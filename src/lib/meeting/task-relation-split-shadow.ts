@@ -24,9 +24,9 @@ export const TASK_RELATION_SPLIT_MAX_OUTPUT_CHARS = 2_048;
 export const FIRST_BATCH_RELATION_RELEASE_MIN_CONFIDENCE = 0.95;
 export const FIRST_BATCH_RELATION_POSSIBLE_ERROR_MIN_CONFIDENCE = 0.9;
 export const TASK_RELATION_CHILD_AFFINITY_PROMPT_VERSION =
-  "task-relation-child-affinity-v1";
+  "task-relation-child-affinity-v2-compact";
 export const TASK_RELATION_PARENT_AFFINITY_PROMPT_VERSION =
-  "task-relation-parent-affinity-v1";
+  "task-relation-parent-affinity-v2-compact";
 export const TASK_RELATION_CANONICAL_SHADOW_PROMPT_VERSION =
   "task-relation-canonical-shadow-v1";
 
@@ -586,11 +586,11 @@ export function buildTaskRelationAffinityPrompts(
         "Use unclear when the bounded evidence cannot decide.",
         "Time proximity, shared vocabulary, and broad topic overlap are not enough.",
         "Do not decide final task relation, parent mutation, question type, response action, context scope, phase, memory, or artifacts.",
-        "For related, return exactly one currentEvidenceSpans item and one childEvidenceSpans item copied verbatim from matching fields.",
-        "For unrelated, return exactly one currentEvidenceSpans item and an empty childEvidenceSpans array.",
-        "For unclear, return empty evidence arrays and one short ambiguityReason.",
+        "For related, set d='r', q to one current exact span, and b to one child exact span.",
+        "For unrelated, set d='n', q to one current exact span, and b to null.",
+        "For unclear, set d='u', q and b to null, and a to one short ambiguity reason.",
         "Every evidence span must be a non-empty exact substring of at most 180 characters. Select a shorter identifying clause instead of copying a long question.",
-        "Schema: {schemaVersion:1,decision:'related'|'unrelated'|'unclear',confidence:number,currentEvidenceSpans:string[],childEvidenceSpans:string[],ambiguityReason?:string}.",
+        "Schema: {\"v\":1,\"d\":\"r|n|u\",\"c\":number,\"q\":string|null,\"b\":string|null,\"a\"?:string}.",
       ].join(" ")
     : [
         "Decide one thing only: whether the current interviewer question depends on and continues the supplied active parent objective.",
@@ -600,11 +600,11 @@ export function buildTaskRelationAffinityPrompts(
         "Use unclear when the bounded evidence cannot decide.",
         "Time proximity, compatible question type, shared vocabulary, and broad topic overlap are not enough.",
         "Do not decide child status, resume intent, final task relation, parent mutation, question type, response action, phase, memory, or artifacts.",
-        "For related, return exactly one currentEvidenceSpans item and one parentEvidenceSpans item copied verbatim from matching fields.",
-        "For independent, return exactly one currentEvidenceSpans item and an empty parentEvidenceSpans array.",
-        "For unclear, return empty evidence arrays and one short ambiguityReason.",
+        "For related, set d='r', q to one current exact span, and b to one parent exact span.",
+        "For independent, set d='i', q to one current exact span, and b to null.",
+        "For unclear, set d='u', q and b to null, and a to one short ambiguity reason.",
         "Every evidence span must be a non-empty exact substring of at most 180 characters. Select a shorter identifying clause instead of copying a long question.",
-        "Schema: {schemaVersion:1,decision:'related'|'independent'|'unclear',confidence:number,currentEvidenceSpans:string[],parentEvidenceSpans:string[],ambiguityReason?:string}.",
+        "Schema: {\"v\":1,\"d\":\"r|i|u\",\"c\":number,\"q\":string|null,\"b\":string|null,\"a\"?:string}.",
       ].join(" ");
   return buildRuntimeInferenceModelInput({
     systemPrompt,
@@ -618,7 +618,11 @@ export function parseTaskRelationAffinityOutput(
 ): TaskRelationAffinityParseResult {
   const parsed = parseJsonObject(rawOutput);
   if (!parsed.ok) return parsed;
-  const candidate = parsed.value;
+  const candidate = expandCompactAffinityCandidate(
+    parsed.value,
+    request.affinityKind
+  );
+  if (!candidate) return parseFailure("invalid-affinity-schema", "schema");
   const branchKey =
     request.affinityKind === "child"
       ? "childEvidenceSpans"
@@ -701,6 +705,51 @@ export function parseTaskRelationAffinityOutput(
           ? candidate.ambiguityReason.trim()
           : undefined,
     },
+  };
+}
+
+function expandCompactAffinityCandidate(
+  candidate: Record<string, unknown>,
+  affinityKind: TaskRelationAffinityKind
+) {
+  if (!("v" in candidate)) return candidate;
+  const allowedKeys = new Set(["v", "d", "c", "q", "b", "a"]);
+  if (Object.keys(candidate).some((key) => !allowedKeys.has(key))) {
+    return undefined;
+  }
+  if (candidate.v !== TASK_RELATION_AFFINITY_SCHEMA_VERSION) {
+    return undefined;
+  }
+  const decision =
+    candidate.d === "r"
+      ? "related"
+      : candidate.d === "u"
+        ? "unclear"
+        : affinityKind === "child" && candidate.d === "n"
+          ? "unrelated"
+          : affinityKind === "parent" && candidate.d === "i"
+            ? "independent"
+            : undefined;
+  if (!decision) return undefined;
+  const currentEvidenceSpans =
+    typeof candidate.q === "string" && candidate.q.trim()
+      ? [candidate.q]
+      : [];
+  const branchEvidenceSpans =
+    typeof candidate.b === "string" && candidate.b.trim()
+      ? [candidate.b]
+      : [];
+  return {
+    schemaVersion: TASK_RELATION_AFFINITY_SCHEMA_VERSION,
+    decision,
+    confidence: candidate.c,
+    currentEvidenceSpans,
+    [affinityKind === "child"
+      ? "childEvidenceSpans"
+      : "parentEvidenceSpans"]: branchEvidenceSpans,
+    ...(typeof candidate.a === "string"
+      ? { ambiguityReason: candidate.a }
+      : {}),
   };
 }
 

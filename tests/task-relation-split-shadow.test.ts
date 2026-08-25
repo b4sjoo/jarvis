@@ -144,6 +144,8 @@ test("builds clean child and parent affinity prompts", () => {
   assert.match(parentPrompt.systemPrompt, /active parent objective/i);
   assert.match(childPrompt.systemPrompt, /at most 180 characters/i);
   assert.match(parentPrompt.systemPrompt, /shorter identifying clause/i);
+  assert.match(childPrompt.systemPrompt, /"d":"r\|n\|u"/i);
+  assert.match(parentPrompt.systemPrompt, /"d":"r\|i\|u"/i);
 });
 
 test("parses grounded affinity decisions with operation-specific evidence", () => {
@@ -156,21 +158,21 @@ test("parses grounded affinity decisions with operation-specific evidence", () =
   assert.ok(split.child);
   const child = parseTaskRelationAffinityOutput(
     JSON.stringify({
-      schemaVersion: 1,
-      decision: "unrelated",
-      confidence: 0.94,
-      currentEvidenceSpans: ["Back to the RAG system"],
-      childEvidenceSpans: [],
+      v: 1,
+      d: "n",
+      c: 0.94,
+      q: "Back to the RAG system",
+      b: null,
     }),
     split.child
   );
   const parent = parseTaskRelationAffinityOutput(
     JSON.stringify({
-      schemaVersion: 1,
-      decision: "related",
-      confidence: 0.97,
-      currentEvidenceSpans: ["monitor freshness"],
-      parentEvidenceSpans: ["Documents change continuously"],
+      v: 1,
+      d: "r",
+      c: 0.97,
+      q: "monitor freshness",
+      b: "Documents change continuously",
     }),
     split.parent
   );
