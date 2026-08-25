@@ -292,6 +292,7 @@ import {
   formatCorrectionOwnedResettlementForTrace,
   mapCorrectionOwnedPlaybookPhase,
   resolveCorrectionOwnedResettlement,
+  correctionTargetOwnsParentOrigin,
   buildInterviewSessionBriefMemoryHint,
   buildInterviewSessionMemoryHint,
   buildWhiteboardEvalTraceMetadata,
@@ -31424,6 +31425,12 @@ export function useMeetingAssistant() {
                 activeParentId: latestParent?.id,
                 activeParentRevision: latestParent?.revisions,
                 activeParentType: latestParentType,
+                targetOwnsActiveParent:
+                  correctionTargetOwnsParentOrigin({
+                    logicalQuestionUnit:
+                      application.logicalQuestionUnit,
+                    parent: latestContext.taskRuntime.parent,
+                  }),
                 manualCorrectionRevision:
                   manualCorrectionRevisionRef.current,
               });
@@ -31574,7 +31581,12 @@ export function useMeetingAssistant() {
               latestQuestionText: correctedSemanticEvidenceText,
               parentQuestionText: latestParent.topic,
               classifierConfidence: 1,
-              currentQuestionMatchesParentOrigin: true,
+              currentQuestionMatchesParentOrigin:
+                correctionTargetOwnsParentOrigin({
+                  logicalQuestionUnit:
+                    application.logicalQuestionUnit,
+                  parent: latestContext.taskRuntime.parent,
+                }),
             });
             const lifecycleParentBefore =
               latestContext.taskRuntime.parent ??

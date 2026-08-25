@@ -12,6 +12,7 @@ import {
   type QuestionTypeInferenceDecision,
 } from "./task-taxonomy.js";
 import type { LlmTaxonomyAdjudication } from "./taxonomy-adjudication.js";
+import type { ActiveInterviewParent } from "./types.js";
 
 export const CORRECTION_OWNED_ADJUDICATION_BUDGET_MS = 1_200;
 export const CORRECTION_OWNED_ADJUDICATION_MIN_CONFIDENCE = 0.88;
@@ -134,6 +135,7 @@ export function resolveCorrectionOwnedResettlement(input: {
   activeParentId?: string;
   activeParentRevision?: number;
   activeParentType?: unknown;
+  targetOwnsActiveParent: boolean;
   manualCorrectionRevision: number;
   minConfidence?: number;
 }): CorrectionOwnedResettlementDecision {
@@ -252,6 +254,17 @@ export function resolveCorrectionOwnedResettlement(input: {
       settlement,
     };
   }
+  if (!input.targetOwnsActiveParent) {
+    return {
+      disposition: "semantic-result-rejected",
+      parentMutationAuthorized: false,
+      correctedType,
+      relation: settlement.relation,
+      confidence: adjudication.confidence,
+      reason: "correction-target-does-not-own-active-parent",
+      settlement,
+    };
+  }
 
   return {
     disposition: "same-question-retype",
@@ -262,6 +275,34 @@ export function resolveCorrectionOwnedResettlement(input: {
     reason: "human-correction-changed-current-question-domain",
     settlement,
   };
+}
+
+export function correctionTargetOwnsParentOrigin(input: {
+  logicalQuestionUnit: LogicalQuestionUnit;
+  parent: ActiveInterviewParent | undefined;
+}) {
+  const parent = input.parent;
+  if (
+    !parent?.sourceQuestionUnitId ||
+    parent.sourceQuestionRevision === undefined ||
+    parent.sourceQuestionUnitId !== input.logicalQuestionUnit.id ||
+    input.logicalQuestionUnit.revision < parent.sourceQuestionRevision
+  ) {
+    return false;
+  }
+
+  const parentSourceTurnIds =
+    parent.canonicalQuestionSourceTurnIds?.length
+      ? parent.canonicalQuestionSourceTurnIds
+      : parent.startTurnId
+        ? [parent.startTurnId]
+        : [];
+  return (
+    parentSourceTurnIds.length > 0 &&
+    parentSourceTurnIds.every((turnId) =>
+      input.logicalQuestionUnit.sourceTurnIds.includes(turnId)
+    )
+  );
 }
 
 export function mapCorrectionOwnedPlaybookPhase(input: {

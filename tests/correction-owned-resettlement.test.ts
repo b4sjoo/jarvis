@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   decideCorrectionOwnedAdjudicationTrigger,
+  correctionTargetOwnsParentOrigin,
   mapCorrectionOwnedPlaybookPhase,
   resolveCorrectionOwnedResettlement,
 } from "../src/lib/meeting/correction-owned-resettlement.js";
@@ -58,6 +59,7 @@ test("authorizes a correction-owned General SD to AI/ML SD retype", () => {
     activeParentId: "parent_1",
     activeParentRevision: 3,
     activeParentType: "general-system-design",
+    targetOwnsActiveParent: true,
     manualCorrectionRevision: 4,
   });
 
@@ -83,6 +85,7 @@ test("rejects stale and low-confidence semantic resettlement results", () => {
     operationAuthorized: false,
     operationAuthorizationReason: "logical-unit-revision-mismatch",
     activeParentType: "general-system-design",
+    targetOwnsActiveParent: false,
     manualCorrectionRevision: 3,
   });
   const lowConfidence = resolveCorrectionOwnedResettlement({
@@ -90,6 +93,7 @@ test("rejects stale and low-confidence semantic resettlement results", () => {
     adjudication: adjudication({ confidence: 0.71 }),
     operationAuthorized: true,
     activeParentType: "general-system-design",
+    targetOwnsActiveParent: false,
     manualCorrectionRevision: 3,
   });
 
@@ -97,6 +101,53 @@ test("rejects stale and low-confidence semantic resettlement results", () => {
   assert.equal(stale.parentMutationAuthorized, false);
   assert.equal(lowConfidence.disposition, "semantic-result-rejected");
   assert.equal(lowConfidence.parentMutationAuthorized, false);
+});
+
+test("requires the corrected LQU lineage to own the active parent", () => {
+  const unit = question("Design a RAG system.");
+  const parent = {
+    id: "parent_1",
+    source: "voice" as const,
+    stableKind: "general-system-design" as const,
+    topic: "Design a rack system.",
+    playbookPhase: "requirement_clarification" as const,
+    phaseProgress: {},
+    supportedFactAnchors: [],
+    createdAt: 1,
+    updatedAt: 2,
+    revisions: 3,
+    sourceQuestionUnitId: unit.id,
+    sourceQuestionRevision: 1,
+    canonicalQuestionSourceTurnIds: ["turn_1"],
+  };
+
+  assert.equal(
+    correctionTargetOwnsParentOrigin({ logicalQuestionUnit: unit, parent }),
+    true
+  );
+  assert.equal(
+    correctionTargetOwnsParentOrigin({
+      logicalQuestionUnit: { ...unit, id: "different_lqu" },
+      parent,
+    }),
+    false
+  );
+
+  const rejected = resolveCorrectionOwnedResettlement({
+    logicalQuestionUnit: unit,
+    adjudication: adjudication(),
+    operationAuthorized: true,
+    activeParentId: parent.id,
+    activeParentRevision: parent.revisions,
+    activeParentType: parent.stableKind,
+    targetOwnsActiveParent: false,
+    manualCorrectionRevision: 4,
+  });
+  assert.equal(rejected.parentMutationAuthorized, false);
+  assert.equal(
+    rejected.reason,
+    "correction-target-does-not-own-active-parent"
+  );
 });
 
 test("maps equivalent system-design phases without carrying unrelated phases", () => {
