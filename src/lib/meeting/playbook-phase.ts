@@ -313,18 +313,6 @@ const PROJECT_CONTEXT_PATTERNS = [
   "what is",
 ];
 
-const HARD_PROBLEM_PATTERNS = [
-  "hard",
-  "challenge",
-  "difficult",
-  "problem",
-  "root cause",
-  "issue",
-  "blocked",
-  "failure",
-  "complex",
-];
-
 const TRADEOFF_PATTERNS = [
   "tradeoff",
   "trade off",
@@ -336,26 +324,42 @@ const TRADEOFF_PATTERNS = [
   "compromise",
 ];
 
-const VALIDATION_PATTERNS = [
-  "validate",
-  "debug",
-  "test",
-  "experiment",
-  "verify",
-  "metric",
-  "rollout",
-  "monitor",
+const PROJECT_ARCHITECTURE_PHASE_EVIDENCE_PATTERNS = [
+  "architecture",
+  "technical design",
+  "system design",
+  "design alternative",
+  "why did you choose",
+  "tradeoff",
+  "trade off",
+  "pros and cons",
 ];
 
-const IMPACT_PATTERNS = [
-  "impact",
-  "result",
-  "learn",
-  "lesson",
-  "outcome",
-  "customer",
-  "saved",
-  "improve",
+const PROJECT_HARD_PROBLEM_PHASE_EVIDENCE_PATTERNS = [
+  "hardest technical",
+  "technical challenge",
+  "most difficult",
+  "root cause",
+  "what failed",
+  "failure mode",
+];
+
+const PROJECT_VALIDATION_PHASE_EVIDENCE_PATTERNS = [
+  "how did you validate",
+  "how did you debug",
+  "how did you test",
+  "during rollout",
+  "verify the fix",
+  "monitor in production",
+];
+
+const PROJECT_IMPACT_PHASE_EVIDENCE_PATTERNS = [
+  "what was the impact",
+  "what was the result",
+  "what did you learn",
+  "what would you improve",
+  "measured outcome",
+  "customer impact",
 ];
 
 const CODING_OPTIMIZATION_PATTERNS = [
@@ -538,7 +542,7 @@ export function decidePlaybookPhaseProgression(
   }
 
   const detectedFlags = uniqueFlags([
-    ...detectCommonFlags(text),
+    ...detectCommonFlags(text, questionType),
     ...detectQuestionTypeFlags(
       questionType,
       text,
@@ -1175,11 +1179,22 @@ function detectProjectDeepDiveFlags(
   return uniqueFlags([
     askFrame === "past-project" ? "project_context" : undefined,
     matchesAny(text, PROJECT_CONTEXT_PATTERNS) ? "project_context" : undefined,
-    matchesAny(text, ARCHITECTURE_PATTERNS) ? "architecture" : undefined,
-    matchesAny(text, HARD_PROBLEM_PATTERNS) ? "hard_problem" : undefined,
-    matchesAny(text, TRADEOFF_PATTERNS) ? "tradeoff_decision" : undefined,
-    matchesAny(text, VALIDATION_PATTERNS) ? "validation_debugging" : undefined,
-    matchesAny(text, IMPACT_PATTERNS) ? "impact_lesson" : undefined,
+    matchesAny(text, PROJECT_ARCHITECTURE_PHASE_EVIDENCE_PATTERNS)
+      ? "architecture"
+      : undefined,
+    matchesAny(text, PROJECT_HARD_PROBLEM_PHASE_EVIDENCE_PATTERNS)
+      ? "hard_problem"
+      : undefined,
+    matchesAny(text, PROJECT_ARCHITECTURE_PHASE_EVIDENCE_PATTERNS) &&
+    matchesAny(text, ["why did you choose", "tradeoff", "trade off", "pros and cons"])
+      ? "tradeoff_decision"
+      : undefined,
+    matchesAny(text, PROJECT_VALIDATION_PHASE_EVIDENCE_PATTERNS)
+      ? "validation_debugging"
+      : undefined,
+    matchesAny(text, PROJECT_IMPACT_PHASE_EVIDENCE_PATTERNS)
+      ? "impact_lesson"
+      : undefined,
   ]);
 }
 
@@ -1208,10 +1223,16 @@ function detectCodingFlags(
   ]);
 }
 
-function detectCommonFlags(text: string): PlaybookPhaseFlag[] {
+function detectCommonFlags(
+  text: string,
+  questionType?: CanonicalQuestionType
+): PlaybookPhaseFlag[] {
   return uniqueFlags([
     matchesAny(text, WHITEBOARD_PATTERNS) ? "whiteboard" : undefined,
-    matchesAny(text, TRADEOFF_PATTERNS) ? "tradeoffs_wrapup" : undefined,
+    questionType !== "project-deep-dive" &&
+    matchesAny(text, TRADEOFF_PATTERNS)
+      ? "tradeoffs_wrapup"
+      : undefined,
   ]);
 }
 

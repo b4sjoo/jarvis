@@ -295,7 +295,27 @@ test("project deep dive records hard problem and tradeoff progress", () => {
   assert.equal(decision.phase, "architecture_decision");
   assert.ok(decision.flags.includes("hard_problem"));
   assert.ok(decision.flags.includes("tradeoff_decision"));
-  assert.ok(decision.flags.includes("tradeoffs_wrapup"));
+  assert.equal(decision.flags.includes("tradeoffs_wrapup"), false);
+});
+
+test("keeps broad project words as evidence without advancing the phase", () => {
+  for (const latestTurnText of [
+    "What service did the project use?",
+    "What problem did the customer describe?",
+    "Why was this useful?",
+  ]) {
+    const decision = decidePlaybookPhaseProgression({
+      questionType: "project-deep-dive",
+      playbookId: "project_deep_dive",
+      currentPhase: "project_narrative",
+      phaseProgress: { project_narrative: true, project_context: true },
+      latestTurnText,
+      relation: "followup-parent",
+    });
+
+    assert.equal(decision.phase, "project_narrative", latestTurnText);
+    assert.equal(decision.action, "stay", latestTurnText);
+  }
 });
 
 test("project deep dive advances through evidence-led phases without regressing", () => {
