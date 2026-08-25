@@ -21,10 +21,11 @@ import type { MeetingQuestionTypeAdjudicationMode } from "./types.js";
 
 export const QUESTION_TYPE_ADJUDICATION_SCHEMA_VERSION = 1;
 export const QUESTION_TYPE_ADJUDICATION_PROMPT_VERSION =
-  "question-type-adjudication-v2";
+  "question-type-adjudication-v3";
 export const QUESTION_TYPE_ADJUDICATION_MAX_OUTPUT_CHARS = 2_048;
 export const QUESTION_TYPE_ENFORCEMENT_MIN_CONFIDENCE = 0.95;
 export const QUESTION_TYPE_ENFORCEMENT_WAIT_BUDGET_MS = 1_200;
+export const FIELD_KNOWLEDGE_REVIEW_WAIT_BUDGET_MS = 3_500;
 
 export interface QuestionTypeAdjudicationRequest {
   schemaVersion: 1;
@@ -49,6 +50,12 @@ export interface LlmQuestionTypeAdjudication {
   confidence: number;
   evidenceSpans: string[];
   ambiguityReason?: string;
+  fieldCodingScores?: {
+    codingScore: number;
+    fieldKnowledgeScore: number;
+    unknownScore: number;
+    codingMajorityMargin: number;
+  };
 }
 
 export type QuestionTypeAdjudicationParseResult =
@@ -84,6 +91,7 @@ export type QuestionTypeEnforcementReason =
   | "operation-lease-not-authorized"
   | "candidate-missing"
   | "candidate-type-unknown"
+  | "field-coding-majority-not-met"
   | "field-knowledge-requires-narrow-review"
   | "candidate-confidence-below-threshold"
   | "settlement-type-mutation-not-authorized"
@@ -433,14 +441,14 @@ export function buildQuestionTypeAdjudicationPrompts(
     ? [
         "Review one automatic Field Knowledge proposal for Jarvis.",
         "Return one minified JSON object on one line with no markdown fence. Do not answer the interview question.",
-        "Classify only whether the current request asks the candidate to solve, implement, debug, trace, or analyze code or an algorithm, versus explain an independently answerable technical concept.",
-        "Allowed questionType values: coding, field-knowledge, unknown.",
-        "Use coding for implementation, debugging, algorithm derivation, complexity-driven solution work, or requests whose expected deliverable is code or pseudocode.",
-        "Use field-knowledge only for a factual or conceptual explanation that does not require producing or repairing a solution.",
-        "Use unknown when the bounded evidence cannot distinguish the two.",
+        "Score only whether the current request asks the candidate to solve, implement, debug, trace, or analyze code or an algorithm, versus explain an independently answerable technical concept.",
+        "cs is the Coding score, fs is the Field Knowledge score, and us is residual Unknown uncertainty. Each score must be between 0 and 1 and the three scores must sum to 1.",
+        "Raise cs for implementation, debugging, algorithm derivation, complexity-driven solution work, or requests whose expected deliverable is code or pseudocode.",
+        "Raise fs only for a factual or conceptual explanation that does not require producing or repairing a solution.",
+        "Use us for bounded ambiguity rather than forcing either side.",
         "Do not decide task relation, parent or child status, response action, playbook phase, evidence mode, or meeting metadata.",
-        "evidenceSpans must contain exactly one shortest identifying exact verbatim substring from question.sourceTexts.",
-        "Schema: {schemaVersion:1,questionType,confidence,evidenceSpans,ambiguityReason?}.",
+        "e must be one shortest identifying exact verbatim substring from question.sourceTexts.",
+        "Schema: {\"v\":1,\"cs\":number,\"fs\":number,\"us\":number,\"e\":string}.",
       ].join(" ")
     : [
       "Classify only the question type of one bounded interviewer question for Jarvis.",
@@ -482,6 +490,9 @@ export function parseQuestionTypeAdjudicationOutput(
     return parseFailure("output-is-not-object", "schema");
   }
   const candidate = decoded as Record<string, unknown>;
+  if (request.reviewScope === "field-vs-coding") {
+    return parseFieldCodingScoreOutput(candidate, request);
+  }
   const allowedKeys = new Set([
     "schemaVersion",
     "questionType",
@@ -500,14 +511,6 @@ export function parseQuestionTypeAdjudicationOutput(
   }
   if (!isCanonicalQuestionType(candidate.questionType)) {
     return parseFailure("invalid-question-type", "schema");
-  }
-  if (
-    request.reviewScope === "field-vs-coding" &&
-    candidate.questionType !== "coding" &&
-    candidate.questionType !== "field-knowledge" &&
-    candidate.questionType !== "unknown"
-  ) {
-    return parseFailure("question-type-outside-review-scope", "schema");
   }
   if (
     typeof candidate.confidence !== "number" ||
@@ -611,9 +614,12 @@ export function decideQuestionTypeEnforcement(input: {
     input.candidate?.questionType
   );
   const confidence = clampConfidence(input.candidate?.confidence);
-  const minimumConfidence = clampConfidence(
-    input.minimumConfidence ?? QUESTION_TYPE_ENFORCEMENT_MIN_CONFIDENCE
-  );
+  const minimumConfidence =
+    input.reviewScope === "field-vs-coding"
+      ? 0.5
+      : clampConfidence(
+          input.minimumConfidence ?? QUESTION_TYPE_ENFORCEMENT_MIN_CONFIDENCE
+        );
   const reject = (
     reason: Exclude<QuestionTypeEnforcementReason, "authorized">
   ): QuestionTypeEnforcementDecision => ({
@@ -638,6 +644,16 @@ export function decideQuestionTypeEnforcement(input: {
     return reject("operation-lease-not-authorized");
   }
   if (!input.candidate) return reject("candidate-missing");
+  if (input.reviewScope === "field-vs-coding") {
+    const scores = input.candidate.fieldCodingScores;
+    if (
+      input.candidate.questionType !== "coding" ||
+      !scores ||
+      scores.codingMajorityMargin <= 0
+    ) {
+      return reject("field-coding-majority-not-met");
+    }
+  }
   if (proposedQuestionType === "unknown") {
     return reject("candidate-type-unknown");
   }
@@ -647,7 +663,10 @@ export function decideQuestionTypeEnforcement(input: {
   ) {
     return reject("field-knowledge-requires-narrow-review");
   }
-  if (confidence < minimumConfidence) {
+  if (
+    input.reviewScope !== "field-vs-coding" &&
+    confidence < minimumConfidence
+  ) {
     return reject("candidate-confidence-below-threshold");
   }
   if (!input.settlement?.typeMutationAuthorized) {
@@ -725,6 +744,14 @@ export function formatQuestionTypeAdjudicationForTrace(input: {
       input.candidate?.evidenceSpans,
     questionTypeAdjudicationAmbiguityReason:
       input.candidate?.ambiguityReason,
+    questionTypeAdjudicationFieldCodingScore:
+      input.candidate?.fieldCodingScores?.codingScore,
+    questionTypeAdjudicationFieldKnowledgeScore:
+      input.candidate?.fieldCodingScores?.fieldKnowledgeScore,
+    questionTypeAdjudicationFieldUnknownScore:
+      input.candidate?.fieldCodingScores?.unknownScore,
+    questionTypeAdjudicationFieldCodingMajorityMargin:
+      input.candidate?.fieldCodingScores?.codingMajorityMargin,
     questionTypeAdjudicationRelationMutationBlocked: true,
     questionTypeAdjudicationParentMutationBlocked: true,
   };
@@ -739,6 +766,81 @@ function parseFailure(
     reason,
     errorKind,
     evidenceSpansValid: false,
+  };
+}
+
+function parseFieldCodingScoreOutput(
+  candidate: Record<string, unknown>,
+  request: QuestionTypeAdjudicationRequest
+): QuestionTypeAdjudicationParseResult {
+  const allowedKeys = new Set(["v", "cs", "fs", "us", "e"]);
+  if (Object.keys(candidate).some((key) => !allowedKeys.has(key))) {
+    return parseFailure("non-field-coding-score-field-present", "schema");
+  }
+  if (candidate.v !== QUESTION_TYPE_ADJUDICATION_SCHEMA_VERSION) {
+    return parseFailure("unsupported-schema-version", "schema");
+  }
+  const scores = [candidate.cs, candidate.fs, candidate.us];
+  if (
+    scores.some(
+      (score) =>
+        typeof score !== "number" ||
+        !Number.isFinite(score) ||
+        score < 0 ||
+        score > 1
+    )
+  ) {
+    return parseFailure("invalid-field-coding-scores", "schema");
+  }
+  const [codingScore, fieldKnowledgeScore, unknownScore] = scores as [
+    number,
+    number,
+    number,
+  ];
+  if (Math.abs(codingScore + fieldKnowledgeScore + unknownScore - 1) > 0.02) {
+    return parseFailure("field-coding-scores-not-normalized", "schema");
+  }
+  if (typeof candidate.e !== "string" || !candidate.e.trim()) {
+    return parseFailure("invalid-evidence-spans", "schema");
+  }
+  const evidence = candidate.e.trim();
+  const allowedEvidence = request.question.sourceTurns
+    .map((source) => source.text)
+    .join("\n")
+    .toLocaleLowerCase();
+  if (!allowedEvidence.includes(evidence.toLocaleLowerCase())) {
+    return parseFailure("invalid-evidence-span", "evidence");
+  }
+  const codingMajorityMargin =
+    codingScore - fieldKnowledgeScore - unknownScore;
+  const questionType: CanonicalQuestionType =
+    codingMajorityMargin > 0
+      ? "coding"
+      : fieldKnowledgeScore >= unknownScore
+        ? "field-knowledge"
+        : "unknown";
+  const confidence =
+    questionType === "coding"
+      ? codingScore
+      : questionType === "field-knowledge"
+        ? fieldKnowledgeScore
+        : unknownScore;
+
+  return {
+    ok: true,
+    evidenceSpansValid: true,
+    value: {
+      schemaVersion: QUESTION_TYPE_ADJUDICATION_SCHEMA_VERSION,
+      questionType,
+      confidence,
+      evidenceSpans: [evidence],
+      fieldCodingScores: {
+        codingScore,
+        fieldKnowledgeScore,
+        unknownScore,
+        codingMajorityMargin,
+      },
+    },
   };
 }
 

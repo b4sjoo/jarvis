@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { LogicalQuestionUnit } from "../src/lib/meeting/logical-question-unit.js";
 import {
+  FIELD_KNOWLEDGE_REVIEW_WAIT_BUDGET_MS,
+  QUESTION_TYPE_ENFORCEMENT_WAIT_BUDGET_MS,
   buildQuestionTypeAdjudicationPrompts,
   buildQuestionTypeAdjudicationRequest,
   createQuestionTypeSettlementProposal,
@@ -91,34 +93,42 @@ test("builds and enforces a narrow Field Knowledge versus Coding review", () => 
   });
   const prompts = buildQuestionTypeAdjudicationPrompts(request);
   assert.match(prompts.systemPrompt, /automatic Field Knowledge proposal/i);
-  assert.match(prompts.systemPrompt, /coding, field-knowledge, unknown/i);
+  assert.match(prompts.systemPrompt, /cs is the Coding score/i);
+  assert.match(prompts.systemPrompt, /three scores must sum to 1/i);
   assert.doesNotMatch(prompts.systemPrompt, /behavioral asks/i);
 
-  assert.equal(
-    parseQuestionTypeAdjudicationOutput(
-      JSON.stringify({
-        schemaVersion: 1,
-        questionType: "coding",
-        confidence: 0.97,
-        evidenceSpans: ["Implement an LRU cache"],
-      }),
-      request
-    ).ok,
-    true
+  const parsed = parseQuestionTypeAdjudicationOutput(
+    JSON.stringify({
+      v: 1,
+      cs: 0.72,
+      fs: 0.2,
+      us: 0.08,
+      e: "Implement an LRU cache",
+    }),
+    request
   );
+  assert.equal(parsed.ok, true);
+  assert.deepEqual(parsed.ok ? parsed.value.fieldCodingScores : undefined, {
+    codingScore: 0.72,
+    fieldKnowledgeScore: 0.2,
+    unknownScore: 0.08,
+    codingMajorityMargin: 0.44,
+  });
+  assert.equal(parsed.ok ? parsed.value.questionType : undefined, "coding");
   assert.deepEqual(
     parseQuestionTypeAdjudicationOutput(
       JSON.stringify({
-        schemaVersion: 1,
-        questionType: "general-system-design",
-        confidence: 0.98,
-        evidenceSpans: ["LRU cache"],
+        v: 1,
+        cs: 0.6,
+        fs: 0.3,
+        us: 0.3,
+        e: "LRU cache",
       }),
       request
     ),
     {
       ok: false,
-      reason: "question-type-outside-review-scope",
+      reason: "field-coding-scores-not-normalized",
       errorKind: "schema",
       evidenceSpansValid: false,
     }
@@ -170,12 +180,79 @@ test("keeps a full-scope Field Knowledge result observational", () => {
     decideQuestionTypeEnforcement({ ...base, reviewScope: "full" }).reason,
     "field-knowledge-requires-narrow-review"
   );
+  const narrowCandidate = {
+    schemaVersion: 1 as const,
+    questionType: "coding" as const,
+    confidence: 0.62,
+    evidenceSpans: ["explain HNSW"],
+    fieldCodingScores: {
+      codingScore: 0.62,
+      fieldKnowledgeScore: 0.28,
+      unknownScore: 0.1,
+      codingMajorityMargin: 0.24,
+    },
+  };
+  const narrowCurrentQuestion = createProvisionalCurrentQuestion({
+    logicalQuestionUnit: unit("Please explain HNSW."),
+    sourceKind: "voice",
+  });
+  const narrowSettlement = settleCurrentQuestion({
+    currentQuestion: narrowCurrentQuestion,
+    llmProposal: createQuestionTypeSettlementProposal({
+      currentQuestion: narrowCurrentQuestion,
+      adjudication: narrowCandidate,
+    }),
+    manualCorrectionRevision: 0,
+    policy: {
+      allowLlmTypeRepair: true,
+      llmTypeRepairMinConfidence: 0.5,
+      runtimeMutationAuthorized: true,
+      questionComplete: true,
+      commitParent: false,
+    },
+  });
   assert.equal(
     decideQuestionTypeEnforcement({
       ...base,
+      candidate: narrowCandidate,
+      settlement: narrowSettlement,
       reviewScope: "field-vs-coding",
     }).authorized,
     true
+  );
+});
+
+test("keeps Field when Coding does not beat Field and Unknown combined", () => {
+  const request = buildQuestionTypeAdjudicationRequest({
+    logicalQuestionUnit: unit("Explain how a stack differs from a queue."),
+    reviewScope: "field-vs-coding",
+  });
+  const parsed = parseQuestionTypeAdjudicationOutput(
+    JSON.stringify({
+      v: 1,
+      cs: 0.46,
+      fs: 0.44,
+      us: 0.1,
+      e: "stack differs from a queue",
+    }),
+    request
+  );
+  assert.equal(parsed.ok, true);
+  if (!parsed.ok) return;
+  assert.equal(parsed.value.questionType, "field-knowledge");
+  assert.equal(
+    decideQuestionTypeEnforcement({
+      mode: "enforcement",
+      localQuestionType: "field-knowledge",
+      candidate: parsed.value,
+      settlement: undefined,
+      sourceOwnedSubstantive: true,
+      manualAuthorityConflict: false,
+      operationLeaseAuthorized: true,
+      advisorReleaseWindowOpen: true,
+      reviewScope: "field-vs-coding",
+    }).reason,
+    "field-coding-majority-not-met"
   );
 });
 
@@ -199,6 +276,10 @@ test("requires automatic Field Knowledge review even when broad adjudication is 
   assert.equal(required.eligible, true);
   assert.equal(required.executionMode, "enforcement-window");
   assert.equal(required.reason, "field-knowledge-review-required");
+  assert.ok(
+    FIELD_KNOWLEDGE_REVIEW_WAIT_BUDGET_MS >
+      QUESTION_TYPE_ENFORCEMENT_WAIT_BUDGET_MS
+  );
 
   const manual = decideQuestionTypeAdjudicationEligibility({
     mode: "off",

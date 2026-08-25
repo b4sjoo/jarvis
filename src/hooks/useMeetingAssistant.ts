@@ -466,6 +466,7 @@ import {
   QUESTION_TYPE_ADJUDICATION_MAX_OUTPUT_CHARS,
   QUESTION_TYPE_ENFORCEMENT_MIN_CONFIDENCE,
   QUESTION_TYPE_ENFORCEMENT_WAIT_BUDGET_MS,
+  FIELD_KNOWLEDGE_REVIEW_WAIT_BUDGET_MS,
   buildQuestionTypeAdjudicationPrompts,
   buildQuestionTypeAdjudicationRequest,
   createQuestionTypeAdjudicationOutcomeEvent,
@@ -2147,6 +2148,7 @@ interface SourceLinkageRuntimeOutcome {
 
 interface QuestionTypeAdjudicationScheduleHandle {
   enforcementWindowRequested: boolean;
+  waitBudgetMs: number;
   operationId?: string;
   outcome: Promise<QuestionTypeAdjudicationRuntimeOutcome>;
 }
@@ -17359,10 +17361,14 @@ export function useMeetingAssistant() {
           sourceOwnedSubstantive &&
           !manualAuthorityConflict
       );
+      const waitBudgetMs = mandatoryFieldKnowledgeReview
+        ? FIELD_KNOWLEDGE_REVIEW_WAIT_BUDGET_MS
+        : QUESTION_TYPE_ENFORCEMENT_WAIT_BUDGET_MS;
       const immediateHandle = (
         disposition: string
       ): QuestionTypeAdjudicationScheduleHandle => ({
         enforcementWindowRequested,
+        waitBudgetMs,
         outcome: Promise.resolve({
           disposition,
           enforcement: decideQuestionTypeEnforcement({
@@ -17753,7 +17759,9 @@ export function useMeetingAssistant() {
                   allowLlmRelationRepair: false,
                   allowLlmActionRepair: false,
                   llmTypeRepairMinConfidence:
-                    QUESTION_TYPE_ENFORCEMENT_MIN_CONFIDENCE,
+                    request.reviewScope === "field-vs-coding"
+                      ? 0.5
+                      : QUESTION_TYPE_ENFORCEMENT_MIN_CONFIDENCE,
                   runtimeMutationAuthorized: false,
                   questionComplete: true,
                   commitParent: false,
@@ -17950,6 +17958,7 @@ export function useMeetingAssistant() {
       }, enforcementWindowRequested ? 0 : undefined);
       return {
         enforcementWindowRequested,
+        waitBudgetMs,
         operationId: lease.operationId,
         outcome,
       };
@@ -20533,6 +20542,7 @@ export function useMeetingAssistant() {
     (input: ScheduleAdvisorAfterTypeWindowInput) => {
       const questionTypeHandle = input.handle?.questionType;
       if (!questionTypeHandle?.enforcementWindowRequested) return false;
+      const questionTypeWaitBudgetMs = questionTypeHandle.waitBudgetMs;
       const taskRelationHandle = input.handle?.taskRelation;
       const relationWindowRequested = Boolean(
         taskRelationHandle?.releaseWindowRequested
@@ -20664,7 +20674,7 @@ export function useMeetingAssistant() {
         );
         const metadata = {
           questionTypeAdjudicationWaitBudgetMs:
-            QUESTION_TYPE_ENFORCEMENT_WAIT_BUDGET_MS,
+            questionTypeWaitBudgetMs,
           questionTypeAdjudicationWaitMs: waitMs,
           questionTypeAdjudicationWaitDisposition: waitDisposition,
           questionTypeAdjudicationAppliedToRuntime:
@@ -20807,7 +20817,7 @@ export function useMeetingAssistant() {
       traceStoreRef.current.updateMetadata(input.traceId, {
         questionTypeAdjudicationWaitStartedAt: waitStartedAt,
         questionTypeAdjudicationWaitBudgetMs:
-          QUESTION_TYPE_ENFORCEMENT_WAIT_BUDGET_MS,
+          questionTypeWaitBudgetMs,
         questionTypeAdjudicationWaitDisposition: "pending",
       });
       let settledTypeOutcome:
@@ -20864,7 +20874,7 @@ export function useMeetingAssistant() {
           settledAffinityOutcome,
           "deadline-expired-fail-open"
         );
-      }, QUESTION_TYPE_ENFORCEMENT_WAIT_BUDGET_MS);
+      }, questionTypeWaitBudgetMs);
 
       void questionTypeHandle.outcome.then(
         (outcome) => {
@@ -20984,7 +20994,7 @@ export function useMeetingAssistant() {
         void responseOpportunityGenerationGateRef.current
           .wait(
             responseOpportunityGateOperationId,
-            QUESTION_TYPE_ENFORCEMENT_WAIT_BUDGET_MS
+            questionTypeWaitBudgetMs
           )
           .then((gate) => {
             responseOpportunitySettled = true;
@@ -25042,7 +25052,7 @@ export function useMeetingAssistant() {
             try {
               const outcome = await withTimeout(
                 fieldReview.outcome,
-                QUESTION_TYPE_ENFORCEMENT_WAIT_BUDGET_MS,
+                fieldReview.waitBudgetMs,
                 "Screen Field Knowledge review window expired."
               );
               if (outcome.enforcement.authorized && outcome.settlement) {
