@@ -347,6 +347,16 @@ export function authorizeRuntimeTypeRepairOutputAuthority(
   return { authorized: true, reason: "authorized" };
 }
 
+export function runtimeTypeRepairLimitsGenerationToAnswer(input: {
+  authority?: RuntimeTypeRepairOutputAuthority;
+  taskBoundaryCommitted: boolean;
+}) {
+  return Boolean(
+    input.authority?.authorityScope === "type-only" &&
+      !input.taskBoundaryCommitted
+  );
+}
+
 export function formatRuntimeTypeRepairOutputAuthorityForTrace(
   authority: RuntimeTypeRepairOutputAuthority | undefined,
   authorization?: RuntimeTypeRepairOutputAuthorization

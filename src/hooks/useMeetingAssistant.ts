@@ -704,6 +704,7 @@ import {
   createResponseOnlyTaskScope,
   formatResponseOnlyTaskScopeForTrace,
   resolveResponseOnlyContextReadScope,
+  runtimeTypeRepairLimitsGenerationToAnswer,
   toAdvisorGeneratedContinuityEvidence,
   classifyInterviewTransitionTurn,
   reconcileInterviewTransitionTurnWithPrimaryAsk,
@@ -12261,8 +12262,11 @@ export function useMeetingAssistant() {
     generationAuthorizedArtifacts =
       advisorJob.source === "force-advise"
         ? ["answer"]
-        : runtimeTypeRepairOutputAuthorized &&
-            !taskBoundaryCommittedBeforeAdvisor
+      : runtimeTypeRepairOutputAuthorized &&
+          runtimeTypeRepairLimitsGenerationToAnswer({
+            authority: advisorJob.runtimeTypeRepairOutputAuthority,
+            taskBoundaryCommitted: taskBoundaryCommittedBeforeAdvisor,
+          })
           ? ["answer"]
           : settledExecutionPlan
             ? resolveAuthorizedAnswerArtifacts({

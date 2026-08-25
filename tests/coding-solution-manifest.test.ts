@@ -59,3 +59,37 @@ test("authorizes manifest candidates according to the committed phase", () => {
     "optimized-visible-candidate-mismatch"
   );
 });
+
+test("allows a complete optimized fallback during baseline reasoning", () => {
+  const extraction = extractCodingSolutionManifest(
+    `<CODING_SOLUTION_MANIFEST>${JSON.stringify({
+      ...manifest,
+      visibleCandidate: "optimized",
+    })}</CODING_SOLUTION_MANIFEST>`
+  );
+  const decision = validateCodingSolutionManifestPhase({
+    phase: "baseline_reasoning",
+    extraction,
+  });
+
+  assert.equal(decision.authorized, true);
+  assert.equal(decision.reason, "optimized-fallback-authorized");
+  assert.equal(decision.codeMutationAuthorized, true);
+});
+
+test("rejects a same-solution manifest with contradictory complexity", () => {
+  const extraction = extractCodingSolutionManifest(
+    `<CODING_SOLUTION_MANIFEST>${JSON.stringify({
+      ...manifest,
+      sameSolution: true,
+      visibleCandidate: "baseline",
+    })}</CODING_SOLUTION_MANIFEST>`
+  );
+  const decision = validateCodingSolutionManifestPhase({
+    phase: "baseline_reasoning",
+    extraction,
+  });
+
+  assert.equal(decision.authorized, false);
+  assert.equal(decision.reason, "manifest-candidates-inconsistent");
+});

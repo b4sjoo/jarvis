@@ -5,6 +5,7 @@ import {
   authorizeRuntimeTypeRepairOutputAuthority,
   createAnswerGenerationLease,
   createRuntimeTypeRepairOutputAuthority,
+  runtimeTypeRepairLimitsGenerationToAnswer,
   decideRefreshAuthority,
   formatAnswerGenerationLeaseForTrace,
   rebaseAnswerGenerationLeaseAfterOwnedParentMutation,
@@ -179,6 +180,14 @@ test("grants answer authority to converged non-parent-mutating relations", () =>
 
     assert.ok(authority, relation);
     assert.equal(authority.authorityScope, "type-and-relation", relation);
+    assert.equal(
+      runtimeTypeRepairLimitsGenerationToAnswer({
+        authority,
+        taskBoundaryCommitted: false,
+      }),
+      false,
+      relation
+    );
   }
 });
 

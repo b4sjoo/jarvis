@@ -56,6 +56,24 @@ test("makes the settled Mermaid preference explicit in the system-design contrac
   assert.match(message, /exactly one compact valid ```mermaid fenced flowchart/);
 });
 
+test("lets the coding phase own the visible solution instead of forcing optimal output", () => {
+  const message = buildAdvisorUserMessage(
+    {
+      transcript: "them: Solve longest substring without repeating characters.",
+      screenContext: "",
+      rollingSummary: "",
+      userProfileContext: "",
+      glossaryText: "",
+      taskRuntime: { revision: 0 },
+    },
+    { answerProfile: "coding" }
+  );
+
+  assert.match(message, /solution candidate required by/);
+  assert.match(message, /must not describe a different algorithm from Code/);
+  assert.doesNotMatch(message, /summary of the optimal solution/);
+});
+
 test("blocks numeric QPS when General SD evidence has inventory and ratio only", () => {
   const message = buildAdvisorUserMessage(
     {

@@ -36,6 +36,8 @@ export interface CodingSolutionManifestPhaseDecision {
   reason:
     | "authorized"
     | "manifest-missing-or-invalid"
+    | "manifest-candidates-inconsistent"
+    | "optimized-fallback-authorized"
     | "baseline-visible-candidate-mismatch"
     | "optimized-visible-candidate-mismatch";
   phase: "baseline_reasoning" | "optimized_pseudocode" | "implementation_validation";
@@ -90,6 +92,29 @@ export function validateCodingSolutionManifestPhase(input: {
       codeMutationAuthorized: false,
     };
   }
+  if (!manifestCandidatesAreCoherent(input.extraction.manifest)) {
+    return {
+      authorized: false,
+      reason: "manifest-candidates-inconsistent",
+      phase,
+      expectedVisibleCandidate,
+      actualVisibleCandidate,
+      codeMutationAuthorized: false,
+    };
+  }
+  if (
+    phase === "baseline_reasoning" &&
+    actualVisibleCandidate === "optimized"
+  ) {
+    return {
+      authorized: true,
+      reason: "optimized-fallback-authorized",
+      phase,
+      expectedVisibleCandidate,
+      actualVisibleCandidate,
+      codeMutationAuthorized: true,
+    };
+  }
   if (actualVisibleCandidate !== expectedVisibleCandidate) {
     return {
       authorized: false,
@@ -113,6 +138,33 @@ export function validateCodingSolutionManifestPhase(input: {
       phase === "baseline_reasoning" ||
       phase === "implementation_validation",
   };
+}
+
+function manifestCandidatesAreCoherent(manifest: CodingSolutionManifest) {
+  const baseline = manifest.baseline;
+  const optimized = manifest.optimized;
+  const sameComplexityAndStructures =
+    normalizeCandidateField(baseline.time) ===
+      normalizeCandidateField(optimized.time) &&
+    normalizeCandidateField(baseline.space) ===
+      normalizeCandidateField(optimized.space) &&
+    normalizeCandidateList(baseline.dataStructures) ===
+      normalizeCandidateList(optimized.dataStructures);
+  const sameSummary =
+    sameComplexityAndStructures &&
+    normalizeCandidateField(baseline.approach) ===
+      normalizeCandidateField(optimized.approach);
+  return manifest.sameSolution
+    ? sameComplexityAndStructures
+    : !sameSummary;
+}
+
+function normalizeCandidateField(value: string) {
+  return value.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function normalizeCandidateList(values: string[]) {
+  return values.map(normalizeCandidateField).sort().join("|");
 }
 
 export function formatCodingSolutionManifestForPrompt(

@@ -450,12 +450,12 @@ function buildMeetingAnswerContractInstructions(
   if (profile === "coding") {
     return [
       "Use this exact coding profile:",
-      "中文思路: 用中文简洁说明最优算法、关键不变量和边界条件。",
+      "中文思路: 用中文简洁说明当前 Coding phase 拥有的算法、关键不变量和边界条件。不要在 baseline phase 擅自声称最优。",
       "Question: restate the focused coding problem in meeting-ready English.",
-      "Answer: concise English summary of the optimal solution.",
-      "Approach: key reasoning and correctness argument in English.",
-      "Code: complete runnable implementation in the trusted selected programming language.",
-      "Complexity: exact time and space complexity in English.",
+      "Answer: concise English summary of the solution candidate required by <interview_playbook> and <playbook_phase_state>.",
+      "Approach: key reasoning and correctness argument for that same visible candidate in English. It must not describe a different algorithm from Code or Complexity.",
+      "Code: when required by <playbook_phase_state>, provide one complete runnable implementation in the trusted selected programming language; otherwise output '-'.",
+      "Complexity: exact time and space complexity for the same visible candidate in English.",
       ...clarification,
       ...authorityEvidence,
     ];
