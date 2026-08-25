@@ -36,10 +36,11 @@ import {
   type MeetingMetadataMutationDisposition,
 } from "./meeting-metadata-evaluation.js";
 import { projectObservedAdvisorAttempt } from "./observed-advisor-outcome.js";
+import type { CurrentQuestionSourceKind } from "./current-question-settlement.js";
 
 export const HUMAN_GROUND_TRUTH_SCHEMA_VERSION = 2 as const;
 export const HUMAN_EVALUATION_DERIVATION_VERSION =
-  "human-evaluation-v2.9";
+  "human-evaluation-v2.10";
 
 export type HumanGroundTruthConfirmation = "confirmed" | "suggested";
 
@@ -203,6 +204,7 @@ export interface HumanEvaluationObservedSnapshotV2 {
   questionType?: CanonicalQuestionType;
   relation?: InterviewTaskRelation;
   parentAction?: HumanExpectedParentAction;
+  questionSourceKind?: CurrentQuestionSourceKind;
   settledParentId?: string;
   settledChildId?: string;
   settledBranchId?: string;
@@ -339,7 +341,9 @@ export function evaluateTaskSettlementTupleCompatibilityV2(input: {
 }): TaskSettlementTupleCompatibilityV2 {
   const recommendedParentAction =
     recommendedParentActionForRelation(input.relation);
-  const compatible = input.parentAction === recommendedParentAction;
+  const compatible =
+    input.parentAction === recommendedParentAction ||
+    (input.relation === "child-probe" && input.parentAction === "preserve");
   return {
     compatible,
     relation: input.relation,
@@ -674,6 +678,10 @@ export function buildHumanEvaluationObservedSnapshotV2(
   const questionTypeObservation = projectQuestionTypeObservation({ metadata });
   const questionType =
     questionTypeObservation.observedCurrentQuestionType;
+  const questionSourceKind = resolveObservedQuestionSourceKind(
+    trace.kind,
+    metadata
+  );
   const currentOnly =
     readBoolean(metadata.effectiveAdvisorCurrentOnly) === true;
   const relation = currentOnly
@@ -777,6 +785,7 @@ export function buildHumanEvaluationObservedSnapshotV2(
     questionType,
     relation,
     parentAction,
+    questionSourceKind,
     settledParentId,
     settledChildId,
     settledBranchId,
@@ -804,6 +813,28 @@ export function buildHumanEvaluationObservedSnapshotV2(
     ...traceEvidence,
     traceHash: fingerprint(stableStringify(traceEvidence)),
   };
+}
+
+function resolveObservedQuestionSourceKind(
+  traceKind: MeetingTrace["kind"],
+  metadata: Record<string, unknown>
+): CurrentQuestionSourceKind {
+  const sourceTurnIds = readStringArray(
+    metadata.settledExecutionPlanSourceTurnIds ??
+      metadata.currentQuestionSettlementSourceTurnIds ??
+      metadata.currentQuestionSourceTurnIds
+  );
+  const sourceObservationIds = readStringArray(
+    metadata.settledExecutionPlanSourceObservationIds ??
+      metadata.currentQuestionSettlementSourceObservationIds ??
+      metadata.currentQuestionSourceObservationIds
+  );
+  if (sourceTurnIds.length > 0 && sourceObservationIds.length > 0) {
+    return "mixed";
+  }
+  if (sourceObservationIds.length > 0) return "screen";
+  if (sourceTurnIds.length > 0) return "voice";
+  return traceKind === "screen" ? "screen" : "voice";
 }
 
 export function buildHumanGroundTruthSubjectV2(input: {

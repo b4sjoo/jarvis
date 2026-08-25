@@ -487,12 +487,11 @@ test("validates relation and parent-action tuples before ground truth is saved",
       parentAction: "preserve",
     }),
     {
-      compatible: false,
+      compatible: true,
       relation: "child-probe",
       parentAction: "preserve",
       recommendedParentAction: "attach-child",
-      reason:
-        "child-probe normally requires attach-child, not preserve.",
+      reason: undefined,
     }
   );
 });
@@ -991,6 +990,33 @@ test("projects current-only execution as parent preservation without borrowing a
   assert.equal(observed.settledParentId, undefined);
   assert.equal(observed.settledChildId, undefined);
   assert.equal(observed.contextReadScope, "current-only");
+});
+
+test("derives question source identity from committed evidence, not a stale label", () => {
+  const trace = buildSettledAttemptTrace({
+    id: "trace_voice_source",
+    status: "success",
+    questionType: "general-system-design",
+  });
+  trace.metadata = {
+    ...trace.metadata,
+    currentQuestionSettlementSourceKind: "screen",
+    settledExecutionPlanSourceTurnIds: ["turn_voice_1"],
+    settledExecutionPlanSourceObservationIds: [],
+  };
+  assert.equal(
+    buildHumanEvaluationObservedSnapshotV2(trace).questionSourceKind,
+    "voice"
+  );
+
+  trace.metadata = {
+    ...trace.metadata,
+    settledExecutionPlanSourceObservationIds: ["observation_1"],
+  };
+  assert.equal(
+    buildHumanEvaluationObservedSnapshotV2(trace).questionSourceKind,
+    "mixed"
+  );
 });
 
 test("does not pass settlement when relation is right but parent owner is wrong", () => {
