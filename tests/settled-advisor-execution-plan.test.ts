@@ -13,6 +13,7 @@ import {
   formatEffectiveAdvisorSettlementViewForTrace,
   formatSettledAdvisorExecutionPlanForTrace,
   rebaseSettledAdvisorExecutionPlanAfterOwnedParentMutation,
+  settledExecutionPlanAuthorizesTaskContinuity,
 } from "../src/lib/meeting/settled-advisor-execution-plan.js";
 import {
   primaryAskAnswerFocusText,
@@ -485,6 +486,57 @@ test("keeps a response-only active-parent read inside the immutable plan", () =>
   assert.equal(plan.contextReadScope, "active-parent-read");
   assert.deepEqual(plan.taskMutationPolicy, { kind: "preserve" });
   assert.equal(plan.artifactIntent, "preserve");
+  assert.equal(settledExecutionPlanAuthorizesTaskContinuity(plan, true), false);
+});
+
+test("lets the settled task command exclusively authorize output continuity", () => {
+  const task = activeTask("general-system-design");
+  const updatePlan = buildSettledAdvisorExecutionPlan({
+    settlement: settlement({
+      questionType: "general-system-design",
+      relation: "followup-parent",
+      parentMutationAuthorized: false,
+      relationMutationAuthorized: true,
+      activeParentId: task.parent.id,
+      activeParentRevision: task.parent.revisions,
+    }),
+    activeMeetingTask: task,
+    preBoundaryQuestionType: "general-system-design",
+    taskBoundaryCommitted: false,
+    childOwnsResponse: false,
+    providerSnapshot: providers,
+    playbook: playbook("general-system-design"),
+    memoryUseCase: "system_design_interview",
+    askFrame: "direct-answer",
+    topicDomain: "backend",
+    sourceQuestion: "How would multi-region failover change this design?",
+    createdAt: 100,
+  });
+
+  assert.deepEqual(updatePlan.taskMutationPolicy, {
+    kind: "update-parent-context",
+  });
+  assert.equal(settledExecutionPlanAuthorizesTaskContinuity(updatePlan), true);
+  assert.equal(settledExecutionPlanAuthorizesTaskContinuity(undefined, true), true);
+  assert.equal(settledExecutionPlanAuthorizesTaskContinuity(undefined), false);
+});
+
+test("keeps generated Advisor output outside the Screen source object", () => {
+  const hookSource = readFileSync(
+    `${process.cwd()}/src/hooks/useMeetingAssistant.ts`,
+    "utf8"
+  );
+
+  assert.equal(
+    hookSource.includes("shouldUpdateActiveScreenTaskFromAdvisorOutput"),
+    false
+  );
+  assert.equal(
+    /nextActiveScreenTask\s*=\s*\{[\s\S]*?content:\s*finalContent\.trim\(\)/.test(
+      hookSource
+    ),
+    false
+  );
 });
 
 test("keeps raw task relation and project anchor behind the consumer barrier", () => {

@@ -512,6 +512,15 @@ export function effectiveSettlementAuthorizesSourceTransition(
   );
 }
 
+export function settledExecutionPlanAuthorizesTaskContinuity(
+  plan: SettledAdvisorExecutionPlan | undefined,
+  fallbackAuthorized = false
+) {
+  return plan
+    ? plan.taskMutationPolicy.kind !== "preserve"
+    : fallbackAuthorized;
+}
+
 function isEffectiveCurrentQuestionSettlement(
   settlement: CurrentQuestionSettlementDecision | undefined
 ): settlement is EffectiveCurrentQuestionSettlement {

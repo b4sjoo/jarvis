@@ -517,6 +517,7 @@ import {
   buildQuestionTypeConsumerObservation,
   buildEffectiveAdvisorSettlementView,
   effectiveSettlementAuthorizesSourceTransition,
+  settledExecutionPlanAuthorizesTaskContinuity,
   buildSettledAdvisorExecutionPlan,
   commitTaskBoundaryCandidate,
   commitSourceOwnedTransition,
@@ -14005,7 +14006,10 @@ export function useMeetingAssistant() {
         !responseMutationSuppressed &&
         (settledExecutionPlan?.responseIntent === "advise" ||
           !settledExecutionPlan) &&
-        advisorTaskMutationDecision.commitParent &&
+        settledExecutionPlanAuthorizesTaskContinuity(
+          settledExecutionPlan,
+          advisorTaskMutationDecision.commitParent
+        ) &&
         advisorTaskSignals.openingRoute?.commitParent !== false &&
         (effectiveAdvisorSettlementView.relation !== "new-parent" ||
           taskBoundaryCommittedBeforeAdvisor ||
@@ -14160,49 +14164,7 @@ export function useMeetingAssistant() {
           });
         }
       }
-      let nextActiveScreenTask = promptContext.taskRuntime.screenAttachment;
-
-      if (
-        !transientPersonalStatusDecision &&
-        taskMutationAuthorization.authorized &&
-        mode === "screen-anchored" &&
-        nextActiveScreenTask &&
-        shouldUpdateActiveScreenTaskFromAdvisorOutput(finalContent)
-      ) {
-        const taxonomyAuthorityDecision = resolveTaskTaxonomyAuthority({
-          candidates: [{ source: "generated-answer" }],
-          existingQuestionType: nextActiveScreenTask.kind,
-        });
-        const updatedAt = Date.now();
-        const basedOnTurnIds =
-          latestTurn &&
-          !nextActiveScreenTask.basedOnTurnIds.includes(latestTurn.id)
-            ? [...nextActiveScreenTask.basedOnTurnIds, latestTurn.id]
-            : nextActiveScreenTask.basedOnTurnIds;
-
-        nextActiveScreenTask = {
-          ...nextActiveScreenTask,
-          updatedAt,
-          expiresAt: getActiveScreenTaskExpiresAt(state.settings, updatedAt),
-          language:
-            inferTrustedProgrammingLanguage({
-              textHints: [latestTurn?.text],
-              activeTaskLanguage: nextActiveScreenTask.language,
-              preparationLanguage:
-                preparationRuntimeReinforcement.programmingLanguage?.value,
-            }).language ?? nextActiveScreenTask.language,
-          content: finalContent.trim(),
-          basedOnTurnIds,
-        };
-        if (traceId) {
-          traceStoreRef.current.updateMetadata(traceId, {
-            ...formatTaskTaxonomyAuthorityForTrace(
-              taxonomyAuthorityDecision
-            ),
-            taxonomyMutationTarget: "active-screen-task",
-          });
-        }
-      }
+      const nextActiveScreenTask = promptContext.taskRuntime.screenAttachment;
 
       const advisorGenerationRuntimeTransition =
         taskMutationAuthorization.authorized &&
@@ -35095,22 +35057,6 @@ function inferMemoryTopicDomainFromQuery(query: string): MemoryTopicDomain {
     return "backend";
   }
   return "unknown";
-}
-
-function shouldUpdateActiveScreenTaskFromAdvisorOutput(content: string) {
-  const normalized = content.trim().toLowerCase();
-
-  if (!normalized || normalized === "-") return false;
-
-  if (!normalized.includes("clarifying question:")) return true;
-
-  return !(
-    normalized.includes("new task") ||
-    normalized.includes("new question") ||
-    normalized.includes("next question") ||
-    normalized.includes("recapture") ||
-    normalized.includes("capture or state")
-  );
 }
 
 function selectLatestMeAdjudicationContext(
