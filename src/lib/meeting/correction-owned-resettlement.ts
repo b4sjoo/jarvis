@@ -12,6 +12,10 @@ import {
   type QuestionTypeInferenceDecision,
 } from "./task-taxonomy.js";
 import type { LlmTaxonomyAdjudication } from "./taxonomy-adjudication.js";
+import {
+  createQuestionTypeSettlementProposal,
+  type LlmQuestionTypeAdjudication,
+} from "./question-type-adjudication.js";
 
 interface CorrectionParentOrigin {
   sourceQuestionUnitId?: string;
@@ -20,7 +24,7 @@ interface CorrectionParentOrigin {
   startTurnId?: string;
 }
 
-export const CORRECTION_OWNED_ADJUDICATION_BUDGET_MS = 1_200;
+export const CORRECTION_OWNED_ADJUDICATION_BUDGET_MS = 3_500;
 export const CORRECTION_OWNED_ADJUDICATION_MIN_CONFIDENCE = 0.88;
 
 export interface CorrectionOwnedAdjudicationTriggerDecision {
@@ -277,6 +281,120 @@ export function resolveCorrectionOwnedResettlement(input: {
     parentMutationAuthorized: true,
     correctedType,
     relation: settlement.relation,
+    confidence: adjudication.confidence,
+    reason: "human-correction-changed-current-question-domain",
+    settlement,
+  };
+}
+
+export function resolveCorrectionOwnedTypeResettlement(input: {
+  logicalQuestionUnit: LogicalQuestionUnit;
+  adjudication?: LlmQuestionTypeAdjudication;
+  operationAuthorized: boolean;
+  operationAuthorizationReason?: string;
+  activeParentId?: string;
+  activeParentRevision?: number;
+  activeParentType?: unknown;
+  targetOwnsActiveParent: boolean;
+  manualCorrectionRevision: number;
+  minConfidence?: number;
+}): CorrectionOwnedResettlementDecision {
+  const activeParentType =
+    normalizeCanonicalQuestionType(input.activeParentType) ?? "unknown";
+  const adjudication = input.adjudication;
+  if (!input.operationAuthorized) {
+    return {
+      disposition: "semantic-result-stale",
+      parentMutationAuthorized: false,
+      correctedType: activeParentType,
+      relation: "unknown",
+      confidence: adjudication?.confidence ?? 0,
+      reason:
+        input.operationAuthorizationReason ??
+        "correction-owned-operation-not-authorized",
+    };
+  }
+  if (!adjudication) {
+    return {
+      disposition: "semantic-result-rejected",
+      parentMutationAuthorized: false,
+      correctedType: activeParentType,
+      relation: "unknown",
+      confidence: 0,
+      reason: "correction-owned-type-adjudication-missing",
+    };
+  }
+
+  const currentQuestion = createProvisionalCurrentQuestion({
+    logicalQuestionUnit: input.logicalQuestionUnit,
+    sourceKind: "voice",
+  });
+  const settlement = settleCurrentQuestion({
+    currentQuestion,
+    llmProposal: createQuestionTypeSettlementProposal({
+      currentQuestion,
+      adjudication,
+      expectedParentId: input.activeParentId,
+      expectedParentRevision: input.activeParentRevision,
+    }),
+    activeParentId: input.activeParentId,
+    activeParentRevision: input.activeParentRevision,
+    manualCorrectionRevision: input.manualCorrectionRevision,
+    policy: {
+      allowLlmTypeRepair: true,
+      allowLlmRelationRepair: false,
+      allowLlmActionRepair: false,
+      llmTypeRepairMinConfidence:
+        input.minConfidence ?? CORRECTION_OWNED_ADJUDICATION_MIN_CONFIDENCE,
+      runtimeMutationAuthorized: true,
+      questionComplete: true,
+      commitParent: false,
+    },
+  });
+  const correctedType = settlement.questionType;
+  if (
+    correctedType === "unknown" ||
+    !isParentCanonicalQuestionType(correctedType) ||
+    settlement.typeAuthoritySource !== "llm-type-repair" ||
+    !settlement.typeMutationAuthorized
+  ) {
+    return {
+      disposition: "semantic-result-rejected",
+      parentMutationAuthorized: false,
+      correctedType: activeParentType,
+      relation: "unknown",
+      confidence: adjudication.confidence,
+      reason: "correction-owned-type-settlement-not-authorized",
+      settlement,
+    };
+  }
+  if (correctedType === activeParentType) {
+    return {
+      disposition: "same-domain-fast-path",
+      parentMutationAuthorized: false,
+      correctedType,
+      relation: "followup-parent",
+      confidence: adjudication.confidence,
+      reason: "corrected-question-remains-in-active-parent-domain",
+      settlement,
+    };
+  }
+  if (!input.targetOwnsActiveParent) {
+    return {
+      disposition: "semantic-result-rejected",
+      parentMutationAuthorized: false,
+      correctedType,
+      relation: "unknown",
+      confidence: adjudication.confidence,
+      reason: "correction-target-does-not-own-active-parent",
+      settlement,
+    };
+  }
+  return {
+    disposition: "same-question-retype",
+    parentMutationAuthorized: true,
+    correctedType,
+    relation: "followup-parent",
     confidence: adjudication.confidence,
     reason: "human-correction-changed-current-question-domain",
     settlement,

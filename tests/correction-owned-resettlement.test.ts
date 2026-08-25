@@ -5,6 +5,7 @@ import {
   correctionTargetOwnsParentOrigin,
   mapCorrectionOwnedPlaybookPhase,
   resolveCorrectionOwnedResettlement,
+  resolveCorrectionOwnedTypeResettlement,
 } from "../src/lib/meeting/correction-owned-resettlement.js";
 import type { LogicalQuestionUnit } from "../src/lib/meeting/logical-question-unit.js";
 import type { QuestionTypeInferenceDecision } from "../src/lib/meeting/task-taxonomy.js";
@@ -75,6 +76,34 @@ test("authorizes a correction-owned General SD to AI/ML SD retype", () => {
     decision.settlement?.relationAuthoritySource,
     "llm-type-repair"
   );
+});
+
+test("authorizes the same parent retype from the compact Question Type result", () => {
+  const logicalQuestionUnit = question(
+    "Design a RAG system for trip planning."
+  );
+  const decision = resolveCorrectionOwnedTypeResettlement({
+    logicalQuestionUnit,
+    adjudication: {
+      schemaVersion: 1,
+      questionType: "ai-ml-system-design",
+      confidence: 0.96,
+      evidenceSpans: ["RAG system"],
+    },
+    operationAuthorized: true,
+    activeParentId: "parent_1",
+    activeParentRevision: 3,
+    activeParentType: "general-system-design",
+    targetOwnsActiveParent: true,
+    manualCorrectionRevision: 4,
+  });
+
+  assert.equal(decision.disposition, "same-question-retype");
+  assert.equal(decision.parentMutationAuthorized, true);
+  assert.equal(decision.correctedType, "ai-ml-system-design");
+  assert.equal(decision.relation, "followup-parent");
+  assert.equal(decision.settlement?.typeMutationAuthorized, true);
+  assert.equal(decision.settlement?.relationMutationAuthorized, false);
 });
 
 test("rejects stale and low-confidence semantic resettlement results", () => {

@@ -223,6 +223,39 @@ test("manual type correction regenerates under its corrected human authority", (
   );
 });
 
+test("keeps canonical runtime ownership when prompt context is current-only", () => {
+  const job = createAdvisorTriggerJob({
+    source: "response-action",
+    mode: "live",
+    promptContext: buildPromptContext(),
+    sessionId: "session-a",
+    runtimeEpoch: 1,
+    runtimeCommitSnapshot: {
+      runtimeEpoch: 1,
+      sessionId: "session-a",
+      parentId: "parent-preserved",
+      parentRevision: 4,
+    },
+    snapshotTurnCount: 1,
+    taskMutationAuthority: "preserve-parent",
+  });
+
+  assert.equal(job.expectedParentId, "parent-preserved");
+  assert.equal(
+    decideAdvisorJobCommit({
+      job,
+      activeJobId: job.id,
+      currentRuntime: {
+        runtimeEpoch: 1,
+        sessionId: "session-a",
+        parentId: "parent-preserved",
+        parentRevision: 4,
+      },
+    }).reason,
+    "authorized"
+  );
+});
+
 test("freezes and traces the bounded logical question owned by a job", () => {
   const logicalQuestionUnit = {
     id: "logical-question-a",

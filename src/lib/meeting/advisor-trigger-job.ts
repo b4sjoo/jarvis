@@ -93,6 +93,7 @@ export interface CreateAdvisorTriggerJobInput {
   turnIntentDecision?: AdvisorTurnIntentDecision;
   sessionId: string;
   runtimeEpoch: number;
+  runtimeCommitSnapshot?: RuntimeCommitSnapshot;
   snapshotTurnCount: number;
   questionLineage?: QuestionInstanceLineage;
   logicalQuestionUnit?: LogicalQuestionUnit;
@@ -195,10 +196,14 @@ export function createAdvisorTriggerJob(
 ): AdvisorTriggerJob {
   const snapshot = cloneAdvisorPromptContext(input.promptContext);
   const id = createMeetingId("advisor_job");
-  const expectedParentId =
-    snapshot.activeMeetingTask?.parent.id;
-  const expectedParentRevision =
-    snapshot.activeMeetingTask?.parent.revisions;
+  const commitSnapshot = input.runtimeCommitSnapshot ?? {
+    runtimeEpoch: input.runtimeEpoch,
+    sessionId: input.sessionId,
+    parentId: snapshot.activeMeetingTask?.parent.id,
+    parentRevision: snapshot.activeMeetingTask?.parent.revisions,
+  };
+  const expectedParentId = commitSnapshot.parentId;
+  const expectedParentRevision = commitSnapshot.parentRevision;
   const humanResponseAuthority =
     input.source === "force-advise" || input.source === "manual-correction";
   const responseOpportunityGenerationGateOperationId =
@@ -232,12 +237,7 @@ export function createAdvisorTriggerJob(
     runtimeCommitToken: createRuntimeCommitToken({
       operationId: id,
       pipeline: "advisor",
-      snapshot: {
-        runtimeEpoch: input.runtimeEpoch,
-        sessionId: input.sessionId,
-        parentId: expectedParentId,
-        parentRevision: expectedParentRevision,
-      },
+      snapshot: commitSnapshot,
     }),
     questionLineage: input.questionLineage
       ? { ...input.questionLineage }

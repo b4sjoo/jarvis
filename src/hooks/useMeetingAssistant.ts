@@ -291,7 +291,7 @@ import {
   decideCorrectionOwnedAdjudicationTrigger,
   formatCorrectionOwnedResettlementForTrace,
   mapCorrectionOwnedPlaybookPhase,
-  resolveCorrectionOwnedResettlement,
+  resolveCorrectionOwnedTypeResettlement,
   correctionTargetOwnsParentOrigin,
   buildInterviewSessionBriefMemoryHint,
   buildInterviewSessionMemoryHint,
@@ -9556,6 +9556,10 @@ export function useMeetingAssistant() {
       turnIntentDecision: options.turnIntentDecision,
       sessionId: contextState.sessionId,
       runtimeEpoch: runtimeEpochRef.current,
+      runtimeCommitSnapshot: buildRuntimeCommitSnapshot({
+        runtimeEpoch: runtimeEpochRef.current,
+        contextState,
+      }),
       snapshotTurnCount: contextState.transcriptTurns.length,
       questionLineage: options.questionLineage,
       logicalQuestionUnit: options.logicalQuestionUnit,
@@ -31433,41 +31437,18 @@ export function useMeetingAssistant() {
             expectedParentId: adjudicationParent?.id,
             expectedParentRevision: adjudicationParent?.revisions,
           });
-          const adjudicationRequest = buildTaxonomyAdjudicationRequest({
+          const adjudicationRequest = buildQuestionTypeAdjudicationRequest({
             logicalQuestionUnit: application.logicalQuestionUnit,
-            activeParent: adjudicationParent
-              ? {
-                  idHash: hashTaxonomySourceTurnIds([
-                    adjudicationParent.id,
-                  ]),
-                  revision: adjudicationParent.revisions,
-                  questionType: adjudicationParentType,
-                  topic: adjudicationParent.topic,
-                  playbookPhase: adjudicationParent.playbookPhase,
-                  sharedScenarioEntities:
-                    adjudicationParent.parentContextHandoff
-                      ?.sharedScenarioContext.domainEntities,
-                }
-              : undefined,
-            latestMeCorrection: [
-              `Human correction: ${correction.input}`,
-              `Intended term: ${application.transaction.normalizedTerm}`,
-            ].join("\n"),
-            taskSwitchEvidence: [
-              "human-term-correction",
-              correctionOwnedTrigger.reason,
-              application.logicalQuestionUnit.boundaryReason,
-            ],
           });
           const prompts =
-            buildTaxonomyAdjudicationPrompts(adjudicationRequest);
+            buildQuestionTypeAdjudicationPrompts(adjudicationRequest);
           const promptText = [
             prompts.systemPrompt,
             prompts.userMessage,
           ].join("\n\n");
           traceStoreRef.current.recordInput(
             repairTrace.id,
-            "correction-owned adjudication model input",
+            "correction-owned question type model input",
             promptText,
             {
               correctionOwnedAdjudicationOperationId:
@@ -31482,7 +31463,7 @@ export function useMeetingAssistant() {
           sessionRecordingManagerRef.current?.recordModelInput({
             traceId: repairTrace.id,
             taskId: contextState.activeMeetingTask?.id,
-            label: "correction-owned adjudication model input",
+            label: "correction-owned question type model input",
             value: promptText,
             metadata: {
               correctionOwnedAdjudicationOperationId:
@@ -31497,12 +31478,12 @@ export function useMeetingAssistant() {
 
           const abortController = new AbortController();
           let requestResult:
-            | TaxonomyAdjudicationRequestResult
+            | QuestionTypeAdjudicationRequestResult
             | undefined;
           let timedOut = false;
           try {
             requestResult = await withTimeout(
-              requestTaxonomyAdjudication({
+              requestQuestionTypeAdjudication({
                 request: adjudicationRequest,
                 provider: modelRoute.provider,
                 selectedProvider: modelRoute.selectedProvider,
@@ -31592,7 +31573,7 @@ export function useMeetingAssistant() {
               });
             const parsed = requestResult.parsed;
             correctionOwnedResettlement =
-              resolveCorrectionOwnedResettlement({
+              resolveCorrectionOwnedTypeResettlement({
                 logicalQuestionUnit:
                   application.logicalQuestionUnit,
                 adjudication:
@@ -31617,10 +31598,10 @@ export function useMeetingAssistant() {
             if (requestResult.rawOutput) {
               traceStoreRef.current.recordOutput(
                 repairTrace.id,
-                "correction-owned adjudication raw output",
+                "correction-owned question type raw output",
                 requestResult.rawOutput.slice(
                   0,
-                  TAXONOMY_ADJUDICATION_MAX_OUTPUT_CHARS
+                  QUESTION_TYPE_ADJUDICATION_MAX_OUTPUT_CHARS
                 ),
                 {
                   providerDisposition:
@@ -31633,7 +31614,7 @@ export function useMeetingAssistant() {
                   ),
                   truncated:
                     requestResult.rawOutput.length >
-                    TAXONOMY_ADJUDICATION_MAX_OUTPUT_CHARS,
+                    QUESTION_TYPE_ADJUDICATION_MAX_OUTPUT_CHARS,
                 }
               );
             }
