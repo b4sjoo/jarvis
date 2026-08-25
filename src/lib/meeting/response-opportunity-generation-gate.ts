@@ -47,6 +47,8 @@ export type ResponseOpportunityEffectiveCommand =
   | "output-authorized"
   | "preserve-stable-answer";
 
+export const RESPONSE_OPPORTUNITY_GENERATION_WAIT_MS = 2_200;
+
 export interface ResponseOpportunityGenerationGateSnapshot {
   operationId: string;
   sessionId: string;
@@ -233,6 +235,40 @@ export function resolveResponseOpportunityEffectiveCommand(
   return snapshot.disposition === "output-authorized"
     ? "output-authorized"
     : "preserve-stable-answer";
+}
+
+export function shouldRetainImmediateTaskCommand(input: {
+  immediateCandidate: boolean;
+  mutationSuppressedByScope: boolean;
+  responseOpportunityOperationId?: string;
+  responseOpportunityGate?: ResponseOpportunityGenerationGateSnapshot;
+}) {
+  if (!input.immediateCandidate || input.mutationSuppressedByScope) {
+    return false;
+  }
+  if (!input.responseOpportunityOperationId) return true;
+  return (
+    !input.responseOpportunityGate ||
+    input.responseOpportunityGate.disposition === "pending" ||
+    input.responseOpportunityGate.disposition === "output-authorized"
+  );
+}
+
+export function responseOpportunityAuthorizesImmediateTaskCommand(input: {
+  immediateCandidate: boolean;
+  mutationSuppressedByScope: boolean;
+  responseOpportunityOperationId?: string;
+  responseOpportunityGate?: ResponseOpportunityGenerationGateSnapshot;
+}) {
+  if (!input.immediateCandidate || input.mutationSuppressedByScope) {
+    return false;
+  }
+  if (!input.responseOpportunityOperationId) return true;
+  return (
+    resolveResponseOpportunityEffectiveCommand(
+      input.responseOpportunityGate
+    ) === "output-authorized"
+  );
 }
 
 export function resolveResponseOpportunityRefreshAuthority<

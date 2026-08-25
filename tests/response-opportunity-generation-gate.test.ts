@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   ResponseOpportunityGenerationGateCoordinator,
+  responseOpportunityAuthorizesImmediateTaskCommand,
   resolveResponseOpportunityEffectiveCommand,
   resolveResponseOpportunityRefreshAuthority,
+  shouldRetainImmediateTaskCommand,
 } from "../src/lib/meeting/response-opportunity-generation-gate.js";
 import { decideRefreshAuthority } from "../src/lib/meeting/answer-generation-lease.js";
 import { decideAdvisorTurnIntent } from "../src/lib/meeting/advisor-turn-intent.js";
@@ -156,5 +158,89 @@ test("leaves refresh authority unchanged when no response gate exists", () => {
   assert.equal(
     resolveResponseOpportunityRefreshAuthority({ localAuthority: local }),
     local
+  );
+});
+
+test("retains an immediate task command while response authority is pending", () => {
+  const coordinator = new ResponseOpportunityGenerationGateCoordinator();
+  const pending = coordinator.create(lease());
+
+  assert.equal(
+    shouldRetainImmediateTaskCommand({
+      immediateCandidate: true,
+      mutationSuppressedByScope: false,
+      responseOpportunityOperationId: pending.operationId,
+      responseOpportunityGate: pending,
+    }),
+    true
+  );
+  assert.equal(
+    responseOpportunityAuthorizesImmediateTaskCommand({
+      immediateCandidate: true,
+      mutationSuppressedByScope: false,
+      responseOpportunityOperationId: pending.operationId,
+      responseOpportunityGate: pending,
+    }),
+    false
+  );
+});
+
+test("commits or drops the retained task command with the response command", () => {
+  const coordinator = new ResponseOpportunityGenerationGateCoordinator();
+  coordinator.create(lease());
+  const authorized = coordinator.settle({
+    operationId: "operation-a",
+    disposition: "output-authorized",
+    reason: "runtime-output-request",
+  });
+
+  assert.equal(
+    responseOpportunityAuthorizesImmediateTaskCommand({
+      immediateCandidate: true,
+      mutationSuppressedByScope: false,
+      responseOpportunityOperationId: "operation-a",
+      responseOpportunityGate: authorized,
+    }),
+    true
+  );
+
+  const suppressing = new ResponseOpportunityGenerationGateCoordinator();
+  suppressing.create(lease("operation-suppress"));
+  const suppressed = suppressing.settle({
+    operationId: "operation-suppress",
+    disposition: "output-suppressed",
+    reason: "runtime-no-output",
+  });
+  assert.equal(
+    shouldRetainImmediateTaskCommand({
+      immediateCandidate: true,
+      mutationSuppressedByScope: false,
+      responseOpportunityOperationId: "operation-suppress",
+      responseOpportunityGate: suppressed,
+    }),
+    false
+  );
+  assert.equal(
+    responseOpportunityAuthorizesImmediateTaskCommand({
+      immediateCandidate: true,
+      mutationSuppressedByScope: false,
+      responseOpportunityOperationId: "operation-suppress",
+      responseOpportunityGate: suppressed,
+    }),
+    false
+  );
+});
+
+test("never retains task mutation suppressed by current-only scope", () => {
+  const coordinator = new ResponseOpportunityGenerationGateCoordinator();
+  const pending = coordinator.create(lease());
+  assert.equal(
+    shouldRetainImmediateTaskCommand({
+      immediateCandidate: true,
+      mutationSuppressedByScope: true,
+      responseOpportunityOperationId: pending.operationId,
+      responseOpportunityGate: pending,
+    }),
+    false
   );
 });

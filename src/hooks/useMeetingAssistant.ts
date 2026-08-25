@@ -360,6 +360,9 @@ import {
   formatRefreshAuthorityForTrace,
   formatRuntimeTypeRepairOutputAuthorityForTrace,
   formatResponseOpportunityGenerationGateForTrace,
+  RESPONSE_OPPORTUNITY_GENERATION_WAIT_MS,
+  responseOpportunityAuthorizesImmediateTaskCommand,
+  shouldRetainImmediateTaskCommand,
   formatRuntimeAxisConflictForTrace,
   formatActiveQuestionTermCorrectionForTrace,
   formatAnswerSufficiencyDecisionForTrace,
@@ -11117,14 +11120,26 @@ export function useMeetingAssistant() {
       commitParent:
         llmTypeRepairFirstParentAdmission.authorized || commitParent,
     });
+    const taskBoundaryCandidateIsImmediate = Boolean(
+      taskBoundaryCandidate?.commitPolicy === "immediate"
+    );
+    const retainTaskBoundaryCandidate =
+      shouldRetainImmediateTaskCommand({
+        immediateCandidate: taskBoundaryCandidateIsImmediate,
+        mutationSuppressedByScope: responseMutationSuppressedByScope,
+        responseOpportunityOperationId:
+          responseOpportunityGenerationGateOperationId,
+        responseOpportunityGate:
+          refreshResponseOpportunityGenerationGate(),
+      });
     if (
-      !responseMutationSuppressed &&
       taskBoundaryCandidate &&
       (taskBoundaryCandidate.mutationDisposition ===
         "commit-before-advisor" ||
         taskBoundaryCandidate.mutationDisposition ===
           "pending-incomplete-question" ||
-        taskBoundaryCandidate.mutationDisposition === "pending-low-authority")
+        taskBoundaryCandidate.mutationDisposition === "pending-low-authority") &&
+      (!responseMutationSuppressed || retainTaskBoundaryCandidate)
     ) {
       const previousCandidate = expireTaskBoundaryCandidate(
         taskBoundaryCandidateRef.current
@@ -11144,6 +11159,14 @@ export function useMeetingAssistant() {
         }
       }
       taskBoundaryCandidateRef.current = taskBoundaryCandidate;
+      if (traceId && responseMutationSuppressed) {
+        traceStoreRef.current.updateMetadata(traceId, {
+          taskBoundaryCommandRetainedWhileResponsePending: true,
+          taskBoundaryResponseOpportunityDisposition:
+            refreshResponseOpportunityGenerationGate()?.disposition ??
+            "missing",
+        });
+      }
     }
     const questionTypeTraceMetadata =
       formatAdvisorQuestionTypeDecisionForTrace(advisorTaskSignals);
@@ -11575,7 +11598,52 @@ export function useMeetingAssistant() {
         );
     let taskBoundaryCommittedBeforeAdvisor = false;
     if (
-      !responseMutationSuppressed &&
+      taskBoundaryCandidateIsImmediate &&
+      !responseMutationSuppressedByScope &&
+      responseOpportunityGenerationGateOperationId &&
+      refreshResponseOpportunityGenerationGate()?.disposition === "pending"
+    ) {
+      const waitStartedAt = Date.now();
+      const gate = await responseOpportunityGenerationGateRef.current.wait(
+        responseOpportunityGenerationGateOperationId,
+        RESPONSE_OPPORTUNITY_GENERATION_WAIT_MS
+      );
+      responseOpportunityGenerationGate = gate;
+      const waitMs = Math.max(0, Date.now() - waitStartedAt);
+      if (gate.disposition === "output-authorized") {
+        responseMutationSuppressed = responseMutationSuppressedByScope;
+        commitDeferredResponseAuthorizedState();
+      } else if (taskBoundaryCandidate?.state === "pending") {
+        taskBoundaryCandidate = supersedeTaskBoundaryCandidate(
+          taskBoundaryCandidate
+        );
+        if (
+          taskBoundaryCandidateRef.current?.id === taskBoundaryCandidate.id
+        ) {
+          taskBoundaryCandidateRef.current = taskBoundaryCandidate;
+        }
+      }
+      if (traceId) {
+        traceStoreRef.current.updateMetadata(traceId, {
+          ...formatResponseOpportunityGenerationGateForTrace(gate),
+          taskBoundaryResponseOpportunityWaitMs: waitMs,
+          taskBoundaryResponseOpportunityDisposition: gate.disposition,
+          taskBoundaryCommandDroppedBeforeProvider:
+            gate.disposition !== "output-authorized",
+        });
+      }
+    }
+    const taskBoundaryCommandAuthorized =
+      responseOpportunityAuthorizesImmediateTaskCommand({
+        immediateCandidate: taskBoundaryCandidateIsImmediate,
+        mutationSuppressedByScope: responseMutationSuppressedByScope,
+        responseOpportunityOperationId:
+          responseOpportunityGenerationGateOperationId,
+        responseOpportunityGate:
+          refreshResponseOpportunityGenerationGate(),
+      });
+    if (
+      taskBoundaryCommandAuthorized &&
       taskBoundaryCandidate?.commitPolicy === "immediate" &&
       advisorJob.logicalQuestionUnit
     ) {
@@ -11676,6 +11744,8 @@ export function useMeetingAssistant() {
               runtimeCommitTokenRebased: true,
               runtimeCommitTokenRebaseReason:
                 "task-boundary-committed-before-advisor",
+              taskBoundaryCommandCommittedAfterResponseOpportunity:
+                Boolean(responseOpportunityGenerationGateOperationId),
             });
             if (committedContext.activeMeetingTask) {
               sessionRecordingManagerRef.current?.recordActiveMeetingTaskSnapshot(
@@ -13566,7 +13636,7 @@ export function useMeetingAssistant() {
       if (responseOpportunityGenerationGateOperationId) {
         const gate = await responseOpportunityGenerationGateRef.current.wait(
           responseOpportunityGenerationGateOperationId,
-          2_200
+          RESPONSE_OPPORTUNITY_GENERATION_WAIT_MS
         );
         responseOpportunityGenerationGate = gate;
         if (traceId) {
