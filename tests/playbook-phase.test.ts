@@ -477,7 +477,7 @@ test("manual next is blocked without an active task", () => {
   assert.equal(decision.targetArtifact, "none");
 });
 
-test("starts a coding parent with a simple complete baseline code artifact", () => {
+test("starts a coding parent with a novice-facing answer-only baseline", () => {
   const decision = decidePlaybookPhaseProgression({
     questionType: "coding",
     playbookId: "coding_algorithm",
@@ -489,14 +489,10 @@ test("starts a coding parent with a simple complete baseline code artifact", () 
   assert.equal(decision.phase, "baseline_reasoning");
   assert.equal(decision.action, "advance");
   assert.ok(decision.flags.includes("baseline_solution"));
-  assert.deepEqual(decision.requiredArtifacts, [
-    "answer",
-    "code",
-    "complexity",
-  ]);
+  assert.deepEqual(decision.requiredArtifacts, ["answer"]);
   assert.match(
     formatPlaybookPhaseDecisionForPrompt(decision, undefined),
-    /Emit the simplest complete correct implementation in Code/
+    /no programming background/i
   );
 });
 
@@ -514,11 +510,7 @@ test("generic implement wording cannot skip a new coding parent baseline", () =>
   assert.equal(decision.action, "advance");
   assert.ok(decision.flags.includes("baseline_solution"));
   assert.ok(!decision.flags.includes("implementation"));
-  assert.deepEqual(decision.requiredArtifacts, [
-    "answer",
-    "code",
-    "complexity",
-  ]);
+  assert.deepEqual(decision.requiredArtifacts, ["answer"]);
   assert.match(decision.reason, /initial-coding-parent-baseline-authority/);
 });
 
@@ -529,7 +521,8 @@ test("coding baseline clarifies callable contracts without adding a question sub
   assert.match(contract, /input\/output shape/);
   assert.match(contract, /request, response, status\/error behavior/);
   assert.match(contract, /without treating them as a separate question type/);
-  assert.match(contract, /simplest complete correct implementation in Code/);
+  assert.match(contract, /no programming or algorithm background/);
+  assert.match(contract, /Do not emit Code or Complexity/);
   assert.match(contract, /state concise, revisable assumptions/);
 });
 

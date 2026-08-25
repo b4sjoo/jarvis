@@ -418,17 +418,20 @@ export function resolvePlaybookRequiredArtifacts(input: {
   }
 
   if (questionType === "coding" || input.playbookId === "coding_algorithm") {
+    const phase = normalizeCodingPhase(input.phase);
     if (input.subtaskIntent === "complexity-probe") {
+      return ["answer", "complexity"];
+    }
+    if (phase === "baseline_reasoning") {
+      return ["answer"];
+    }
+    if (phase === "optimized_pseudocode") {
       return ["answer", "complexity"];
     }
     if (input.subtaskIntent === "implementation-probe") {
       return ["answer", "code", "complexity"];
     }
-    const phase = normalizeCodingPhase(input.phase);
-    return phase === "baseline_reasoning" ||
-      phase === "implementation_validation"
-      ? ["answer", "code", "complexity"]
-      : ["answer", "complexity"];
+    return ["answer", "code", "complexity"];
   }
 
   return ["answer"];
@@ -442,8 +445,8 @@ export function formatCodingPlaybookPhaseContract(
     return [
       "codingPhaseContract:",
       "- Explain the baseline bottleneck, then the optimized data structure, state, or invariant.",
-      "- Give clear pseudocode, boundary conditions, one spoken dry run, and exact target complexity.",
-      "- Preserve the existing baseline Code artifact; do not replace it with partial pseudocode or an empty Code section.",
+      "- Give clear pseudocode, boundary conditions, one spoken dry run, and exact target Complexity.",
+      "- Do not emit Code in this phase. Preserve any existing Code artifact until implementation_validation replaces it.",
       formatCodingSolutionManifestContract("optimized"),
     ].join("\n");
   }
@@ -462,8 +465,9 @@ export function formatCodingPlaybookPhaseContract(
     "- Establish input/output shape, signature or interface, units, ordering, mutation, duplicate or missing-input behavior, and relevant error semantics.",
     "- For endpoint or API-shaped tasks, clarify request, response, status/error behavior, state, and dependency failures without treating them as a separate question type.",
     "- Explain the simplest correct baseline, including brute force when useful.",
-    "- Walk through one small example and state the baseline complexity.",
-    "- Emit the simplest complete correct implementation in Code under the stated assumptions; do not optimize prematurely.",
+    "- Assume the listener has no programming or algorithm background. Explain the mechanics in plain spoken English.",
+    "- Walk through one small example and state the baseline complexity inside Approach.",
+    "- Do not emit Code or Complexity in this phase. The goal is shared understanding, not implementation.",
     formatCodingSolutionManifestContract("baseline"),
   ].join("\n");
 }
@@ -927,8 +931,8 @@ export function formatPlaybookPhaseDecisionForPrompt(
     "- If requested flags include evaluation_metrics, be concrete about metrics, logs, evaluation, and feedback-loop signals.",
     "- Requested flags describe what is being discussed; they are not proof that a phase or milestone is complete.",
     "- During requirement_clarification for General or AI/ML System Design, produce a shallow provisional Whiteboard immediately. Do not choose detailed technologies or silently fill open constraints.",
-    "- For Coding baseline_reasoning, explain the simplest correct solution and a small dry run. Emit the simplest complete correct implementation in Code under concise, revisable assumptions.",
-    "- For Coding optimized_pseudocode, explain the bottleneck, optimized structure, pseudocode, edge cases, dry run, and target complexity. Preserve the existing baseline Code artifact until implementation_validation replaces it.",
+    "- For Coding baseline_reasoning, explain the simplest correct solution for a listener with no programming background and give a small dry run. Do not emit Code or Complexity.",
+    "- For Coding optimized_pseudocode, explain the bottleneck, optimized structure, pseudocode, edge cases, dry run, and target Complexity. Do not emit Code; preserve any existing Code artifact until implementation_validation replaces it.",
     "- For Coding implementation_validation, emit complete runnable Code in the selected language plus exact Complexity and validation cases.",
     task?.parent.questionType === "project-deep-dive" ||
     normalizeCanonicalQuestionType(task?.parent.questionType) ===

@@ -198,12 +198,12 @@ test("uses the committed Coding phase as artifact authority without a subtype", 
   const baseline = authorizeResponseArtifactMutation({
     ...base,
     codingPhase: "baseline_reasoning",
-    requiredArtifacts: ["answer", "code", "complexity"],
+    requiredArtifacts: ["answer"],
   });
   const pseudocode = authorizeResponseArtifactMutation({
     ...base,
     codingPhase: "optimized_pseudocode",
-    requiredArtifacts: ["answer", "complexity"],
+    requiredArtifacts: ["answer"],
   });
   const implementation = authorizeResponseArtifactMutation({
     ...base,
@@ -213,11 +213,11 @@ test("uses the committed Coding phase as artifact authority without a subtype", 
 
   assert.deepEqual(
     [baseline.allowCode, baseline.allowComplexity],
-    [true, true]
+    [false, false]
   );
   assert.deepEqual(
     [pseudocode.allowCode, pseudocode.allowComplexity],
-    [false, true]
+    [false, false]
   );
   assert.deepEqual(
     [implementation.allowCode, implementation.allowComplexity],

@@ -16,11 +16,11 @@ test("selects the spoken baseline as the initial coding phase", () => {
   assert.equal(playbook?.phase, "baseline_reasoning");
   assert.match(
     formatInterviewPlaybookForPrompt(playbook),
-    /requiredArtifacts: answer, code, complexity/
+    /requiredArtifacts: answer/
   );
   assert.match(
     formatInterviewPlaybookForPrompt(playbook),
-    /do not optimize prematurely/i
+    /no programming or algorithm background/i
   );
 });
 
@@ -50,7 +50,7 @@ test("changes the coding output contract with the committed phase", () => {
 
   assert.match(
     formatInterviewPlaybookForPrompt(optimized),
-    /Preserve the existing baseline Code artifact/
+    /Do not emit Code in this phase/i
   );
   assert.match(
     formatInterviewPlaybookForPrompt(implementation),

@@ -607,17 +607,14 @@ test("builds one immutable coding plan for route, prompt, memory, and artifacts"
   assert.equal(plan.promptContract.profile, "coding");
   assert.equal(plan.memoryPolicy.questionType, "coding");
   assert.equal(plan.memoryPolicy.retrievalPolicyId, "coding");
-  assert.equal(plan.artifactPolicy.allowCode, true);
-  assert.deepEqual(plan.requiredArtifacts, [
-    "answer",
-    "code",
-    "complexity",
-  ]);
+  assert.equal(plan.artifactPolicy.allowCode, false);
+  assert.equal(plan.artifactPolicy.allowComplexity, false);
+  assert.deepEqual(plan.requiredArtifacts, ["answer"]);
   assert.equal(plan.artifactPolicy.allowWhiteboard, false);
   assert.equal(plan.factAnchorPolicy.policyId, "not-required");
   assert.equal(plan.responseIntent, "advise");
   assert.equal(plan.contextReadScope, "current-only");
-  assert.equal(plan.artifactIntent, "revise-code");
+  assert.equal(plan.artifactIntent, "preserve");
   assert.deepEqual(plan.taskMutationPolicy, {
     kind: "create-parent",
     type: "coding",
@@ -1225,12 +1222,8 @@ test("equivalent settlement inputs produce a stable plan id and compact trace", 
     trace.settledExecutionPlanContextReadScope,
     "current-only"
   );
-  assert.equal(trace.settledExecutionPlanArtifactIntent, "revise-code");
-  assert.deepEqual(trace.settledExecutionPlanRequiredArtifacts, [
-    "answer",
-    "code",
-    "complexity",
-  ]);
+  assert.equal(trace.settledExecutionPlanArtifactIntent, "preserve");
+  assert.deepEqual(trace.settledExecutionPlanRequiredArtifacts, ["answer"]);
   assert.equal(
     trace.settledExecutionPlanTaskMutationCommand,
     "create-parent"
@@ -1271,18 +1264,21 @@ test("freezes phase-owned Coding artifact authority across Manual Next", () => {
   const phases = [
     {
       phase: "baseline_reasoning" as const,
-      required: ["answer", "code", "complexity"],
-      allowCode: true,
+      required: ["answer"],
+      allowCode: false,
+      allowComplexity: false,
     },
     {
       phase: "optimized_pseudocode" as const,
       required: ["answer", "complexity"],
       allowCode: false,
+      allowComplexity: true,
     },
     {
       phase: "implementation_validation" as const,
       required: ["answer", "code", "complexity"],
       allowCode: true,
+      allowComplexity: true,
     },
   ];
 
@@ -1318,7 +1314,10 @@ test("freezes phase-owned Coding artifact authority across Manual Next", () => {
     assert.equal(plan.playbookPhase, current.phase);
     assert.deepEqual(plan.requiredArtifacts, current.required);
     assert.equal(plan.artifactPolicy.allowCode, current.allowCode);
-    assert.equal(plan.artifactPolicy.allowComplexity, true);
+    assert.equal(
+      plan.artifactPolicy.allowComplexity,
+      current.allowComplexity
+    );
     assert.deepEqual(plan.taskMutationPolicy, {
       kind: "advance-phase",
       phase: current.phase,
