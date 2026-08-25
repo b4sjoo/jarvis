@@ -321,6 +321,7 @@ export interface SessionEffectiveCurrentQuestionSettlementSummary
   contextReadScope?: string;
   nullHypothesisApplied?: boolean;
   nullHypothesisReason?: string;
+  currentOnly?: boolean;
   unresolvedAtConsumerBarrier: boolean;
 }
 
@@ -8382,10 +8383,16 @@ function buildEffectiveCurrentQuestionSettlementSummary(input: {
     ) === true || Boolean(settlementId && questionType && relation);
   if (!materialized || !settlementId) return undefined;
 
-  const effectiveParentId = readFirstString(
-    metadataSources,
-    "effectiveCurrentQuestionSettlementParentId"
-  );
+  const effectiveParentId =
+    readFirstString(
+      metadataSources,
+      "effectiveCurrentQuestionSettlementParentId"
+    ) ??
+    readFirstString(
+      metadataSources,
+      "settledExecutionPlanPostMutationParentId"
+    ) ??
+    readFirstString(metadataSources, "sourceTransitionParentAfterId");
   const unresolvedAtConsumerBarrier =
     readFirstBoolean(metadataSources, "unresolvedAtConsumerBarrier") ??
     relation === "unknown";
@@ -8454,6 +8461,10 @@ function buildEffectiveCurrentQuestionSettlementSummary(input: {
     contextReadScope: readFirstString(
       metadataSources,
       "effectiveCurrentQuestionContextReadScope"
+    ),
+    currentOnly: readFirstBoolean(
+      metadataSources,
+      "effectiveAdvisorCurrentOnly"
     ),
     nullHypothesisApplied: readFirstBoolean(
       metadataSources,

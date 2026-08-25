@@ -307,7 +307,7 @@ export function buildEffectiveAdvisorSettlementView(input: {
     alreadyEffective
       ? settlement.nullHypothesisApplied
       : questionType !== rawQuestionType || relation !== rawRelation;
-  const currentOnly = relation === "unknown";
+  const relationCurrentOnly = relation === "unknown";
   const relationReadsParent =
     relation === "followup-parent" ||
     relation === "resume-parent" ||
@@ -355,13 +355,6 @@ export function buildEffectiveAdvisorSettlementView(input: {
       : relation === "new-parent"
   );
   const activeParent = input.activeMeetingTask?.parent;
-  const contextReadScope: AdvisorContextReadScope =
-    relation === "child-probe" && activeTask?.child
-      ? "active-child-read"
-      : (relation === "followup-parent" || relation === "resume-parent") &&
-          activeTask?.parent
-        ? "active-parent-read"
-        : "current-only";
   const committedNewParentMatches = Boolean(
     settlement &&
       startsNewParent &&
@@ -383,6 +376,15 @@ export function buildEffectiveAdvisorSettlementView(input: {
         (!effectiveParentId || activeParent.id === effectiveParentId)
       ? activeParent
       : undefined;
+  const currentOnly =
+    relationCurrentOnly || (relationReadsParent && !parent);
+  const contextReadScope: AdvisorContextReadScope =
+    relation === "child-probe" && activeTask?.child && parent
+      ? "active-child-read"
+      : (relation === "followup-parent" || relation === "resume-parent") &&
+          parent
+        ? "active-parent-read"
+        : "current-only";
   const projectAnchor =
     parent?.projectBinding?.projectName ??
     parent?.projectBinding?.projectId ??
@@ -498,6 +500,16 @@ export function formatEffectiveAdvisorSettlementViewForTrace(
         diagnostics.proposedProjectAnchor !== view.projectAnchor
     ),
   };
+}
+
+export function effectiveSettlementAuthorizesSourceTransition(
+  view: EffectiveAdvisorSettlementView
+) {
+  return Boolean(
+    !view.currentOnly &&
+      view.relation !== "new-parent" &&
+      view.effectiveSettlement?.relationMutationAuthorized
+  );
 }
 
 function isEffectiveCurrentQuestionSettlement(
@@ -704,11 +716,13 @@ export function buildSettledAdvisorExecutionPlan(input: {
   const expectedParentId =
     input.expectedActiveMeetingTask?.parent.id ??
     input.activeMeetingTask?.parent.id ??
-    responseOnlyTaskScope?.preservedParentId;
+    responseOnlyTaskScope?.preservedParentId ??
+    input.settlement.activeParentId;
   const expectedParentRevision =
     input.expectedActiveMeetingTask?.parent.revisions ??
     input.activeMeetingTask?.parent.revisions ??
-    responseOnlyTaskScope?.preservedParentRevision;
+    responseOnlyTaskScope?.preservedParentRevision ??
+    input.settlement.activeParentRevision;
   const postMutationParentId = taskSnapshot?.parent.id;
   const postMutationParentRevision = taskSnapshot?.parent.revisions;
   const memoryUseCase = transientPersonalStatusDecision

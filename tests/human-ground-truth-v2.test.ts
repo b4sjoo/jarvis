@@ -967,6 +967,32 @@ test("uses the effective settlement while retaining raw abstention diagnostics",
   assert.equal(observed.contextReadScope, "active-parent-read");
 });
 
+test("projects current-only execution as parent preservation without borrowing an owner", () => {
+  const trace = buildSettledAttemptTrace({
+    id: "trace_current_only",
+    status: "success",
+    questionType: "behavioral",
+  });
+  trace.metadata = {
+    ...trace.metadata,
+    effectiveCurrentQuestionSettlementQuestionType: "behavioral",
+    effectiveCurrentQuestionSettlementRelation: "unknown",
+    effectiveCurrentQuestionSettlementParentMutationAuthorized: false,
+    effectiveAdvisorCurrentOnly: true,
+    effectiveCurrentQuestionContextReadScope: "current-only",
+    settledExecutionPlanTaskMutationCommand: "preserve",
+    activeMeetingParentId: "parent_coding",
+  };
+
+  const observed = buildHumanEvaluationObservedSnapshotV2(trace);
+  assert.equal(observed.questionType, "behavioral");
+  assert.equal(observed.relation, undefined);
+  assert.equal(observed.parentAction, "preserve");
+  assert.equal(observed.settledParentId, undefined);
+  assert.equal(observed.settledChildId, undefined);
+  assert.equal(observed.contextReadScope, "current-only");
+});
+
 test("does not pass settlement when relation is right but parent owner is wrong", () => {
   const trace = buildSettledAttemptTrace({
     id: "trace_wrong_parent",

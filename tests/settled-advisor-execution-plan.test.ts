@@ -9,6 +9,7 @@ import {
   authorizeSettledAdvisorExecutionPlan,
   buildEffectiveAdvisorSettlementView,
   buildSettledAdvisorExecutionPlan,
+  effectiveSettlementAuthorizesSourceTransition,
   formatEffectiveAdvisorSettlementViewForTrace,
   formatSettledAdvisorExecutionPlanForTrace,
   rebaseSettledAdvisorExecutionPlanAfterOwnedParentMutation,
@@ -370,6 +371,7 @@ test("uses compatible concrete type as a non-mutating parent continuity fallback
   assert.equal(view.nullHypothesisReason, "active-parent-preserved");
   assert.equal(view.effectiveSettlement?.relationMutationAuthorized, false);
   assert.equal(view.contextReadScope, "active-parent-read");
+  assert.equal(effectiveSettlementAuthorizesSourceTransition(view), false);
 });
 
 test("uses a matching concrete child type without replacing child identity", () => {
@@ -404,6 +406,44 @@ test("uses a matching concrete child type without replacing child identity", () 
   assert.equal(view.effectiveSettlement?.effectiveChildId, "child-a");
   assert.equal(view.effectiveSettlement?.relationMutationAuthorized, false);
   assert.equal(view.contextReadScope, "active-child-read");
+  assert.equal(effectiveSettlementAuthorizesSourceTransition(view), false);
+});
+
+test("does not reinterpret one effective settlement after the active branch changes", () => {
+  const originalTask = activeTask("general-system-design");
+  const first = buildEffectiveAdvisorSettlementView({
+    settlement: settlement({
+      questionType: "general-system-design",
+      relation: "unknown",
+      relationMutationAuthorized: false,
+      parentMutationAuthorized: false,
+      activeParentId: originalTask.parent.id,
+      activeParentRevision: originalTask.parent.revisions,
+    }),
+    activeMeetingTask: originalTask,
+    taskRuntimeRevision: 10,
+    fallback: {
+      questionType: "general-system-design",
+      relation: "unknown",
+    },
+  });
+  assert.equal(first.relation, "followup-parent");
+  assert.ok(first.effectiveSettlement);
+
+  const differentTask = activeTask("behavioral", { id: "parent-b" });
+  const replay = buildEffectiveAdvisorSettlementView({
+    settlement: first.effectiveSettlement,
+    activeMeetingTask: differentTask,
+    taskRuntimeRevision: 11,
+    fallback: { questionType: "behavioral", relation: "unknown" },
+  });
+
+  assert.equal(replay.questionType, "general-system-design");
+  assert.equal(replay.relation, "followup-parent");
+  assert.equal(replay.effectiveSettlement, first.effectiveSettlement);
+  assert.equal(replay.parent, undefined);
+  assert.equal(replay.contextReadScope, "current-only");
+  assert.equal(replay.currentOnly, true);
 });
 
 test("keeps a response-only active-parent read inside the immutable plan", () => {

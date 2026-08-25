@@ -2876,6 +2876,48 @@ test("compact summaries mark raw-only settlement proposals incomplete", () => {
   assert.deepEqual(summary.summarySettlementConflicts, []);
 });
 
+test("compact summaries treat current-only execution as resolved without a parent", () => {
+  const summary = buildCompactTraceSummary({
+    sessionId: "recording-session",
+    trace: buildCompletedTrace("current_only_summary_trace", 100, {
+      currentQuestionSettlementId: "raw_current_only",
+      currentQuestionSettlementSessionId: "runtime-session",
+      currentQuestionSettlementUnitId: "logical_current_only",
+      currentQuestionSettlementRevision: 1,
+      currentQuestionSettlementSourceHash: "source_current_only",
+      currentQuestionSettlementType: "behavioral",
+      currentQuestionSettlementRelation: "unknown",
+      effectiveCurrentQuestionSettlementMaterialized: true,
+      effectiveCurrentQuestionSettlementId: "effective_current_only",
+      effectiveCurrentQuestionSettlementSessionId: "runtime-session",
+      effectiveCurrentQuestionSettlementUnitId: "logical_current_only",
+      effectiveCurrentQuestionSettlementUnitRevision: 1,
+      effectiveCurrentQuestionSettlementSourceHash: "source_current_only",
+      effectiveCurrentQuestionSettlementQuestionType: "behavioral",
+      effectiveCurrentQuestionSettlementRelation: "unknown",
+      effectiveAdvisorCurrentOnly: true,
+      effectiveCurrentQuestionContextReadScope: "current-only",
+      unresolvedAtConsumerBarrier: false,
+      settledExecutionPlanSettlementId: "effective_current_only",
+      settledExecutionPlanQuestionType: "behavioral",
+      settledExecutionPlanRelation: "unknown",
+      promptCurrentQuestionSourceHash: "source_current_only",
+    }),
+    trigger: "manual",
+    traceExportPath: "traces/current_only_summary_trace/trace.json",
+    summaryPath: "traces/current_only_summary_trace/summary.json",
+  });
+
+  assert.equal(summary.currentQuestionSettlement?.currentOnly, true);
+  assert.equal(
+    summary.currentQuestionSettlement?.unresolvedAtConsumerBarrier,
+    false
+  );
+  assert.equal(summary.currentQuestionSettlement?.effectiveParentId, undefined);
+  assert.equal(summary.currentQuestionSettlementIncomplete, false);
+  assert.equal(summary.summarySettlementCoherent, true);
+});
+
 test("records a current-question term correction without copying provider state", async () => {
   const native = new ControlledRecordingInvoke();
   const manager = new SessionRecordingManager(undefined, native.invoke);

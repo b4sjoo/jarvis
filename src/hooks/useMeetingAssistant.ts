@@ -516,6 +516,7 @@ import {
   buildCommittedTaskBoundaryParent,
   buildQuestionTypeConsumerObservation,
   buildEffectiveAdvisorSettlementView,
+  effectiveSettlementAuthorizesSourceTransition,
   buildSettledAdvisorExecutionPlan,
   commitTaskBoundaryCandidate,
   commitSourceOwnedTransition,
@@ -11680,9 +11681,9 @@ export function useMeetingAssistant() {
       !transientPersonalStatusDecision &&
       !responseMutationSuppressed &&
       !responseOnlyTaskScope &&
-      effectiveAdvisorSettlementView.effectiveSettlement
-        ?.relationMutationAuthorized &&
-      effectiveAdvisorSettlementView.relation !== "new-parent" &&
+      effectiveSettlementAuthorizesSourceTransition(
+        effectiveAdvisorSettlementView
+      ) &&
       advisorJob.logicalQuestionUnit
     ) {
       const transitionContextBefore =

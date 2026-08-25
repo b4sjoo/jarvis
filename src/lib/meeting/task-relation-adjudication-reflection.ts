@@ -197,6 +197,8 @@ export function buildTaskRelationAdjudicationReflectionReport(input: {
     );
     const observedParentId = readString(
       metadata.effectiveCurrentQuestionSettlementParentId ??
+        metadata.settledExecutionPlanPostMutationParentId ??
+        metadata.sourceTransitionParentAfterId ??
         metadata.currentQuestionSettlementParentAfterId ??
         metadata.activeMeetingParentId ??
         metadata.taskRelationAdjudicationParentId
@@ -206,11 +208,14 @@ export function buildTaskRelationAdjudicationReflectionReport(input: {
         metadata.activeMeetingChildId ??
         metadata.taskRelationAdjudicationActiveChildId
     );
-    const effectiveRelation = normalizeRelation(
-      metadata.effectiveCurrentQuestionSettlementRelation ??
-        metadata.settledExecutionPlanTaskRelation ??
-        metadata.currentQuestionSettlementRelation
-    );
+    const effectiveRelation =
+      readBoolean(metadata.effectiveAdvisorCurrentOnly) === true
+        ? undefined
+        : normalizeRelation(
+            metadata.effectiveCurrentQuestionSettlementRelation ??
+              metadata.settledExecutionPlanTaskRelation ??
+              metadata.currentQuestionSettlementRelation
+          );
     const observedBranchId =
       effectiveRelation === "child-probe" && observedChildId
         ? observedChildId

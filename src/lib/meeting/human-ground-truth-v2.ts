@@ -674,19 +674,25 @@ export function buildHumanEvaluationObservedSnapshotV2(
   const questionTypeObservation = projectQuestionTypeObservation({ metadata });
   const questionType =
     questionTypeObservation.observedCurrentQuestionType;
-  const relation = normalizeRelation(
-    metadata.effectiveCurrentQuestionSettlementRelation ??
-      metadata.currentQuestionSettlementRelation ??
-      metadata.settledExecutionPlanTaskRelation ??
-      metadata.taskRelation ??
-      metadata.relationToActiveTask
-  );
+  const currentOnly =
+    readBoolean(metadata.effectiveAdvisorCurrentOnly) === true;
+  const relation = currentOnly
+    ? undefined
+    : normalizeRelation(
+        metadata.effectiveCurrentQuestionSettlementRelation ??
+          metadata.currentQuestionSettlementRelation ??
+          metadata.settledExecutionPlanTaskRelation ??
+          metadata.taskRelation ??
+          metadata.relationToActiveTask
+      );
   const parentAction = resolveObservedParentAction(
     relation,
     readBoolean(
       metadata.effectiveCurrentQuestionSettlementParentMutationAuthorized ??
         metadata.currentQuestionSettlementParentMutationAuthorized
-    )
+    ),
+    readString(metadata.settledExecutionPlanTaskMutationCommand),
+    currentOnly
   );
   const advisorAttempt = projectObservedAdvisorAttempt(metadata);
   const runtimeAction = advisorAttempt.runtimeAction;
@@ -710,15 +716,20 @@ export function buildHumanEvaluationObservedSnapshotV2(
     metadata,
     answerCommitted
   );
-  const settledParentId = readString(
-    metadata.effectiveCurrentQuestionSettlementParentId ??
-      metadata.activeMeetingParentId ??
-      metadata.currentQuestionSettlementParentAfterId
-  );
-  const settledChildId = readString(
-    metadata.effectiveCurrentQuestionSettlementChildId ??
-      metadata.activeMeetingChildId
-  );
+  const settledParentId = currentOnly
+    ? undefined
+    : readString(
+        metadata.effectiveCurrentQuestionSettlementParentId ??
+          metadata.settledExecutionPlanPostMutationParentId ??
+          metadata.activeMeetingParentId ??
+          metadata.currentQuestionSettlementParentAfterId
+      );
+  const settledChildId = currentOnly
+    ? undefined
+    : readString(
+        metadata.effectiveCurrentQuestionSettlementChildId ??
+          metadata.activeMeetingChildId
+      );
   const settledBranchId =
     relation === "child-probe" && settledChildId
       ? settledChildId
@@ -1204,8 +1215,26 @@ function didArtifactRevisionChange(
 
 function resolveObservedParentAction(
   relation: InterviewTaskRelation | undefined,
-  mutationAuthorized: boolean | undefined
+  mutationAuthorized: boolean | undefined,
+  lifecycleCommand: string | undefined,
+  currentOnly: boolean
 ): HumanExpectedParentAction | undefined {
+  if (
+    lifecycleCommand === "create-parent" ||
+    lifecycleCommand === "replace-parent"
+  ) {
+    return "create";
+  }
+  if (lifecycleCommand === "attach-child") return "attach-child";
+  if (lifecycleCommand === "resume-parent") return "resume";
+  if (
+    lifecycleCommand === "preserve" ||
+    lifecycleCommand === "update-parent-context" ||
+    lifecycleCommand === "advance-phase" ||
+    currentOnly
+  ) {
+    return "preserve";
+  }
   if (!relation) return undefined;
   if (relation === "new-parent") {
     return mutationAuthorized === false ? "none" : "create";
