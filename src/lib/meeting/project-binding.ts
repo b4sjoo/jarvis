@@ -431,10 +431,7 @@ export function buildProjectTopicEvidence({
   candidates: ProjectBindingCandidate[];
 }): ProjectTopicEvidence {
   const text = [sourceText, projectAnchor].filter(Boolean).join(" ").trim();
-  const deicticReference = isDeicticProjectReference(sourceText);
-  const explicitMatches = deicticReference
-    ? []
-    : candidates
+  const explicitMatches = candidates
     .map((candidate) => ({
       candidate,
       alias: findExplicitProjectAlias(sourceText, candidate),
@@ -447,6 +444,9 @@ export function buildProjectTopicEvidence({
         alias: string;
       } => Boolean(item.alias)
     );
+  const deicticReference =
+    explicitMatches.length === 0 &&
+    isDeicticProjectReference(sourceText);
   const unmatchedExplicitProject =
     !deicticReference && explicitMatches.length === 0
       ? extractExplicitProjectName(sourceText)

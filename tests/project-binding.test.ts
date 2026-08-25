@@ -231,6 +231,26 @@ test("keeps an active binding for a qualified deictic project reference", () => 
   assert.deepEqual(decision.topicEvidence?.conflictingProjectNames, []);
 });
 
+test("lets an exact Oasis alias outrank an overlapping deictic phrase", () => {
+  const decision = resolveProjectBinding({
+    existingBinding: makeBinding(),
+    questionType: "project-deep-dive",
+    relation: "followup-parent",
+    currentSourceText:
+      "I noticed that in Oasis project, you used NDJSON instead of plain JSON.",
+    sourceTurnIds: ["turn-oasis-exact"],
+    memoryContext: makeMemoryResult([
+      makeEvidence("mem_agentic", "agentic-memory", "Agentic Memory"),
+      makeEvidence("mem_oasis", "oasis", "Oasis"),
+    ]),
+  });
+
+  assert.equal(decision.action, "rebind");
+  assert.equal(decision.binding?.projectId, "oasis");
+  assert.equal(decision.topicEvidence?.deicticReference, false);
+  assert.deepEqual(decision.topicEvidence?.explicitProjectAliases, ["oasis"]);
+});
+
 test("does not invent a project identity from a deictic reference without a binding", () => {
   const decision = resolveProjectBinding({
     questionType: "project-deep-dive",
