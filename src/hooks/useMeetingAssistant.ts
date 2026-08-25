@@ -242,6 +242,7 @@ import {
   MeetingModelRequestOptions,
   MeetingModelProviderSnapshot,
   PENDING_CONFIRMATION_TTL_MS,
+  canOpeningRouteOwnCanonicalProjectParent,
   detectOpeningTaskRoute,
   OpeningRouteContext,
   ParentQuestionType,
@@ -10194,6 +10195,11 @@ export function useMeetingAssistant() {
       ? {
           ...correctedAdvisorTaskSignals,
           questionType: semanticUnknownRescueDecision.effectiveType,
+          openingRoute:
+            semanticUnknownRescueDecision.effectiveType ===
+            "project-deep-dive"
+              ? correctedAdvisorTaskSignals.openingRoute
+              : undefined,
           source: "semantic-unknown-rescue",
           latestTurnTaxonomyBoundaryReason:
             "semantic-unknown-rescue" as const,
@@ -10260,6 +10266,10 @@ export function useMeetingAssistant() {
             source: "current-question-settlement",
             reuseActivePlaybook:
               currentQuestionSettlement.relation !== "new-parent",
+            openingRoute:
+              currentQuestionSettlement.questionType === "project-deep-dive"
+                ? phaseControlledAdvisorTaskSignals.openingRoute
+                : undefined,
             latestTurnTaxonomyBoundaryReason:
               "current-question-settlement" as const,
             taxonomyFallbackSuppressed: true,
@@ -10764,14 +10774,14 @@ export function useMeetingAssistant() {
     });
     const taskBoundaryAuthoritySource = options.manualQuestionTypeCorrection
       ? "manual-correction"
-      : advisorTaskSignals.openingRoute
+      : advisorTaskSignals.openingRoute?.commitParent
         ? "opening-route"
         : advisorTaskSignals.source === "semantic-unknown-rescue"
           ? "semantic-unknown-rescue"
           : "accepted-transcript";
     const questionComplete =
       Boolean(options.manualQuestionTypeCorrection) ||
-      Boolean(advisorTaskSignals.openingRoute) ||
+      Boolean(advisorTaskSignals.openingRoute?.commitParent) ||
       Boolean(
         inferredTurnIntentDecision?.executionAuthorized &&
           inferredTurnIntentDecision.intent !== "incomplete" &&
@@ -10821,7 +10831,7 @@ export function useMeetingAssistant() {
           action: executionAuthorization.authorized
             ? ("answer" as const)
             : ("ignore" as const),
-          confidence: advisorTaskSignals.openingRoute
+          confidence: advisorTaskSignals.openingRoute?.commitParent
             ? 1
             : questionTypeDecisionAuthorityConfidence(
                 advisorTaskSignals.questionTypeDecision
@@ -11082,7 +11092,7 @@ export function useMeetingAssistant() {
         : taskBoundaryAuthoritySource,
       sourceKind: currentQuestionSourceKind,
       sourceObservationIds: currentQuestionSourceObservationIds,
-      confidence: advisorTaskSignals.openingRoute
+      confidence: advisorTaskSignals.openingRoute?.commitParent
         ? 1
         : questionTypeDecisionAuthorityConfidence(
             advisorTaskSignals.questionTypeDecision
@@ -33388,7 +33398,7 @@ function resolveAdvisorTaskSignals(
     classifierText && calculateWordEquivalent(classifierText) >= 3
       ? classifierText
       : "";
-  const openingRoute = latestUsefulText
+  const detectedOpeningRoute = latestUsefulText
     ? detectOpeningTaskRoute(latestUsefulText)
     : undefined;
   const latestQuestionTypeDecision = latestUsefulText
@@ -33396,9 +33406,36 @@ function resolveAdvisorTaskSignals(
         interviewSessionBrief: context.interviewSessionBrief,
       })
     : undefined;
-  const latestQuestionType = openingRoute?.questionType ??
-    latestQuestionTypeDecision?.type ??
-    "unknown";
+  const localConcreteQuestionType = normalizeCanonicalQuestionType(
+    latestQuestionTypeDecision?.type
+  );
+  const openingRouteFastPathEligible =
+    canOpeningRouteOwnCanonicalProjectParent({
+      route: detectedOpeningRoute,
+      hasActiveParent: hasAdvisorActiveTask(context),
+      explicitTaskBoundary,
+      concreteQuestionType: localConcreteQuestionType,
+    });
+  const openingRouteConflictsWithConcreteType = Boolean(
+    detectedOpeningRoute &&
+      localConcreteQuestionType &&
+      localConcreteQuestionType !== "unknown" &&
+      localConcreteQuestionType !== "project-deep-dive"
+  );
+  const openingRouteOwnsCanonicalType =
+    openingRouteFastPathEligible &&
+    !openingRouteConflictsWithConcreteType;
+  const openingRoute = openingRouteConflictsWithConcreteType
+    ? undefined
+    : detectedOpeningRoute
+      ? {
+          ...detectedOpeningRoute,
+          commitParent: openingRouteOwnsCanonicalType,
+        }
+      : undefined;
+  const latestQuestionType = openingRouteOwnsCanonicalType
+    ? detectedOpeningRoute?.questionType ?? "unknown"
+    : latestQuestionTypeDecision?.type ?? "unknown";
   const latestAskFrame =
     openingRoute?.askFrame ??
     (latestUsefulText ? inferMemoryAskFrameFromQuery(latestUsefulText) : "unknown");
@@ -33473,14 +33510,14 @@ function resolveAdvisorTaskSignals(
         ),
         projectAnchor: latestProjectAnchor,
         source:
-          openingRoute?.source ??
+          (openingRoute?.commitParent ? openingRoute.source : undefined) ??
           (explicitTaskBoundary
             ? "explicit-task-boundary"
             : "latest-turn-new-parent"),
         reuseActivePlaybook: false,
         openingRoute,
         latestTurnAskFrame: latestAskFrame,
-        latestTurnTaxonomyBoundaryReason: openingRoute
+        latestTurnTaxonomyBoundaryReason: openingRoute?.commitParent
           ? "opening-route"
           : explicitTaskBoundary
             ? "explicit-task-boundary"
@@ -33640,7 +33677,7 @@ function resolveAdvisorTaskSignals(
     latestQuestionType:
       normalizeCanonicalQuestionType(latestQuestionType) ?? "unknown",
     hasLatestUsefulText: Boolean(latestUsefulText),
-    hasOpeningRoute: Boolean(openingRoute),
+    hasOpeningRoute: Boolean(openingRoute?.commitParent),
   });
   const questionType = latestTurnBoundary.questionType;
 
@@ -33658,7 +33695,7 @@ function resolveAdvisorTaskSignals(
     subtaskIntent: inferAdvisorSubtaskIntent(latestUsefulText, questionType),
     projectAnchor: latestProjectAnchor,
     source:
-      openingRoute?.source ??
+      (openingRoute?.commitParent ? openingRoute.source : undefined) ??
       (latestTurnBoundary.allowsNewTaskSignal
         ? "latest-turn"
         : "latest-turn-taxonomy-boundary"),
@@ -33692,7 +33729,7 @@ function formatAdvisorQuestionTypeDecisionForTrace(
     ),
   };
 
-  if (signals.openingRoute) {
+  if (signals.openingRoute?.commitParent) {
     return {
       ...boundaryMetadata,
       questionTypeInferenceType: signals.questionType,

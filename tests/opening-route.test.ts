@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { detectOpeningTaskRoute } from "../src/lib/meeting/opening-route.js";
+import {
+  canOpeningRouteOwnCanonicalProjectParent,
+  detectOpeningTaskRoute,
+} from "../src/lib/meeting/opening-route.js";
 
 test("recognizes natural recruiter resume and project portfolio openings", () => {
   const cases = [
@@ -35,12 +38,12 @@ test("recognizes natural recruiter resume and project portfolio openings", () =>
   }
 });
 
-test("keeps self introduction transient and concrete project introductions durable", () => {
+test("keeps opening frames non-mutating until runtime authorizes the parent", () => {
   const selfIntro = detectOpeningTaskRoute(
     "Before we begin, could you briefly introduce yourself?"
   );
   const projectIntro = detectOpeningTaskRoute(
-    "Tell me about the Agentic Memory project and its hardest technical challenge."
+    "Tell me about your Agentic Memory project and its hardest technical challenge."
   );
   const selectedProject = detectOpeningTaskRoute(
     "Tell me about a project you are proud of."
@@ -51,9 +54,70 @@ test("keeps self introduction transient and concrete project introductions durab
   assert.equal(projectIntro?.kind, "project-intro");
   assert.equal(projectIntro?.projectAnchor, "Agentic Memory");
   assert.equal(projectIntro?.topicDomain, "ai-ml-infra");
-  assert.equal(projectIntro?.commitParent, true);
+  assert.equal(projectIntro?.commitParent, false);
   assert.equal(selectedProject?.kind, "project-intro");
-  assert.equal(selectedProject?.commitParent, true);
+  assert.equal(selectedProject?.commitParent, false);
+
+  assert.equal(
+    canOpeningRouteOwnCanonicalProjectParent({
+      route: projectIntro,
+      hasActiveParent: false,
+      concreteQuestionType: "ai-ml-system-design",
+    }),
+    false
+  );
+  assert.equal(
+    canOpeningRouteOwnCanonicalProjectParent({
+      route: projectIntro,
+      hasActiveParent: false,
+    }),
+    true
+  );
+  assert.equal(
+    canOpeningRouteOwnCanonicalProjectParent({
+      route: projectIntro,
+      hasActiveParent: true,
+    }),
+    false
+  );
+  assert.equal(
+    canOpeningRouteOwnCanonicalProjectParent({
+      route: projectIntro,
+      hasActiveParent: true,
+      explicitTaskBoundary: true,
+    }),
+    true
+  );
+  assert.equal(
+    canOpeningRouteOwnCanonicalProjectParent({
+      route: selectedProject,
+      hasActiveParent: false,
+    }),
+    false
+  );
+});
+
+test("does not treat generic technical follow-ups as authoritative project introductions", () => {
+  for (const text of [
+    "Explain this system.",
+    "Why did you choose Redis?",
+    "How did you implement the queue?",
+  ]) {
+    assert.equal(detectOpeningTaskRoute(text), undefined, text);
+  }
+
+  const ambiguousNamedSystem = detectOpeningTaskRoute(
+    "Explain the semantic search system."
+  );
+  assert.equal(ambiguousNamedSystem?.kind, "project-intro");
+  assert.equal(ambiguousNamedSystem?.commitParent, false);
+  assert.equal(
+    canOpeningRouteOwnCanonicalProjectParent({
+      route: ambiguousNamedSystem,
+      hasActiveParent: false,
+    }),
+    false
+  );
 });
 
 test("does not turn recruiter logistics, quoted examples, or future topics into openings", () => {
