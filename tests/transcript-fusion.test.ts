@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
+  decideExpiredConfirmationRecovery,
   findDuplicateSystemAudioTurnForMeTurn,
   shouldSuppressDuplicateSystemAudioTurn,
 } from "../src/lib/meeting/transcript-fusion.js";
@@ -78,6 +79,31 @@ test("uses the producer suppression disposition in both hook consumers", () => {
   assert.equal(
     microphoneConsumer.includes('duplicateDecision.confidence !== "low"'),
     false
+  );
+});
+
+test("preserves expired confirmation content without turning exact filler into an ask", () => {
+  assert.deepEqual(
+    decideExpiredConfirmationRecovery({
+      wordEquivalent: 1,
+      exactHighFiller: false,
+    }),
+    {
+      appendTranscript: true,
+      publishRecoveryTarget: true,
+      reason: "contentful-confirmation-expired",
+    }
+  );
+  assert.deepEqual(
+    decideExpiredConfirmationRecovery({
+      wordEquivalent: 1,
+      exactHighFiller: true,
+    }),
+    {
+      appendTranscript: true,
+      publishRecoveryTarget: false,
+      reason: "exact-filler-confirmation-expired",
+    }
   );
 });
 

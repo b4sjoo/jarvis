@@ -27,6 +27,15 @@ export interface DuplicateTranscriptDecision {
   reason: string;
 }
 
+export interface ExpiredConfirmationRecoveryDecision {
+  appendTranscript: boolean;
+  publishRecoveryTarget: boolean;
+  reason:
+    | "contentful-confirmation-expired"
+    | "exact-filler-confirmation-expired"
+    | "empty-confirmation-expired";
+}
+
 const CONFIRMATION_PHRASES = new Set([
   "yes",
   "yeah",
@@ -274,6 +283,31 @@ export function calculateWordEquivalent(text: string) {
       ?.length ?? 0;
 
   return englishWordCount + Math.ceil(cjkCharacterCount / 2);
+}
+
+export function decideExpiredConfirmationRecovery(input: {
+  wordEquivalent: number;
+  exactHighFiller: boolean;
+}): ExpiredConfirmationRecoveryDecision {
+  if (input.wordEquivalent < 1) {
+    return {
+      appendTranscript: false,
+      publishRecoveryTarget: false,
+      reason: "empty-confirmation-expired",
+    };
+  }
+  if (input.exactHighFiller) {
+    return {
+      appendTranscript: true,
+      publishRecoveryTarget: false,
+      reason: "exact-filler-confirmation-expired",
+    };
+  }
+  return {
+    appendTranscript: true,
+    publishRecoveryTarget: true,
+    reason: "contentful-confirmation-expired",
+  };
 }
 
 function compareTranscriptDuplicate(

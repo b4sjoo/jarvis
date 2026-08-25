@@ -314,6 +314,7 @@ import {
   formatDisplayTranscriptForTrace,
   calculateWordEquivalent,
   classifyMeTurn,
+  decideExpiredConfirmationRecovery,
   collectConfirmedMeFacts,
   findDuplicateSystemAudioTurnForMeTurn,
   findRecentMeClarificationForTurn,
@@ -17127,6 +17128,11 @@ export function useMeetingAssistant() {
         if (!pending || pending.turn.id !== turn.id) return;
 
         pendingConfirmationRef.current = null;
+        const recoveryDecision = decideExpiredConfirmationRecovery({
+          wordEquivalent: calculateWordEquivalent(turn.text),
+          exactHighFiller: isExactLowValueAcknowledgement(turn.text),
+        });
+        const currentSegment = isCurrentAudioSegment(segment);
         const expiredStepId = traceStoreRef.current.startStep(
           segment.traceId,
           "Pending confirmation expired",
@@ -17135,6 +17141,11 @@ export function useMeetingAssistant() {
             heldMs: Date.now() - heldAt,
             audioSegmentSeq: segment.sequence,
             audioSessionId: segment.sessionId,
+            confirmationRecoveryReason: recoveryDecision.reason,
+            confirmationTranscriptPreserved:
+              recoveryDecision.appendTranscript && currentSegment,
+            confirmationRecoveryTargetPublished:
+              recoveryDecision.publishRecoveryTarget && currentSegment,
           }
         );
         traceStoreRef.current.finishStep(
@@ -17142,6 +17153,52 @@ export function useMeetingAssistant() {
           expiredStepId,
           "success"
         );
+        if (currentSegment && recoveryDecision.appendTranscript) {
+          const intentDecision = decideAdvisorTurnIntent(turn.text, {
+            hasActiveTask: Boolean(
+              contextManagerRef.current.getState().activeMeetingTask
+            ),
+            hasRecentQuestionContext: Boolean(
+              currentQuestionLineageRef.current
+            ),
+          });
+          turn.contextPromptEligible = intentDecision.contextPromptEligible;
+          turn.contextFusionStatus = intentDecision.contextPromptEligible
+            ? "none"
+            : "debug-only";
+          appendTranscriptTurnForTrace(turn, segment.traceId, segment, {
+            turnGateAction: intentDecision.action,
+            turnGateReason: "pending-confirmation-expired",
+            transcriptAppendReason: "pending-confirmation-expired",
+          });
+          if (recoveryDecision.publishRecoveryTarget) {
+            const contextState = contextManagerRef.current.getState();
+            const primaryAskProjection = projectPrimaryAsk({
+              turnId: turn.id,
+              text: turn.text,
+            });
+            const logicalQuestionUnit = composeLogicalQuestionUnit({
+              currentTurn: turn,
+              sessionId: contextState.sessionId,
+              runtimeEpoch: runtimeEpochRef.current,
+              intentDecision,
+              primaryAskProjection,
+            });
+            publishResponseRecoveryTarget({
+              logicalQuestionUnit,
+              traceId: segment.traceId,
+              turn,
+              intentDecision,
+            });
+          }
+        }
+        traceStoreRef.current.updateMetadata(segment.traceId, {
+          confirmationRecoveryReason: recoveryDecision.reason,
+          confirmationTranscriptPreserved:
+            recoveryDecision.appendTranscript && currentSegment,
+          confirmationRecoveryTargetPublished:
+            recoveryDecision.publishRecoveryTarget && currentSegment,
+        });
         traceStoreRef.current.finishTrace(segment.traceId, "success");
       }, PENDING_CONFIRMATION_TTL_MS);
 
@@ -17157,7 +17214,12 @@ export function useMeetingAssistant() {
         status: activeRef.current ? "listening" : "idle",
       }));
     },
-    [clearPendingConfirmation]
+    [
+      appendTranscriptTurnForTrace,
+      clearPendingConfirmation,
+      isCurrentAudioSegment,
+      publishResponseRecoveryTarget,
+    ]
   );
 
   const scheduleQuestionTypeAdjudication = useCallback(
