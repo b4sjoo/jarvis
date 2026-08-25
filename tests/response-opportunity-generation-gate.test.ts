@@ -3,7 +3,10 @@ import test from "node:test";
 import {
   ResponseOpportunityGenerationGateCoordinator,
   resolveResponseOpportunityEffectiveCommand,
+  resolveResponseOpportunityRefreshAuthority,
 } from "../src/lib/meeting/response-opportunity-generation-gate.js";
+import { decideRefreshAuthority } from "../src/lib/meeting/answer-generation-lease.js";
+import { decideAdvisorTurnIntent } from "../src/lib/meeting/advisor-turn-intent.js";
 
 function lease(operationId = "operation-a") {
   return {
@@ -82,5 +85,76 @@ test("preserves local authority on wait timeout and rejects superseded work", as
   assert.equal(
     resolveResponseOpportunityEffectiveCommand(await staleWait),
     "preserve-stable-answer"
+  );
+});
+
+test("lets one response opportunity gate own refresh authority", () => {
+  const localDenied = decideRefreshAuthority({
+    source: "live-turn",
+    turnIntentDecision: decideAdvisorTurnIntent("Kubernetes.", {
+      hasActiveTask: true,
+    }),
+  });
+  const coordinator = new ResponseOpportunityGenerationGateCoordinator();
+  const pending = coordinator.create(lease());
+
+  const speculative = resolveResponseOpportunityRefreshAuthority({
+    localAuthority: localDenied,
+    operationId: pending.operationId,
+    snapshot: pending,
+  });
+  assert.equal(speculative.authorized, true);
+  assert.equal(speculative.reason, "response-opportunity-pending");
+
+  const authorized = coordinator.settle({
+    operationId: pending.operationId,
+    disposition: "output-authorized",
+    reason: "runtime-output-request",
+  });
+  const released = resolveResponseOpportunityRefreshAuthority({
+    localAuthority: localDenied,
+    operationId: pending.operationId,
+    snapshot: authorized,
+  });
+  assert.equal(released.authorized, true);
+  assert.equal(released.reason, "response-opportunity-output-authorized");
+
+  const suppressingCoordinator =
+    new ResponseOpportunityGenerationGateCoordinator();
+  suppressingCoordinator.create(lease("operation-suppress"));
+  const suppressed = suppressingCoordinator.settle({
+    operationId: "operation-suppress",
+    disposition: "output-suppressed",
+    reason: "runtime-no-output",
+  });
+  const denied = resolveResponseOpportunityRefreshAuthority({
+    localAuthority: {
+      ...localDenied,
+      authorized: true,
+      kind: "automatic-substantive",
+      reason: "substantive-turn",
+      maySupersedeGeneration: true,
+    },
+    operationId: "operation-suppress",
+    snapshot: suppressed,
+  });
+  assert.equal(denied.authorized, false);
+  assert.equal(
+    denied.reason,
+    "response-opportunity-preserve-stable-answer"
+  );
+});
+
+test("leaves refresh authority unchanged when no response gate exists", () => {
+  const local = decideRefreshAuthority({
+    source: "live-turn",
+    turnIntentDecision: decideAdvisorTurnIntent("Yeah, yeah.", {
+      hasActiveTask: true,
+    }),
+  });
+
+  assert.equal(
+    resolveResponseOpportunityRefreshAuthority({ localAuthority: local }),
+    local
   );
 });

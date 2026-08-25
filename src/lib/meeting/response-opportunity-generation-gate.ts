@@ -208,6 +208,35 @@ export function resolveResponseOpportunityEffectiveCommand(
     : "preserve-stable-answer";
 }
 
+export function resolveResponseOpportunityRefreshAuthority(input: {
+  localAuthority: RefreshAuthorityDecision;
+  operationId?: string;
+  snapshot?: ResponseOpportunityGenerationGateSnapshot;
+}): RefreshAuthorityDecision {
+  if (!input.operationId) return input.localAuthority;
+
+  const command = resolveResponseOpportunityEffectiveCommand(input.snapshot);
+  if (command === "preserve-stable-answer") {
+    return {
+      authorized: false,
+      kind: "denied",
+      reason: "response-opportunity-preserve-stable-answer",
+      hardOverride: false,
+      maySupersedeGeneration: false,
+    };
+  }
+
+  return {
+    authorized: true,
+    kind: "runtime-intent-answer",
+    reason: command
+      ? "response-opportunity-output-authorized"
+      : "response-opportunity-pending",
+    hardOverride: false,
+    maySupersedeGeneration: true,
+  };
+}
+
 function cloneSnapshot(
   snapshot: ResponseOpportunityGenerationGateSnapshot
 ): ResponseOpportunityGenerationGateSnapshot {
@@ -231,3 +260,4 @@ function missingGateSnapshot(
     settledAt: Date.now(),
   };
 }
+import type { RefreshAuthorityDecision } from "./answer-generation-lease.js";

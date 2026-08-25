@@ -449,6 +449,7 @@ import {
   resolveResponseOpportunityExecutionMode,
   formatResponseOpportunityProposalForTrace,
   resolveResponseOpportunityEffectiveCommand,
+  resolveResponseOpportunityRefreshAuthority,
   requestResponseOpportunity,
   QuestionTypeAdjudicationJob,
   QuestionTypeAdjudicationOutcomeDisposition,
@@ -9469,11 +9470,19 @@ export function useMeetingAssistant() {
     ) {
       recentAdvisorContinuityRef.current = [];
     }
-    const refreshAuthority = decideRefreshAuthority({
-      source,
-      turnIntentDecision: options.turnIntentDecision,
-      runtimeTypeRepairOutputAuthority:
-        options.runtimeTypeRepairOutputAuthority,
+    const responseOpportunityGateSnapshot =
+      responseOpportunityGenerationGateRef.current.read(
+        options.responseOpportunityGenerationGateOperationId
+      );
+    const refreshAuthority = resolveResponseOpportunityRefreshAuthority({
+      localAuthority: decideRefreshAuthority({
+        source,
+        turnIntentDecision: options.turnIntentDecision,
+        runtimeTypeRepairOutputAuthority:
+          options.runtimeTypeRepairOutputAuthority,
+      }),
+      operationId: options.responseOpportunityGenerationGateOperationId,
+      snapshot: responseOpportunityGateSnapshot,
     });
     if (
       source === "regenerate" ||
