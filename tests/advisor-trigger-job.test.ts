@@ -452,7 +452,8 @@ test("shadow execution cannot authorize output, task, or phase mutation", () => 
     reason: "turn-intent-would-suppress",
   });
   assert.equal(taskMutation.commitParent, false);
-  assert.equal(taskMutation.relation, "unknown");
+  assert.equal(taskMutation.relation, "new-parent");
+  assert.equal(taskMutation.preserveParentType, false);
   assert.equal(taskMutation.reason, "turn-intent-mutation-suppressed");
   assert.equal(phaseMutation.phase, "requirement_clarification");
   assert.equal(phaseMutation.action, "stay");

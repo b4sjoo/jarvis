@@ -303,9 +303,9 @@ export function decideAdvisorTaskMutation(input: {
 }): AdvisorTaskMutationDecision {
   if (input.mutationAuthorized === false) {
     return {
-      relation: "unknown",
+      relation: input.resolvedRelation,
       commitParent: false,
-      preserveParentType: true,
+      preserveParentType: false,
       allowExplicitRetype: false,
       reason: "turn-intent-mutation-suppressed",
     };

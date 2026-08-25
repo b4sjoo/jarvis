@@ -272,8 +272,12 @@ export function createRuntimeTypeRepairOutputAuthority(input: {
   const typeAndRelation =
     input.settlement.relationAuthoritySource === "llm-type-repair" &&
     input.settlement.relationMutationAuthorized &&
-    input.settlement.parentMutationAuthorized &&
-    input.settlement.relation === "new-parent";
+    ((input.settlement.relation === "new-parent" &&
+      input.settlement.parentMutationAuthorized) ||
+      ((input.settlement.relation === "followup-parent" ||
+        input.settlement.relation === "child-probe" ||
+        input.settlement.relation === "resume-parent") &&
+        !input.settlement.parentMutationAuthorized));
   if (
     input.settlement.typeAuthoritySource !== "llm-type-repair" ||
     !input.settlement.typeMutationAuthorized ||

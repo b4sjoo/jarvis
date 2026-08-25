@@ -354,6 +354,15 @@ test("releases only the approved no-parent and parent-without-child matrix", () 
   assert.equal(
     decideFirstBatchRelationRelease({
       currentQuestionType: "coding",
+      activeParentQuestionType: "general-system-design",
+      hasActiveChild: false,
+      parentAffinity: parentIndependent,
+    }).relation,
+    "new-parent"
+  );
+  assert.equal(
+    decideFirstBatchRelationRelease({
+      currentQuestionType: "coding",
       activeParentQuestionType: "behavioral",
       hasActiveChild: false,
       parentAffinity: parentIndependent,

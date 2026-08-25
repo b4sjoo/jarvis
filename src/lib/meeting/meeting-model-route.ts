@@ -1,6 +1,7 @@
 import type { TYPE_PROVIDER } from "@/types";
 import type { InterviewTaskRelation, SelectedProviderState } from "./types";
 import {
+  areCompatibleParentContinuityTypes,
   normalizeCanonicalQuestionType,
   type CanonicalQuestionType,
 } from "./task-taxonomy.js";
@@ -110,29 +111,25 @@ export function resolveMeetingResponseOwner(input: {
     };
   }
 
-  if (
-    input.relation === "child-probe" &&
-    input.childOwnsResponse &&
-    proposedQuestionType !== "unknown"
-  ) {
+  if (input.relation === "child-probe" && proposedQuestionType !== "unknown") {
     return {
       questionType: proposedQuestionType,
-      source: "authorized-child",
+      source: input.childOwnsResponse ? "authorized-child" : "current-question",
       preBoundaryType,
       relation: input.relation,
     };
   }
 
-  if (input.relation === "unknown" && activeChildType) {
-    return {
-      questionType: activeChildType,
-      source: "active-child-preserved",
-      preBoundaryType,
-      relation: input.relation,
-    };
-  }
-
-  if (postBoundaryParentType) {
+  if (
+    postBoundaryParentType &&
+    (input.relation === "followup-parent" ||
+      input.relation === "resume-parent") &&
+    (proposedQuestionType === "unknown" ||
+      areCompatibleParentContinuityTypes(
+        postBoundaryParentType,
+        proposedQuestionType
+      ))
+  ) {
     return {
       questionType: postBoundaryParentType,
       source: "canonical-parent",
@@ -142,7 +139,12 @@ export function resolveMeetingResponseOwner(input: {
   }
 
   return {
-    questionType: proposedQuestionType,
+    questionType:
+      proposedQuestionType !== "unknown"
+        ? proposedQuestionType
+        : input.relation === "child-probe"
+          ? activeChildType ?? "unknown"
+          : "unknown",
     source: "current-question",
     preBoundaryType,
     relation: input.relation,

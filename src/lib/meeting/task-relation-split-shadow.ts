@@ -380,6 +380,7 @@ export function decideFirstBatchRelationRelease(input: {
   }
   if (canQuestionTypeCreateParent(currentQuestionType)) {
     if (
+      currentQuestionType === "field-knowledge" &&
       canParentQuestionTypeOwnChild(
         activeParentQuestionType,
         currentQuestionType

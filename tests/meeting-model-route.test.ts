@@ -187,7 +187,7 @@ test("an authorized coding child owns its response under a design parent", () =>
   assert.equal(owner.questionType, "coding");
 });
 
-test("a non-authoritative child signal cannot take provider authority", () => {
+test("a non-authoritative child signal keeps the current question out of the parent route", () => {
   const owner = resolveMeetingResponseOwner({
     preBoundaryType: "general-system-design",
     postBoundaryParentType: "general-system-design",
@@ -197,8 +197,8 @@ test("a non-authoritative child signal cannot take provider authority", () => {
     childOwnsResponse: false,
   });
 
-  assert.equal(owner.source, "canonical-parent");
-  assert.equal(owner.questionType, "general-system-design");
+  assert.equal(owner.source, "current-question");
+  assert.equal(owner.questionType, "coding");
 });
 
 test("response-owner trace explains pre-boundary and committed types", () => {

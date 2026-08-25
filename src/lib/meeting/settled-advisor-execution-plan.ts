@@ -36,6 +36,7 @@ import type {
   ResponseOnlyTaskScope,
 } from "./response-only-task-scope.js";
 import {
+  areCompatibleParentContinuityTypes,
   normalizeCanonicalQuestionType,
   toMemoryUseCaseForQuestionType,
   type CanonicalQuestionType,
@@ -196,6 +197,7 @@ export interface EffectiveAdvisorSettlementView {
   taskRuntimeRevision: number;
   questionType: CanonicalQuestionType;
   relation: InterviewTaskRelation;
+  currentOnly: boolean;
   nullHypothesisApplied: boolean;
   nullHypothesisReason?:
     | "active-child-preserved"
@@ -228,72 +230,124 @@ export function buildEffectiveAdvisorSettlementView(input: {
   preserveCurrentBranchOnAbstention?: boolean;
 }): EffectiveAdvisorSettlementView {
   const settlement = input.settlement;
-  const rawQuestionType = settlement
-    ? settlement.questionType
+  const alreadyEffective = isEffectiveCurrentQuestionSettlement(settlement);
+  const rawQuestionType = alreadyEffective
+    ? settlement.rawQuestionType
+    : settlement
+      ? settlement.questionType
     : normalizeCanonicalQuestionType(input.fallback.questionType) ?? "unknown";
-  const rawRelation = settlement
-    ? toInterviewTaskRelation(settlement.relation)
+  const rawRelation = alreadyEffective
+    ? toInterviewTaskRelation(settlement.rawRelation)
+    : settlement
+      ? toInterviewTaskRelation(settlement.relation)
     : input.fallback.relation;
   const activeTask = input.activeMeetingTask;
   const preserveCurrentBranch =
     input.preserveCurrentBranchOnAbstention !== false;
-  const activeResponseOwnerType = normalizeCanonicalQuestionType(
-    activeTask?.child?.questionType ?? activeTask?.parent.questionType
+  const activeParentType = normalizeCanonicalQuestionType(
+    activeTask?.parent.questionType
   );
-  const questionType =
-    preserveCurrentBranch &&
-    rawQuestionType === "unknown" &&
-    activeResponseOwnerType
-      ? activeResponseOwnerType
-      : rawQuestionType;
-  const relation =
-    preserveCurrentBranch && rawRelation === "unknown"
-      ? settlement?.sourceKind === "screen"
-        ? "new-parent"
-        : activeTask?.child
-          ? "child-probe"
-          : activeTask?.parent
-            ? "followup-parent"
-            : "new-parent"
-      : rawRelation;
-  const nullHypothesisApplied =
-    questionType !== rawQuestionType || relation !== rawRelation;
-  const nullHypothesisReason = nullHypothesisApplied
-    ? settlement?.sourceKind === "screen" && rawRelation === "unknown"
-      ? "deliberate-screen-milestone"
-      : activeTask?.child
-        ? "active-child-preserved"
-        : activeTask?.parent
-          ? "active-parent-preserved"
-          : "no-parent-current-question"
+  const activeChildType = normalizeCanonicalQuestionType(
+    activeTask?.child?.questionType
+  );
+  let questionType = alreadyEffective
+    ? settlement.questionType
+    : rawQuestionType;
+  let relation = alreadyEffective
+    ? toInterviewTaskRelation(settlement.relation)
+    : rawRelation;
+  let nullHypothesisReason = alreadyEffective
+    ? settlement.nullHypothesisReason
     : undefined;
+
+  if (
+    !alreadyEffective &&
+    settlement &&
+    relation === "new-parent" &&
+    !settlement.parentMutationAuthorized
+  ) {
+    relation = "unknown";
+    nullHypothesisReason = activeTask?.parent
+      ? "active-parent-preserved"
+      : "no-parent-current-question";
+  }
+
+  if (
+    !alreadyEffective &&
+    preserveCurrentBranch &&
+    rawRelation === "unknown" &&
+    rawQuestionType !== "unknown"
+  ) {
+    if (activeTask?.child && rawQuestionType === activeChildType) {
+      relation = "child-probe";
+      nullHypothesisReason = "active-child-preserved";
+    } else if (
+      activeTask?.parent &&
+      areCompatibleParentContinuityTypes(rawQuestionType, activeParentType)
+    ) {
+      relation = "followup-parent";
+      nullHypothesisReason = "active-parent-preserved";
+    }
+  }
+
+  if (!alreadyEffective && rawQuestionType === "unknown") {
+    if (relation === "child-probe" && activeChildType) {
+      questionType = activeChildType;
+      nullHypothesisReason = "active-child-preserved";
+    } else if (
+      (relation === "followup-parent" || relation === "resume-parent") &&
+      activeParentType
+    ) {
+      questionType = activeParentType;
+      nullHypothesisReason = "active-parent-preserved";
+    }
+  }
+
+  const nullHypothesisApplied =
+    alreadyEffective
+      ? settlement.nullHypothesisApplied
+      : questionType !== rawQuestionType || relation !== rawRelation;
+  const currentOnly = relation === "unknown";
+  const relationReadsParent =
+    relation === "followup-parent" ||
+    relation === "resume-parent" ||
+    relation === "child-probe";
   const effectiveSettlement = settlement
-    ? Object.freeze({
-        ...settlement,
-        effective: true as const,
-        effectiveRevision: input.taskRuntimeRevision,
-        rawQuestionType,
-        rawRelation,
-        nullHypothesisApplied,
-        nullHypothesisReason,
-        effectiveParentId: activeTask?.parent.id,
-        effectiveParentRevision: activeTask?.parent.revisions,
-        effectiveChildId: activeTask?.child?.id,
-        questionType,
-        relation,
-        activeParentId: nullHypothesisApplied
-          ? activeTask?.parent.id
-          : settlement.activeParentId,
-        activeParentRevision: nullHypothesisApplied
-          ? activeTask?.parent.revisions
-          : settlement.activeParentRevision,
-        reasons: nullHypothesisApplied
-          ? [
-              ...settlement.reasons,
-              `eventual-resolution:${nullHypothesisReason}`,
-            ]
-          : [...settlement.reasons],
-      })
+    ? alreadyEffective
+      ? settlement
+      : Object.freeze({
+          ...settlement,
+          effective: true as const,
+          effectiveRevision: input.taskRuntimeRevision,
+          rawQuestionType,
+          rawRelation,
+          nullHypothesisApplied,
+          nullHypothesisReason,
+          effectiveParentId: relationReadsParent
+            ? activeTask?.parent.id
+            : undefined,
+          effectiveParentRevision: relationReadsParent
+            ? activeTask?.parent.revisions
+            : undefined,
+          effectiveChildId:
+            relation === "child-probe" ? activeTask?.child?.id : undefined,
+          questionType,
+          relation,
+          activeParentId:
+            nullHypothesisApplied && relationReadsParent
+              ? activeTask?.parent.id
+              : settlement.activeParentId,
+          activeParentRevision:
+            nullHypothesisApplied && relationReadsParent
+              ? activeTask?.parent.revisions
+              : settlement.activeParentRevision,
+          reasons: nullHypothesisApplied
+            ? [
+                ...settlement.reasons,
+                `eventual-resolution:${nullHypothesisReason}`,
+              ]
+            : [...settlement.reasons],
+        })
     : undefined;
   const startsNewParent = Boolean(
     settlement
@@ -304,7 +358,8 @@ export function buildEffectiveAdvisorSettlementView(input: {
   const contextReadScope: AdvisorContextReadScope =
     relation === "child-probe" && activeTask?.child
       ? "active-child-read"
-      : relation !== "new-parent" && activeTask?.parent
+      : (relation === "followup-parent" || relation === "resume-parent") &&
+          activeTask?.parent
         ? "active-parent-read"
         : "current-only";
   const committedNewParentMatches = Boolean(
@@ -314,23 +369,24 @@ export function buildEffectiveAdvisorSettlementView(input: {
       activeParent.sourceQuestionUnitId === settlement.logicalQuestionUnitId &&
       activeParent.sourceQuestionRevision === settlement.revision
   );
-  const parent = settlement
-    ? startsNewParent
-      ? committedNewParentMatches
-        ? activeParent
-        : undefined
-      : nullHypothesisApplied
-        ? activeParent
-        : settlement.activeParentId &&
-          activeParent?.id !== settlement.activeParentId
-        ? undefined
-        : activeParent
-    : activeParent;
-  const projectAnchor = settlement
-    ? parent?.projectBinding?.projectName ?? parent?.projectBinding?.projectId
-    : input.fallback.projectAnchor ??
-      parent?.projectBinding?.projectName ??
-      parent?.projectBinding?.projectId;
+  const effectiveParentId = alreadyEffective
+    ? settlement.effectiveParentId
+    : relationReadsParent
+      ? activeParent?.id
+      : undefined;
+  const parent = startsNewParent
+    ? committedNewParentMatches
+      ? activeParent
+      : undefined
+    : relationReadsParent &&
+        activeParent &&
+        (!effectiveParentId || activeParent.id === effectiveParentId)
+      ? activeParent
+      : undefined;
+  const projectAnchor =
+    parent?.projectBinding?.projectName ??
+    parent?.projectBinding?.projectId ??
+    (currentOnly ? input.fallback.projectAnchor : undefined);
   const playbook = parent?.playbook ??
     (settlement ? undefined : input.fallback.playbook);
   const playbookPhase = parent?.playbookPhase ??
@@ -346,6 +402,7 @@ export function buildEffectiveAdvisorSettlementView(input: {
     taskRuntimeRevision: input.taskRuntimeRevision,
     questionType,
     relation,
+    currentOnly,
     nullHypothesisApplied,
     nullHypothesisReason,
     effectiveSettlement,
@@ -376,6 +433,7 @@ export function formatEffectiveAdvisorSettlementViewForTrace(
     effectiveAdvisorTaskRuntimeRevision: view.taskRuntimeRevision,
     effectiveAdvisorQuestionType: view.questionType,
     effectiveAdvisorRelation: view.relation,
+    effectiveAdvisorCurrentOnly: view.currentOnly,
     effectiveAdvisorNullHypothesisApplied:
       view.nullHypothesisApplied,
     effectiveAdvisorNullHypothesisReason:
@@ -415,7 +473,8 @@ export function formatEffectiveAdvisorSettlementViewForTrace(
       view.effectiveSettlement?.rawRelation,
     unresolvedAtConsumerBarrier: Boolean(
       view.effectiveSettlement &&
-        (view.effectiveSettlement.relation === "unknown" ||
+        ((!view.currentOnly &&
+          view.effectiveSettlement.relation === "unknown") ||
           (view.effectiveSettlement.questionType === "unknown" &&
             view.effectiveSettlement.effectiveParentId))
     ),
@@ -439,6 +498,16 @@ export function formatEffectiveAdvisorSettlementViewForTrace(
         diagnostics.proposedProjectAnchor !== view.projectAnchor
     ),
   };
+}
+
+function isEffectiveCurrentQuestionSettlement(
+  settlement: CurrentQuestionSettlementDecision | undefined
+): settlement is EffectiveCurrentQuestionSettlement {
+  return Boolean(
+    settlement &&
+      (settlement as Partial<EffectiveCurrentQuestionSettlement>).effective ===
+        true
+  );
 }
 
 export function buildSettledAdvisorExecutionPlan(input: {
@@ -1119,11 +1188,17 @@ function resolveContextReadScope(input: {
   }
   if (
     input.taskSnapshot?.child &&
-    (input.relation === "child-probe" || input.relation === "unknown")
+    input.relation === "child-probe"
   ) {
     return "active-child-read";
   }
-  if (input.taskSnapshot) return "active-parent-read";
+  if (
+    input.taskSnapshot &&
+    (input.relation === "followup-parent" ||
+      input.relation === "resume-parent")
+  ) {
+    return "active-parent-read";
+  }
   return "current-only";
 }
 
@@ -1208,7 +1283,7 @@ function resolveTaskMutationPolicy(input: {
 function toInterviewTaskRelation(
   relation: CurrentQuestionRelation
 ): InterviewTaskRelation {
-  if (relation === "linked-parent-extension") return "new-parent";
+  if (relation === "linked-parent-extension") return "followup-parent";
   if (relation === "none") return "unknown";
   return relation;
 }

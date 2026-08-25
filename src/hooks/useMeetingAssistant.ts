@@ -10456,15 +10456,10 @@ export function useMeetingAssistant() {
       resolveResponseOnlyContextReadScope({
         preservedParent: responseOnlyPreservedTask,
         proposedRelation:
-          advisorTaskSignals.taskRelationAuthorityDecision
-            ?.proposedRelation ??
-          (llmTypeOnlySettlement
-            ? responseOnlyPreservedTask?.child
-              ? "child-probe"
-              : responseOnlyPreservedTask
-                ? "followup-parent"
-                : undefined
-            : advisorTaskSignals.taskRelation),
+          !llmTypeOnlySettlement &&
+          advisorTaskSignals.relationEvidenceAuthorized
+            ? advisorTaskSignals.taskRelation
+            : undefined,
       });
     const boundedRecentHistoryDecision =
       decideBoundedRecentHistoryRead({
@@ -10532,7 +10527,7 @@ export function useMeetingAssistant() {
         ...boundedRecentHistoryMetadata,
       });
     }
-    const responseOnlyTaskScope: ResponseOnlyTaskScope | undefined =
+    let responseOnlyTaskScope: ResponseOnlyTaskScope | undefined =
       options.responseOnlyTaskScopeOverride ??
       (llmTypeOnlySettlement &&
       !llmTypeRepairFirstParentAdmission.authorized &&
@@ -10570,7 +10565,7 @@ export function useMeetingAssistant() {
                 : responseOnlyBaseContextReadScope,
           })
         : undefined);
-    const responseMutationSuppressedByScope =
+    let responseMutationSuppressedByScope =
       Boolean(responseOnlyTaskScope) ||
       advisorJob.source === "force-advise";
     let responseMutationSuppressed =
@@ -11348,6 +11343,38 @@ export function useMeetingAssistant() {
         preserveCurrentBranchOnAbstention:
           !transientPersonalStatusDecision,
       });
+    if (effectiveAdvisorSettlementView.effectiveSettlement) {
+      currentQuestionSettlement =
+        effectiveAdvisorSettlementView.effectiveSettlement;
+    }
+    if (
+      effectiveAdvisorSettlementView.currentOnly &&
+      !responseOnlyTaskScope &&
+      advisorJob.logicalQuestionUnit
+    ) {
+      responseOnlyTaskScope = createResponseOnlyTaskScope({
+        logicalQuestionUnitId: advisorJob.logicalQuestionUnit.id,
+        revision: advisorJob.logicalQuestionUnit.revision,
+        sourceQuestion: advisorQuestionAnswerFocusText,
+        sourceTurnIds: advisorJob.logicalQuestionUnit.sourceTurnIds,
+        inferredType: effectiveAdvisorSettlementView.questionType,
+        relationDisposition: "ambiguous",
+        preservedParent: originalPromptContext.activeMeetingTask,
+        contextReadScope: "current-only",
+      });
+      promptContext = applyResponseOnlyTaskScopeToPromptContext(
+        promptContext,
+        responseOnlyTaskScope
+      );
+      responseMutationSuppressedByScope = true;
+      responseMutationSuppressed = true;
+      if (traceId) {
+        traceStoreRef.current.updateMetadata(
+          traceId,
+          formatResponseOnlyTaskScopeForTrace(responseOnlyTaskScope)
+        );
+      }
+    }
     advisorQuestionType = effectiveAdvisorSettlementView.questionType;
     let advisorAnswerProfile = resolveMeetingAnswerProfile(
       advisorQuestionType
@@ -11652,6 +11679,8 @@ export function useMeetingAssistant() {
       !transientPersonalStatusDecision &&
       !responseMutationSuppressed &&
       !responseOnlyTaskScope &&
+      effectiveAdvisorSettlementView.effectiveSettlement
+        ?.relationMutationAuthorized &&
       effectiveAdvisorSettlementView.relation !== "new-parent" &&
       advisorJob.logicalQuestionUnit
     ) {
@@ -25520,7 +25549,14 @@ export function useMeetingAssistant() {
                     preservedParent:
                       preflightContextState.activeMeetingTask,
                     proposedRelation:
-                      screenTaskRelationDecision.proposedRelation,
+                      screenCurrentQuestionSettlement
+                        ?.relationMutationAuthorized
+                        ? isRuntimeTaskRelation(
+                            screenCurrentQuestionSettlement.relation
+                          )
+                          ? screenCurrentQuestionSettlement.relation
+                          : undefined
+                        : undefined,
                   }),
               })
             : undefined;

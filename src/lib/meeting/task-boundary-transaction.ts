@@ -514,7 +514,7 @@ export function buildCommittedTaskBoundaryParent(input: {
 function normalizeBoundaryRelation(
   relation: CurrentQuestionSettlementDecision["relation"]
 ): InterviewTaskRelation {
-  if (relation === "linked-parent-extension") return "new-parent";
+  if (relation === "linked-parent-extension") return "followup-parent";
   if (relation === "none") return "unknown";
   return relation;
 }

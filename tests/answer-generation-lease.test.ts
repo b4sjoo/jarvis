@@ -159,6 +159,29 @@ test("grants answer authority to one converged type-and-relation settlement", ()
   assert.deepEqual(authority.authorizedArtifacts, ["answer"]);
 });
 
+test("grants answer authority to converged non-parent-mutating relations", () => {
+  for (const relation of [
+    "followup-parent",
+    "child-probe",
+    "resume-parent",
+  ] as const) {
+    const authority = createRuntimeTypeRepairOutputAuthority({
+      operationId: `type-relation-${relation}`,
+      settlement: buildTypeRepairSettlement({
+        questionType: relation === "child-probe" ? "field-knowledge" : "coding",
+        relation,
+        relationAuthoritySource: "llm-type-repair",
+        relationMutationAuthorized: true,
+        parentMutationAuthorized: false,
+      }),
+      manualCorrectionRevision: 1,
+    });
+
+    assert.ok(authority, relation);
+    assert.equal(authority.authorityScope, "type-and-relation", relation);
+  }
+});
+
 test("rejects stale type-repair output authority and broader mutation", () => {
   const authority = createRuntimeTypeRepairOutputAuthority({
     operationId: "type-operation-a",

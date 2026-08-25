@@ -219,7 +219,28 @@ test("keeps the committed project parent visible for a project follow-up", () =>
   assert.deepEqual(view.supportedFactAnchors, ["mem_oasis_ndjson"]);
 });
 
-test("projects active-parent abstention before downstream consumers", () => {
+test("normalizes a legacy linked extension to parent continuity, not a new parent", () => {
+  const task = activeTask("general-system-design");
+  const view = buildEffectiveAdvisorSettlementView({
+    settlement: settlement({
+      questionType: "ai-ml-system-design",
+      relation: "linked-parent-extension",
+      parentMutationAuthorized: false,
+    }),
+    activeMeetingTask: task,
+    taskRuntimeRevision: 10,
+    fallback: {
+      questionType: "ai-ml-system-design",
+      relation: "unknown",
+    },
+  });
+
+  assert.equal(view.relation, "followup-parent");
+  assert.equal(view.startsNewParent, false);
+  assert.equal(view.parentId, task.parent.id);
+});
+
+test("keeps active-parent abstention current-only without inventing compatibility", () => {
   const task = activeTask("general-system-design");
   const view = buildEffectiveAdvisorSettlementView({
     settlement: settlement({
@@ -241,20 +262,22 @@ test("projects active-parent abstention before downstream consumers", () => {
 
   assert.equal(view.rawQuestionType, "unknown");
   assert.equal(view.rawRelation, "unknown");
-  assert.equal(view.questionType, "general-system-design");
-  assert.equal(view.relation, "followup-parent");
-  assert.equal(view.nullHypothesisApplied, true);
-  assert.equal(view.nullHypothesisReason, "active-parent-preserved");
-  assert.equal(view.effectiveSettlement?.questionType, "general-system-design");
-  assert.equal(view.effectiveSettlement?.relation, "followup-parent");
+  assert.equal(view.questionType, "unknown");
+  assert.equal(view.relation, "unknown");
+  assert.equal(view.currentOnly, true);
+  assert.equal(view.nullHypothesisApplied, false);
+  assert.equal(view.nullHypothesisReason, undefined);
+  assert.equal(view.effectiveSettlement?.questionType, "unknown");
+  assert.equal(view.effectiveSettlement?.relation, "unknown");
   assert.equal(view.effectiveSettlement?.relationMutationAuthorized, false);
   assert.equal(view.effectiveSettlement?.effective, true);
   assert.equal(view.effectiveSettlement?.effectiveRevision, 4);
   assert.equal(view.effectiveSettlement?.rawRelation, "unknown");
-  assert.equal(view.contextReadScope, "active-parent-read");
+  assert.equal(view.effectiveSettlement?.effectiveParentId, undefined);
+  assert.equal(view.contextReadScope, "current-only");
 });
 
-test("projects active-child abstention without attaching another child", () => {
+test("keeps active-child abstention current-only without borrowing its type", () => {
   const task: ActiveMeetingTask = {
     ...activeTask("general-system-design"),
     child: {
@@ -287,15 +310,16 @@ test("projects active-child abstention without attaching another child", () => {
     },
   });
 
-  assert.equal(view.questionType, "field-knowledge");
-  assert.equal(view.relation, "child-probe");
-  assert.equal(view.nullHypothesisReason, "active-child-preserved");
+  assert.equal(view.questionType, "unknown");
+  assert.equal(view.relation, "unknown");
+  assert.equal(view.currentOnly, true);
+  assert.equal(view.nullHypothesisReason, undefined);
   assert.equal(view.effectiveSettlement?.relationMutationAuthorized, false);
-  assert.equal(view.effectiveSettlement?.effectiveChildId, "child-a");
-  assert.equal(view.contextReadScope, "active-child-read");
+  assert.equal(view.effectiveSettlement?.effectiveChildId, undefined);
+  assert.equal(view.contextReadScope, "current-only");
 });
 
-test("materializes deliberate Screen abstention as a non-mutating milestone", () => {
+test("keeps an unresolved Screen relation current-only instead of inventing a parent", () => {
   const task = activeTask("coding");
   const raw = settlement({
     questionType: "behavioral",
@@ -315,13 +339,71 @@ test("materializes deliberate Screen abstention as a non-mutating milestone", ()
   });
 
   assert.equal(view.rawRelation, "unknown");
-  assert.equal(view.relation, "new-parent");
+  assert.equal(view.relation, "unknown");
+  assert.equal(view.currentOnly, true);
   assert.equal(view.startsNewParent, false);
   assert.equal(view.contextReadScope, "current-only");
-  assert.equal(
-    view.nullHypothesisReason,
-    "deliberate-screen-milestone"
-  );
+  assert.equal(view.nullHypothesisReason, undefined);
+});
+
+test("uses compatible concrete type as a non-mutating parent continuity fallback", () => {
+  const task = activeTask("general-system-design");
+  const view = buildEffectiveAdvisorSettlementView({
+    settlement: settlement({
+      questionType: "general-system-design",
+      relation: "unknown",
+      relationMutationAuthorized: false,
+      parentMutationAuthorized: false,
+      activeParentId: task.parent.id,
+      activeParentRevision: task.parent.revisions,
+    }),
+    activeMeetingTask: task,
+    taskRuntimeRevision: 8,
+    fallback: {
+      questionType: "general-system-design",
+      relation: "unknown",
+    },
+  });
+
+  assert.equal(view.relation, "followup-parent");
+  assert.equal(view.currentOnly, false);
+  assert.equal(view.nullHypothesisReason, "active-parent-preserved");
+  assert.equal(view.effectiveSettlement?.relationMutationAuthorized, false);
+  assert.equal(view.contextReadScope, "active-parent-read");
+});
+
+test("uses a matching concrete child type without replacing child identity", () => {
+  const task: ActiveMeetingTask = {
+    ...activeTask("general-system-design"),
+    child: {
+      id: "child-a",
+      createdAt: 30,
+      updatedAt: 30,
+      questionType: "field-knowledge",
+      relation: "child-probe",
+      intent: "concept-probe",
+      question: "Explain consistent hashing.",
+      basedOnTurnIds: ["turn-child"],
+      basedOnObservationIds: [],
+    },
+  };
+  const view = buildEffectiveAdvisorSettlementView({
+    settlement: settlement({
+      questionType: "field-knowledge",
+      relation: "unknown",
+      relationMutationAuthorized: false,
+      parentMutationAuthorized: false,
+    }),
+    activeMeetingTask: task,
+    taskRuntimeRevision: 9,
+    fallback: { questionType: "field-knowledge", relation: "unknown" },
+  });
+
+  assert.equal(view.relation, "child-probe");
+  assert.equal(view.currentOnly, false);
+  assert.equal(view.effectiveSettlement?.effectiveChildId, "child-a");
+  assert.equal(view.effectiveSettlement?.relationMutationAuthorized, false);
+  assert.equal(view.contextReadScope, "active-child-read");
 });
 
 test("keeps a response-only active-parent read inside the immutable plan", () => {
@@ -423,7 +505,7 @@ test("builds one immutable coding plan for route, prompt, memory, and artifacts"
   assert.equal(plan.artifactPolicy.allowWhiteboard, false);
   assert.equal(plan.factAnchorPolicy.policyId, "not-required");
   assert.equal(plan.responseIntent, "advise");
-  assert.equal(plan.contextReadScope, "active-parent-read");
+  assert.equal(plan.contextReadScope, "current-only");
   assert.equal(plan.artifactIntent, "revise-code");
   assert.deepEqual(plan.taskMutationPolicy, {
     kind: "create-parent",
@@ -601,7 +683,7 @@ test("an authorized child owns its response Playbook while the parent Playbook r
   assert.deepEqual(plan.taskMutationPolicy, { kind: "preserve" });
 });
 
-test("relation abstention preserves the active child response owner and read scope", () => {
+test("relation abstention preserves task state without borrowing child response authority", () => {
   const task: ActiveMeetingTask = {
     ...activeTask("general-system-design", {
       playbook: playbook("general-system-design"),
@@ -638,9 +720,9 @@ test("relation abstention preserves the active child response owner and read sco
     sourceQuestion: "Why does it need multiple layers?",
   });
 
-  assert.equal(plan.responseOwner.source, "active-child-preserved");
-  assert.equal(plan.responseOwner.questionType, "field-knowledge");
-  assert.equal(plan.contextReadScope, "active-child-read");
+  assert.equal(plan.responseOwner.source, "current-question");
+  assert.equal(plan.responseOwner.questionType, "unknown");
+  assert.equal(plan.contextReadScope, "current-only");
   assert.deepEqual(plan.taskMutationPolicy, { kind: "preserve" });
   assert.equal(plan.taskSnapshot?.child?.id, "child-hnsw");
 });
@@ -1030,7 +1112,7 @@ test("equivalent settlement inputs produce a stable plan id and compact trace", 
   assert.equal(trace.settledExecutionPlanResponseIntent, "advise");
   assert.equal(
     trace.settledExecutionPlanContextReadScope,
-    "active-parent-read"
+    "current-only"
   );
   assert.equal(trace.settledExecutionPlanArtifactIntent, "revise-code");
   assert.deepEqual(trace.settledExecutionPlanRequiredArtifacts, [
