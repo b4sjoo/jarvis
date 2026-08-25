@@ -12,7 +12,13 @@ import {
   type QuestionTypeInferenceDecision,
 } from "./task-taxonomy.js";
 import type { LlmTaxonomyAdjudication } from "./taxonomy-adjudication.js";
-import type { ActiveInterviewParent } from "./types.js";
+
+interface CorrectionParentOrigin {
+  sourceQuestionUnitId?: string;
+  sourceQuestionRevision?: number;
+  canonicalQuestionSourceTurnIds?: string[];
+  startTurnId?: string;
+}
 
 export const CORRECTION_OWNED_ADJUDICATION_BUDGET_MS = 1_200;
 export const CORRECTION_OWNED_ADJUDICATION_MIN_CONFIDENCE = 0.88;
@@ -279,7 +285,7 @@ export function resolveCorrectionOwnedResettlement(input: {
 
 export function correctionTargetOwnsParentOrigin(input: {
   logicalQuestionUnit: LogicalQuestionUnit;
-  parent: ActiveInterviewParent | undefined;
+  parent: CorrectionParentOrigin | undefined;
 }) {
   const parent = input.parent;
   if (

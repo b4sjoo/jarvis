@@ -1,3 +1,30 @@
+interface RefreshAuthorityShape {
+  authorized: boolean;
+  kind: string;
+  reason: string;
+  hardOverride: boolean;
+  maySupersedeGeneration: boolean;
+  authorityId?: string;
+}
+
+type ResponseOpportunityRefreshAuthority =
+  | {
+      authorized: true;
+      kind: "runtime-intent-answer";
+      reason:
+        | "response-opportunity-pending"
+        | "response-opportunity-output-authorized";
+      hardOverride: false;
+      maySupersedeGeneration: true;
+    }
+  | {
+      authorized: false;
+      kind: "denied";
+      reason: "response-opportunity-preserve-stable-answer";
+      hardOverride: false;
+      maySupersedeGeneration: false;
+    };
+
 export interface ResponseOpportunityGenerationGateLease {
   operationId: string;
   sessionId: string;
@@ -208,11 +235,13 @@ export function resolveResponseOpportunityEffectiveCommand(
     : "preserve-stable-answer";
 }
 
-export function resolveResponseOpportunityRefreshAuthority(input: {
-  localAuthority: RefreshAuthorityDecision;
+export function resolveResponseOpportunityRefreshAuthority<
+  TAuthority extends RefreshAuthorityShape,
+>(input: {
+  localAuthority: TAuthority;
   operationId?: string;
   snapshot?: ResponseOpportunityGenerationGateSnapshot;
-}): RefreshAuthorityDecision {
+}): TAuthority | ResponseOpportunityRefreshAuthority {
   if (!input.operationId) return input.localAuthority;
 
   const command = resolveResponseOpportunityEffectiveCommand(input.snapshot);
@@ -260,4 +289,3 @@ function missingGateSnapshot(
     settledAt: Date.now(),
   };
 }
-import type { RefreshAuthorityDecision } from "./answer-generation-lease.js";

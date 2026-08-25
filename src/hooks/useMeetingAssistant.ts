@@ -547,7 +547,6 @@ import {
   formatRuntimeInferenceOperationForTrace,
   formatCurrentQuestionSettlementForTrace,
   finalizeCurrentQuestionFirstParentSettlement,
-  settlementAuthorizesFollowupParentScope,
   settlementAuthorizesTaskTransition,
   formatCurrentQuestionTerminalNoAnswerForTrace,
   formatQuestionTypeConsumerObservationForTrace,
@@ -9474,9 +9473,17 @@ export function useMeetingAssistant() {
     ) {
       recentAdvisorContinuityRef.current = [];
     }
+    const responseOpportunityGenerationGateOperationId =
+      options.logicalQuestionUnit
+        ? responseOpportunityGenerationGateRef.current.findOperationId({
+            logicalQuestionUnitId: options.logicalQuestionUnit.id,
+            logicalQuestionUnitRevision:
+              options.logicalQuestionUnit.revision,
+          })
+        : undefined;
     const responseOpportunityGateSnapshot =
       responseOpportunityGenerationGateRef.current.read(
-        options.responseOpportunityGenerationGateOperationId
+        responseOpportunityGenerationGateOperationId
       );
     const refreshAuthority = resolveResponseOpportunityRefreshAuthority({
       localAuthority: decideRefreshAuthority({
@@ -9485,7 +9492,7 @@ export function useMeetingAssistant() {
         runtimeTypeRepairOutputAuthority:
           options.runtimeTypeRepairOutputAuthority,
       }),
-      operationId: options.responseOpportunityGenerationGateOperationId,
+      operationId: responseOpportunityGenerationGateOperationId,
       snapshot: responseOpportunityGateSnapshot,
     });
     if (
@@ -9547,13 +9554,7 @@ export function useMeetingAssistant() {
       runtimeTypeRepairOutputAuthority:
         options.runtimeTypeRepairOutputAuthority,
       responseOpportunityGenerationGateOperationId:
-        options.logicalQuestionUnit
-          ? responseOpportunityGenerationGateRef.current.findOperationId({
-              logicalQuestionUnitId: options.logicalQuestionUnit.id,
-              logicalQuestionUnitRevision:
-                options.logicalQuestionUnit.revision,
-            })
-          : undefined,
+        responseOpportunityGenerationGateOperationId,
       manualCorrectionRevision: manualCorrectionRevisionRef.current,
       responseActionRevision: responseActionRevisionRef.current,
     });

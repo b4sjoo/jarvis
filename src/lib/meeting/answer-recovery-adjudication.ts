@@ -1,6 +1,5 @@
 import type { RuntimeInferenceRuntimeJob } from "./runtime-inference-runtime.js";
 import { buildRuntimeInferenceModelInput } from "./runtime-inference.js";
-import type { AdvisorJobSource } from "./advisor-trigger-job.js";
 
 export const ANSWER_RECOVERY_ADJUDICATION_SCHEMA_VERSION = 2;
 export const ANSWER_RESOLUTION_PROMPT_VERSION =
@@ -28,7 +27,7 @@ export type EvidenceRequirementDecision =
   | "unclear";
 
 export function shouldRunQuestionOnlyVisualEvidenceCheck(
-  source: AdvisorJobSource
+  source: string
 ) {
   return (
     source === "live-turn" ||

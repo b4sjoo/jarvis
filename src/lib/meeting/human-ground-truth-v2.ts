@@ -36,7 +36,8 @@ import {
   type MeetingMetadataMutationDisposition,
 } from "./meeting-metadata-evaluation.js";
 import { projectObservedAdvisorAttempt } from "./observed-advisor-outcome.js";
-import type { CurrentQuestionSourceKind } from "./current-question-settlement.js";
+
+type ObservedQuestionSourceKind = "voice" | "screen" | "mixed";
 
 export const HUMAN_GROUND_TRUTH_SCHEMA_VERSION = 2 as const;
 export const HUMAN_EVALUATION_DERIVATION_VERSION =
@@ -204,7 +205,7 @@ export interface HumanEvaluationObservedSnapshotV2 {
   questionType?: CanonicalQuestionType;
   relation?: InterviewTaskRelation;
   parentAction?: HumanExpectedParentAction;
-  questionSourceKind?: CurrentQuestionSourceKind;
+  questionSourceKind?: ObservedQuestionSourceKind;
   settledParentId?: string;
   settledChildId?: string;
   settledBranchId?: string;
@@ -818,7 +819,7 @@ export function buildHumanEvaluationObservedSnapshotV2(
 function resolveObservedQuestionSourceKind(
   traceKind: MeetingTrace["kind"],
   metadata: Record<string, unknown>
-): CurrentQuestionSourceKind {
+): ObservedQuestionSourceKind {
   const sourceTurnIds = readStringArray(
     metadata.settledExecutionPlanSourceTurnIds ??
       metadata.currentQuestionSettlementSourceTurnIds ??
