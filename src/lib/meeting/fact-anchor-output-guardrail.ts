@@ -190,18 +190,6 @@ function enforceFactAnchorOutputInEnforcementMode({
       parsedAnswer.answerDisposition === "supported-choices") &&
       !isSafeClarifyingDisposition(parsedAnswer, decision)
   );
-  if (
-    decision.state === "strong-anchor" &&
-    decision.claimSupportDecisions.length === 0 &&
-    unsupportedAnchorIds.length === 0 &&
-    parsedAnswer.supportingAnchorIds.some((anchorId) =>
-      decision.supportedAnchorIds.includes(anchorId)
-    ) &&
-    !unsafeClarifyingShape
-  ) {
-    return authorizeOriginal(parsedAnswer, "matching-authority-contract");
-  }
-
   const hasSupportedClaimSpans = decision.claimSupportDecisions.some(
     (support) =>
       isOutputSupportSpan(support)

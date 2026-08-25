@@ -20,6 +20,20 @@ Supporting anchor IDs: mem_story_aos_cleanup`);
     decision: makeDecision({
       state: "strong-anchor",
       supportedAnchorIds: ["mem_story_aos_cleanup"],
+      claimSupportDecisions: [
+        {
+          claimId: "claim:behavioral:mem_story_aos_cleanup",
+          predicateFamily: "behavioral-story",
+          anchorId: "mem_story_aos_cleanup",
+          projectCompatible: true,
+          predicateCompatible: true,
+          supportSpanPresent: true,
+          supportSpan: "I led the AOS cleanup.",
+          conflictFree: true,
+          decision: "allow",
+          reason: "test-support",
+        },
+      ],
     }),
     parsedAnswer: output,
   });
@@ -27,6 +41,29 @@ Supporting anchor IDs: mem_story_aos_cleanup`);
   assert.equal(result.modelOutputAuthorized, true);
   assert.equal(result.commitSource, "model-output");
   assert.equal(result.effectiveContent, output.rawContent);
+});
+
+test("does not let an empty personal claim decision authorize unrelated claims", () => {
+  const result = enforceFactAnchorOutput({
+    decision: makeDecision({
+      state: "strong-anchor",
+      requiredFor: "personal-logistics",
+      supportedAnchorIds: ["profile_work_authorization"],
+      supportedAnchorTitles: ["US work authorization"],
+      selectedAnchorId: "profile_work_authorization",
+      claimPredicateFamily: "personal-status",
+      claimSupportDecisions: [],
+    }),
+    parsedAnswer: parseMeetingAnswer(`Answer: I am authorized to work in the US. I have no health restrictions and I require a $300,000 salary.
+Answer disposition: factual-with-anchor
+Supporting anchor IDs: profile_work_authorization`),
+  });
+
+  assert.equal(result.modelOutputAuthorized, false);
+  assert.equal(result.commitSource, "sanitized-model-output");
+  assert.doesNotMatch(result.effectiveContent, /health restrictions/i);
+  assert.doesNotMatch(result.effectiveContent, /\$300,000/i);
+  assert.ok(result.sanitizedClaimCount > 0);
 });
 
 test("sanitizes unsupported hard claims while preserving a supported anchored story", () => {
