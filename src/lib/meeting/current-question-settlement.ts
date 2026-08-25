@@ -639,6 +639,22 @@ export function settlementAuthorizesFollowupParentScope(
   );
 }
 
+export function settlementAuthorizesTaskTransition(
+  decision: CurrentQuestionSettlementDecision | undefined
+) {
+  if (!decision) return false;
+  if (decision.relation === "new-parent") {
+    return decision.parentMutationAuthorized;
+  }
+  return Boolean(
+    (decision.relation === "followup-parent" ||
+      decision.relation === "child-probe" ||
+      decision.relation === "resume-parent") &&
+      decision.relationMutationAuthorized &&
+      decision.activeParentId
+  );
+}
+
 export function settleCurrentQuestionTerminalNoAnswer(input: {
   currentQuestion: ProvisionalCurrentQuestion;
   candidate?: CurrentQuestionTerminalNoAnswerCandidate;

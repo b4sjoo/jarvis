@@ -9,6 +9,7 @@ import {
   formatProvisionalCurrentQuestionForTrace,
   resolveCurrentQuestionSettlementDisposition,
   settlementAuthorizesFollowupParentScope,
+  settlementAuthorizesTaskTransition,
   settleCurrentQuestion,
   settleCurrentQuestionTerminalNoAnswer,
   selectCommittedSettlementForLogicalQuestionUnit,
@@ -198,6 +199,28 @@ test("authorizes active-parent scope only for a bound settled follow-up", () => 
     settlementAuthorizesFollowupParentScope({
       ...settledFollowup,
       activeParentId: undefined,
+    }),
+    false
+  );
+  assert.equal(settlementAuthorizesTaskTransition(settledFollowup), true);
+  assert.equal(
+    settlementAuthorizesTaskTransition({
+      ...settledFollowup,
+      relation: "child-probe",
+    }),
+    true
+  );
+  assert.equal(
+    settlementAuthorizesTaskTransition({
+      ...settledFollowup,
+      relation: "resume-parent",
+    }),
+    true
+  );
+  assert.equal(
+    settlementAuthorizesTaskTransition({
+      ...settledFollowup,
+      relationMutationAuthorized: false,
     }),
     false
   );

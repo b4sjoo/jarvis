@@ -546,6 +546,7 @@ import {
   formatCurrentQuestionSettlementForTrace,
   finalizeCurrentQuestionFirstParentSettlement,
   settlementAuthorizesFollowupParentScope,
+  settlementAuthorizesTaskTransition,
   formatCurrentQuestionTerminalNoAnswerForTrace,
   formatQuestionTypeConsumerObservationForTrace,
   formatEffectiveAdvisorSettlementViewForTrace,
@@ -25547,8 +25548,7 @@ export function useMeetingAssistant() {
           normalizeScreenQuestionType(settledScreenQuestionType) ??
           "unknown";
         const screenResponseOnlyTaskScope =
-          !screenCurrentQuestionSettlement?.parentMutationAuthorized &&
-          !settlementAuthorizesFollowupParentScope(
+          !settlementAuthorizesTaskTransition(
             screenCurrentQuestionSettlement
           ) &&
           screenTaskRelationDecision.responseOnly &&
@@ -25740,9 +25740,13 @@ export function useMeetingAssistant() {
 
         const committedScreenQuestionSettlement =
           screenCurrentQuestionSettlement;
+        const screenTransitionMutationAuthorized =
+          settlementAuthorizesTaskTransition(
+            committedScreenQuestionSettlement
+          );
         const screenTransitionCandidate =
           screenResponseOnlyTaskScope ||
-          !committedScreenQuestionSettlement?.parentMutationAuthorized
+          !screenTransitionMutationAuthorized
           ? undefined
           : createSourceOwnedTransitionCandidate({
             sessionId: preflightContextState.sessionId,
@@ -25757,7 +25761,7 @@ export function useMeetingAssistant() {
                 : "screen-preflight",
             mutationAuthorized: Boolean(
               readScreenAuthorization().authorized &&
-                committedScreenQuestionSettlement.parentMutationAuthorized
+                screenTransitionMutationAuthorized
             ),
             questionType: settledScreenQuestionType,
             question:
