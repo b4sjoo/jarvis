@@ -13033,6 +13033,12 @@ export function useMeetingAssistant() {
     let advisorResponseCandidate:
       | Readonly<MeetingAIResponseCandidate>
       | undefined;
+    let localAdvisorOutput:
+      | {
+          kind: "question-only-visual-evidence-request";
+          content: string;
+        }
+      | undefined;
     let advisorModelPromptText = "";
     let advisorModelRequestStartedAt: number | undefined;
     let advisorModelFirstContentAt: number | undefined;
@@ -13216,41 +13222,11 @@ export function useMeetingAssistant() {
         "Answer:",
         "Please share the relevant screenshot or code lines so I can answer this precisely.",
       ].join("\n");
-      const localParsedAnswer = parseMeetingAnswer(localContent);
-      const localSuggestion = {
-        ...advisorEngineRef.current.toSuggestion(
-          requestId,
-          localContent,
-          advisorJob.logicalQuestionUnit.sourceTurnIds,
-          [],
-          buildSuggestionTaskMetadata(visualContext.activeMeetingTask),
-          localParsedAnswer
-        ),
-        questionType: responseOwner.questionType,
-        sourceTraceId: traceId,
+      finalContent = localContent;
+      localAdvisorOutput = {
+        kind: "question-only-visual-evidence-request",
+        content: localContent,
       };
-      setState((previous) => ({
-        ...previous,
-        ...withLatestReliableSuggestion(previous, localSuggestion),
-        status: activeRef.current
-          ? "listening"
-          : returnStatus === "paused"
-            ? "paused"
-            : "idle",
-        partialSuggestion: "",
-        error: null,
-      }));
-      recordCurrentQuestionSettlement();
-      updateForceAdviseTargetForAdvisorOutcome({
-        advisorJob,
-        status: "already-advised",
-        outcome: "question-only-visual-evidence-request",
-      });
-      releaseAdvisorJob(advisorJob, "committed", {
-        commitAuthorized: true,
-        commitAuthorizationReason:
-          "question-only-visual-evidence-request",
-      });
       if (traceId) {
         const metadata = {
           ...formatAwaitingVisualEvidenceRecoveryForTrace(recovery, {
@@ -13263,7 +13239,9 @@ export function useMeetingAssistant() {
           ),
           visualEvidenceCheckAppliedToRuntime: Boolean(recovery),
           advisorModelStarted: false,
-          advisorOutputCommittedToUi: true,
+          advisorOutputCommittedToUi: false,
+          advisorOutputCandidateKind:
+            "question-only-visual-evidence-request",
         };
         traceStoreRef.current.updateMetadata(traceId, metadata);
         traceStoreRef.current.recordOutput(
@@ -13278,13 +13256,12 @@ export function useMeetingAssistant() {
           taskId: visualParent?.id,
           ...metadata,
         });
-        traceStoreRef.current.finishTrace(traceId, "success");
       }
-      return;
     }
 
     try {
-      for await (const event of advisorEngineRef.current.streamSuggestion({
+      if (!localAdvisorOutput) {
+        for await (const event of advisorEngineRef.current.streamSuggestion({
         requestId,
         mode: advisorPromptMode,
         promptContext: advisorModelPromptContext,
@@ -13460,107 +13437,108 @@ export function useMeetingAssistant() {
               },
             }
           : undefined,
-      })) {
-        if (event.type === "partial-reset") {
-          finalContent = "";
-          stagedAnswerDeliveryChunkCount = 0;
-          stagedAnswerDeliveryFirstChunkAt = undefined;
-          stagedAnswerDeliveryFirstVisiblePartialAt = undefined;
-          stagedAnswerDeliveryVisible = false;
-          setState((previous) => ({
-            ...previous,
-            partialSuggestion: "",
-          }));
-          continue;
-        }
-        if (event.type === "candidate") {
-          advisorResponseCandidate = event.candidate;
-          for (const outcome of event.candidate.attempts) {
-            generationResultLedgerRef.current.recordProviderAttempt(
-              answerGenerationLease,
-              outcome
-            );
+        })) {
+          if (event.type === "partial-reset") {
+            finalContent = "";
+            stagedAnswerDeliveryChunkCount = 0;
+            stagedAnswerDeliveryFirstChunkAt = undefined;
+            stagedAnswerDeliveryFirstVisiblePartialAt = undefined;
+            stagedAnswerDeliveryVisible = false;
+            setState((previous) => ({
+              ...previous,
+              partialSuggestion: "",
+            }));
+            continue;
           }
-          finalContent = event.candidate.content;
-          continue;
-        }
-        stagedAnswerDeliveryChunkCount += 1;
-        stagedAnswerDeliveryFirstChunkAt ??= Date.now();
-        if (rejectStaleCommit("partial-output")) {
-          rollbackStagedAnswerDelivery("stale-partial-output");
-          return;
-        }
-        finalContent = event.accumulated;
-        const factAnchorStreamingPartial =
-          projectFactAnchorStreamingPartial({
-            decision: factAnchorDecision,
-            content: event.accumulated,
-          });
-        const stagedPartialContent = projectStagedAnswerOnlyContent(
-          factAnchorStreamingPartial.visibleContent
-        );
-        const automaticVoiceAuthorized =
-          automaticVoiceStreamingAuthorized();
-        const stagedPartialDecision = decideStagedAnswerPartial({
-          accumulated: stagedPartialContent,
-          explicitRequest: stagedAnswerDeliveryExplicitRequest,
-          automaticVoiceAuthorized,
-          stableAnswerPresent: Boolean(stableAnswerRevisionRef.current),
-          guardrailHeld:
-            !outputCommitAuthorization.authorized ||
-            (holdAdvisorPartialForFactAnchor &&
-              !stagedPartialContent.trim()) ||
-            !responseOpportunityGenerationAuthorized(),
-          visibleStreamStarted: stagedAnswerDeliveryVisible,
-        });
-        if (stagedPartialDecision.visible) {
-          if (
-            stagedPartialDecision.startsVisibleStream ||
-            !stagedAnswerDeliveryFirstVisiblePartialAt
-          ) {
-            stagedAnswerDeliveryFirstVisiblePartialAt = Date.now();
-            if (traceId) {
-              traceStoreRef.current.updateMetadata(
-                traceId,
-                {
-                  ...formatStagedAnswerDeliveryForTrace({
-                    explicitRequest:
-                      stagedAnswerDeliveryExplicitRequest,
-                    automaticVoiceAuthorized,
-                    chunkCount: stagedAnswerDeliveryChunkCount,
-                    firstChunkAt: stagedAnswerDeliveryFirstChunkAt,
-                    firstVisiblePartialAt:
-                      stagedAnswerDeliveryFirstVisiblePartialAt,
-                    visibleStreamStarted: true,
-                  }),
-                  factAnchorCompletedSentenceBuffering:
-                    factAnchorStreamingPartial.bufferingEnabled,
-                  factAnchorStreamingHeldTrailingChars:
-                    factAnchorStreamingPartial.heldTrailingChars,
-                  factAnchorStreamingSanitizedClaimCount:
-                    factAnchorStreamingPartial.sanitizedClaimCount,
-                  factAnchorStreamingArtifactBoundaryHeld:
-                    factAnchorStreamingPartial.artifactBoundaryHeld,
-                  ...formatModelGenerationTimingForTrace({
-                    requestStartedAt: advisorModelRequestStartedAt,
-                    firstContentAt: advisorModelFirstContentAt,
-                    firstVisiblePartialAt:
-                      stagedAnswerDeliveryFirstVisiblePartialAt,
-                    completedAt: advisorModelCompletedAt,
-                    chunkCount: stagedAnswerDeliveryChunkCount,
-                  }),
-                }
+          if (event.type === "candidate") {
+            advisorResponseCandidate = event.candidate;
+            for (const outcome of event.candidate.attempts) {
+              generationResultLedgerRef.current.recordProviderAttempt(
+                answerGenerationLease,
+                outcome
               );
             }
+            finalContent = event.candidate.content;
+            continue;
           }
-          stagedAnswerDeliveryVisible =
-            stagedAnswerDeliveryVisible ||
-            stagedAnswerDeliveryExplicitRequest ||
-            automaticVoiceAuthorized;
-          setState((previous) => ({
-            ...previous,
-            partialSuggestion: stagedPartialContent,
-          }));
+          stagedAnswerDeliveryChunkCount += 1;
+          stagedAnswerDeliveryFirstChunkAt ??= Date.now();
+          if (rejectStaleCommit("partial-output")) {
+            rollbackStagedAnswerDelivery("stale-partial-output");
+            return;
+          }
+          finalContent = event.accumulated;
+          const factAnchorStreamingPartial =
+            projectFactAnchorStreamingPartial({
+              decision: factAnchorDecision,
+              content: event.accumulated,
+            });
+          const stagedPartialContent = projectStagedAnswerOnlyContent(
+            factAnchorStreamingPartial.visibleContent
+          );
+          const automaticVoiceAuthorized =
+            automaticVoiceStreamingAuthorized();
+          const stagedPartialDecision = decideStagedAnswerPartial({
+            accumulated: stagedPartialContent,
+            explicitRequest: stagedAnswerDeliveryExplicitRequest,
+            automaticVoiceAuthorized,
+            stableAnswerPresent: Boolean(stableAnswerRevisionRef.current),
+            guardrailHeld:
+              !outputCommitAuthorization.authorized ||
+              (holdAdvisorPartialForFactAnchor &&
+                !stagedPartialContent.trim()) ||
+              !responseOpportunityGenerationAuthorized(),
+            visibleStreamStarted: stagedAnswerDeliveryVisible,
+          });
+          if (stagedPartialDecision.visible) {
+            if (
+              stagedPartialDecision.startsVisibleStream ||
+              !stagedAnswerDeliveryFirstVisiblePartialAt
+            ) {
+              stagedAnswerDeliveryFirstVisiblePartialAt = Date.now();
+              if (traceId) {
+                traceStoreRef.current.updateMetadata(
+                  traceId,
+                  {
+                    ...formatStagedAnswerDeliveryForTrace({
+                      explicitRequest:
+                        stagedAnswerDeliveryExplicitRequest,
+                      automaticVoiceAuthorized,
+                      chunkCount: stagedAnswerDeliveryChunkCount,
+                      firstChunkAt: stagedAnswerDeliveryFirstChunkAt,
+                      firstVisiblePartialAt:
+                        stagedAnswerDeliveryFirstVisiblePartialAt,
+                      visibleStreamStarted: true,
+                    }),
+                    factAnchorCompletedSentenceBuffering:
+                      factAnchorStreamingPartial.bufferingEnabled,
+                    factAnchorStreamingHeldTrailingChars:
+                      factAnchorStreamingPartial.heldTrailingChars,
+                    factAnchorStreamingSanitizedClaimCount:
+                      factAnchorStreamingPartial.sanitizedClaimCount,
+                    factAnchorStreamingArtifactBoundaryHeld:
+                      factAnchorStreamingPartial.artifactBoundaryHeld,
+                    ...formatModelGenerationTimingForTrace({
+                      requestStartedAt: advisorModelRequestStartedAt,
+                      firstContentAt: advisorModelFirstContentAt,
+                      firstVisiblePartialAt:
+                        stagedAnswerDeliveryFirstVisiblePartialAt,
+                      completedAt: advisorModelCompletedAt,
+                      chunkCount: stagedAnswerDeliveryChunkCount,
+                    }),
+                  }
+                );
+              }
+            }
+            stagedAnswerDeliveryVisible =
+              stagedAnswerDeliveryVisible ||
+              stagedAnswerDeliveryExplicitRequest ||
+              automaticVoiceAuthorized;
+            setState((previous) => ({
+              ...previous,
+              partialSuggestion: stagedPartialContent,
+            }));
+          }
         }
       }
 
@@ -14480,7 +14458,9 @@ export function useMeetingAssistant() {
               contextState.taskRuntime.revision,
             currentTaskRuntimeRevision:
               advisorCommitTaskRuntimeState.revision,
-            candidateAccepted: Boolean(advisorResponseCandidate),
+            candidateAccepted: Boolean(
+              advisorResponseCandidate || localAdvisorOutput
+            ),
             visibleAnswerRevision: candidateStableAnswer.revision,
             transition: preparedAdvisorTransition.transition
               ? {

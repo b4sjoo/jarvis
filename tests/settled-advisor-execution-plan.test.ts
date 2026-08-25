@@ -539,6 +539,25 @@ test("keeps generated Advisor output outside the Screen source object", () => {
   );
 });
 
+test("routes the local visual-evidence response into the shared publication path", () => {
+  const hookSource = readFileSync(
+    `${process.cwd()}/src/hooks/useMeetingAssistant.ts`,
+    "utf8"
+  );
+  const branchStart = hookSource.indexOf(
+    "visualEvidenceCheckOutcome?.leaseAuthorized"
+  );
+  const sharedPublicationStart = hookSource.indexOf("    try {", branchStart);
+  assert.ok(branchStart >= 0);
+  assert.ok(sharedPublicationStart > branchStart);
+  const localBranch = hookSource.slice(branchStart, sharedPublicationStart);
+
+  assert.equal(localBranch.includes("localAdvisorOutput ="), true);
+  assert.equal(localBranch.includes("withLatestReliableSuggestion"), false);
+  assert.equal(localBranch.includes("releaseAdvisorJob"), false);
+  assert.equal(localBranch.includes("finishTrace"), false);
+});
+
 test("keeps raw task relation and project anchor behind the consumer barrier", () => {
   const hookSource = readFileSync(
     `${process.cwd()}/src/hooks/useMeetingAssistant.ts`,
