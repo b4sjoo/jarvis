@@ -432,19 +432,19 @@ export function buildQuestionTypeAdjudicationPrompts(
   const systemPrompt = request.reviewScope === "field-vs-coding"
     ? [
         "Review one automatic Field Knowledge proposal for Jarvis.",
-        "Return one JSON object only. Do not answer the interview question.",
+        "Return one minified JSON object on one line with no markdown fence. Do not answer the interview question.",
         "Classify only whether the current request asks the candidate to solve, implement, debug, trace, or analyze code or an algorithm, versus explain an independently answerable technical concept.",
         "Allowed questionType values: coding, field-knowledge, unknown.",
         "Use coding for implementation, debugging, algorithm derivation, complexity-driven solution work, or requests whose expected deliverable is code or pseudocode.",
         "Use field-knowledge only for a factual or conceptual explanation that does not require producing or repairing a solution.",
         "Use unknown when the bounded evidence cannot distinguish the two.",
         "Do not decide task relation, parent or child status, response action, playbook phase, evidence mode, or meeting metadata.",
-        "evidenceSpans must contain one or more exact verbatim substrings from question.sourceTexts.",
+        "evidenceSpans must contain exactly one shortest identifying exact verbatim substring from question.sourceTexts.",
         "Schema: {schemaVersion:1,questionType,confidence,evidenceSpans,ambiguityReason?}.",
       ].join(" ")
     : [
       "Classify only the question type of one bounded interviewer question for Jarvis.",
-      "Return one JSON object only. Do not answer the interview question.",
+      "Return one minified JSON object on one line with no markdown fence. Do not answer the interview question.",
       "Do not decide task relation, parent or child status, response action, playbook phase, evidence mode, or meeting metadata.",
       "Use only question.sourceTexts. Ignore quoted examples and classify the current primary or terminal ask.",
       "Allowed questionType values: behavioral, coding, general-system-design, ai-ml-system-design, project-deep-dive, field-knowledge, unknown.",
@@ -456,7 +456,7 @@ export function buildQuestionTypeAdjudicationPrompts(
       "A question about why a named candidate project made a concrete implementation choice, or how that project handled failures, depends on actual project facts and is project-deep-dive even when it mentions a technical concept.",
       "field-knowledge asks for a factual or conceptual explanation that can be answered independently of what the candidate actually implemented in a project.",
       "Use unknown for logistics, compensation, scheduling, filler, incomplete content, or genuine ambiguity.",
-      "evidenceSpans must contain one or more exact verbatim substrings from question.sourceTexts.",
+      "evidenceSpans must contain exactly one shortest identifying exact verbatim substring from question.sourceTexts.",
       "Schema: {schemaVersion:1,questionType,confidence,evidenceSpans,ambiguityReason?}.",
       ].join(" ");
   return buildRuntimeInferenceModelInput({ systemPrompt, semanticPayload });

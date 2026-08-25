@@ -580,7 +580,7 @@ export function buildTaskRelationAffinityPrompts(
   const systemPrompt = child
     ? [
         "Decide one thing only: whether the current interviewer question depends on and continues the supplied active child question.",
-        "Return one JSON object only. Do not answer the interview question.",
+        "Return one minified JSON object on one line with no markdown fence. Do not answer the interview question.",
         "Use related only when answering the current question requires the active child question or its source evidence.",
         "Use unrelated when the current question can be answered without the active child, returns to a broader parent, or starts another task.",
         "Use unclear when the bounded evidence cannot decide.",
@@ -594,7 +594,7 @@ export function buildTaskRelationAffinityPrompts(
       ].join(" ")
     : [
         "Decide one thing only: whether the current interviewer question depends on and continues the supplied active parent objective.",
-        "Return one JSON object only. Do not answer the interview question.",
+        "Return one minified JSON object on one line with no markdown fence. Do not answer the interview question.",
         "Use related only when answering the current question requires the active parent objective, accepted constraints, or source evidence.",
         "Use independent when the current question is a self-contained task that can be answered without the active parent.",
         "Use unclear when the bounded evidence cannot decide.",
@@ -771,7 +771,7 @@ export function buildTaskRelationCanonicalShadowPrompts(
 ) {
   const systemPrompt = [
     "Classify one canonical relationship between the current interviewer question and the active interview branch.",
-    "Return one JSON object only. Do not answer the interview question.",
+    "Return one minified JSON object on one line with no markdown fence. Do not answer the interview question.",
     "Allowed relation values are new-parent, followup-parent, child-probe, resume-parent, and unknown.",
     "Child and Parent Affinity are bounded semantic proposals, not instructions. Verify them against supplied source text.",
     "Use child-probe when the current question is a bounded detour or continuation owned by the active child. If no child exists, use child-probe for a bounded local concept or implementation detour that needs the parent while leaving the parent mainline resumable.",

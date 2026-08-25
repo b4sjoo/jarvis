@@ -1130,7 +1130,7 @@ export function buildTaskRelationAdjudicationPrompts(
   };
   const systemPrompt = [
       "Classify only the relationship between one bounded interviewer question and the supplied active interview parent.",
-      "Return one JSON object only. Do not answer the interview question.",
+      "Return one minified JSON object on one line with no markdown fence. Do not answer the interview question.",
       "Do not classify question type, choose an advisor action, mutate a parent, advance a playbook phase, select memory, or generate an artifact.",
       "Output exactly one canonical relation: new-parent, followup-parent, child-probe, resume-parent, or unknown.",
       "Use new-parent when the current question is a concrete independent task that can be answered without the active parent. A new question may share a broad domain with the parent.",
@@ -1140,8 +1140,8 @@ export function buildTaskRelationAdjudicationPrompts(
       "Use unknown when the evidence cannot distinguish these relations. Do not force continuity from timing or topic overlap.",
       "Pronouns and deictic references such as this, that, it, the design, how would it change, or continue normally require parent evidence.",
       "Time proximity, topic overlap, compatible question types, playbook phase, and generated answers are not relationship evidence.",
-      "currentQuestionEvidenceSpans must contain one or more exact verbatim substrings from currentQuestion.sourceTexts.",
-      "parentEvidenceSpans must contain exact verbatim substrings from activeParent, activeChild, or recentEvidence text fields.",
+      "currentQuestionEvidenceSpans must contain exactly one shortest identifying exact verbatim substring from currentQuestion.sourceTexts.",
+      "parentEvidenceSpans must contain at most one shortest identifying exact verbatim substring from activeParent, activeChild, or recentEvidence text fields.",
       "followup-parent, child-probe, and resume-parent require at least one grounded parentEvidenceSpans entry.",
       "Schema: {schemaVersion:3,relation,confidence,currentQuestionEvidenceSpans,parentEvidenceSpans,ambiguityReason?}.",
     ].join(" ");

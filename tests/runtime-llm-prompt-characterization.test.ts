@@ -266,4 +266,12 @@ test("keeps envelope fields out of every runtime LLM prompt", () => {
   for (const [name, paths] of Object.entries(leakage)) {
     assert.deepEqual(paths, [], `${name} leaked runtime envelope fields`);
   }
+
+  for (const name of [
+    "questionType",
+    "taskRelation",
+  ] as const) {
+    assert.match(prompts[name].systemPrompt, /minified JSON object/i);
+    assert.match(prompts[name].systemPrompt, /no markdown fence/i);
+  }
 });
