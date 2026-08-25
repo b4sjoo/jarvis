@@ -679,6 +679,7 @@ import {
   appendHumanGroundTruthEventV2,
   buildHumanEvaluationObservedSnapshotV2,
   buildHumanGroundTruthSubjectV2,
+  resolveObservedQuestionSourceKind,
   createHumanGroundTruthEventV2,
   deriveHumanEvaluationProjectionV2,
   findActiveHumanGroundTruthEventV2,
@@ -7961,7 +7962,12 @@ export function useMeetingAssistant() {
           evaluationPatch.parentTaskId ?? activeTaskIdentity.parentTaskId,
         childTaskId:
           evaluationPatch.childTaskId ?? activeTaskIdentity.childTaskId,
-        taskSource: evaluationPatch.taskSource ?? activeTaskIdentity.taskSource,
+        taskSource:
+          evaluationPatch.taskSource ??
+          resolveObservedQuestionSourceKind(
+            trace.kind,
+            trace.metadata ?? {}
+          ),
         questionType,
         company:
           readStringFromTraceMetadata(trace.metadata, "targetCompany") ??

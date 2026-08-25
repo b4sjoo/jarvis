@@ -11,6 +11,7 @@ import {
   importLegacyQuestionEvaluationV2,
   normalizeArtifactIntentEvaluationFamily,
   projectHumanGroundTruthEventsForSessionPurposeV2,
+  resolveObservedQuestionSourceKind,
 } from "../src/lib/meeting/human-ground-truth-v2.js";
 import {
   buildHumanEvaluationProjectionMaterializationRevisionV2,
@@ -89,6 +90,31 @@ test("creates attempt-scoped subjects after settlement identity is stable", () =
   assert.equal(
     buildHumanGroundTruthSubjectV2({ trace }).attemptId,
     "trace_attempt"
+  );
+});
+
+test("derives question source from final settlement evidence before trace kind", () => {
+  assert.equal(
+    resolveObservedQuestionSourceKind("voice", {
+      currentQuestionSettlementSourceTurnIds: [],
+      currentQuestionSettlementSourceObservationIds: ["screen-a"],
+      activeMeetingTaskSource: "mixed",
+    }),
+    "screen"
+  );
+  assert.equal(
+    resolveObservedQuestionSourceKind("screen", {
+      currentQuestionSettlementSourceTurnIds: ["turn-a"],
+      currentQuestionSettlementSourceObservationIds: [],
+    }),
+    "voice"
+  );
+  assert.equal(
+    resolveObservedQuestionSourceKind("screen", {
+      currentQuestionSettlementSourceTurnIds: ["turn-a"],
+      currentQuestionSettlementSourceObservationIds: ["screen-a"],
+    }),
+    "mixed"
   );
 });
 

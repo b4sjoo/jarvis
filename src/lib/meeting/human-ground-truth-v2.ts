@@ -37,7 +37,7 @@ import {
 } from "./meeting-metadata-evaluation.js";
 import { projectObservedAdvisorAttempt } from "./observed-advisor-outcome.js";
 
-type ObservedQuestionSourceKind = "voice" | "screen" | "mixed";
+export type ObservedQuestionSourceKind = "voice" | "screen" | "mixed";
 
 export const HUMAN_GROUND_TRUTH_SCHEMA_VERSION = 2 as const;
 export const HUMAN_EVALUATION_DERIVATION_VERSION =
@@ -816,7 +816,7 @@ export function buildHumanEvaluationObservedSnapshotV2(
   };
 }
 
-function resolveObservedQuestionSourceKind(
+export function resolveObservedQuestionSourceKind(
   traceKind: MeetingTrace["kind"],
   metadata: Record<string, unknown>
 ): ObservedQuestionSourceKind {
