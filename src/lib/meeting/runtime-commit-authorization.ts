@@ -131,6 +131,34 @@ export function rebaseRuntimeCommitTokenAfterOwnedParentMutation(input: {
   });
 }
 
+export function rebaseRuntimeCommitTokenAfterOwnedParentReplacement(input: {
+  token: RuntimeCommitToken;
+  snapshot: RuntimeCommitSnapshot;
+  previousParentId: string | undefined;
+  nextParentId: string | undefined;
+}) {
+  if (
+    input.token.pipeline !== "correction" ||
+    !input.previousParentId ||
+    !input.nextParentId ||
+    input.previousParentId === input.nextParentId ||
+    input.snapshot.parentId !== input.nextParentId
+  ) {
+    return undefined;
+  }
+  const expectation = input.token.parentExpectation;
+  if (
+    expectation.kind !== "exact" ||
+    expectation.parentId !== input.previousParentId
+  ) {
+    return undefined;
+  }
+  return rebaseRuntimeCommitToken({
+    token: input.token,
+    snapshot: input.snapshot,
+  });
+}
+
 export function authorizeRuntimeCommit(input: {
   token: RuntimeCommitToken;
   current: RuntimeCommitSnapshot;

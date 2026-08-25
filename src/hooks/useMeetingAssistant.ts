@@ -561,6 +561,7 @@ import {
   formatTaskLifecycleReductionForTrace,
   rebaseRuntimeCommitToken,
   rebaseRuntimeCommitTokenAfterOwnedParentMutation,
+  rebaseRuntimeCommitTokenAfterOwnedParentReplacement,
   resolveCurrentQuestionSettlementDisposition,
   selectCommittedSettlementForLogicalQuestionUnit,
   reduceTaskLifecycleTransaction,
@@ -4452,6 +4453,8 @@ export function useMeetingAssistant() {
             authorizedArtifacts: pending.authorizedArtifacts,
             candidateMutatedArtifacts:
               pendingMutationDelta.candidateMutatedArtifacts,
+            logicalQuestionUnitId: pending.logicalQuestionUnitId,
+            logicalQuestionRevision: pending.logicalQuestionRevision,
           })
         ),
         expectedTaskRuntimeRevision: pending.taskRuntimeRevision,
@@ -4653,6 +4656,8 @@ export function useMeetingAssistant() {
               authorizedArtifacts: input.authorizedArtifacts,
               candidateMutatedArtifacts:
                 previewMutationDelta.candidateMutatedArtifacts,
+              logicalQuestionUnitId: input.logicalQuestionUnitId,
+              logicalQuestionRevision: input.logicalQuestionRevision,
             })
           ),
           expectedTaskRuntimeRevision: input.taskRuntimeRevision,
@@ -14519,6 +14524,8 @@ export function useMeetingAssistant() {
               settledArtifactAuthorization.allowLatestUsefulAnswer &&
               shouldCommitAdvisorParent,
           });
+        const finalLogicalQuestionTarget =
+          readLogicalQuestionAuthorizationTarget().logicalQuestionUnit;
         const advisorLeaseAuthorization =
           authorizeAnswerGenerationLease(
             answerGenerationLease,
@@ -14527,6 +14534,10 @@ export function useMeetingAssistant() {
               authorizedArtifacts: generationAuthorizedArtifacts,
               candidateMutatedArtifacts:
                 advisorCandidateMutationDelta.candidateMutatedArtifacts,
+              logicalQuestionUnitId:
+                finalLogicalQuestionTarget?.id ?? null,
+              logicalQuestionRevision:
+                finalLogicalQuestionTarget?.revision ?? null,
             })
           );
         const generationCommit =
@@ -29702,19 +29713,34 @@ export function useMeetingAssistant() {
             !stableAnswerCommitted &&
             Boolean(stableAnswerBeforeRegeneration),
         });
+        const completionSnapshot = readRuntimeCommitSnapshot();
+        const replacementToken =
+          regenerationStatus === "success" &&
+          correctionCurrentQuestionSettlement?.relation === "new-parent" &&
+          correctionCurrentQuestionSettlement.parentMutationAuthorized
+            ? rebaseRuntimeCommitTokenAfterOwnedParentReplacement({
+                token: correctionLifecycleToken,
+                snapshot: completionSnapshot,
+                previousParentId: activeTask?.parent.id,
+                nextParentId: resettledCorrectionTask?.parent.id,
+              })
+            : undefined;
         const completionToken =
-          regenerationStatus === "success"
+          replacementToken ??
+          (regenerationStatus === "success"
             ? rebaseRuntimeCommitTokenAfterOwnedParentMutation({
                 token: correctionLifecycleToken,
-                snapshot: readRuntimeCommitSnapshot(),
+                snapshot: completionSnapshot,
                 expectedRevisionDelta: 1,
               }) ?? correctionLifecycleToken
-            : correctionLifecycleToken;
+            : correctionLifecycleToken);
         if (completionToken !== correctionLifecycleToken) {
           traceStoreRef.current.updateMetadata(correctionTrace.id, {
             correctionRuntimeCommitTokenRebased: true,
             correctionRuntimeCommitTokenRebaseReason:
-              "owned-regeneration-parent-mutation",
+              replacementToken
+                ? "owned-regeneration-parent-replacement"
+                : "owned-regeneration-parent-mutation",
             correctionRuntimeCommitTokenParentId:
               completionToken.parentExpectation.kind === "exact"
                 ? completionToken.parentExpectation.parentId

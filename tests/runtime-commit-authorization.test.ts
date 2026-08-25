@@ -6,6 +6,7 @@ import {
   formatRuntimeCommitAuthorizationForTrace,
   rebaseRuntimeCommitToken,
   rebaseRuntimeCommitTokenAfterOwnedParentMutation,
+  rebaseRuntimeCommitTokenAfterOwnedParentReplacement,
   type RuntimeCommitSnapshot,
 } from "../src/lib/meeting/runtime-commit-authorization.js";
 
@@ -252,6 +253,61 @@ test("rebases only the expected revision written by an owned parent mutation", (
       token,
       snapshot: { ...BASE_SNAPSHOT, parentRevision: 6 },
       expectedRevisionDelta: 1,
+    }),
+    undefined
+  );
+});
+
+test("rebases only an explicitly owned correction parent replacement", () => {
+  const token = createRuntimeCommitToken({
+    operationId: "correction-replace",
+    pipeline: "correction",
+    snapshot: BASE_SNAPSHOT,
+  });
+  const replacementSnapshot = {
+    ...BASE_SNAPSHOT,
+    parentId: "parent-b",
+    parentRevision: 1,
+  };
+  const rebased = rebaseRuntimeCommitTokenAfterOwnedParentReplacement({
+    token,
+    snapshot: replacementSnapshot,
+    previousParentId: "parent-a",
+    nextParentId: "parent-b",
+  });
+  assert.deepEqual(rebased?.parentExpectation, {
+    kind: "exact",
+    parentId: "parent-b",
+    parentRevision: 1,
+  });
+  assert.equal(
+    authorizeRuntimeCommit({
+      token: rebased!,
+      current: replacementSnapshot,
+      currentOperationId: "correction-replace",
+    }).reason,
+    "authorized"
+  );
+
+  assert.equal(
+    rebaseRuntimeCommitTokenAfterOwnedParentReplacement({
+      token,
+      snapshot: replacementSnapshot,
+      previousParentId: "parent-wrong",
+      nextParentId: "parent-b",
+    }),
+    undefined
+  );
+  assert.equal(
+    rebaseRuntimeCommitTokenAfterOwnedParentReplacement({
+      token: createRuntimeCommitToken({
+        operationId: "advisor-replace",
+        pipeline: "advisor",
+        snapshot: BASE_SNAPSHOT,
+      }),
+      snapshot: replacementSnapshot,
+      previousParentId: "parent-a",
+      nextParentId: "parent-b",
     }),
     undefined
   );
