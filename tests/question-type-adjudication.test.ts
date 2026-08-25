@@ -4,6 +4,8 @@ import type { LogicalQuestionUnit } from "../src/lib/meeting/logical-question-un
 import {
   FIELD_KNOWLEDGE_REVIEW_WAIT_BUDGET_MS,
   QUESTION_TYPE_ENFORCEMENT_WAIT_BUDGET_MS,
+  QuestionTypeAdjudicationCandidateCache,
+  buildQuestionTypeAdjudicationCacheKey,
   buildQuestionTypeAdjudicationPrompts,
   buildQuestionTypeAdjudicationRequest,
   createQuestionTypeSettlementProposal,
@@ -132,6 +134,51 @@ test("builds and enforces a narrow Field Knowledge versus Coding review", () => 
       errorKind: "schema",
       evidenceSpansValid: false,
     }
+  );
+});
+
+test("memoizes only cloned parsed candidates under provider and request identity", () => {
+  const cache = new QuestionTypeAdjudicationCandidateCache(2);
+  const key = buildQuestionTypeAdjudicationCacheKey({
+    providerId: "gemini",
+    modelId: "flash",
+    requestHash: "request-a",
+  });
+  const candidate = {
+    schemaVersion: 1 as const,
+    questionType: "coding" as const,
+    confidence: 0.7,
+    evidenceSpans: ["implement the cache"],
+    fieldCodingScores: {
+      codingScore: 0.7,
+      fieldKnowledgeScore: 0.2,
+      unknownScore: 0.1,
+      codingMajorityMargin: 0.4,
+    },
+  };
+  cache.write(key, candidate);
+  candidate.evidenceSpans[0] = "mutated";
+
+  const firstRead = cache.read(key);
+  assert.equal(firstRead?.evidenceSpans[0], "implement the cache");
+  firstRead!.fieldCodingScores!.codingScore = 0;
+  assert.equal(cache.read(key)?.fieldCodingScores?.codingScore, 0.7);
+
+  cache.write(
+    buildQuestionTypeAdjudicationCacheKey({ requestHash: "request-b" }),
+    { ...candidate, evidenceSpans: ["b"] }
+  );
+  cache.write(
+    buildQuestionTypeAdjudicationCacheKey({ requestHash: "request-c" }),
+    { ...candidate, evidenceSpans: ["c"] }
+  );
+  assert.equal(cache.read(key), undefined);
+  cache.clear();
+  assert.equal(
+    cache.read(
+      buildQuestionTypeAdjudicationCacheKey({ requestHash: "request-c" })
+    ),
+    undefined
   );
 });
 

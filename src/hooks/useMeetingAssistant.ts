@@ -463,12 +463,16 @@ import {
   QuestionTypeAdjudicationRequestResult,
   QuestionTypeAdjudicationRuntimeOutcome,
   QuestionTypeEnforcementDecision,
+  QuestionTypeAdjudicationCandidateCache,
   QUESTION_TYPE_ADJUDICATION_MAX_OUTPUT_CHARS,
   QUESTION_TYPE_ENFORCEMENT_MIN_CONFIDENCE,
   QUESTION_TYPE_ENFORCEMENT_WAIT_BUDGET_MS,
   FIELD_KNOWLEDGE_REVIEW_WAIT_BUDGET_MS,
+  SCREEN_FIELD_KNOWLEDGE_REVIEW_PROVIDER_TIMEOUT_MS,
+  SCREEN_FIELD_KNOWLEDGE_REVIEW_WAIT_BUDGET_MS,
   buildQuestionTypeAdjudicationPrompts,
   buildQuestionTypeAdjudicationRequest,
+  buildQuestionTypeAdjudicationCacheKey,
   createQuestionTypeAdjudicationOutcomeEvent,
   createQuestionTypeSettlementProposal,
   decideQuestionTypeAdjudicationEligibility,
@@ -2945,6 +2949,9 @@ export function useMeetingAssistant() {
   const questionTypeAdjudicationCircuitRef = useRef(
     new RuntimeInferenceSessionCircuitBreaker()
   );
+  const questionTypeAdjudicationCandidateCacheRef = useRef(
+    new QuestionTypeAdjudicationCandidateCache()
+  );
   const taskRelationAdjudicationRuntimeRef = useRef<
     RuntimeInferenceOperationRuntime<
       TaskRelationAdjudicationJob,
@@ -5258,6 +5265,7 @@ export function useMeetingAssistant() {
     responseOpportunityGenerationGateRef.current.cancelAll("superseded");
     meetingMetadataInferenceRuntimeRef.current?.cancelAll("superseded");
     questionTypeAdjudicationRuntimeRef.current?.cancelAll("superseded");
+    questionTypeAdjudicationCandidateCacheRef.current.clear();
     taskRelationAdjudicationRuntimeRef.current?.cancelAll("superseded");
     taskRelationChildAffinityRuntimeRef.current?.cancelAll("superseded");
     taskRelationParentAffinityRuntimeRef.current?.cancelAll("superseded");
@@ -17377,8 +17385,14 @@ export function useMeetingAssistant() {
           !manualAuthorityConflict
       );
       const waitBudgetMs = mandatoryFieldKnowledgeReview
-        ? FIELD_KNOWLEDGE_REVIEW_WAIT_BUDGET_MS
+        ? sourceKind === "screen"
+          ? SCREEN_FIELD_KNOWLEDGE_REVIEW_WAIT_BUDGET_MS
+          : FIELD_KNOWLEDGE_REVIEW_WAIT_BUDGET_MS
         : QUESTION_TYPE_ENFORCEMENT_WAIT_BUDGET_MS;
+      const providerTimeoutMs =
+        sourceKind === "screen"
+          ? SCREEN_FIELD_KNOWLEDGE_REVIEW_PROVIDER_TIMEOUT_MS
+          : undefined;
       const immediateHandle = (
         disposition: string
       ): QuestionTypeAdjudicationScheduleHandle => ({
@@ -17535,6 +17549,18 @@ export function useMeetingAssistant() {
         prompts.systemPrompt,
         prompts.userMessage,
       ]);
+      const modelId = readSelectedProviderModelId(
+        modelRoute.selectedProvider
+      );
+      const cacheKey = buildQuestionTypeAdjudicationCacheKey({
+        providerId: modelRoute.resolvedProviderId,
+        modelId,
+        requestHash,
+      });
+      const cachedCandidate =
+        request.reviewScope === "field-vs-coding"
+          ? questionTypeAdjudicationCandidateCacheRef.current.read(cacheKey)
+          : undefined;
       const scheduledMetadata = {
         ...baseMetadata,
         ...routeMetadata,
@@ -17567,7 +17593,10 @@ export function useMeetingAssistant() {
         questionTypeAdjudicationExpectedParentRevision:
           lease.expectedParentRevision,
         questionTypeAdjudicationModelId:
-          readSelectedProviderModelId(modelRoute.selectedProvider),
+          modelId,
+        questionTypeAdjudicationCacheKey: cacheKey,
+        questionTypeAdjudicationCacheHit: Boolean(cachedCandidate),
+        questionTypeAdjudicationProviderTimeoutMs: providerTimeoutMs,
       };
       traceStoreRef.current.updateMetadata(
         traceId,
@@ -17631,11 +17660,31 @@ export function useMeetingAssistant() {
           triggerReasons: eligibility.triggerReasons,
         },
         execute: (job, signal) =>
-          requestQuestionTypeAdjudication({
+          cachedCandidate
+            ? Promise.resolve({
+                rawOutput: "",
+                parsed: {
+                  ok: true as const,
+                  value: {
+                    ...cachedCandidate,
+                    evidenceSpans: [...cachedCandidate.evidenceSpans],
+                    fieldCodingScores: cachedCandidate.fieldCodingScores
+                      ? { ...cachedCandidate.fieldCodingScores }
+                      : undefined,
+                  },
+                  evidenceSpansValid: true as const,
+                },
+                providerDisposition: "completed-with-content" as const,
+                parseDisposition: "valid-json-cache",
+                completedAt: Date.now(),
+                cacheHit: true,
+              })
+            : requestQuestionTypeAdjudication({
             request: job.request,
             provider: modelRoute.provider,
             selectedProvider: modelRoute.selectedProvider,
             signal,
+            timeoutMs: providerTimeoutMs,
             executionIdentity: {
               requestId: job.operationId,
               executionPlanId: job.lease.operationId,
@@ -17654,7 +17703,7 @@ export function useMeetingAssistant() {
                 questionTypeAdjudicationFirstTokenAt: at,
               });
             },
-          }),
+              }),
         onStarted: (_job, startedAt, budget) => {
           const metadata = {
             ...scheduledMetadata,
@@ -17716,6 +17765,16 @@ export function useMeetingAssistant() {
           const parsedValue = parsed?.ok
             ? parsed.value
             : undefined;
+          if (
+            parsedValue &&
+            request.reviewScope === "field-vs-coding" &&
+            !result?.cacheHit
+          ) {
+            questionTypeAdjudicationCandidateCacheRef.current.write(
+              cacheKey,
+              parsedValue
+            );
+          }
           const providerDisposition =
             result?.providerDisposition ??
             (settlement.disposition === "error"
@@ -17891,6 +17950,7 @@ export function useMeetingAssistant() {
               : undefined,
             questionTypeAdjudicationRawOutputTruncated:
               rawOutput.length > boundedRawOutput.length,
+            questionTypeAdjudicationCacheHit: result?.cacheHit ?? false,
             questionTypeAdjudicationError:
               settlement.error instanceof Error
                 ? settlement.error.message

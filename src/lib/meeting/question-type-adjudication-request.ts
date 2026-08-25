@@ -32,6 +32,7 @@ export interface QuestionTypeAdjudicationRequestResult {
   providerOutcome?: Readonly<AIResponseTerminalOutcome>;
   firstTokenAt?: number;
   completedAt: number;
+  cacheHit?: boolean;
 }
 
 export async function requestQuestionTypeAdjudication(input: {
@@ -41,6 +42,7 @@ export async function requestQuestionTypeAdjudication(input: {
   signal: AbortSignal;
   executionIdentity?: AIResponseExecutionIdentityInput;
   onFirstToken?: (at: number) => void;
+  timeoutMs?: number;
 }): Promise<QuestionTypeAdjudicationRequestResult> {
   const prompts = buildQuestionTypeAdjudicationPrompts(input.request);
   const responseEvents = fetchAIResponseEvents({
@@ -51,7 +53,7 @@ export async function requestQuestionTypeAdjudication(input: {
     signal: input.signal,
     applyResponseSettings: false,
     requestOptions: {
-      timeoutMs: OPERATION.timeoutMs,
+      timeoutMs: input.timeoutMs ?? OPERATION.timeoutMs,
       maxOutputTokens: OPERATION.maxOutputTokens,
     },
     executionIdentity: {

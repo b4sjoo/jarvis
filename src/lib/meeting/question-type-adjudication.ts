@@ -26,6 +26,8 @@ export const QUESTION_TYPE_ADJUDICATION_MAX_OUTPUT_CHARS = 2_048;
 export const QUESTION_TYPE_ENFORCEMENT_MIN_CONFIDENCE = 0.95;
 export const QUESTION_TYPE_ENFORCEMENT_WAIT_BUDGET_MS = 1_200;
 export const FIELD_KNOWLEDGE_REVIEW_WAIT_BUDGET_MS = 3_500;
+export const SCREEN_FIELD_KNOWLEDGE_REVIEW_WAIT_BUDGET_MS = 5_500;
+export const SCREEN_FIELD_KNOWLEDGE_REVIEW_PROVIDER_TIMEOUT_MS = 6_000;
 
 export interface QuestionTypeAdjudicationRequest {
   schemaVersion: 1;
@@ -56,6 +58,46 @@ export interface LlmQuestionTypeAdjudication {
     unknownScore: number;
     codingMajorityMargin: number;
   };
+}
+
+export function buildQuestionTypeAdjudicationCacheKey(input: {
+  providerId?: string;
+  modelId?: string;
+  requestHash: string;
+}) {
+  return [
+    input.providerId ?? "unknown-provider",
+    input.modelId ?? "unknown-model",
+    input.requestHash,
+  ].join(":");
+}
+
+export class QuestionTypeAdjudicationCandidateCache {
+  private readonly candidates = new Map<
+    string,
+    LlmQuestionTypeAdjudication
+  >();
+
+  constructor(private readonly maxEntries = 32) {}
+
+  read(key: string) {
+    const candidate = this.candidates.get(key);
+    return candidate ? cloneQuestionTypeCandidate(candidate) : undefined;
+  }
+
+  write(key: string, candidate: LlmQuestionTypeAdjudication) {
+    this.candidates.delete(key);
+    this.candidates.set(key, cloneQuestionTypeCandidate(candidate));
+    while (this.candidates.size > this.maxEntries) {
+      const oldest = this.candidates.keys().next().value;
+      if (!oldest) break;
+      this.candidates.delete(oldest);
+    }
+  }
+
+  clear() {
+    this.candidates.clear();
+  }
 }
 
 export type QuestionTypeAdjudicationParseResult =
@@ -766,6 +808,18 @@ function parseFailure(
     reason,
     errorKind,
     evidenceSpansValid: false,
+  };
+}
+
+function cloneQuestionTypeCandidate(
+  candidate: LlmQuestionTypeAdjudication
+): LlmQuestionTypeAdjudication {
+  return {
+    ...candidate,
+    evidenceSpans: [...candidate.evidenceSpans],
+    fieldCodingScores: candidate.fieldCodingScores
+      ? { ...candidate.fieldCodingScores }
+      : undefined,
   };
 }
 
