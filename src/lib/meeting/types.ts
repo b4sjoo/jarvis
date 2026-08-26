@@ -1578,6 +1578,9 @@ export interface MeetingSessionRecordingState {
   active: boolean;
   lifecycle: "idle" | "starting" | "active" | "closing";
   scriptedValidation?: true;
+  scriptedValidationForced?: true;
+  scriptedValidationSource?: "scenario-runner";
+  scenarioRunId?: string;
   sessionId?: string;
   meetingSessionId?: string;
   folderName?: string;

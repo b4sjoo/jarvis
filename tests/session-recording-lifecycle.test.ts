@@ -25,6 +25,10 @@ import {
   createAdvisorResponseFingerprintRecord,
   observeAdvisorResponseConsistency,
 } from "../src/lib/meeting/advisor-response-consistency.js";
+import {
+  createRuntimeRegressionRunRecord,
+  createRuntimeRegressionStepEvent,
+} from "../src/lib/meeting/runtime-regression.js";
 import { parseMeetingAnswer } from "../src/lib/meeting/meeting-answer.js";
 import type {
   PreparationArtifactEvaluation,
@@ -116,6 +120,122 @@ test("updates scripted validation for an active recording without creating a sec
   assert.equal(writes.length, 2);
   const finalManifest = native.stoppedManifest(recording.folderName!);
   assert.equal(finalManifest?.scriptedValidation, undefined);
+});
+
+test("forces Scenario Runner recordings to remain scripted", async () => {
+  const native = new ControlledRecordingInvoke();
+  const manager = new SessionRecordingManager(undefined, native.invoke);
+  const recording = await manager.start({
+    ...START_OPTIONS,
+    scriptedValidationLock: {
+      source: "scenario-runner",
+      scenarioRunId: "scenario-run-1",
+    },
+  });
+
+  assert.equal(recording.scriptedValidation, true);
+  assert.equal(recording.scriptedValidationForced, true);
+  assert.equal(recording.scriptedValidationSource, "scenario-runner");
+  assert.equal(recording.scenarioRunId, "scenario-run-1");
+  const afterRejectedMutation = manager.setScriptedValidation(false);
+  assert.equal(afterRejectedMutation.scriptedValidation, true);
+  assert.equal(afterRejectedMutation.scriptedValidationForced, true);
+
+  const initialManifest = JSON.parse(
+    stringArg(native.startCalls()[0]!, "manifestPayload")
+  ) as Record<string, unknown>;
+  assert.equal(initialManifest.scriptedValidation, true);
+  assert.equal(initialManifest.scriptedValidationForced, true);
+  assert.equal(initialManifest.scriptedValidationSource, "scenario-runner");
+  assert.equal(initialManifest.scenarioRunId, "scenario-run-1");
+
+  await manager.stop("test-complete");
+  const provenanceWrite = native.calls.find(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath") ===
+        "evaluation/session-provenance.json"
+  );
+  assert.ok(provenanceWrite);
+  const provenance = JSON.parse(
+    stringArg(provenanceWrite, "payload")
+  ) as Record<string, unknown>;
+  assert.equal(provenance.effectiveScriptedValidation, true);
+  assert.equal(provenance.forced, true);
+  assert.equal(provenance.source, "scenario-runner");
+  assert.equal(provenance.scenarioRunId, "scenario-run-1");
+});
+
+test("records matching runtime regression run and step artifacts only", async () => {
+  const native = new ControlledRecordingInvoke();
+  const manager = new SessionRecordingManager(undefined, native.invoke);
+  await manager.start({
+    ...START_OPTIONS,
+    scriptedValidationLock: {
+      source: "scenario-runner",
+      scenarioRunId: "scenario-run-1",
+    },
+  });
+
+  assert.equal(
+    manager.recordRuntimeRegressionRun(
+      createRuntimeRegressionRunRecord({
+        scenarioRunId: "scenario-run-1",
+        runtimeSessionId: "meeting-runtime-1",
+        startedAt: 100,
+      })
+    ),
+    true
+  );
+  assert.equal(
+    manager.recordRuntimeRegressionStep(
+      createRuntimeRegressionStepEvent({
+        scenarioRunId: "scenario-run-1",
+        scenarioStepId: "step-1",
+        ordinal: 1,
+        event: "injected",
+        inputKind: "them-text",
+        runtimeSessionId: "meeting-runtime-1",
+        traceId: "trace-1",
+        textChars: 24,
+        occurredAt: 110,
+      })
+    ),
+    true
+  );
+  assert.equal(
+    manager.recordRuntimeRegressionStep(
+      createRuntimeRegressionStepEvent({
+        scenarioRunId: "different-run",
+        scenarioStepId: "step-2",
+        ordinal: 2,
+        event: "injected",
+        inputKind: "them-text",
+        runtimeSessionId: "meeting-runtime-1",
+        occurredAt: 120,
+      })
+    ),
+    false
+  );
+
+  await manager.stop("test-complete");
+  const runWrite = native.calls.find(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath") ===
+        "runtime-regression/run.v1.json"
+  );
+  const stepWrite = native.calls.find(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath") ===
+        "runtime-regression/steps.v1.jsonl"
+  );
+  assert.ok(runWrite);
+  assert.ok(stepWrite);
+  assert.match(stringArg(runWrite, "payload"), /scenario-run-1/);
+  assert.match(stringArg(stepWrite, "payload"), /step-1/);
+  assert.doesNotMatch(stringArg(stepWrite, "payload"), /step-2/);
 });
 
 test("allows one recording to own evaluation attempts from a later runtime meeting session", async () => {

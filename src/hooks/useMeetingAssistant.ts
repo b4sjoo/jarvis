@@ -7569,7 +7569,12 @@ export function useMeetingAssistant() {
     return warnings;
   }, [aiProvider, state.settings.privacyMode, sttProvider]);
 
-  const startSessionRecording = useCallback(async () => {
+  const startSessionRecording = useCallback(async (options?: {
+    scriptedValidationLock?: {
+      source: "scenario-runner";
+      scenarioRunId: string;
+    };
+  }) => {
     try {
       const resetBoundary = await resetMeetingRuntimeForNewSession(
         "session-recording-started"
@@ -7603,7 +7608,10 @@ export function useMeetingAssistant() {
           taxonomyAdjudicationMissingRequiredVariables:
             taxonomyAdjudicationRoute.missingRequiredVariables,
         }),
-        scriptedValidation: scriptedValidationRef.current,
+        scriptedValidation:
+          Boolean(options?.scriptedValidationLock) ||
+          scriptedValidationRef.current,
+        scriptedValidationLock: options?.scriptedValidationLock,
       });
       sessionRecordingManagerRef.current?.recordPreparationRuntimeContext(
         preparationProvenanceLedgerRef.current.getSnapshot()
@@ -7623,6 +7631,10 @@ export function useMeetingAssistant() {
       );
 
       if (sessionRecording) {
+        if (sessionRecording.scriptedValidationForced) {
+          scriptedValidationRef.current = true;
+          setScriptedValidation(true);
+        }
         setState((previous) => ({
           ...previous,
           sessionRecording,
@@ -7693,8 +7705,18 @@ export function useMeetingAssistant() {
   );
 
   const setSessionScriptedValidation = useCallback((enabled: boolean) => {
-    const lifecycle = sessionRecordingManagerRef.current?.getState().lifecycle;
+    const recordingState =
+      sessionRecordingManagerRef.current?.getState();
+    const lifecycle = recordingState?.lifecycle;
     if (lifecycle === "starting" || lifecycle === "closing") return;
+    if (recordingState?.scriptedValidationForced && !enabled) {
+      setState((previous) => ({
+        ...previous,
+        error:
+          "Scenario Runner recordings are permanently scripted and cannot be marked organic.",
+      }));
+      return;
+    }
     scriptedValidationRef.current = enabled;
     setScriptedValidation(enabled);
     if (lifecycle === "active") {

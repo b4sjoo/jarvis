@@ -91,3 +91,52 @@ test("marks and clears scripted validation without mutating the sealed manifest"
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("rejects organic relabeling for a forced Scenario Runner recording", async () => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "jarvis-forced-session-provenance-")
+  );
+  try {
+    await writeFile(
+      path.join(directory, "manifest.json"),
+      JSON.stringify(
+        {
+          sessionId: "session_recording_forced",
+          status: "stopped",
+          scriptedValidation: true,
+          scriptedValidationForced: true,
+          scriptedValidationSource: "scenario-runner",
+          scenarioRunId: "scenario-run-1",
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+
+    await assert.rejects(
+      setSessionEvaluationProvenance({
+        sessionDirectory: directory,
+        scriptedValidation: false,
+        now: 100,
+      }),
+      /permanently scripted/
+    );
+    const scripted = await setSessionEvaluationProvenance({
+      sessionDirectory: directory,
+      scriptedValidation: true,
+      now: 101,
+    });
+    assert.equal(scripted.scriptedValidation, true);
+    const record = JSON.parse(
+      await readFile(
+        path.join(directory, "evaluation", "session-provenance.json"),
+        "utf8"
+      )
+    );
+    assert.equal(record.forced, true);
+    assert.equal(record.scenarioRunId, "scenario-run-1");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

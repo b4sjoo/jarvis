@@ -64,6 +64,13 @@ export async function setSessionEvaluationProvenance(input) {
   const manifestPath = path.join(input.sessionDirectory, "manifest.json");
   const manifestBytes = await readFile(manifestPath);
   const manifest = JSON.parse(manifestBytes.toString("utf8"));
+  const forcedScriptedValidation =
+    manifest.scriptedValidationForced === true;
+  if (forcedScriptedValidation && input.scriptedValidation === false) {
+    throw new Error(
+      "This recording is permanently scripted by Scenario Runner and cannot be marked organic."
+    );
+  }
   const sessionRecordingId = readNonEmptyString(manifest.sessionId) || path.basename(input.sessionDirectory);
   const evaluationDirectory = path.join(input.sessionDirectory, "evaluation");
   const recordPath = path.join(evaluationDirectory, "session-provenance.json");
@@ -86,6 +93,10 @@ export async function setSessionEvaluationProvenance(input) {
     schemaVersion: SCHEMA_VERSION,
     sessionRecordingId,
     effectiveScriptedValidation: input.scriptedValidation,
+    ...(forcedScriptedValidation ? { forced: true } : {}),
+    ...(readNonEmptyString(manifest.scenarioRunId)
+      ? { scenarioRunId: readNonEmptyString(manifest.scenarioRunId) }
+      : {}),
     updatedAt,
     source: "reflection-cli",
   };

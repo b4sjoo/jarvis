@@ -80,6 +80,10 @@ import {
   buildSessionEvaluationProvenanceHistoryEntry,
   buildSessionEvaluationProvenanceRecord,
 } from "./session-evaluation-provenance.js";
+import type {
+  RuntimeRegressionRunRecordV1,
+  RuntimeRegressionStepEventV1,
+} from "./runtime-regression.js";
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
 const SESSION_RECORDING_INTEGRITY_SCHEMA_VERSION = 1;
@@ -94,6 +98,10 @@ interface SessionRecordingStartOptions {
   interviewSessionContext?: InterviewSessionContext;
   providerSummary: SessionRecordingProviderSummary;
   scriptedValidation?: boolean;
+  scriptedValidationLock?: {
+    source: "scenario-runner";
+    scenarioRunId: string;
+  };
 }
 
 export interface SessionRecordingProviderSummary {
@@ -166,6 +174,8 @@ interface SessionRecordingEvent {
     | "preparation-artifact-use"
     | "preparation-artifact-evaluation"
     | "session-evaluation-provenance"
+    | "runtime-regression-run"
+    | "runtime-regression-step"
     | "runtime-reset"
     | "runtime-continued"
     | "error";
@@ -182,6 +192,9 @@ interface ActiveSessionRecording {
   meetingSessionId: string;
   runtimeMeetingSessionIds: Set<string>;
   scriptedValidation: boolean;
+  scriptedValidationForced: boolean;
+  scriptedValidationSource?: "scenario-runner";
+  scenarioRunId?: string;
   folderName: string;
   folderPath: string;
   startedAt: number;
@@ -1390,6 +1403,18 @@ export class SessionRecordingManager {
       ...(this.activeSession.scriptedValidation
         ? { scriptedValidation: true as const }
         : {}),
+      ...(this.activeSession.scriptedValidationForced
+        ? { scriptedValidationForced: true as const }
+        : {}),
+      ...(this.activeSession.scriptedValidationSource
+        ? {
+            scriptedValidationSource:
+              this.activeSession.scriptedValidationSource,
+          }
+        : {}),
+      ...(this.activeSession.scenarioRunId
+        ? { scenarioRunId: this.activeSession.scenarioRunId }
+        : {}),
       eventCount: this.activeSession.eventCount,
       artifactCount: this.activeSession.artifactCount,
       lastError: this.activeSession.lastError,
@@ -1406,7 +1431,15 @@ export class SessionRecordingManager {
 
       try {
         const startedAt = Date.now();
-        const scriptedValidation = options.scriptedValidation === true;
+        const scriptedValidationForced = Boolean(
+          options.scriptedValidationLock
+        );
+        const scriptedValidation =
+          scriptedValidationForced || options.scriptedValidation === true;
+        const scriptedValidationSource =
+          options.scriptedValidationLock?.source;
+        const scenarioRunId =
+          options.scriptedValidationLock?.scenarioRunId;
         const sessionId = createMeetingId("session_recording");
         const folderName = buildSessionRecordingFolderName(sessionId, startedAt);
         const initialManifest = buildSessionRecordingManifest({
@@ -1421,6 +1454,9 @@ export class SessionRecordingManager {
           interviewSessionContext: options.interviewSessionContext,
           providerSummary: options.providerSummary,
           scriptedValidation,
+          scriptedValidationForced,
+          scriptedValidationSource,
+          scenarioRunId,
         });
 
         const folderPath = await this.invokeCommand<string>(
@@ -1443,6 +1479,9 @@ export class SessionRecordingManager {
           interviewSessionContext: options.interviewSessionContext,
           providerSummary: options.providerSummary,
           scriptedValidation,
+          scriptedValidationForced,
+          scriptedValidationSource,
+          scenarioRunId,
         });
         const session: ActiveSessionRecording = {
           generationId: createMeetingId("recording_generation"),
@@ -1451,6 +1490,9 @@ export class SessionRecordingManager {
           meetingSessionId: options.meetingSessionId,
           runtimeMeetingSessionIds: new Set([options.meetingSessionId]),
           scriptedValidation,
+          scriptedValidationForced,
+          scriptedValidationSource,
+          scenarioRunId,
           folderName,
           folderPath,
           startedAt,
@@ -1516,12 +1558,15 @@ export class SessionRecordingManager {
           meetingSessionId: options.meetingSessionId,
           privacy: "raw audio omitted",
           scriptedValidation,
+          scriptedValidationForced,
+          scriptedValidationSource,
+          scenarioRunId,
         });
         if (scriptedValidation) {
           this.writeSessionEvaluationProvenance(
             session,
             true,
-            "debug-ui"
+            scriptedValidationForced ? "scenario-runner" : "debug-ui"
           );
         }
         return this.getState();
@@ -1536,6 +1581,20 @@ export class SessionRecordingManager {
 
   setScriptedValidation(enabled: boolean) {
     const session = this.getWritableSession();
+    if (
+      session?.scriptedValidationForced &&
+      enabled === false
+    ) {
+      this.recordEvent("session-evaluation-provenance", {
+        scriptedValidation: true,
+        scriptedValidationForced: true,
+        scriptedValidationMutationRejected: true,
+        scriptedValidationMutationReason:
+          "forced-scripted-recording",
+        scenarioRunId: session.scenarioRunId,
+      });
+      return this.getState();
+    }
     if (!session || session.scriptedValidation === enabled) {
       return this.getState();
     }
@@ -1547,6 +1606,64 @@ export class SessionRecordingManager {
     });
     this.emit();
     return this.getState();
+  }
+
+  recordRuntimeRegressionRun(record: RuntimeRegressionRunRecordV1) {
+    const session = this.getWritableSession();
+    if (
+      !session?.scriptedValidationForced ||
+      !session.scenarioRunId ||
+      session.scenarioRunId !== record.scenarioRunId
+    ) {
+      return false;
+    }
+    const persisted = {
+      ...record,
+      recordingSessionId: session.sessionId,
+    };
+    this.enqueue(session, () =>
+      this.writeJson(
+        session,
+        "runtime-regression/run.v1.json",
+        persisted
+      )
+    );
+    this.recordEvent("runtime-regression-run", {
+      scenarioRunId: record.scenarioRunId,
+      runtimeSessionId: record.runtimeSessionId,
+      status: record.status,
+      forcedScripted: true,
+    });
+    return true;
+  }
+
+  recordRuntimeRegressionStep(event: RuntimeRegressionStepEventV1) {
+    const session = this.getWritableSession({ traceId: event.traceId });
+    if (
+      !session?.scriptedValidationForced ||
+      !session.scenarioRunId ||
+      session.scenarioRunId !== event.scenarioRunId
+    ) {
+      return false;
+    }
+    this.enqueue(session, () =>
+      this.appendJsonl(
+        session,
+        "runtime-regression/steps.v1.jsonl",
+        event
+      )
+    );
+    this.recordEvent("runtime-regression-step", {
+      scenarioRunId: event.scenarioRunId,
+      scenarioStepId: event.scenarioStepId,
+      ordinal: event.ordinal,
+      event: event.event,
+      inputKind: event.inputKind,
+      runtimeSessionId: event.runtimeSessionId,
+      terminalDisposition: event.terminalDisposition,
+      traceId: event.traceId,
+    });
+    return true;
   }
 
   async stop(reason = "manual") {
@@ -4051,17 +4168,21 @@ export class SessionRecordingManager {
   private writeSessionEvaluationProvenance(
     session: ActiveSessionRecording,
     scriptedValidation: boolean,
-    source: "debug-ui" | "reflection-cli"
+    source: "debug-ui" | "reflection-cli" | "scenario-runner"
   ) {
     const record = buildSessionEvaluationProvenanceRecord({
       sessionRecordingId: session.sessionId,
       scriptedValidation,
       source,
+      forced: session.scriptedValidationForced,
+      scenarioRunId: session.scenarioRunId,
     });
     const history = buildSessionEvaluationProvenanceHistoryEntry({
       sessionRecordingId: session.sessionId,
       scriptedValidation,
       source,
+      forced: session.scriptedValidationForced,
+      scenarioRunId: session.scenarioRunId,
       now: record.updatedAt,
     });
     this.enqueue(session, async () => {
@@ -4333,6 +4454,9 @@ function buildSessionRecordingManifest({
   interviewSessionContext,
   providerSummary,
   scriptedValidation,
+  scriptedValidationForced,
+  scriptedValidationSource,
+  scenarioRunId,
 }: {
   status: "running";
   sessionId: string;
@@ -4345,6 +4469,9 @@ function buildSessionRecordingManifest({
   interviewSessionContext?: InterviewSessionContext;
   providerSummary: SessionRecordingProviderSummary;
   scriptedValidation: boolean;
+  scriptedValidationForced: boolean;
+  scriptedValidationSource?: "scenario-runner";
+  scenarioRunId?: string;
 }) {
   return {
     version: SESSION_RECORDING_SCHEMA_VERSION,
@@ -4365,6 +4492,13 @@ function buildSessionRecordingManifest({
     interviewSessionContext,
     providerSummary,
     ...(scriptedValidation ? { scriptedValidation: true as const } : {}),
+    ...(scriptedValidationForced
+      ? { scriptedValidationForced: true as const }
+      : {}),
+    ...(scriptedValidationSource
+      ? { scriptedValidationSource }
+      : {}),
+    ...(scenarioRunId ? { scenarioRunId } : {}),
   };
 }
 
