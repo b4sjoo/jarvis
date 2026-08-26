@@ -442,7 +442,9 @@ import {
   requestWhiteboardSyntaxRepair,
   resolveRuntimeInferenceModelRouteFromSnapshot,
   RuntimeInferenceOperationRuntime,
+  RuntimeInferenceProviderAdmissionCoordinator,
   RuntimeInferenceSessionCircuitBreaker,
+  formatRuntimeInferenceSharedAdmissionForTrace,
   ResponseOpportunityJob,
   ResponseOpportunityRequestResult,
   ResponseOpportunitySessionBudget,
@@ -2943,12 +2945,22 @@ export function useMeetingAssistant() {
       ResponseOpportunityRequestResult
     > | null
   >(null);
+  const runtimeInferenceProviderAdmissionRef = useRef<
+    RuntimeInferenceProviderAdmissionCoordinator | null
+  >(null);
+  if (runtimeInferenceProviderAdmissionRef.current === null) {
+    runtimeInferenceProviderAdmissionRef.current =
+      new RuntimeInferenceProviderAdmissionCoordinator();
+  }
   if (responseOpportunityRuntimeRef.current === null) {
     responseOpportunityRuntimeRef.current =
       new RuntimeInferenceOperationRuntime<
         ResponseOpportunityJob,
         ResponseOpportunityRequestResult
-      >("response-opportunity-inference");
+      >(
+        "response-opportunity-inference",
+        runtimeInferenceProviderAdmissionRef.current
+      );
   }
   const responseOpportunityGenerationGateRef = useRef(
     new ResponseOpportunityGenerationGateCoordinator()
@@ -2967,7 +2979,10 @@ export function useMeetingAssistant() {
       new RuntimeInferenceOperationRuntime<
         MeetingMetadataInferenceJob,
         MeetingMetadataInferenceRequestResult
-      >("meeting-metadata-inference");
+      >(
+        "meeting-metadata-inference",
+        runtimeInferenceProviderAdmissionRef.current
+      );
   }
   const meetingMetadataInferenceCircuitRef = useRef(
     new RuntimeInferenceSessionCircuitBreaker()
@@ -2986,7 +3001,10 @@ export function useMeetingAssistant() {
       new RuntimeInferenceOperationRuntime<
         QuestionTypeAdjudicationJob,
         QuestionTypeAdjudicationRequestResult
-      >("question-type-adjudication");
+      >(
+        "question-type-adjudication",
+        runtimeInferenceProviderAdmissionRef.current
+      );
   }
   const questionTypeAdjudicationCircuitRef = useRef(
     new RuntimeInferenceSessionCircuitBreaker()
@@ -3005,7 +3023,10 @@ export function useMeetingAssistant() {
       new RuntimeInferenceOperationRuntime<
         TaskRelationAdjudicationJob,
         TaskRelationAdjudicationRequestResult
-      >("task-relation-adjudication");
+      >(
+        "task-relation-adjudication",
+        runtimeInferenceProviderAdmissionRef.current
+      );
   }
   const taskRelationAdjudicationCircuitRef = useRef(
     new RuntimeInferenceSessionCircuitBreaker()
@@ -3019,7 +3040,8 @@ export function useMeetingAssistant() {
   if (taskRelationChildAffinityRuntimeRef.current === null) {
     taskRelationChildAffinityRuntimeRef.current =
       new RuntimeInferenceOperationRuntime(
-        "task-relation-child-affinity"
+        "task-relation-child-affinity",
+        runtimeInferenceProviderAdmissionRef.current
       );
   }
   const taskRelationParentAffinityRuntimeRef = useRef<
@@ -3031,7 +3053,8 @@ export function useMeetingAssistant() {
   if (taskRelationParentAffinityRuntimeRef.current === null) {
     taskRelationParentAffinityRuntimeRef.current =
       new RuntimeInferenceOperationRuntime(
-        "task-relation-parent-affinity"
+        "task-relation-parent-affinity",
+        runtimeInferenceProviderAdmissionRef.current
       );
   }
   const taskRelationCanonicalShadowRuntimeRef = useRef<
@@ -3043,7 +3066,8 @@ export function useMeetingAssistant() {
   if (taskRelationCanonicalShadowRuntimeRef.current === null) {
     taskRelationCanonicalShadowRuntimeRef.current =
       new RuntimeInferenceOperationRuntime(
-        "task-relation-canonical-shadow"
+        "task-relation-canonical-shadow",
+        runtimeInferenceProviderAdmissionRef.current
       );
   }
   const taskRelationSplitShadowCircuitRef = useRef(
@@ -3060,7 +3084,10 @@ export function useMeetingAssistant() {
       new RuntimeInferenceOperationRuntime<
         AnswerRecoveryAdjudicationJob,
         AnswerRecoveryAdjudicationRequestResult
-      >("answer-resolution");
+      >(
+        "answer-resolution",
+        runtimeInferenceProviderAdmissionRef.current
+      );
   }
   const evidenceRequirementRuntimeRef = useRef<
     RuntimeInferenceOperationRuntime<
@@ -3073,7 +3100,10 @@ export function useMeetingAssistant() {
       new RuntimeInferenceOperationRuntime<
         AnswerRecoveryAdjudicationJob,
         AnswerRecoveryAdjudicationRequestResult
-      >("evidence-requirement");
+      >(
+        "evidence-requirement",
+        runtimeInferenceProviderAdmissionRef.current
+      );
   }
   const answerRecoveryCircuitRef = useRef(
     new RuntimeInferenceSessionCircuitBreaker()
@@ -3089,7 +3119,10 @@ export function useMeetingAssistant() {
       new RuntimeInferenceOperationRuntime<
         SourceLinkageAdjudicationJob,
         SourceLinkageAdjudicationRequestResult
-      >("source-linkage-adjudication");
+      >(
+        "source-linkage-adjudication",
+        runtimeInferenceProviderAdmissionRef.current
+      );
   }
   const sourceLinkageAdjudicationCircuitRef = useRef(
     new RuntimeInferenceSessionCircuitBreaker()
@@ -3105,7 +3138,10 @@ export function useMeetingAssistant() {
       new RuntimeInferenceOperationRuntime<
         WhiteboardSyntaxRepairJob,
         WhiteboardSyntaxRepairRequestResult
-      >("whiteboard-syntax-repair");
+      >(
+        "whiteboard-syntax-repair",
+        runtimeInferenceProviderAdmissionRef.current
+      );
   }
   const whiteboardSyntaxRepairCircuitRef = useRef(
     new RuntimeInferenceSessionCircuitBreaker()
@@ -6509,6 +6545,9 @@ export function useMeetingAssistant() {
                       : "candidate-accepted";
             const metadata = {
               ...scheduledMetadata,
+              ...formatRuntimeInferenceSharedAdmissionForTrace(
+                settlement.sharedAdmission
+              ),
               ...formatRuntimeInferenceProviderOutcomeForTrace(
                 result?.providerOutcome,
                 "visualEvidenceCheck"
@@ -6800,6 +6839,9 @@ export function useMeetingAssistant() {
                       : "candidate-accepted";
             const metadata = {
               ...scheduledMetadata,
+              ...formatRuntimeInferenceSharedAdmissionForTrace(
+                settlement.sharedAdmission
+              ),
               ...formatRuntimeInferenceProviderOutcomeForTrace(
                 result?.providerOutcome,
                 "answerRecovery"
@@ -7106,6 +7148,9 @@ export function useMeetingAssistant() {
                         : "shadow-observed";
             const metadata = {
               ...scheduledMetadata,
+              ...formatRuntimeInferenceSharedAdmissionForTrace(
+                settlement.sharedAdmission
+              ),
               ...formatRuntimeInferenceProviderOutcomeForTrace(
                 result?.providerOutcome,
                 "sourceLinkage"
@@ -7494,6 +7539,9 @@ export function useMeetingAssistant() {
                         ? "revalidation-failed"
                         : "shadow-valid";
             const metadata = {
+              ...formatRuntimeInferenceSharedAdmissionForTrace(
+                settlement.sharedAdmission
+              ),
               ...formatWhiteboardSyntaxRepairForTrace({
                 lease: settlement.job.lease,
                 disposition: finalDisposition,
@@ -16007,6 +16055,9 @@ export function useMeetingAssistant() {
           );
           const metadata = {
             ...scheduledMetadata,
+            ...formatRuntimeInferenceSharedAdmissionForTrace(
+              settlement.sharedAdmission
+            ),
             ...formatRuntimeInferenceProviderOutcomeForTrace(
               result?.providerOutcome,
               "responseOpportunity"
@@ -16577,6 +16628,9 @@ export function useMeetingAssistant() {
           );
           const metadata = {
             ...scheduledMetadata,
+            ...formatRuntimeInferenceSharedAdmissionForTrace(
+              settlement.sharedAdmission
+            ),
             ...formatRuntimeInferenceProviderOutcomeForTrace(
               result?.providerOutcome,
               "meetingMetadataInference"
@@ -17979,6 +18033,9 @@ export function useMeetingAssistant() {
           );
           const metadata = {
             ...scheduledMetadata,
+            ...formatRuntimeInferenceSharedAdmissionForTrace(
+              settlement.sharedAdmission
+            ),
             ...formatRuntimeInferenceProviderOutcomeForTrace(
               result?.providerOutcome,
               "questionTypeAdjudication"
@@ -18341,6 +18398,9 @@ export function useMeetingAssistant() {
                     : undefined;
               const metadata = {
                 ...baseMetadata,
+                ...formatRuntimeInferenceSharedAdmissionForTrace(
+                  settlement.sharedAdmission
+                ),
                 ...formatRuntimeInferenceProviderOutcomeForTrace(
                   result?.providerOutcome,
                   prefix
@@ -18570,6 +18630,9 @@ export function useMeetingAssistant() {
             });
             const metadata = {
               ...baseMetadata,
+              ...formatRuntimeInferenceSharedAdmissionForTrace(
+                settlement.sharedAdmission
+              ),
               ...formatRuntimeInferenceProviderOutcomeForTrace(
                 result?.providerOutcome,
                 "taskRelationSplitCanonical"
@@ -19305,6 +19368,9 @@ export function useMeetingAssistant() {
           );
           const metadata = {
             ...scheduledMetadata,
+            ...formatRuntimeInferenceSharedAdmissionForTrace(
+              runtimeSettlement.sharedAdmission
+            ),
             ...formatRuntimeInferenceProviderOutcomeForTrace(
               result?.providerOutcome,
               "taskRelationAdjudication"

@@ -75,6 +75,7 @@ export * from "./response-action-contract";
 export * from "./native-speech-event";
 export * from "./rollover-transcript";
 export * from "./runtime-inference";
+export * from "./runtime-inference-provider-admission";
 export * from "./runtime-inference-health";
 export * from "./runtime-inference-runtime";
 export * from "./runtime-axis-conflict";

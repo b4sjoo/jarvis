@@ -2,6 +2,10 @@ import {
   getRuntimeInferenceOperationDefinition,
   type RuntimeInferenceOperationKind,
 } from "./runtime-inference.js";
+import type {
+  RuntimeInferenceProviderAdmissionCoordinator,
+  RuntimeInferenceSharedAdmissionReceipt,
+} from "./runtime-inference-provider-admission.js";
 
 export interface RuntimeInferenceRuntimeJob {
   operationId: string;
@@ -46,6 +50,7 @@ export interface RuntimeInferenceRuntimeSettlement<
   completedAt: number;
   queueWaitMs?: number;
   durationMs?: number;
+  sharedAdmission?: RuntimeInferenceSharedAdmissionReceipt;
   budget: RuntimeInferenceBudgetSnapshot;
 }
 
@@ -71,9 +76,10 @@ interface ActiveJob<
   Result,
 > extends ScheduledJob<Job, Result> {
   controller: AbortController;
-  startedAt: number;
+  startedAt?: number;
   superseded: boolean;
   budget: RuntimeInferenceBudgetSnapshot;
+  sharedAdmission?: RuntimeInferenceSharedAdmissionReceipt;
 }
 
 export class RuntimeInferenceOperationRuntime<
@@ -92,7 +98,8 @@ export class RuntimeInferenceOperationRuntime<
   private readonly definition;
 
   constructor(
-    private readonly operationKind: RuntimeInferenceOperationKind
+    private readonly operationKind: RuntimeInferenceOperationKind,
+    private readonly admissionCoordinator?: RuntimeInferenceProviderAdmissionCoordinator
   ) {
     this.definition =
       getRuntimeInferenceOperationDefinition(operationKind);
@@ -189,28 +196,42 @@ export class RuntimeInferenceOperationRuntime<
       });
       return;
     }
-    const budget = this.readBudgetSnapshot(scheduled.job, true);
-    while (this.startsByBudgetKey.size > 64) {
-      const oldest = this.startsByBudgetKey.keys().next().value;
-      if (!oldest) break;
-      this.startsByBudgetKey.delete(oldest);
-    }
-
     const controller = new AbortController();
-    const startedAt = Date.now();
     const active: ActiveJob<Job, Result> = {
       ...scheduled,
       controller,
-      startedAt,
       superseded: false,
-      budget,
+      budget: budgetBefore,
     };
     this.active = active;
-    active.onStarted?.(active.job, startedAt, budget);
-    void active
-      .execute(active.job, controller.signal)
+    const execute = () => {
+      const budget = this.readBudgetSnapshot(active.job, true);
+      while (this.startsByBudgetKey.size > 64) {
+        const oldest = this.startsByBudgetKey.keys().next().value;
+        if (!oldest) break;
+        this.startsByBudgetKey.delete(oldest);
+      }
+      const startedAt = Date.now();
+      active.startedAt = startedAt;
+      active.budget = budget;
+      active.onStarted?.(active.job, startedAt, budget);
+      return active.execute(active.job, controller.signal);
+    };
+    const execution = this.admissionCoordinator
+      ? this.admissionCoordinator.run({
+          operationId: active.job.operationId,
+          lane: this.definition.lane,
+          signal: controller.signal,
+          execute,
+          onAdmitted: (receipt) => {
+            active.sharedAdmission = receipt;
+          },
+        })
+      : execute();
+    void execution
       .then((result) => {
         const completedAt = Date.now();
+        const startedAt = active.startedAt;
         active.onSettled({
           job: active.job,
           disposition: active.superseded
@@ -220,13 +241,21 @@ export class RuntimeInferenceOperationRuntime<
           scheduledAt: active.scheduledAt,
           startedAt,
           completedAt,
-          queueWaitMs: startedAt - active.scheduledAt,
-          durationMs: completedAt - startedAt,
-          budget,
+          queueWaitMs: Math.max(
+            0,
+            (startedAt ?? completedAt) - active.scheduledAt
+          ),
+          durationMs:
+            startedAt === undefined
+              ? undefined
+              : completedAt - startedAt,
+          sharedAdmission: active.sharedAdmission,
+          budget: active.budget,
         });
       })
       .catch((error) => {
         const completedAt = Date.now();
+        const startedAt = active.startedAt;
         active.onSettled({
           job: active.job,
           disposition:
@@ -237,9 +266,16 @@ export class RuntimeInferenceOperationRuntime<
           scheduledAt: active.scheduledAt,
           startedAt,
           completedAt,
-          queueWaitMs: startedAt - active.scheduledAt,
-          durationMs: completedAt - startedAt,
-          budget,
+          queueWaitMs: Math.max(
+            0,
+            (startedAt ?? completedAt) - active.scheduledAt
+          ),
+          durationMs:
+            startedAt === undefined
+              ? undefined
+              : completedAt - startedAt,
+          sharedAdmission: active.sharedAdmission,
+          budget: active.budget,
         });
       })
       .finally(() => {
