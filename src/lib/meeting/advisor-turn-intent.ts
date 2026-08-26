@@ -191,6 +191,18 @@ export function decideAdvisorTurnIntent(
   }
 
   if (constraintEvidence.length > 0) {
+    if (directAskEvidence.length > 0) {
+      return withFollowupScope(allowedDecision({
+        intent: "constraint-or-follow-up",
+        confidence: 0.97,
+        evidence: [...directAskEvidence, ...constraintEvidence],
+        action: "answer-refresh",
+        reason: hasQuestionScope
+          ? "scoped-constraint-direct-ask"
+          : "self-contained-constraint-direct-ask",
+        contextPromptEligible: true,
+      }), followupScopeSource);
+    }
     if (hasQuestionScope) {
       return withFollowupScope(allowedDecision({
         intent: "constraint-or-follow-up",

@@ -89,6 +89,25 @@ test("keeps exact fillers local while reviewing clear requests in runtime shadow
   assert.equal(resolveResponseOpportunityExecutionMode(filler), undefined);
 });
 
+test("reviews a direct ask with constraints without making Runtime authoritative", () => {
+  const text =
+    "Please implement an LRU cache with O(1) get and put in Python.";
+  const route = decideResponseOpportunityLocalRoute({
+    text,
+    decision: decideAdvisorTurnIntent(text, {
+      hasActiveTask: false,
+      hasRecentQuestionContext: false,
+    }),
+  });
+
+  assert.equal(route.disposition, "deterministic-output");
+  assert.equal(route.decision, "output-request");
+  assert.equal(
+    resolveResponseOpportunityExecutionMode(route),
+    "speculative-authoritative"
+  );
+});
+
 test("sends contentful residual ambiguity to runtime regardless of length", () => {
   for (const text of [
     "The deployment environment uses Kubernetes.",

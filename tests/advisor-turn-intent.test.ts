@@ -170,6 +170,28 @@ test("allows an explicit language constraint only with provisional question scop
   assert.equal(unscoped.executionAuthorized, false);
 });
 
+test("preserves a self-contained direct ask when the same turn adds constraints", () => {
+  for (const text of [
+    "Please implement an LRU cache with O(1) get and put in Python.",
+    "Design a ride-sharing service for 10 million users.",
+    "Write the solution without extra space.",
+    "Design an API that must support 5000 requests per second.",
+  ]) {
+    const decision = decideAdvisorTurnIntent(text, {
+      hasActiveTask: false,
+      hasRecentQuestionContext: false,
+    });
+    assert.equal(decision.intent, "constraint-or-follow-up", text);
+    assert.equal(decision.action, "answer-refresh", text);
+    assert.equal(
+      decision.reason,
+      "self-contained-constraint-direct-ask",
+      text
+    );
+    assert.equal(decision.executionAuthorized, true, text);
+  }
+});
+
 test("allows each bounded adjacent constraint family with provisional scope", () => {
   for (const text of [
     "For 10 million users.",
