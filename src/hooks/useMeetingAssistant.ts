@@ -24245,6 +24245,15 @@ export function useMeetingAssistant() {
           reason: input.reason,
         });
       };
+      const didScreenTypeRepairApplyToParent = () =>
+        Boolean(
+          screenQuestionTypeOutcomeReceipt?.settlementApplied &&
+            screenSourceOwnedTransitionResult?.mutationApplied &&
+            (screenSourceOwnedTransitionResult.candidate.kind ===
+              "new-parent" ||
+              screenSourceOwnedTransitionResult.candidate.kind ===
+                "reseed-parent")
+        );
       const readScreenAuthorization = () =>
         authorizeRuntimeCommit({
           token: screenRuntimeToken,
@@ -25206,35 +25215,38 @@ export function useMeetingAssistant() {
                 screenFieldKnowledgeReviewSettlement = outcome.settlement;
                 screenMemoryQuestionType = outcome.settlement.questionType;
               }
-              screenQuestionTypeOutcomeReceipt = {
-                operationId:
-                  outcome.operationId ?? fieldReview.operationId,
-                sessionId:
-                  screenRelationLogicalQuestionUnit.sessionId,
-                runtimeEpoch:
-                  screenRelationLogicalQuestionUnit.runtimeEpoch,
-                logicalQuestionUnitId:
-                  screenRelationLogicalQuestionUnit.id,
-                logicalQuestionUnitRevision:
-                  screenRelationLogicalQuestionUnit.revision,
-                proposedQuestionType:
-                  outcome.enforcement.proposedQuestionType,
-                enforcementAuthorized:
-                  outcome.enforcement.authorized,
-                settlementApplied,
-              };
-              recordScreenQuestionTypeOutcome({
-                stage: "release",
-                disposition: settlementApplied
-                  ? "settlement-applied"
-                  : "enforcement-denied",
-                settlement: outcome.settlement,
-                reason: settlementApplied
-                  ? "screen-field-review-settlement-applied"
-                  : outcome.enforcement.reason,
-              });
-              if (!settlementApplied) {
-                screenQuestionTypeOutcomeReceipt = undefined;
+              const fieldReviewOperationId =
+                outcome.operationId ?? fieldReview.operationId;
+              if (fieldReviewOperationId) {
+                screenQuestionTypeOutcomeReceipt = {
+                  operationId: fieldReviewOperationId,
+                  sessionId:
+                    screenRelationLogicalQuestionUnit.sessionId,
+                  runtimeEpoch:
+                    screenRelationLogicalQuestionUnit.runtimeEpoch,
+                  logicalQuestionUnitId:
+                    screenRelationLogicalQuestionUnit.id,
+                  logicalQuestionUnitRevision:
+                    screenRelationLogicalQuestionUnit.revision,
+                  proposedQuestionType:
+                    outcome.enforcement.proposedQuestionType,
+                  enforcementAuthorized:
+                    outcome.enforcement.authorized,
+                  settlementApplied,
+                };
+                recordScreenQuestionTypeOutcome({
+                  stage: "release",
+                  disposition: settlementApplied
+                    ? "settlement-applied"
+                    : "enforcement-denied",
+                  settlement: outcome.settlement,
+                  reason: settlementApplied
+                    ? "screen-field-review-settlement-applied"
+                    : outcome.enforcement.reason,
+                });
+                if (!settlementApplied) {
+                  screenQuestionTypeOutcomeReceipt = undefined;
+                }
               }
               traceStoreRef.current.updateMetadata(trace.id, {
                 screenFieldKnowledgeReviewDisposition: outcome.disposition,
@@ -25247,28 +25259,31 @@ export function useMeetingAssistant() {
                   Date.now() - fieldReviewStartedAt,
               });
             } catch (error) {
-              screenQuestionTypeOutcomeReceipt = {
-                operationId: fieldReview.operationId,
-                sessionId: screenRelationLogicalQuestionUnit.sessionId,
-                runtimeEpoch:
-                  screenRelationLogicalQuestionUnit.runtimeEpoch,
-                logicalQuestionUnitId:
-                  screenRelationLogicalQuestionUnit.id,
-                logicalQuestionUnitRevision:
-                  screenRelationLogicalQuestionUnit.revision,
-                proposedQuestionType: "field-knowledge",
-                enforcementAuthorized: false,
-                settlementApplied: false,
-              };
-              recordScreenQuestionTypeOutcome({
-                stage: "release",
-                disposition: "enforcement-denied",
-                reason:
-                  error instanceof Error
-                    ? error.message
-                    : "screen-field-review-window-expired",
-              });
-              screenQuestionTypeOutcomeReceipt = undefined;
+              if (fieldReview.operationId) {
+                screenQuestionTypeOutcomeReceipt = {
+                  operationId: fieldReview.operationId,
+                  sessionId:
+                    screenRelationLogicalQuestionUnit.sessionId,
+                  runtimeEpoch:
+                    screenRelationLogicalQuestionUnit.runtimeEpoch,
+                  logicalQuestionUnitId:
+                    screenRelationLogicalQuestionUnit.id,
+                  logicalQuestionUnitRevision:
+                    screenRelationLogicalQuestionUnit.revision,
+                  proposedQuestionType: "field-knowledge",
+                  enforcementAuthorized: false,
+                  settlementApplied: false,
+                };
+                recordScreenQuestionTypeOutcome({
+                  stage: "release",
+                  disposition: "enforcement-denied",
+                  reason:
+                    error instanceof Error
+                      ? error.message
+                      : "screen-field-review-window-expired",
+                });
+                screenQuestionTypeOutcomeReceipt = undefined;
+              }
               traceStoreRef.current.updateMetadata(trace.id, {
                 screenFieldKnowledgeReviewDisposition: "deadline-expired",
                 screenFieldKnowledgeReviewApplied: false,
@@ -27169,8 +27184,7 @@ export function useMeetingAssistant() {
           disposition: "model-completed",
           settlement: screenCurrentQuestionSettlement,
           modelCompleted: true,
-          appliedToParent:
-            screenCurrentQuestionSettlement?.typeAppliedToParent,
+          appliedToParent: didScreenTypeRepairApplyToParent(),
           reason: "screen-model-completed",
         });
 
@@ -28424,8 +28438,7 @@ export function useMeetingAssistant() {
             modelCompleted: true,
             visibleCommitted: true,
             visibleAnswerRevision: visibleAnswerRevisionAfter,
-            appliedToParent:
-              screenCurrentQuestionSettlement?.typeAppliedToParent,
+            appliedToParent: didScreenTypeRepairApplyToParent(),
             reason: "screen-stable-answer-visible-commit",
           });
         } else {
