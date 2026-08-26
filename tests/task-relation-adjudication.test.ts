@@ -19,8 +19,13 @@ import {
   parseTaskRelationAdjudicationOutput,
   resolveTaskRelationBudgetSlot,
   settleNarrowVoiceTypeRelation,
+  SCREEN_RELATION_RELEASE_WAIT_BUDGET_MS,
   type LlmTaskRelationAdjudication,
 } from "../src/lib/meeting/task-relation-adjudication.js";
+
+test("gives Screen relation settlement a dedicated extended wait", () => {
+  assert.equal(SCREEN_RELATION_RELEASE_WAIT_BUDGET_MS, 4_500);
+});
 
 function unit(text: string, revision = 1): LogicalQuestionUnit {
   return {
