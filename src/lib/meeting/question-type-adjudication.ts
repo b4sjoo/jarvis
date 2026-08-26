@@ -10,8 +10,9 @@ import {
 } from "./task-taxonomy.js";
 import type {
   CurrentQuestionSettlementDecision,
-  CurrentQuestionSettlementProposal,
-  ProvisionalCurrentQuestion,
+} from "./current-question-settlement.js";
+export {
+  createLlmTypeRepairSettlementProposal as createQuestionTypeSettlementProposal,
 } from "./current-question-settlement.js";
 import type { RuntimeInferenceRuntimeJob } from "./runtime-inference-runtime.js";
 import { buildRuntimeInferenceModelInput } from "./runtime-inference.js";
@@ -605,36 +606,6 @@ export function parseQuestionTypeAdjudicationOutput(
         | string
         | undefined,
     },
-  };
-}
-
-export function createQuestionTypeSettlementProposal(input: {
-  currentQuestion: ProvisionalCurrentQuestion;
-  adjudication: LlmQuestionTypeAdjudication;
-  expectedParentId?: string;
-  expectedParentRevision?: number;
-}): CurrentQuestionSettlementProposal {
-  return {
-    source: "llm-type-repair",
-    sessionId: input.currentQuestion.sessionId,
-    runtimeEpoch: input.currentQuestion.runtimeEpoch,
-    logicalQuestionUnitId:
-      input.currentQuestion.logicalQuestionUnitId,
-    revision: input.currentQuestion.revision,
-    sourceHash: input.currentQuestion.sourceHash,
-    questionType: input.adjudication.questionType,
-    relation: "unknown",
-    confidence: input.adjudication.confidence,
-    typeEvidenceAuthorized: true,
-    relationEvidenceAuthorized: false,
-    actionEvidenceAuthorized: false,
-    expectedParentId: input.expectedParentId,
-    expectedParentRevision: input.expectedParentRevision,
-    reasons: [
-      "question-type-runtime-operation",
-      "relation-authority-withheld",
-      "parent-mutation-withheld",
-    ],
   };
 }
 

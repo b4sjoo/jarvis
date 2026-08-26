@@ -107,6 +107,42 @@ export interface CurrentQuestionSettlementProposal {
   reasons?: string[];
 }
 
+export interface LlmTypeRepairSettlementCandidate {
+  questionType: CanonicalQuestionType;
+  confidence: number;
+}
+
+export function createLlmTypeRepairSettlementProposal<
+  TCandidate extends LlmTypeRepairSettlementCandidate,
+>(input: {
+  currentQuestion: ProvisionalCurrentQuestion;
+  adjudication: TCandidate;
+  expectedParentId?: string;
+  expectedParentRevision?: number;
+}): CurrentQuestionSettlementProposal {
+  return {
+    source: "llm-type-repair",
+    sessionId: input.currentQuestion.sessionId,
+    runtimeEpoch: input.currentQuestion.runtimeEpoch,
+    logicalQuestionUnitId: input.currentQuestion.logicalQuestionUnitId,
+    revision: input.currentQuestion.revision,
+    sourceHash: input.currentQuestion.sourceHash,
+    questionType: input.adjudication.questionType,
+    relation: "unknown",
+    confidence: input.adjudication.confidence,
+    typeEvidenceAuthorized: true,
+    relationEvidenceAuthorized: false,
+    actionEvidenceAuthorized: false,
+    expectedParentId: input.expectedParentId,
+    expectedParentRevision: input.expectedParentRevision,
+    reasons: [
+      "question-type-runtime-operation",
+      "relation-authority-withheld",
+      "parent-mutation-withheld",
+    ],
+  };
+}
+
 export interface CurrentQuestionSettlementProposalRejection {
   source: CurrentQuestionSettlementProposalSource;
   reasons: CurrentQuestionSettlementProposalRejectionReason[];
