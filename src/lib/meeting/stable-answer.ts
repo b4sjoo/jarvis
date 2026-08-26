@@ -128,12 +128,11 @@ export function resolveAuthorizedAnswerArtifacts(input: {
   const codeFamilyRevision =
     input.artifactIntent === "revise-code" ||
     input.artifactIntent === "revise-complexity";
-  if (
-    codeFamilyRevision &&
-    (input.artifactPolicy.allowCode ||
-      input.artifactPolicy.allowComplexity)
-  ) {
-    authorized.push("code", "complexity");
+  if (codeFamilyRevision && input.artifactPolicy.allowCode) {
+    authorized.push("code");
+  }
+  if (codeFamilyRevision && input.artifactPolicy.allowComplexity) {
+    authorized.push("complexity");
   }
   if (
     input.artifactIntent === "revise-whiteboard" &&

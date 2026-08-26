@@ -78,7 +78,7 @@ Complexity: O(n squared).`
   assert.equal(second.sections.complexity.revision, 1);
 });
 
-test("treats Code and Complexity as one artifact authority family", () => {
+test("projects the Code family into only its phase-authorized sections", () => {
   const authorized = resolveAuthorizedAnswerArtifacts({
     artifactPolicy: {
       disposition: "parent-owner-authorized",
@@ -95,7 +95,25 @@ test("treats Code and Complexity as one artifact authority family", () => {
     artifactIntent: "revise-code",
   });
 
-  assert.deepEqual(authorized, ["answer", "code", "complexity"]);
+  assert.deepEqual(authorized, ["answer", "code"]);
+
+  const complexityOnly = resolveAuthorizedAnswerArtifacts({
+    artifactPolicy: {
+      disposition: "parent-owner-authorized",
+      reason: "test",
+      parentQuestionType: "coding",
+      responseOwnerQuestionType: "coding",
+      responseOwnerSource: "committed-parent",
+      allowLatestUsefulAnswer: true,
+      allowWhiteboard: false,
+      allowCode: false,
+      allowComplexity: true,
+      allowParentContextMutation: true,
+    },
+    artifactIntent: "revise-code",
+  });
+
+  assert.deepEqual(complexityOnly, ["answer", "complexity"]);
 });
 
 test("does not advance an authorized artifact revision when the candidate omits it", () => {
