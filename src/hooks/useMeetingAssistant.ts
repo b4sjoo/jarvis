@@ -15610,6 +15610,7 @@ export function useMeetingAssistant() {
       logicalQuestionUnit,
       originalDecision,
       executionMode,
+      onOutputAuthorized,
     }: {
       turn: TranscriptTurn;
       traceId: string;
@@ -15619,6 +15620,10 @@ export function useMeetingAssistant() {
         | "authoritative"
         | "speculative-authoritative"
         | "shadow-observation";
+      onOutputAuthorized: (input: {
+        intentDecision: AdvisorTurnIntentDecision;
+        logicalQuestionUnit: LogicalQuestionUnit;
+      }) => void;
     }) => {
       const contextState = contextManagerRef.current.getState();
       const authoritative = executionMode !== "shadow-observation";
@@ -16236,31 +16241,10 @@ export function useMeetingAssistant() {
                 "runtime-response-opportunity",
               provisionalTurnGenerationInvalidationBlocked: false,
             });
-            const debounceStepId = traceStoreRef.current.startStep(
-              traceId,
-              "Advisor debounce scheduled",
-              {
-                debounceMs: ADVISOR_DEBOUNCE_MS,
-                reason: validAppliedDecision.reason,
-                runtimeIntentReleasedAction: "answer",
-              }
-            );
-            traceStoreRef.current.finishStep(
-              traceId,
-              debounceStepId,
-              "success"
-            );
-            scheduleAdvisor(
-              latestContext.activeMeetingTask?.screen
-                ? "screen-anchored"
-                : "live",
-              traceId,
-              validAppliedDecision,
-              turn.id,
-              undefined,
-              latestLogicalQuestionUnit,
-              "runtime-intent-answer"
-            );
+            onOutputAuthorized({
+              intentDecision: validAppliedDecision,
+              logicalQuestionUnit: latestLogicalQuestionUnit,
+            });
             return;
           }
 
@@ -16279,7 +16263,6 @@ export function useMeetingAssistant() {
     [
       publishCanonicalLogicalQuestionTarget,
       refreshRecordedCompletedTrace,
-      scheduleAdvisor,
     ]
   );
 
@@ -22279,48 +22262,6 @@ export function useMeetingAssistant() {
           activeMeetingTask: nextContextState.activeMeetingTask,
         }));
       }
-      let runtimeAdjudication:
-        | RuntimeAdjudicationScheduleHandle
-        | undefined;
-      if (logicalQuestionUnit) {
-        const responseOpportunityExecutionMode =
-          resolveResponseOpportunityExecutionMode(
-            responseOpportunityLocalDecision
-          );
-        if (responseOpportunityExecutionMode) {
-          scheduleResponseOpportunityInference({
-            turn,
-            traceId,
-            logicalQuestionUnit,
-            originalDecision: turnGate,
-            executionMode: responseOpportunityExecutionMode,
-          });
-        }
-        if (
-          responseOpportunityLocalDecision.disposition ===
-          "runtime-required"
-        ) {
-          return;
-        }
-        runtimeAdjudication = scheduleSemanticTaxonomyShadow({
-          turn,
-          traceId,
-          turnGateAction: taxonomyTurnGateAction,
-          logicalQuestionUnit,
-          questionTypeAxisConflict,
-        });
-      }
-
-      if (turnGate.action === "state-update") {
-        traceStoreRef.current.finishTrace(traceId, "success");
-        return;
-      }
-
-      if (turnGate.action !== "answer-refresh") {
-        traceStoreRef.current.finishTrace(traceId, "success");
-        return;
-      }
-
       let advisorQuestionLineage = adjacentConstraintDecision.lineage;
       if (
         !hasActiveInterviewTask &&
@@ -22354,6 +22295,96 @@ export function useMeetingAssistant() {
             formatAdjacentQuestionScopeForTrace(adjacentQuestionScope)
           );
         }
+      }
+      let runtimeAdjudication:
+        | RuntimeAdjudicationScheduleHandle
+        | undefined;
+      if (logicalQuestionUnit) {
+        runtimeAdjudication = scheduleSemanticTaxonomyShadow({
+          turn,
+          traceId,
+          turnGateAction:
+            responseOpportunityLocalDecision.disposition ===
+            "runtime-required"
+              ? "answer-refresh"
+              : taxonomyTurnGateAction,
+          logicalQuestionUnit,
+          questionTypeAxisConflict,
+        });
+        const responseOpportunityExecutionMode =
+          resolveResponseOpportunityExecutionMode(
+            responseOpportunityLocalDecision
+          );
+        if (responseOpportunityExecutionMode) {
+          scheduleResponseOpportunityInference({
+            turn,
+            traceId,
+            logicalQuestionUnit,
+            originalDecision: turnGate,
+            executionMode: responseOpportunityExecutionMode,
+            onOutputAuthorized: ({
+              intentDecision,
+              logicalQuestionUnit: releasedLogicalQuestionUnit,
+            }) => {
+              const latestContext = contextManagerRef.current.getState();
+              const mode = latestContext.activeMeetingTask?.screen
+                ? "screen-anchored"
+                : "live";
+              if (
+                scheduleAdvisorAfterQuestionTypeWindow({
+                  handle: runtimeAdjudication,
+                  mode,
+                  traceId,
+                  turnIntentDecision: intentDecision,
+                  triggerTurnId: turn.id,
+                  questionLineage: advisorQuestionLineage,
+                  logicalQuestionUnit: releasedLogicalQuestionUnit,
+                })
+              ) {
+                return;
+              }
+              const debounceStepId = traceStoreRef.current.startStep(
+                traceId,
+                "Advisor debounce scheduled",
+                {
+                  debounceMs: ADVISOR_DEBOUNCE_MS,
+                  reason: intentDecision.reason,
+                  runtimeIntentReleasedAction: "answer",
+                }
+              );
+              traceStoreRef.current.finishStep(
+                traceId,
+                debounceStepId,
+                "success"
+              );
+              scheduleAdvisor(
+                mode,
+                traceId,
+                intentDecision,
+                turn.id,
+                advisorQuestionLineage,
+                releasedLogicalQuestionUnit,
+                "runtime-intent-answer"
+              );
+            },
+          });
+        }
+        if (
+          responseOpportunityLocalDecision.disposition ===
+          "runtime-required"
+        ) {
+          return;
+        }
+      }
+
+      if (turnGate.action === "state-update") {
+        traceStoreRef.current.finishTrace(traceId, "success");
+        return;
+      }
+
+      if (turnGate.action !== "answer-refresh") {
+        traceStoreRef.current.finishTrace(traceId, "success");
+        return;
       }
 
       if (

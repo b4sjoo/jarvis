@@ -44,6 +44,44 @@ test("keeps STT transport concerns outside canonical ingress", () => {
   assert.doesNotMatch(ingress, /base64WavToBlob/);
 });
 
+test("joins residual response opportunity with type and relation before advisor dispatch", () => {
+  const ingress = sourceSlice(
+    "  const processCanonicalTurnIngress = useCallback(",
+    "  const processQueuedSpeechSegment = useCallback"
+  );
+  const residualBranch = ingress.slice(
+    ingress.indexOf("      let runtimeAdjudication:")
+  );
+  const semanticScheduleAt = residualBranch.indexOf(
+    "runtimeAdjudication = scheduleSemanticTaxonomyShadow"
+  );
+  const responseScheduleAt = residualBranch.indexOf(
+    "scheduleResponseOpportunityInference({"
+  );
+  const residualReturnAt = residualBranch.indexOf(
+    'responseOpportunityLocalDecision.disposition ===\n          "runtime-required"'
+  );
+
+  assert.ok(semanticScheduleAt >= 0);
+  assert.ok(responseScheduleAt > semanticScheduleAt);
+  assert.ok(residualReturnAt > responseScheduleAt);
+  assert.match(
+    residualBranch,
+    /runtime-required"\s*\? "answer-refresh"\s*: taxonomyTurnGateAction/
+  );
+  assert.match(
+    residualBranch,
+    /onOutputAuthorized:[\s\S]*scheduleAdvisorAfterQuestionTypeWindow/
+  );
+
+  const responseOpportunity = sourceSlice(
+    "  const scheduleResponseOpportunityInference = useCallback(",
+    "  const scheduleMeetingMetadataInference = useCallback"
+  );
+  assert.match(responseOpportunity, /onOutputAuthorized\(\{/);
+  assert.doesNotMatch(responseOpportunity, /\bscheduleAdvisor\(/);
+});
+
 function sourceSlice(startMarker: string, endMarker: string) {
   const start = source.indexOf(startMarker);
   const end = source.indexOf(endMarker, start + startMarker.length);
