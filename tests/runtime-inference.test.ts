@@ -94,7 +94,7 @@ test("registers each atomic runtime operation with an isolated policy", () => {
   assert.equal(questionType.maxOutputTokens, 512);
   assert.equal(questionType.quiescenceMs, 350);
   assert.equal(responseOpportunity.lane, "critical");
-  assert.equal(responseOpportunity.timeoutMs, 2_000);
+  assert.equal(responseOpportunity.timeoutMs, 3_000);
   assert.equal(
     responseOpportunity.maxOutputTokens,
     RESPONSE_OPPORTUNITY_MAX_OUTPUT_TOKENS
@@ -120,7 +120,7 @@ test("registers each atomic runtime operation with an isolated policy", () => {
   assert.equal(answerResolution.timeoutMs, 1_500);
   assert.equal(answerResolution.maxOutputTokens, 256);
   assert.equal(evidenceRequirement.lane, "critical");
-  assert.equal(evidenceRequirement.timeoutMs, 2_000);
+  assert.equal(evidenceRequirement.timeoutMs, 3_000);
   assert.equal(evidenceRequirement.maxOutputTokens, 256);
   assert.equal(sourceLinkage.lane, "critical");
   assert.equal(sourceLinkage.timeoutMs, 1_500);
