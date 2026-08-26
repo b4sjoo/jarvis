@@ -3,6 +3,7 @@ import {
   createProvisionalCurrentQuestion,
   settleCurrentQuestion,
   type CurrentQuestionRelation,
+  type CurrentQuestionSourceKind,
   type CurrentQuestionSettlementDecision,
   type LlmTypeRepairSettlementCandidate,
 } from "./current-question-settlement.js";
@@ -145,6 +146,8 @@ export function resolveCorrectionOwnedResettlement(input: {
   activeParentType?: unknown;
   targetOwnsActiveParent: boolean;
   manualCorrectionRevision: number;
+  sourceKind?: CurrentQuestionSourceKind;
+  sourceObservationIds?: readonly string[];
   minConfidence?: number;
 }): CorrectionOwnedResettlementDecision {
   const activeParentType =
@@ -175,7 +178,10 @@ export function resolveCorrectionOwnedResettlement(input: {
 
   const currentQuestion = createProvisionalCurrentQuestion({
     logicalQuestionUnit: input.logicalQuestionUnit,
-    sourceKind: "voice",
+    sourceKind: input.sourceKind ?? "voice",
+    sourceObservationIds: input.sourceObservationIds
+      ? [...input.sourceObservationIds]
+      : undefined,
   });
   const settlement = settleCurrentQuestion({
     currentQuestion,
@@ -297,6 +303,8 @@ export function resolveCorrectionOwnedTypeResettlement<
   activeParentType?: unknown;
   targetOwnsActiveParent: boolean;
   manualCorrectionRevision: number;
+  sourceKind?: CurrentQuestionSourceKind;
+  sourceObservationIds?: readonly string[];
   minConfidence?: number;
 }): CorrectionOwnedResettlementDecision {
   const activeParentType =
@@ -327,7 +335,10 @@ export function resolveCorrectionOwnedTypeResettlement<
 
   const currentQuestion = createProvisionalCurrentQuestion({
     logicalQuestionUnit: input.logicalQuestionUnit,
-    sourceKind: "voice",
+    sourceKind: input.sourceKind ?? "voice",
+    sourceObservationIds: input.sourceObservationIds
+      ? [...input.sourceObservationIds]
+      : undefined,
   });
   const settlement = settleCurrentQuestion({
     currentQuestion,

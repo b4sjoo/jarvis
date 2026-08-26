@@ -62,6 +62,8 @@ test("authorizes a correction-owned General SD to AI/ML SD retype", () => {
     activeParentType: "general-system-design",
     targetOwnsActiveParent: true,
     manualCorrectionRevision: 4,
+    sourceKind: "screen",
+    sourceObservationIds: ["screen-a"],
   });
 
   assert.equal(decision.disposition, "same-question-retype");
@@ -96,6 +98,8 @@ test("authorizes the same parent retype from the compact Question Type result", 
     activeParentType: "general-system-design",
     targetOwnsActiveParent: true,
     manualCorrectionRevision: 4,
+    sourceKind: "screen",
+    sourceObservationIds: ["screen-a"],
   });
 
   assert.equal(decision.disposition, "same-question-retype");
@@ -104,6 +108,8 @@ test("authorizes the same parent retype from the compact Question Type result", 
   assert.equal(decision.relation, "followup-parent");
   assert.equal(decision.settlement?.typeMutationAuthorized, true);
   assert.equal(decision.settlement?.relationMutationAuthorized, false);
+  assert.equal(decision.settlement?.sourceKind, "mixed");
+  assert.deepEqual(decision.settlement?.sourceObservationIds, ["screen-a"]);
 });
 
 test("rejects stale and low-confidence semantic resettlement results", () => {

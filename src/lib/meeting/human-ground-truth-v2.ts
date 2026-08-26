@@ -36,6 +36,7 @@ import {
   type MeetingMetadataMutationDisposition,
 } from "./meeting-metadata-evaluation.js";
 import { projectObservedAdvisorAttempt } from "./observed-advisor-outcome.js";
+import { resolveCurrentQuestionSourceKind } from "./current-question-settlement.js";
 
 export type ObservedQuestionSourceKind = "voice" | "screen" | "mixed";
 
@@ -830,12 +831,11 @@ export function resolveObservedQuestionSourceKind(
       metadata.currentQuestionSettlementSourceObservationIds ??
       metadata.currentQuestionSourceObservationIds
   );
-  if (sourceTurnIds.length > 0 && sourceObservationIds.length > 0) {
-    return "mixed";
-  }
-  if (sourceObservationIds.length > 0) return "screen";
-  if (sourceTurnIds.length > 0) return "voice";
-  return traceKind === "screen" ? "screen" : "voice";
+  return resolveCurrentQuestionSourceKind({
+    sourceTurnIds,
+    sourceObservationIds,
+    fallback: traceKind === "screen" ? "screen" : "voice",
+  });
 }
 
 export function buildHumanGroundTruthSubjectV2(input: {

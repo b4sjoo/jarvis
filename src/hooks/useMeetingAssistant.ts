@@ -540,6 +540,7 @@ import {
   createTaskBoundaryCandidate,
   decideLlmTypeRepairFirstParentAdmission,
   createProvisionalCurrentQuestion,
+  resolveCurrentQuestionSourceKind,
   CurrentQuestionSettlementProposal,
   ProvisionalCurrentQuestion,
   createSourceOwnedTransitionCandidate,
@@ -29434,6 +29435,23 @@ export function useMeetingAssistant() {
         targetResolution.source === "active-task"
           ? targetResolution.targetSource
           : "provisional-question";
+      const correctionSourceObservationIds =
+        canonicalCorrectionTarget?.sourceObservationIds ??
+        (!correctionOriginTurn &&
+        activeTask?.screen?.basedOnObservationId
+          ? [activeTask.screen.basedOnObservationId]
+          : []);
+      const correctionCurrentQuestionSourceKind =
+        resolveCurrentQuestionSourceKind({
+          sourceTurnIds: correctionLogicalQuestionUnit.sourceTurnIds,
+          sourceObservationIds: correctionSourceObservationIds,
+          fallback:
+            state.latestSuggestion?.taskSource === "mixed"
+              ? "mixed"
+              : state.latestSuggestion?.taskSource === "screen"
+                ? "screen"
+                : "voice",
+        });
 
       const eventId = createMeetingId("question_type_correction");
       const correctionRequestKey = [
@@ -29513,9 +29531,9 @@ export function useMeetingAssistant() {
       const correctionModelRouteMetadata =
         formatMeetingModelRouteForTrace(correctionModelRoute);
       const correctionTrace = traceStoreRef.current.startTrace(
-        activeTask?.screen || state.latestSuggestion?.taskSource === "screen"
-          ? "screen"
-          : "voice",
+        correctionCurrentQuestionSourceKind === "voice"
+          ? "voice"
+          : "screen",
         {
           source: "manual-question-type-correction",
           manualQuestionTypeCorrectionSource: source,
@@ -29556,7 +29574,9 @@ export function useMeetingAssistant() {
           correctionQuestionOriginTraceId:
             correctionLineage?.questionOriginTraceId,
           correctionSourceObservationIds:
-            canonicalCorrectionTarget?.sourceObservationIds,
+            correctionSourceObservationIds,
+          correctionTargetSourceKind:
+            correctionCurrentQuestionSourceKind,
           correctionCurrentQuestionSettlementId:
             canonicalCorrectionTarget?.settlement?.settlementId,
           correctionCurrentQuestionRelation:
@@ -29643,7 +29663,7 @@ export function useMeetingAssistant() {
         logicalQuestionUnitId: correctionLogicalQuestionUnit?.id,
         logicalQuestionRevision: correctionLogicalQuestionUnit?.revision,
         sourceObservationIds:
-          canonicalCorrectionTarget?.sourceObservationIds,
+          correctionSourceObservationIds,
         questionOriginTraceId:
           correctionLineage?.questionOriginTraceId,
         settlementId:
@@ -29826,21 +29846,12 @@ export function useMeetingAssistant() {
             return;
           }
         }
-        const correctionCurrentQuestionSourceKind =
-          canonicalCorrectionTarget?.sourceKind ??
-          (correctionOriginTurn
-            ? "voice"
-            : state.latestSuggestion?.taskSource === "mixed"
-              ? "mixed"
-              : state.latestSuggestion?.taskSource === "screen"
-                ? "screen"
-                : "voice");
         const correctionCurrentQuestion =
           createProvisionalCurrentQuestion({
             logicalQuestionUnit: correctionLogicalQuestionUnit,
             sourceKind: correctionCurrentQuestionSourceKind,
             sourceObservationIds:
-              canonicalCorrectionTarget?.sourceObservationIds,
+              correctionSourceObservationIds,
           });
         const correctionTargetOwnsActiveParent = Boolean(
           activeTask &&
@@ -31720,17 +31731,67 @@ export function useMeetingAssistant() {
       const latestSuggestionUsesScreen = Boolean(
         state.latestSuggestion?.basedOnObservationIds.length
       );
+      const currentLogicalQuestionUnit = logicalQuestionUnitRef.current;
+      const currentSettlement = currentQuestionSettlementRef.current;
+      const currentSettlementOwnsLogicalQuestion = Boolean(
+        currentLogicalQuestionUnit &&
+          currentSettlement?.logicalQuestionUnitId ===
+            currentLogicalQuestionUnit.id &&
+          currentSettlement.revision ===
+            currentLogicalQuestionUnit.revision
+      );
+      const currentSourceKind = currentSettlementOwnsLogicalQuestion
+        ? resolveCurrentQuestionSourceKind({
+            sourceTurnIds: currentLogicalQuestionUnit?.sourceTurnIds,
+            sourceObservationIds:
+              currentSettlement?.sourceObservationIds,
+            fallback: currentSettlement?.sourceKind ?? "voice",
+          })
+        : undefined;
+      const preferScreen = currentSettlementOwnsLogicalQuestion
+        ? currentSourceKind !== "voice"
+        : !currentLogicalQuestionUnit && latestSuggestionUsesScreen;
       const targetLogicalQuestionUnit =
         resolveResponseActionLogicalQuestionUnit({
-          currentLogicalQuestionUnit: logicalQuestionUnitRef.current,
+          currentLogicalQuestionUnit,
           meetingContext: contextState,
           runtimeEpoch: runtimeEpochRef.current,
-          preferScreen: latestSuggestionUsesScreen,
+          preferScreen,
         });
+      const targetSettlement =
+        targetLogicalQuestionUnit &&
+        currentSettlement?.logicalQuestionUnitId ===
+          targetLogicalQuestionUnit.id &&
+        currentSettlement.revision ===
+          targetLogicalQuestionUnit.revision
+          ? currentSettlement
+          : undefined;
+      const targetScreenObservationId =
+        contextState.activeMeetingTask?.screen?.basedOnObservationId ??
+        contextState.taskRuntime.screenAttachment?.basedOnObservationId;
+      const targetSourceObservationIds =
+        targetSettlement?.sourceObservationIds ??
+        (preferScreen && targetScreenObservationId
+          ? [targetScreenObservationId]
+          : []);
+      const correctionSourceKind = targetLogicalQuestionUnit
+        ? resolveCurrentQuestionSourceKind({
+            sourceTurnIds: targetLogicalQuestionUnit.sourceTurnIds,
+            sourceObservationIds: targetSourceObservationIds,
+            fallback: preferScreen ? "screen" : "voice",
+          })
+        : latestSuggestionUsesScreen
+          ? "screen"
+          : "voice";
       const trace = traceStoreRef.current.startTrace(
-        latestSuggestionUsesScreen ? "screen" : "voice",
+        correctionSourceKind === "voice" ? "voice" : "screen",
         {
           source: "emergency-correction",
+          correctionTargetSourceKind: correctionSourceKind,
+          correctionTargetSourceTurnIds:
+            targetLogicalQuestionUnit?.sourceTurnIds ?? [],
+          correctionTargetSourceObservationIds:
+            targetSourceObservationIds,
           correctionInputChars: input.trim().length,
           correctionTargetDisposition: targetLogicalQuestionUnit
             ? "current-question-overlay"
@@ -32385,6 +32446,8 @@ export function useMeetingAssistant() {
               resolveCorrectionOwnedTypeResettlement({
                 logicalQuestionUnit:
                   application.logicalQuestionUnit,
+                sourceKind: correctionSourceKind,
+                sourceObservationIds: targetSourceObservationIds,
                 adjudication:
                   parsed?.ok ? parsed.value : undefined,
                 operationAuthorized: authorization.authorized,
@@ -32955,9 +33018,9 @@ export function useMeetingAssistant() {
                     createProvisionalCurrentQuestion({
                       logicalQuestionUnit:
                         application.logicalQuestionUnit,
-                      sourceKind: latestTask.screen
-                        ? "screen"
-                        : "voice",
+                      sourceKind: correctionSourceKind,
+                      sourceObservationIds:
+                        targetSourceObservationIds,
                     }),
                   settlement: settledCorrection,
                   disposition:

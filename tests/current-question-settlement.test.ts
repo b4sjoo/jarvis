@@ -7,6 +7,7 @@ import {
   formatCurrentQuestionSettlementForTrace,
   formatCurrentQuestionTerminalNoAnswerForTrace,
   formatProvisionalCurrentQuestionForTrace,
+  resolveCurrentQuestionSourceKind,
   resolveCurrentQuestionSettlementDisposition,
   settlementAuthorizesFollowupParentScope,
   settlementAuthorizesTaskTransition,
@@ -145,6 +146,47 @@ test("creates a stable versioned provisional question snapshot", () => {
   assert.deepEqual(trace.currentQuestionSettlementSourceObservationIds, [
     "observation-a",
   ]);
+});
+
+test("derives source kind from owned evidence before compatibility fallback", () => {
+  assert.equal(
+    resolveCurrentQuestionSourceKind({
+      sourceTurnIds: ["turn-a"],
+      sourceObservationIds: [],
+      fallback: "screen",
+    }),
+    "voice"
+  );
+  assert.equal(
+    resolveCurrentQuestionSourceKind({
+      sourceTurnIds: [],
+      sourceObservationIds: ["screen-a"],
+      fallback: "voice",
+    }),
+    "screen"
+  );
+  assert.equal(
+    resolveCurrentQuestionSourceKind({
+      sourceTurnIds: ["turn-a"],
+      sourceObservationIds: ["screen-a"],
+      fallback: "voice",
+    }),
+    "mixed"
+  );
+  assert.equal(
+    resolveCurrentQuestionSourceKind({
+      sourceTurnIds: [],
+      sourceObservationIds: [],
+      fallback: "screen",
+    }),
+    "screen"
+  );
+
+  const voiceQuestion = createProvisionalCurrentQuestion({
+    logicalQuestionUnit: logicalQuestion(),
+    sourceKind: "screen",
+  });
+  assert.equal(voiceQuestion.sourceKind, "voice");
 });
 
 test("authorizes active-parent scope only for a bound settled follow-up", () => {
@@ -354,7 +396,7 @@ test("formats provisional identity and authority for trace joins", () => {
 
   assert.equal(metadata.currentQuestionUnitId, "logical-question-a");
   assert.equal(metadata.currentQuestionRevision, 2);
-  assert.equal(metadata.currentQuestionSourceKind, "screen");
+  assert.equal(metadata.currentQuestionSourceKind, "mixed");
   assert.equal(metadata.currentQuestionAuthority, "deterministic-fast-path");
   assert.equal(metadata.currentQuestionParentMutationAuthorized, true);
 });

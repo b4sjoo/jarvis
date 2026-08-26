@@ -17,6 +17,19 @@ import type { InterviewTaskRelation } from "./types.js";
 
 export type CurrentQuestionSourceKind = "voice" | "screen" | "mixed";
 
+export function resolveCurrentQuestionSourceKind(input: {
+  sourceTurnIds?: readonly string[];
+  sourceObservationIds?: readonly string[];
+  fallback: CurrentQuestionSourceKind;
+}): CurrentQuestionSourceKind {
+  const hasVoice = (input.sourceTurnIds?.length ?? 0) > 0;
+  const hasScreen = (input.sourceObservationIds?.length ?? 0) > 0;
+  if (hasVoice && hasScreen) return "mixed";
+  if (hasScreen) return "screen";
+  if (hasVoice) return "voice";
+  return input.fallback;
+}
+
 export type CurrentQuestionAuthority =
   | "explicit-manual"
   | "deterministic-fast-path"
@@ -335,7 +348,11 @@ export function createProvisionalCurrentQuestion(input: {
     normalizedText: semanticEvidenceText,
     sourceTurnIds,
     sourceObservationIds,
-    sourceKind: input.sourceKind,
+    sourceKind: resolveCurrentQuestionSourceKind({
+      sourceTurnIds,
+      sourceObservationIds,
+      fallback: input.sourceKind,
+    }),
     sourceHash,
     createdAt: logicalQuestionUnit.startedAt,
     updatedAt: input.now ?? logicalQuestionUnit.updatedAt,
