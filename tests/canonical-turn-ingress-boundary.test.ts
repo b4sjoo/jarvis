@@ -73,6 +73,14 @@ test("joins residual response opportunity with type and relation before advisor 
     residualBranch,
     /onOutputAuthorized:[\s\S]*scheduleAdvisorAfterQuestionTypeWindow/
   );
+  assert.match(
+    residualBranch,
+    /releasedLogicalQuestionUnit,\s*"input-evidence"/
+  );
+  assert.doesNotMatch(
+    residualBranch,
+    /releasedLogicalQuestionUnit,\s*"runtime-intent-answer"/
+  );
 
   const responseOpportunity = sourceSlice(
     "  const scheduleResponseOpportunityInference = useCallback(",
