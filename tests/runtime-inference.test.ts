@@ -90,27 +90,28 @@ test("registers each atomic runtime operation with an isolated policy", () => {
   assert.equal(taxonomy.lane, "critical");
   assert.equal(taxonomy.quiescenceMs, 450);
   assert.equal(questionType.lane, "critical");
-  assert.equal(questionType.timeoutMs, 4_000);
+  assert.equal(questionType.timeoutMs, 5_000);
   assert.equal(questionType.maxOutputTokens, 512);
   assert.equal(questionType.quiescenceMs, 350);
   assert.equal(responseOpportunity.lane, "critical");
-  assert.equal(responseOpportunity.timeoutMs, 1_500);
+  assert.equal(responseOpportunity.timeoutMs, 2_000);
   assert.equal(
     responseOpportunity.maxOutputTokens,
     RESPONSE_OPPORTUNITY_MAX_OUTPUT_TOKENS
   );
   assert.equal(responseOpportunity.quiescenceMs, 0);
   assert.equal(metadata.lane, "background");
+  assert.equal(metadata.timeoutMs, 5_000);
   assert.equal(whiteboard.timeoutMs, 3_000);
   assert.equal(whiteboard.maxOutputTokens, 768);
   assert.equal(relation.lane, "critical");
   assert.equal(childAffinity.lane, "evaluation");
   assert.equal(parentAffinity.lane, "evaluation");
   assert.equal(canonicalRelation.lane, "evaluation");
-  assert.equal(childAffinity.timeoutMs, 4_500);
-  assert.equal(parentAffinity.timeoutMs, 4_500);
-  assert.equal(canonicalRelation.timeoutMs, 3_000);
-  assert.equal(relation.timeoutMs, 4_000);
+  assert.equal(childAffinity.timeoutMs, 5_500);
+  assert.equal(parentAffinity.timeoutMs, 5_500);
+  assert.equal(canonicalRelation.timeoutMs, 4_000);
+  assert.equal(relation.timeoutMs, 5_000);
   assert.equal(relation.maxOutputTokens, 512);
   assert.equal(childAffinity.maxOutputTokens, 512);
   assert.equal(parentAffinity.maxOutputTokens, 512);
@@ -119,7 +120,7 @@ test("registers each atomic runtime operation with an isolated policy", () => {
   assert.equal(answerResolution.timeoutMs, 1_500);
   assert.equal(answerResolution.maxOutputTokens, 256);
   assert.equal(evidenceRequirement.lane, "critical");
-  assert.equal(evidenceRequirement.timeoutMs, 1_500);
+  assert.equal(evidenceRequirement.timeoutMs, 2_000);
   assert.equal(evidenceRequirement.maxOutputTokens, 256);
   assert.equal(sourceLinkage.lane, "critical");
   assert.equal(sourceLinkage.timeoutMs, 1_500);

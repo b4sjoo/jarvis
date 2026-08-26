@@ -558,6 +558,7 @@ import {
   formatCrossDomainParentTransitionForTrace,
   formatRuntimeCommitAuthorizationForTrace,
   formatRuntimeInferenceOperationForTrace,
+  getRuntimeInferenceOperationDefinition,
   formatCurrentQuestionSettlementForTrace,
   finalizeCurrentQuestionFirstParentSettlement,
   settlementAuthorizesTaskTransition,
@@ -831,6 +832,8 @@ const ADVISOR_DEBOUNCE_MS = 750;
 const STT_TIMEOUT_MS = 30_000;
 const SCREEN_PREFLIGHT_TIMEOUT_MS = 10_000;
 const SCREEN_ANALYSIS_TIMEOUT_MS = 45_000;
+const VISUAL_EVIDENCE_CHECK_WAIT_MS =
+  getRuntimeInferenceOperationDefinition("evidence-requirement").timeoutMs;
 const CODING_MODEL_REQUEST_TIMEOUT_MS = 120_000;
 const CODING_MODEL_MAX_OUTPUT_TOKENS = 16_384;
 const DEFAULT_ACTIVE_SCREEN_TASK_TIMEOUT_MINUTES = 30;
@@ -13316,7 +13319,7 @@ export function useMeetingAssistant() {
       );
       const remainingMs = Math.max(
         0,
-        1_500 - elapsedMs
+        VISUAL_EVIDENCE_CHECK_WAIT_MS - elapsedMs
       );
       if (remainingMs > 0) {
         try {
