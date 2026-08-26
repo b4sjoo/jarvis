@@ -2836,12 +2836,13 @@ export function useMeetingAssistant() {
     );
   }
   const activeRef = useRef(false);
+  const runtimeActiveRef = useRef(false);
   useEffect(() => {
     if (state.status !== "idle") return;
 
     let disposed = false;
     const hydrateIdlePreparationPreview = () => {
-      if (disposed || activeRef.current) return;
+      if (disposed || runtimeActiveRef.current) return;
       const meetingSessionId = contextManagerRef.current.getState().sessionId;
       void pinPreparationRuntimeForSession(meetingSessionId);
     };
@@ -6096,12 +6097,12 @@ export function useMeetingAssistant() {
       });
       const contextState = contextManagerRef.current.getState();
       const nextStatus: MeetingAssistantStatus =
-        activeRef.current ? "listening" : "idle";
+        runtimeActiveRef.current ? "listening" : "idle";
 
       setState((previous) => ({
         ...previous,
         status:
-          previous.status === "paused" && !activeRef.current
+          previous.status === "paused" && !runtimeActiveRef.current
             ? "paused"
             : nextStatus,
         transcriptTurns: contextState.transcriptTurns,
@@ -7822,7 +7823,7 @@ export function useMeetingAssistant() {
           nativeCaptureSessionId: segment.nativeCaptureSessionId,
           nativeCaptureGeneration: segment.nativeCaptureGeneration,
         },
-        runtimeActive: activeRef.current,
+        runtimeActive: runtimeActiveRef.current,
         currentAudioSessionId: audioSessionIdRef.current,
         activeCaptureSessionId: nativeCaptureSessionIdRef.current,
         activeCaptureGeneration: nativeCaptureGenerationRef.current,
@@ -9372,6 +9373,7 @@ export function useMeetingAssistant() {
         reason: "meeting-assistant-stopped",
       });
       activeRef.current = false;
+      runtimeActiveRef.current = false;
       invalidateAudioProcessingSession();
       cancelActiveAdvisorJob("meeting-assistant-stopped");
       nativeAudioManualRecoveryRef.current = null;
@@ -10028,7 +10030,7 @@ export function useMeetingAssistant() {
       return;
     }
 
-    if (!activeRef.current && !force) {
+    if (!runtimeActiveRef.current && !force) {
       updateForceAdviseTargetForAdvisorOutcome({
         advisorJob,
         status: "failed",
@@ -11334,7 +11336,7 @@ export function useMeetingAssistant() {
       }
       setState((previous) => ({
         ...previous,
-        status: activeRef.current ? "listening" : previous.status,
+        status: runtimeActiveRef.current ? "listening" : previous.status,
         partialSuggestion: "",
       }));
       return;
@@ -12573,7 +12575,7 @@ export function useMeetingAssistant() {
       }
       setState((previous) => ({
         ...previous,
-        status: activeRef.current ? "listening" : previous.status,
+        status: runtimeActiveRef.current ? "listening" : previous.status,
         partialSuggestion: "",
         error: MISSING_AI_MESSAGE,
       }));
@@ -13205,7 +13207,7 @@ export function useMeetingAssistant() {
       });
       setState((previous) => ({
         ...previous,
-        status: activeRef.current
+        status: runtimeActiveRef.current
           ? "listening"
           : returnStatus === "paused"
             ? "paused"
@@ -13871,7 +13873,7 @@ export function useMeetingAssistant() {
         }
         setState((previous) => ({
           ...previous,
-          status: activeRef.current
+          status: runtimeActiveRef.current
             ? "listening"
             : returnStatus === "paused"
               ? "paused"
@@ -14605,7 +14607,7 @@ export function useMeetingAssistant() {
               currentQuestionLineageRef.current = committedQuestionLineage;
               setState((previous) => ({
                 ...previous,
-                status: activeRef.current
+                status: runtimeActiveRef.current
                   ? "listening"
                   : returnStatus === "paused"
                     ? "paused"
@@ -14740,7 +14742,7 @@ export function useMeetingAssistant() {
         }
         setState((previous) => ({
           ...previous,
-          status: activeRef.current
+          status: runtimeActiveRef.current
             ? "listening"
             : returnStatus === "paused"
               ? "paused"
@@ -15018,7 +15020,7 @@ export function useMeetingAssistant() {
           });
         }
 
-        if (activeRef.current && commitDecision.authorized) {
+        if (runtimeActiveRef.current && commitDecision.authorized) {
           setState((previous) => ({
             ...previous,
             status: "listening",
@@ -15082,11 +15084,16 @@ export function useMeetingAssistant() {
           clarifyingSelectionCompletedAt: Date.now(),
         });
       }
-      if ((!activeRef.current && !force) || !commitDecision.authorized) return;
+      if (
+        (!runtimeActiveRef.current && !force) ||
+        !commitDecision.authorized
+      ) {
+        return;
+      }
 
       setState((previous) => ({
         ...previous,
-        status: activeRef.current
+        status: runtimeActiveRef.current
           ? "listening"
           : returnStatus === "paused"
             ? "paused"
@@ -15136,14 +15143,14 @@ export function useMeetingAssistant() {
           candidateLogicalQuestion.revision
       : true;
     if (
-      !activeRef.current ||
+      !runtimeActiveRef.current ||
       contextState.sessionId !== pending.candidateJob.expectedSessionId ||
       runtimeEpochRef.current !==
         pending.candidateJob.runtimeCommitToken.runtimeEpoch ||
       !candidateStillCurrent
     ) {
       clearPendingAdvisorGenerationSupersession(
-        !activeRef.current
+        !runtimeActiveRef.current
           ? "meeting-not-active"
           : !candidateStillCurrent
             ? "candidate-logical-question-no-longer-current"
@@ -15194,7 +15201,7 @@ export function useMeetingAssistant() {
     debounceMs = ADVISOR_DEBOUNCE_MS,
     runtimeTypeRepairOutputAuthority?: RuntimeTypeRepairOutputAuthority
   ) => {
-    if (!activeRef.current) return;
+    if (!runtimeActiveRef.current) return;
 
     const advisorJob = buildAdvisorJob({
       mode,
@@ -16055,7 +16062,7 @@ export function useMeetingAssistant() {
           if (
             validAppliedDecision?.action === "answer-refresh"
           ) {
-            if (!activeRef.current) {
+            if (!runtimeActiveRef.current) {
               traceStoreRef.current.updateMetadata(traceId, {
                 responseOpportunityDecisionApplied: false,
                 responseOpportunityReleaseReason:
@@ -16647,7 +16654,7 @@ export function useMeetingAssistant() {
 
       setState((previous) => ({
         ...previous,
-        status: activeRef.current ? "listening" : "idle",
+        status: runtimeActiveRef.current ? "listening" : "idle",
         transcriptTurns: contextState.transcriptTurns,
         interviewSessionContext: contextState.interviewSessionContext,
         taskRuntime: contextState.taskRuntime,
@@ -20736,7 +20743,7 @@ export function useMeetingAssistant() {
         const convergedSettlement = convergenceResult.settlement;
         const settlement = convergedSettlement ?? typeSettlement;
         const releaseEligible = Boolean(
-          activeRef.current &&
+          runtimeActiveRef.current &&
             leaseAuthorization.authorized &&
             settlement
         );
@@ -20851,11 +20858,11 @@ export function useMeetingAssistant() {
               : leaseAuthorization.reason,
         });
 
-        if (!activeRef.current || !leaseAuthorization.authorized) {
+        if (!runtimeActiveRef.current || !leaseAuthorization.authorized) {
           traceStoreRef.current.finishTrace(
             input.traceId,
             "cancelled",
-            activeRef.current
+            runtimeActiveRef.current
               ? `Question type wait became stale: ${leaseAuthorization.reason}`
               : "Meeting stopped during question type wait."
           );
@@ -21253,6 +21260,7 @@ export function useMeetingAssistant() {
         const coordinator = captureLifecycleCoordinatorRef.current!;
         const lifecycleOperation = coordinator.claim("stop");
         activeRef.current = false;
+        runtimeActiveRef.current = false;
         invalidateAudioProcessingSession();
         cancelActiveAdvisorJob("stt-provider-missing");
         screenAnalysisAbortRef.current?.abort();
@@ -22010,7 +22018,7 @@ export function useMeetingAssistant() {
           traceStoreRef.current.finishTrace(traceId, "success");
           setState((previous) => ({
             ...previous,
-            status: activeRef.current ? "listening" : "idle",
+            status: runtimeActiveRef.current ? "listening" : "idle",
           }));
           return;
         }
@@ -22192,7 +22200,7 @@ export function useMeetingAssistant() {
           traceStoreRef.current.finishTrace(traceId, "success");
           setState((previous) => ({
             ...previous,
-            status: activeRef.current ? "listening" : "idle",
+            status: runtimeActiveRef.current ? "listening" : "idle",
           }));
           return;
         }
@@ -22380,7 +22388,7 @@ export function useMeetingAssistant() {
           traceStoreRef.current.finishTrace(traceId, "success");
           setState((previous) => ({
             ...previous,
-            status: activeRef.current ? "listening" : "idle",
+            status: runtimeActiveRef.current ? "listening" : "idle",
             partialSuggestion: "",
             latestInterviewerTurnCandidate: undefined,
           }));
@@ -22826,7 +22834,7 @@ export function useMeetingAssistant() {
           traceStoreRef.current.finishTrace(traceId, "success");
           setState((previous) => ({
             ...previous,
-            status: activeRef.current ? "listening" : "idle",
+            status: runtimeActiveRef.current ? "listening" : "idle",
           }));
           return;
         }
@@ -22894,7 +22902,7 @@ export function useMeetingAssistant() {
           );
           setState((previous) => ({
             ...previous,
-            status: activeRef.current ? "listening" : "idle",
+            status: runtimeActiveRef.current ? "listening" : "idle",
             transcriptTurns: nextContextState.transcriptTurns,
             interviewSessionContext:
               nextContextState.interviewSessionContext,
@@ -23494,6 +23502,7 @@ export function useMeetingAssistant() {
 
       if (state.settings.privacyMode === "memory-only") {
         activeRef.current = false;
+        runtimeActiveRef.current = false;
         invalidateAudioProcessingSession();
         cancelActiveAdvisorJob("local-only-mode-unavailable");
         screenAnalysisAbortRef.current?.abort();
@@ -23513,6 +23522,7 @@ export function useMeetingAssistant() {
 
       if (!sttProvider) {
         activeRef.current = false;
+        runtimeActiveRef.current = false;
         invalidateAudioProcessingSession();
         cancelActiveAdvisorJob("stt-provider-missing");
         screenAnalysisAbortRef.current?.abort();
@@ -23569,6 +23579,7 @@ export function useMeetingAssistant() {
 
           cancelActiveAdvisorJob("meeting-audio-capture-restarting");
           activeRef.current = false;
+          runtimeActiveRef.current = false;
           invalidateAudioProcessingSession();
 
           await stopNativeMeetingCapture(previousNativeLease);
@@ -23635,6 +23646,7 @@ export function useMeetingAssistant() {
           latestNativeAudioLivenessRef.current = null;
           lastNativeAudioLivenessSequenceRef.current = 0;
           activeRef.current = true;
+          runtimeActiveRef.current = true;
           const contextState = contextManagerRef.current.getState();
           if (state.settings.useMemory) {
             void prewarmMemoryContextSnapshot(contextState.sessionId);
@@ -23757,6 +23769,7 @@ export function useMeetingAssistant() {
           if (!authorized) return;
 
           activeRef.current = false;
+          runtimeActiveRef.current = false;
           invalidateAudioProcessingSession();
           if (recoveryAttempt) {
             nativeRecoveryAttemptTimestampsRef.current =
@@ -23902,6 +23915,7 @@ export function useMeetingAssistant() {
       }
       advanceRuntimeEpoch("meeting-assistant-paused");
       activeRef.current = false;
+      runtimeActiveRef.current = false;
       invalidateAudioProcessingSession();
       cancelActiveAdvisorJob("meeting-assistant-paused");
       setState((previous) => ({
@@ -24646,7 +24660,7 @@ export function useMeetingAssistant() {
           traceStoreRef.current.finishTrace(trace.id, "error", MISSING_AI_MESSAGE);
           setState((previous) => ({
             ...previous,
-            status: activeRef.current ? "listening" : idleReturnStatus,
+            status: runtimeActiveRef.current ? "listening" : idleReturnStatus,
             error: MISSING_AI_MESSAGE,
           }));
           return;
@@ -24660,7 +24674,7 @@ export function useMeetingAssistant() {
           );
           setState((previous) => ({
             ...previous,
-            status: activeRef.current ? "listening" : idleReturnStatus,
+            status: runtimeActiveRef.current ? "listening" : idleReturnStatus,
             error: MISSING_VISION_MESSAGE,
           }));
           return;
@@ -28175,7 +28189,7 @@ export function useMeetingAssistant() {
                   screenQuestionLineage;
                 setState((previous) => ({
                   ...previous,
-                  status: activeRef.current
+                  status: runtimeActiveRef.current
                     ? "listening"
                     : idleReturnStatus,
                   partialSuggestion: "",
@@ -28351,7 +28365,7 @@ export function useMeetingAssistant() {
         if (!nextStableAnswer) {
           setState((previous) => ({
             ...previous,
-            status: activeRef.current
+            status: runtimeActiveRef.current
               ? "listening"
               : idleReturnStatus,
             partialSuggestion: "",
@@ -28615,7 +28629,7 @@ export function useMeetingAssistant() {
 
         setState((previous) => ({
           ...previous,
-          status: activeRef.current ? "listening" : "error",
+          status: runtimeActiveRef.current ? "listening" : "error",
           error:
             error instanceof Error
               ? error.message
@@ -33175,6 +33189,7 @@ export function useMeetingAssistant() {
           }
 
           activeRef.current = false;
+          runtimeActiveRef.current = false;
           cancelActiveAdvisorJob(`native-audio-${terminalEvent.eventType}`);
 
           if (disposition === "recovering") {
@@ -33468,6 +33483,7 @@ export function useMeetingAssistant() {
     recordPreparationArtifactUse,
     updatePreparationArtifactEvaluation,
     isActive: activeRef.current,
+    isRuntimeActive: runtimeActiveRef.current,
   };
 }
 
