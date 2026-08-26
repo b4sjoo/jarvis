@@ -24,13 +24,13 @@ test("derives screen generation artifacts from the settled playbook phase", () =
   );
 });
 
-test("treats a manual coding screen as an implementation request", () => {
+test("keeps a manual coding screen inside the committed playbook phase", () => {
   assert.equal(
     resolveManualScreenPlaybookSubtaskIntent({
       questionType: "coding",
       inferredIntent: "complexity-probe",
     }),
-    "implementation-probe"
+    "complexity-probe"
   );
   assert.equal(
     resolveManualScreenPlaybookSubtaskIntent({
@@ -49,7 +49,16 @@ test("treats a manual coding screen as an implementation request", () => {
   );
   assert.deepEqual(
     resolveManualScreenGenerationRequestedArtifacts({
-      requiredArtifacts: ["answer", "complexity"],
+      requiredArtifacts: ["answer"],
+      questionType: "coding",
+      boundVoicePrimaryAsk: false,
+      primaryAskIntent: "implementation-probe",
+    }),
+    ["answer"]
+  );
+  assert.deepEqual(
+    resolveManualScreenGenerationRequestedArtifacts({
+      requiredArtifacts: ["answer", "code", "complexity"],
       questionType: "coding",
       boundVoicePrimaryAsk: false,
       primaryAskIntent: "implementation-probe",

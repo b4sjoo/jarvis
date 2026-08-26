@@ -47,9 +47,6 @@ export function resolveManualScreenGenerationRequestedArtifacts(input: {
     input.requiredArtifacts
   );
   const questionType = normalizeCanonicalQuestionType(input.questionType);
-  if (!input.boundVoicePrimaryAsk && questionType === "coding") {
-    return ["answer", "code", "complexity"];
-  }
   if (
     !input.boundVoicePrimaryAsk ||
     questionType !== "coding"
@@ -71,10 +68,7 @@ export function resolveManualScreenPlaybookSubtaskIntent(input: {
   inferredIntent?: InterviewSubtaskIntent;
   boundVoicePrimaryAsk?: boolean;
 }): InterviewSubtaskIntent {
-  return normalizeCanonicalQuestionType(input.questionType) === "coding" &&
-    !input.boundVoicePrimaryAsk
-    ? "implementation-probe"
-    : input.inferredIntent ?? "unknown";
+  return input.inferredIntent ?? "unknown";
 }
 
 export function authorizeManualScreenPresentationArtifacts(input: {
