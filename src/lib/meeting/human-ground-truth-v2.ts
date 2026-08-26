@@ -36,7 +36,7 @@ import {
   type MeetingMetadataMutationDisposition,
 } from "./meeting-metadata-evaluation.js";
 import { projectObservedAdvisorAttempt } from "./observed-advisor-outcome.js";
-import { resolveCurrentQuestionSourceKind } from "./current-question-settlement.js";
+import { resolveCurrentQuestionSourceKind } from "./current-question-source.js";
 
 export type ObservedQuestionSourceKind = "voice" | "screen" | "mixed";
 
