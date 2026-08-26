@@ -5,6 +5,7 @@ import {
   type CanonicalQuestionType,
 } from "./task-taxonomy.js";
 import type {
+  HumanEvaluationTaskRelation,
   InterviewTaskRelation,
   MeetingTrace,
   TranscriptTurn,
@@ -81,7 +82,7 @@ export interface CriticalMomentEvaluation {
   /** @deprecated Read-only compatibility. New truth is stored in V2 projections. */
   expectedAdvisorAction?: CriticalMomentAdvisorAction;
   /** @deprecated Read-only compatibility. New truth is stored in V2 projections. */
-  expectedRelation?: InterviewTaskRelation;
+  expectedRelation?: HumanEvaluationTaskRelation;
   /** @deprecated Read-only compatibility. New truth is stored in V2 projections. */
   expectedContextTurnIds?: string[];
   opportunityEndAt?: number;

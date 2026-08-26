@@ -489,6 +489,7 @@ test("validates relation and parent-action tuples before ground truth is saved",
     ["logistics", "preserve"],
     ["correction", "preserve"],
     ["unknown", "none"],
+    ["none", "preserve"],
   ] as const;
 
   for (const [relation, parentAction] of canonicalTuples) {
@@ -1011,7 +1012,7 @@ test("projects current-only execution as parent preservation without borrowing a
 
   const observed = buildHumanEvaluationObservedSnapshotV2(trace);
   assert.equal(observed.questionType, "behavioral");
-  assert.equal(observed.relation, undefined);
+  assert.equal(observed.relation, "none");
   assert.equal(observed.parentAction, "preserve");
   assert.equal(observed.settledParentId, undefined);
   assert.equal(observed.settledChildId, undefined);
@@ -1176,6 +1177,59 @@ test("projects a committed screen answer with unchanged artifacts as preserve", 
 
   assert.equal(observed.contextReadScope, "current-only");
   assert.equal(observed.artifactIntent, "preserve");
+});
+
+test("does not treat code lifecycle reset as a code mutation", () => {
+  for (const [previousCodeRevision, nextCodeRevision] of [
+    [1, 0],
+    [undefined, 0],
+  ] as const) {
+    const trace = {
+      id: `trace_screen_reset_${String(previousCodeRevision)}`,
+      kind: "screen",
+      status: "success",
+      startedAt: 1,
+      steps: [],
+      inputs: [],
+      outputs: [],
+      metadata: {
+        advisorOutputCommittedToUi: true,
+        committedArtifacts: ["answer"],
+        candidateMutatedArtifacts: ["answer"],
+        lifecycleResetArtifacts: ["code", "complexity"],
+        previousCodeRevision,
+        nextCodeRevision,
+      },
+    } as MeetingTrace;
+
+    assert.equal(
+      buildHumanEvaluationObservedSnapshotV2(trace).artifactIntent,
+      "preserve"
+    );
+  }
+});
+
+test("uses explicit committed code evidence before revision heuristics", () => {
+  const trace = {
+    id: "trace_screen_explicit_code",
+    kind: "screen",
+    status: "success",
+    startedAt: 1,
+    steps: [],
+    inputs: [],
+    outputs: [],
+    metadata: {
+      advisorOutputCommittedToUi: true,
+      committedArtifacts: ["answer", "code"],
+      previousCodeRevision: 0,
+      nextCodeRevision: 0,
+    },
+  } as MeetingTrace;
+
+  assert.equal(
+    buildHumanEvaluationObservedSnapshotV2(trace).artifactIntent,
+    "revise-code"
+  );
 });
 
 test("projects a committed screen whiteboard update from the actual decision", () => {

@@ -148,7 +148,10 @@ export function buildTaskRelationAdjudicationReflectionReport(input: {
     const candidateRelation = normalizeRelation(
       metadata.taskRelationAdjudicationCandidateRelation
     );
-    const expectedRelation = evaluation?.expectedRelation;
+    const expectedRelation =
+      evaluation?.expectedRelation === "none"
+        ? undefined
+        : evaluation?.expectedRelation;
     const expectedParentAction = evaluation?.expectedParentAction;
     const expectedParentId = evaluation?.expectedParentId;
     const expectedBranchId = evaluation?.expectedBranchId;

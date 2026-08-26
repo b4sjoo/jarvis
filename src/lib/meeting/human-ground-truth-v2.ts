@@ -9,9 +9,9 @@ import type {
   ExpectedAdvisorAction,
   HumanEvaluationVerdict,
   HumanExpectedParentAction,
+  HumanEvaluationTaskRelation,
   FactAnchorState,
   InterviewPlaybookPhase,
-  InterviewTaskRelation,
   MeetingTrace,
   MeetingTraceStatus,
   ProjectTrajectoryChildContinuity,
@@ -86,7 +86,7 @@ export interface HumanGroundTruthEvaluationTargetV2 {
 export interface ExpectedTaskSettlementFactV2 {
   kind: "expected-task-settlement";
   expectedQuestionType: CanonicalQuestionType;
-  expectedRelation: InterviewTaskRelation;
+  expectedRelation: HumanEvaluationTaskRelation;
   expectedParentAction: HumanExpectedParentAction;
   expectedParentId?: string;
   expectedBranchId?: string;
@@ -95,7 +95,7 @@ export interface ExpectedTaskSettlementFactV2 {
 
 export interface TaskSettlementTupleCompatibilityV2 {
   compatible: boolean;
-  relation: InterviewTaskRelation;
+  relation: HumanEvaluationTaskRelation;
   parentAction: HumanExpectedParentAction;
   recommendedParentAction: HumanExpectedParentAction;
   reason?: string;
@@ -204,7 +204,7 @@ export interface HumanEvaluationObservedSnapshotV2 {
   traceHash: string;
   attemptStatus?: MeetingTraceStatus;
   questionType?: CanonicalQuestionType;
-  relation?: InterviewTaskRelation;
+  relation?: HumanEvaluationTaskRelation;
   parentAction?: HumanExpectedParentAction;
   questionSourceKind?: ObservedQuestionSourceKind;
   settledParentId?: string;
@@ -338,7 +338,7 @@ export function createHumanGroundTruthEventV2(input: {
 }
 
 export function evaluateTaskSettlementTupleCompatibilityV2(input: {
-  relation: InterviewTaskRelation;
+  relation: HumanEvaluationTaskRelation;
   parentAction: HumanExpectedParentAction;
 }): TaskSettlementTupleCompatibilityV2 {
   const recommendedParentAction =
@@ -686,8 +686,8 @@ export function buildHumanEvaluationObservedSnapshotV2(
   );
   const currentOnly =
     readBoolean(metadata.effectiveAdvisorCurrentOnly) === true;
-  const relation = currentOnly
-    ? undefined
+  const relation: HumanEvaluationTaskRelation | undefined = currentOnly
+    ? "none"
     : normalizeRelation(
         metadata.effectiveCurrentQuestionSettlementRelation ??
           metadata.currentQuestionSettlementRelation ??
@@ -1211,6 +1211,26 @@ function resolveObservedArtifactIntent(
   );
   if (traceKind !== "screen") return plannedIntent;
 
+  const committedArtifacts = readStringArray(
+    metadata.committedArtifacts
+  );
+  const candidateMutatedArtifacts = readStringArray(
+    metadata.candidateMutatedArtifacts
+  );
+  const explicitMutations = committedArtifacts.length
+    ? committedArtifacts
+    : candidateMutatedArtifacts;
+  if (
+    explicitMutations.includes("code") ||
+    explicitMutations.includes("complexity")
+  ) {
+    return "revise-code";
+  }
+  if (explicitMutations.includes("whiteboard")) {
+    return "revise-whiteboard";
+  }
+  if (explicitMutations.includes("answer")) return "preserve";
+
   const codeChanged = didArtifactRevisionChange(
     metadata.previousCodeRevision,
     metadata.nextCodeRevision
@@ -1241,12 +1261,19 @@ function didArtifactRevisionChange(
 ) {
   const previousRevision = readNumber(previousValue);
   const nextRevision = readNumber(nextValue);
-  if (nextRevision === undefined) return false;
-  return previousRevision === undefined || previousRevision !== nextRevision;
+  if (
+    previousRevision === undefined ||
+    nextRevision === undefined ||
+    previousRevision <= 0 ||
+    nextRevision <= 0
+  ) {
+    return false;
+  }
+  return previousRevision !== nextRevision;
 }
 
 function resolveObservedParentAction(
-  relation: InterviewTaskRelation | undefined,
+  relation: HumanEvaluationTaskRelation | undefined,
   mutationAuthorized: boolean | undefined,
   lifecycleCommand: string | undefined,
   currentOnly: boolean
@@ -1277,6 +1304,7 @@ function resolveObservedParentAction(
   if (relation === "resume-parent") {
     return mutationAuthorized === false ? "preserve" : "resume";
   }
+  if (relation === "none") return "preserve";
   if (
     relation === "followup-parent" ||
     relation === "correction" ||
@@ -1287,14 +1315,17 @@ function resolveObservedParentAction(
   return mutationAuthorized === false ? "none" : undefined;
 }
 
-function normalizeRelation(value: unknown): InterviewTaskRelation | undefined {
+function normalizeRelation(
+  value: unknown
+): HumanEvaluationTaskRelation | undefined {
   return value === "new-parent" ||
     value === "followup-parent" ||
     value === "child-probe" ||
     value === "resume-parent" ||
     value === "logistics" ||
     value === "correction" ||
-    value === "unknown"
+    value === "unknown" ||
+    value === "none"
     ? value
     : undefined;
 }
@@ -1819,7 +1850,7 @@ function normalizeParentAction(
 }
 
 function recommendedParentActionForRelation(
-  relation: InterviewTaskRelation
+  relation: HumanEvaluationTaskRelation
 ): HumanExpectedParentAction {
   switch (relation) {
     case "new-parent":
@@ -1834,6 +1865,8 @@ function recommendedParentActionForRelation(
       return "preserve";
     case "unknown":
       return "none";
+    case "none":
+      return "preserve";
   }
 }
 

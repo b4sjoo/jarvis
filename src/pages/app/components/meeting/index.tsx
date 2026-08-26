@@ -24,6 +24,7 @@ import type {
   HumanEvalQuestionType,
   HumanEvalTaskQuality,
   HumanEvaluationProjectionV2,
+  HumanEvaluationTaskRelation,
   HumanExpectedParentAction,
   HumanGroundTruthFactV2,
   HumanGroundTruthInteractionV2,
@@ -31,7 +32,6 @@ import type {
   HumanEvaluationVerdictBlock,
   InterviewBriefType,
   InterviewSessionBrief,
-  InterviewTaskRelation,
   InterviewTargetCompany,
   MeetingAudioConfig,
   MeetingAudioProfile,
@@ -5210,7 +5210,7 @@ const CriticalMomentEvaluationPanel = ({
   const [expectedQuestionType, setExpectedQuestionType] =
     useState<CanonicalQuestionType>();
   const [expectedRelation, setExpectedRelation] =
-    useState<InterviewTaskRelation>();
+    useState<HumanEvaluationTaskRelation>();
   const [expectedParentAction, setExpectedParentAction] =
     useState<HumanExpectedParentAction>();
   const evaluationOpenedAtRef = useRef<number | undefined>(undefined);
@@ -5409,7 +5409,7 @@ const CriticalMomentEvaluationPanel = ({
               label="Expected relation"
               options={evaluationTaskRelations.map((value) => [
                 value,
-                value,
+                formatEvaluationTaskRelation(value),
               ])}
               value={expectedRelation}
               onSelect={(value) => {
@@ -5649,7 +5649,8 @@ const CriticalMomentBooleanGroup = ({
   </div>
 );
 
-const evaluationTaskRelations: InterviewTaskRelation[] = [
+const evaluationTaskRelations: HumanEvaluationTaskRelation[] = [
+  "none",
   "new-parent",
   "followup-parent",
   "child-probe",
@@ -5686,8 +5687,14 @@ const projectTrajectoryChildContinuities: ProjectTrajectoryChildContinuity[] =
 
 function normalizeEvaluationTaskRelation(
   value: string | undefined
-): InterviewTaskRelation | undefined {
+): HumanEvaluationTaskRelation | undefined {
   return evaluationTaskRelations.find((candidate) => candidate === value);
+}
+
+function formatEvaluationTaskRelation(
+  relation: HumanEvaluationTaskRelation
+) {
+  return relation === "none" ? "N/A" : relation;
 }
 
 const TraceHumanEvaluationPanel = ({
@@ -5785,7 +5792,7 @@ const TraceHumanEvaluationPanel = ({
   const [expectedQuestionType, setExpectedQuestionType] =
     useState<CanonicalQuestionType>();
   const [expectedRelation, setExpectedRelation] =
-    useState<InterviewTaskRelation>();
+    useState<HumanEvaluationTaskRelation>();
   const [expectedParentAction, setExpectedParentAction] =
     useState<HumanExpectedParentAction>();
   const [projectTrajectoryFixOpen, setProjectTrajectoryFixOpen] =
@@ -6553,8 +6560,17 @@ const TraceHumanEvaluationPanel = ({
                 : ""}
             </div>
             <div>
-              settlement: {observedRelation ?? "unknown"} /{" "}
-              {observedParentAction ?? "unresolved"}
+              settlement:{" "}
+              {observedRelation
+                ? formatEvaluationTaskRelation(observedRelation)
+                : trace.status === "success"
+                  ? "ERROR: unresolved relation"
+                  : "N/A"}{" "}
+              /{" "}
+              {observedParentAction ??
+                (trace.status === "success"
+                  ? "ERROR: unresolved action"
+                  : "N/A")}
             </div>
             <div>
               applied: response{" "}
@@ -6638,7 +6654,7 @@ const TraceHumanEvaluationPanel = ({
                 label="Expected relation"
                 options={evaluationTaskRelations.map((value) => [
                   value,
-                  value,
+                  formatEvaluationTaskRelation(value),
                 ])}
                 value={expectedRelation}
                 onSelect={(value) => {

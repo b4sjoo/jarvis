@@ -13,6 +13,7 @@ import {
 } from "./task-taxonomy.js";
 import type {
   ExpectedAdvisorAction,
+  HumanEvaluationTaskRelation,
   HumanExpectedParentAction,
   InterviewTaskRelation,
 } from "./types.js";
@@ -30,7 +31,7 @@ export interface CriticalMomentExpectedFacts {
   projectionId?: string;
   expectedQuestionType?: CanonicalQuestionType;
   expectedRuntimeAction?: ExpectedAdvisorAction;
-  expectedRelation?: InterviewTaskRelation;
+  expectedRelation?: HumanEvaluationTaskRelation;
   expectedParentAction?: HumanExpectedParentAction;
   expectedContextTurnIds: string[];
   legacyExpectedAdvisorAction?: CriticalMomentAdvisorAction;
@@ -274,7 +275,7 @@ function legacyCompatibilityWarnings(input: {
   legacyEvaluation: LegacyCriticalMomentExpectedFacts | undefined;
   expectedQuestionType: CanonicalQuestionType | undefined;
   expectedRuntimeAction: ExpectedAdvisorAction | undefined;
-  expectedRelation: InterviewTaskRelation | undefined;
+  expectedRelation: HumanEvaluationTaskRelation | undefined;
   expectedContextTurnIds: string[];
 }) {
   const legacy = input.legacyEvaluation;

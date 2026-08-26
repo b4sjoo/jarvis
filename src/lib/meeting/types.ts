@@ -640,6 +640,10 @@ export type EffectiveInterviewTaskRelation =
   | Exclude<InterviewTaskRelation, "unknown">
   | "none";
 
+export type HumanEvaluationTaskRelation =
+  | InterviewTaskRelation
+  | "none";
+
 export type HumanExpectedParentAction =
   | "create"
   | "preserve"
@@ -1736,7 +1740,7 @@ export interface TaxonomyAdjudicationHumanEvaluation {
   needed?: boolean;
   typeCorrect?: boolean;
   relationCorrect?: boolean;
-  expectedRelation?: InterviewTaskRelation;
+  expectedRelation?: HumanEvaluationTaskRelation;
   parentDecisionCorrect?: boolean;
   responseOnlyCorrect?: boolean;
   contextOutcome?: "correct" | "contaminated" | "missing";
@@ -1964,7 +1968,7 @@ export interface QuestionHumanEvaluation {
   company?: string;
   correctedCompany?: string;
   relation?: string;
-  expectedRelation?: InterviewTaskRelation;
+  expectedRelation?: HumanEvaluationTaskRelation;
   expectedParentAction?: HumanExpectedParentAction;
   expectedParentId?: string;
   expectedBranchId?: string;
