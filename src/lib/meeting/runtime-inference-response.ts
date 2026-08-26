@@ -62,3 +62,13 @@ export function formatRuntimeInferenceProviderOutcomeForTrace(
     [`${prefix}ProviderRequestId`]: outcome?.requestId,
   };
 }
+
+export function didRuntimeInferenceProviderTimeOut(input: {
+  outcome?: Pick<AIResponseTerminalOutcome, "status">;
+  error?: unknown;
+}) {
+  return (
+    input.outcome?.status === "timed-out" ||
+    (input.error instanceof Error && /timeout/i.test(input.error.message))
+  );
+}

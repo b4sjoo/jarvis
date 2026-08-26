@@ -75,7 +75,10 @@ import {
   requestSourceLinkageAdjudication,
   type SourceLinkageAdjudicationRequestResult,
 } from "@/lib/meeting/source-linkage-adjudication-request";
-import { formatRuntimeInferenceProviderOutcomeForTrace } from "@/lib/meeting/runtime-inference-response";
+import {
+  didRuntimeInferenceProviderTimeOut,
+  formatRuntimeInferenceProviderOutcomeForTrace,
+} from "@/lib/meeting/runtime-inference-response";
 import { buildManualScreenLogicalQuestionUnit } from "@/lib/meeting/manual-screen-question-source";
 import { settleManualQuestionTypeCorrection } from "@/lib/meeting/manual-correction-settlement";
 import {
@@ -16115,8 +16118,10 @@ export function useMeetingAssistant() {
             responseOpportunityBudgetExhausted:
               settlement.disposition === "budget-exhausted",
             responseOpportunityTimedOut:
-              settlement.error instanceof Error &&
-              /timeout/i.test(settlement.error.message),
+              didRuntimeInferenceProviderTimeOut({
+                outcome: result?.providerOutcome,
+                error: settlement.error,
+              }),
             responseOpportunityRawOutputStored: rawOutputStored,
             runtimeIntentReleasedAction:
               validAppliedDecision?.action === "answer-refresh"
@@ -16157,8 +16162,10 @@ export function useMeetingAssistant() {
             shortIntentGateBudgetExhausted:
               settlement.disposition === "budget-exhausted",
             shortIntentGateTimedOut:
-              settlement.error instanceof Error &&
-              /timeout/i.test(settlement.error.message),
+              didRuntimeInferenceProviderTimeOut({
+                outcome: result?.providerOutcome,
+                error: settlement.error,
+              }),
             shortIntentGateRawOutputStored: rawOutputStored,
           };
           traceStoreRef.current.updateMetadata(traceId, metadata);
