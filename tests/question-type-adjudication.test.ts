@@ -86,6 +86,30 @@ test("builds a bounded type-only request without local classifier evidence", () 
   );
 });
 
+test("uses correction-owned semantic text without changing LQU identity", () => {
+  const logicalQuestionUnit = unit(
+    "Design a ride-sharing system for trip planning.",
+    2
+  );
+  const request = buildQuestionTypeAdjudicationRequest({
+    logicalQuestionUnit,
+    semanticQuestionText:
+      'Design a RAG system for trip planning. [Manual term correction: "ride-sharing" means "RAG".]',
+  });
+
+  assert.equal(
+    request.logicalQuestionUnitId,
+    logicalQuestionUnit.id
+  );
+  assert.equal(request.logicalQuestionUnitRevision, 2);
+  assert.deepEqual(request.question.sourceTurnIds, ["turn-a"]);
+  assert.match(request.question.text, /Design a RAG system/);
+  assert.doesNotMatch(
+    request.question.text.split(" ").slice(0, 8).join(" "),
+    /Design a ride-sharing system/
+  );
+});
+
 test("builds and enforces a narrow Field Knowledge versus Coding review", () => {
   const request = buildQuestionTypeAdjudicationRequest({
     logicalQuestionUnit: unit(

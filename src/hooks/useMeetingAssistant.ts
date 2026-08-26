@@ -31505,6 +31505,10 @@ export function useMeetingAssistant() {
           });
           const adjudicationRequest = buildQuestionTypeAdjudicationRequest({
             logicalQuestionUnit: application.logicalQuestionUnit,
+            semanticQuestionText:
+              getLogicalQuestionSemanticEvidenceText(
+                application.logicalQuestionUnit
+              ),
           });
           const prompts =
             buildQuestionTypeAdjudicationPrompts(adjudicationRequest);

@@ -337,16 +337,42 @@ export function normalizeQuestionTypeAdjudicationMode(
 export function buildQuestionTypeAdjudicationRequest(input: {
   logicalQuestionUnit: LogicalQuestionUnit;
   reviewScope?: QuestionTypeAdjudicationRequest["reviewScope"];
+  semanticQuestionText?: string;
 }): QuestionTypeAdjudicationRequest {
+  const semanticQuestionText = input.semanticQuestionText
+    ?.replace(/\s+/g, " ")
+    .trim();
+  const sourceTurnId =
+    input.logicalQuestionUnit.currentTurnId ||
+    input.logicalQuestionUnit.sourceTurnIds[
+      input.logicalQuestionUnit.sourceTurnIds.length - 1
+    ];
+  const question =
+    semanticQuestionText && sourceTurnId
+      ? projectLogicalQuestionForAdjudication({
+          ...input.logicalQuestionUnit,
+          currentTurnId: sourceTurnId,
+          sourceTurnIds: [sourceTurnId],
+          sources: [
+            {
+              turnId: sourceTurnId,
+              text: semanticQuestionText,
+              startedAt: input.logicalQuestionUnit.startedAt,
+              endedAt: input.logicalQuestionUnit.updatedAt,
+            },
+          ],
+          normalizedText: semanticQuestionText,
+        })
+      : projectLogicalQuestionForAdjudication(
+          input.logicalQuestionUnit
+        );
   return {
     schemaVersion: QUESTION_TYPE_ADJUDICATION_SCHEMA_VERSION,
     promptVersion: QUESTION_TYPE_ADJUDICATION_PROMPT_VERSION,
     logicalQuestionUnitId: input.logicalQuestionUnit.id,
     logicalQuestionUnitRevision: input.logicalQuestionUnit.revision,
     reviewScope: input.reviewScope ?? "full",
-    question: projectLogicalQuestionForAdjudication(
-      input.logicalQuestionUnit
-    ),
+    question,
   };
 }
 
