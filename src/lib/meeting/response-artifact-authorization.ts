@@ -34,6 +34,44 @@ export interface ResponseArtifactMutationAuthorization {
   allowParentContextMutation: boolean;
 }
 
+export function resolveAdvisorGenerationRequestedArtifacts(input: {
+  forceAnswerOnly?: boolean;
+  runtimeTypeRepairAnswerOnly?: boolean;
+  settledPlanArtifacts?: readonly AnswerArtifactSection[];
+  committedManualPhaseArtifacts?: readonly AnswerArtifactSection[];
+}): AnswerArtifactSection[] {
+  if (input.forceAnswerOnly || input.runtimeTypeRepairAnswerOnly) {
+    return ["answer"];
+  }
+
+  const requestedArtifacts =
+    input.settledPlanArtifacts ?? input.committedManualPhaseArtifacts;
+  if (!requestedArtifacts?.length) return ["answer"];
+
+  return [...new Set(requestedArtifacts)];
+}
+
+export function formatManualPhaseArtifactContractForTrace(input: {
+  committed: boolean;
+  targetArtifact?: AnswerArtifactSection | "none";
+  requestedArtifacts: readonly AnswerArtifactSection[];
+}) {
+  const targetArtifact = input.targetArtifact;
+  const targetRequested =
+    !input.committed || !targetArtifact || targetArtifact === "none"
+      ? true
+      : input.requestedArtifacts.includes(targetArtifact);
+  const mismatchReasons = targetRequested
+    ? []
+    : [`manual-phase-target-not-requested:${targetArtifact}`];
+
+  return {
+    manualPhaseTargetArtifactRequested: targetRequested,
+    playbookArtifactContractMismatch: mismatchReasons.length > 0,
+    playbookArtifactContractMismatchReasons: mismatchReasons,
+  };
+}
+
 export function authorizeResponseArtifactMutation(input: {
   parentTaskId?: string;
   parentQuestionType?: unknown;

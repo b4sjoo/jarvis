@@ -2,8 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   authorizeResponseArtifactMutation,
+  formatManualPhaseArtifactContractForTrace,
   formatResponseArtifactAuthorizationForTrace,
+  resolveAdvisorGenerationRequestedArtifacts,
 } from "../src/lib/meeting/response-artifact-authorization.js";
+import type { ActiveMeetingTask } from "../src/lib/meeting/active-meeting-task.js";
+import { decideManualNextPhaseTransition } from "../src/lib/meeting/playbook-phase.js";
 
 test("authorizes persistent answer and whiteboard updates for the canonical design parent", () => {
   const decision = authorizeResponseArtifactMutation({
@@ -224,3 +228,102 @@ test("uses the committed Coding phase as artifact authority without a subtype", 
     [true, true]
   );
 });
+
+test("projects committed Manual Next artifacts without a new settlement", () => {
+  const pseudocodeTask = codingTaskAtPhase("baseline_reasoning");
+  const pseudocodeDecision = decideManualNextPhaseTransition(pseudocodeTask);
+  const pseudocodeArtifacts = resolveAdvisorGenerationRequestedArtifacts({
+    committedManualPhaseArtifacts: pseudocodeDecision.requiredArtifacts,
+  });
+
+  assert.equal(pseudocodeDecision.phase, "optimized_pseudocode");
+  assert.deepEqual(pseudocodeArtifacts, ["answer", "complexity"]);
+
+  const implementationTask = codingTaskAtPhase("optimized_pseudocode");
+  const implementationDecision =
+    decideManualNextPhaseTransition(implementationTask);
+  const implementationArtifacts = resolveAdvisorGenerationRequestedArtifacts({
+    committedManualPhaseArtifacts: implementationDecision.requiredArtifacts,
+  });
+
+  assert.equal(implementationDecision.phase, "implementation_validation");
+  assert.equal(implementationDecision.targetArtifact, "code");
+  assert.deepEqual(implementationArtifacts, [
+    "answer",
+    "code",
+    "complexity",
+  ]);
+});
+
+test("keeps stronger Answer-only and settled-plan authority ahead of Manual Next fallback", () => {
+  const manualArtifacts = ["answer", "code", "complexity"] as const;
+
+  assert.deepEqual(
+    resolveAdvisorGenerationRequestedArtifacts({
+      forceAnswerOnly: true,
+      committedManualPhaseArtifacts: manualArtifacts,
+    }),
+    ["answer"]
+  );
+  assert.deepEqual(
+    resolveAdvisorGenerationRequestedArtifacts({
+      runtimeTypeRepairAnswerOnly: true,
+      committedManualPhaseArtifacts: manualArtifacts,
+    }),
+    ["answer"]
+  );
+  assert.deepEqual(
+    resolveAdvisorGenerationRequestedArtifacts({
+      settledPlanArtifacts: ["answer", "complexity"],
+      committedManualPhaseArtifacts: manualArtifacts,
+    }),
+    ["answer", "complexity"]
+  );
+  assert.deepEqual(resolveAdvisorGenerationRequestedArtifacts({}), ["answer"]);
+});
+
+test("reports a Manual Next target missing from requested artifacts", () => {
+  assert.deepEqual(
+    formatManualPhaseArtifactContractForTrace({
+      committed: true,
+      targetArtifact: "code",
+      requestedArtifacts: ["answer"],
+    }),
+    {
+      manualPhaseTargetArtifactRequested: false,
+      playbookArtifactContractMismatch: true,
+      playbookArtifactContractMismatchReasons: [
+        "manual-phase-target-not-requested:code",
+      ],
+    }
+  );
+  assert.equal(
+    formatManualPhaseArtifactContractForTrace({
+      committed: true,
+      targetArtifact: "code",
+      requestedArtifacts: ["answer", "code", "complexity"],
+    }).playbookArtifactContractMismatch,
+    false
+  );
+});
+
+function codingTaskAtPhase(
+  playbookPhase: "baseline_reasoning" | "optimized_pseudocode"
+): ActiveMeetingTask {
+  return {
+    id: "parent-coding",
+    runtimeRevision: 1,
+    source: "voice",
+    parent: {
+      id: "parent-coding",
+      questionType: "coding",
+      topic: "Solve a coding problem.",
+      playbookPhase,
+      phaseProgress: { [playbookPhase]: true },
+      supportedFactAnchors: [],
+      createdAt: 1,
+      updatedAt: 1,
+      revisions: 1,
+    },
+  };
+}

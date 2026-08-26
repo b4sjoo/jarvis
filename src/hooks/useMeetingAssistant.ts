@@ -380,6 +380,8 @@ import {
   prewarmWhiteboardRenderValidator,
   resolveMeetingAnswerProfile,
   resolveAuthorizedAnswerArtifacts,
+  resolveAdvisorGenerationRequestedArtifacts,
+  formatManualPhaseArtifactContractForTrace,
   observeAdvisorResponseConsistency,
   preflightScreenObservation,
   createScreenPreflightDeadlineArbiter,
@@ -12508,21 +12510,34 @@ export function useMeetingAssistant() {
         effectiveAdvisorSettlementView.parent?.sourceQuestionRevision ??
         0,
     };
+    const runtimeTypeRepairAnswerOnly =
+      runtimeTypeRepairOutputAuthorized &&
+      runtimeTypeRepairLimitsGenerationToAnswer({
+        authority: advisorJob.runtimeTypeRepairOutputAuthority,
+        taskBoundaryCommitted: taskBoundaryCommittedBeforeAdvisor,
+      });
     generationAuthorizedArtifacts =
-      advisorJob.source === "force-advise"
-        ? ["answer"]
-      : runtimeTypeRepairOutputAuthorized &&
-          runtimeTypeRepairLimitsGenerationToAnswer({
-            authority: advisorJob.runtimeTypeRepairOutputAuthority,
-            taskBoundaryCommitted: taskBoundaryCommittedBeforeAdvisor,
+      resolveAdvisorGenerationRequestedArtifacts({
+        forceAnswerOnly: advisorJob.source === "force-advise",
+        runtimeTypeRepairAnswerOnly,
+        settledPlanArtifacts: settledExecutionPlan
+          ? resolveAuthorizedAnswerArtifacts({
+              artifactPolicy: settledExecutionPlan.artifactPolicy,
+              artifactIntent: settledExecutionPlan.artifactIntent,
+            })
+          : undefined,
+        committedManualPhaseArtifacts: manualPhaseAdvanceCommitted
+          ? playbookPhaseDecision.requiredArtifacts
+          : undefined,
+      });
+    const manualPhaseArtifactContractMetadata =
+      manualPhaseAdvance
+        ? formatManualPhaseArtifactContractForTrace({
+            committed: manualPhaseAdvanceCommitted,
+            targetArtifact: playbookPhaseDecision.targetArtifact,
+            requestedArtifacts: generationAuthorizedArtifacts,
           })
-          ? ["answer"]
-          : settledExecutionPlan
-            ? resolveAuthorizedAnswerArtifacts({
-                artifactPolicy: settledExecutionPlan.artifactPolicy,
-                artifactIntent: settledExecutionPlan.artifactIntent,
-              })
-            : ["answer"];
+        : {};
     const generationContextState =
       contextManagerRef.current.getState();
     const generationParent =
@@ -12599,6 +12614,7 @@ export function useMeetingAssistant() {
           leaseStartAuthorization,
           "start"
         ),
+        ...manualPhaseArtifactContractMetadata,
         modelRequestOptions: advisorModelRequestOptions,
         preparedProgrammingLanguage:
           includePreparedProgrammingLanguage
