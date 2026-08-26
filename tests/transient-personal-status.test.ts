@@ -80,7 +80,7 @@ for (const item of cases) {
   });
 }
 
-test("does not elevate unsupported personal domains or shadow decisions", () => {
+test("keeps unsupported domains out while routing high-confidence shadow logistics", () => {
   const employment = detectPersonalEvidenceRequirement({
     questionText: "Are you currently employed?",
     questionType: "unknown",
@@ -100,14 +100,13 @@ test("does not elevate unsupported personal domains or shadow decisions", () => 
     }),
     undefined
   );
-  assert.equal(
-    resolveTransientPersonalStatusDecision({
+  const shadowDecision = resolveTransientPersonalStatusDecision({
       personalEvidenceDecision: shadowRelocation,
       sourceQuestionUnitId: "question-a",
       sourceQuestionRevision: 1,
-    }),
-    undefined
-  );
+    });
+  assert.equal(shadowDecision?.domain, "relocation");
+  assert.equal(shadowDecision?.responseOwner, "personal-status");
 });
 
 test("emits replay-safe trace metadata without copying the question text", () => {

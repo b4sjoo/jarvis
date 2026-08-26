@@ -31,7 +31,6 @@ export function resolveTransientPersonalStatusDecision(input: {
     !input.sourceQuestionUnitId ||
     input.sourceQuestionRevision === undefined ||
     evidence.requirement !== "personal-logistics" ||
-    !evidence.enforced ||
     evidence.confidenceTier !== "high" ||
     evidence.confidence < 0.9
   ) {

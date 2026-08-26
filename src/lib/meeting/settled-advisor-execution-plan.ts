@@ -586,8 +586,8 @@ export function buildSettledAdvisorExecutionPlan(input: {
   const rawTaskRelation = toInterviewTaskRelation(
     input.settlement.relation
   );
-  const relationApplicable = rawTaskRelation !== "unknown";
-  const relation = resolveEffectiveInterviewTaskRelation(rawTaskRelation);
+  let relationApplicable = rawTaskRelation !== "unknown";
+  let relation = resolveEffectiveInterviewTaskRelation(rawTaskRelation);
   const responseOnlyTaskScope = input.responseOnlyTaskScope
     ? cloneResponseOnlyTaskScope(input.responseOnlyTaskScope)
     : undefined;
@@ -754,6 +754,13 @@ export function buildSettledAdvisorExecutionPlan(input: {
     explicitCommand: input.explicitTaskMutationCommand,
     activeChildId: taskSnapshot?.child?.id,
   });
+  if (
+    contextReadScope === "current-only" &&
+    taskMutationPolicy.kind === "preserve"
+  ) {
+    relationApplicable = false;
+    relation = "none";
+  }
   const expectedParentId =
     input.expectedActiveMeetingTask?.parent.id ??
     input.activeMeetingTask?.parent.id ??

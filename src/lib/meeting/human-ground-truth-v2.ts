@@ -685,7 +685,11 @@ export function buildHumanEvaluationObservedSnapshotV2(
     metadata
   );
   const currentOnly =
-    readBoolean(metadata.effectiveAdvisorCurrentOnly) === true;
+    readBoolean(metadata.effectiveAdvisorCurrentOnly) === true ||
+    (readString(metadata.settledExecutionPlanContextReadScope) ===
+      "current-only" &&
+      readBoolean(metadata.settledExecutionPlanRelationApplicable) ===
+        false);
   const relation: HumanEvaluationTaskRelation | undefined = currentOnly
     ? "none"
     : normalizeRelation(

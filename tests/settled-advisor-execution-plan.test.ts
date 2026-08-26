@@ -1049,6 +1049,9 @@ test("a personal-status response owns the current answer without mutating its co
   assert.equal(plan.artifactPolicy.allowWhiteboard, false);
   assert.equal(plan.responseIntent, "advise");
   assert.equal(plan.contextReadScope, "current-only");
+  assert.equal(plan.relation, "none");
+  assert.equal(plan.taskRelation, "none");
+  assert.equal(plan.relationApplicable, false);
   assert.equal(plan.artifactIntent, "none");
   assert.deepEqual(plan.taskMutationPolicy, { kind: "preserve" });
   assert.equal(
