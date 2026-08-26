@@ -23,6 +23,8 @@ test("routes accepted production STT turns through one canonical ingress", () =>
   );
   assert.match(transport, /transcribeMeetingAudio/);
   assert.match(ingress, /projectPrimaryAsk/);
+  assert.match(ingress, /Canonical turn ingress admitted/);
+  assert.match(ingress, /canonical-turn-ingress-admitted/);
   assert.match(ingress, /decideResponseOpportunityLocalRoute/);
   assert.match(ingress, /buildLogicalQuestionForTurn/);
   assert.match(ingress, /scheduleSemanticTaxonomyShadow/);

@@ -21195,6 +21195,35 @@ export function useMeetingAssistant() {
       segment: QueuedSpeechSegment;
     }) => {
       const traceId = segment.traceId;
+      const ingressMetadata = {
+        canonicalTurnIngressTransport: "accepted-stt",
+        canonicalTurnIngressTurnId: turn.id,
+        canonicalTurnIngressSpeaker: turn.speaker,
+        canonicalTurnIngressSource: turn.source,
+        canonicalTurnIngressSessionId:
+          contextManagerRef.current.getState().sessionId,
+        canonicalTurnIngressRuntimeEpoch: runtimeEpochRef.current,
+        canonicalTurnIngressRuntimeActive: runtimeActiveRef.current,
+        canonicalTurnIngressNativeCaptureActive: activeRef.current,
+        canonicalTurnIngressTextChars: turn.text.length,
+        canonicalTurnIngressEnteredAt: Date.now(),
+      };
+      traceStoreRef.current.updateMetadata(traceId, ingressMetadata);
+      const ingressStepId = traceStoreRef.current.startStep(
+        traceId,
+        "Canonical turn ingress admitted",
+        ingressMetadata
+      );
+      traceStoreRef.current.finishStep(
+        traceId,
+        ingressStepId,
+        "success"
+      );
+      sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+        stage: "canonical-turn-ingress-admitted",
+        traceId,
+        ...ingressMetadata,
+      });
       const activeContextState = contextManagerRef.current.getState();
       const activeScreenTask = activeContextState.taskRuntime.screenAttachment;
       const activeInterviewTask = activeContextState.taskRuntime.parent;
