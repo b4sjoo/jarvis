@@ -236,3 +236,43 @@ test("selects LQU-first evidence without acknowledgement or logistics", () => {
   assert.equal(selection.diagnostics.logisticsExcludedCount, 1);
   assert.equal(selection.diagnostics.rawSupplementCount, 0);
 });
+
+test("finds one exact committed Voice source for later Screen linkage", () => {
+  const ledger = new EffectiveQuestionSourceLedger();
+  const record: EffectiveQuestionSourceRecord = {
+    recordId: "record-lines",
+    sessionId: "session-a",
+    runtimeEpoch: 3,
+    logicalQuestionUnitId: "lqu-lines",
+    logicalQuestionRevision: 2,
+    sourceHash: "hash-lines",
+    sourceTurnIds: ["turn-lines"],
+    text: "Explain lines 35 through 38.",
+    startedAt: 10,
+    updatedAt: 20,
+    speechAct: "directive",
+    disposition: "answer-primary-ask",
+    relation: "none",
+    owner: { kind: "parent-mainline", parentId: "parent-code" },
+    settledAt: 30,
+  };
+  ledger.upsert(record);
+
+  const found = ledger.findLogicalQuestion({
+    sessionId: "session-a",
+    runtimeEpoch: 3,
+    logicalQuestionUnitId: "lqu-lines",
+    logicalQuestionRevision: 2,
+  });
+  assert.equal(found?.sourceHash, "hash-lines");
+  assert.notEqual(found, record);
+  assert.equal(
+    ledger.findLogicalQuestion({
+      sessionId: "session-a",
+      runtimeEpoch: 3,
+      logicalQuestionUnitId: "lqu-lines",
+      logicalQuestionRevision: 3,
+    }),
+    undefined
+  );
+});

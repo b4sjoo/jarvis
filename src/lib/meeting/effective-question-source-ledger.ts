@@ -78,6 +78,26 @@ export class EffectiveQuestionSourceLedger {
     return this.records.map(cloneRecord);
   }
 
+  findLogicalQuestion(input: {
+    sessionId: string;
+    runtimeEpoch: number;
+    logicalQuestionUnitId: string;
+    logicalQuestionRevision: number;
+  }) {
+    const record = [...this.records]
+      .reverse()
+      .find(
+        (candidate) =>
+          candidate.sessionId === input.sessionId &&
+          candidate.runtimeEpoch === input.runtimeEpoch &&
+          candidate.logicalQuestionUnitId ===
+            input.logicalQuestionUnitId &&
+          candidate.logicalQuestionRevision ===
+            input.logicalQuestionRevision
+      );
+    return record ? cloneRecord(record) : undefined;
+  }
+
   clear() {
     this.records.length = 0;
   }

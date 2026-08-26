@@ -25765,9 +25765,34 @@ export function useMeetingAssistant() {
               voiceCandidate.logicalQuestionRevision
               ? awaitingVisualEvidenceFact
               : undefined;
+          const committedVoiceSourceRecord =
+            effectiveQuestionSourceLedgerRef.current.findLogicalQuestion({
+              sessionId: preflightContextState.sessionId,
+              runtimeEpoch: runtimeEpochRef.current,
+              logicalQuestionUnitId:
+                voiceCandidate.logicalQuestionUnitId,
+              logicalQuestionRevision:
+                voiceCandidate.logicalQuestionRevision,
+            });
           const voiceSourceHash =
             recoveryVoiceFact?.sourceHash ??
-            committedVoiceSettlement?.sourceHash;
+            committedVoiceSettlement?.sourceHash ??
+            committedVoiceSourceRecord?.sourceHash;
+          const sourceLinkageVoiceAuthoritySource = recoveryVoiceFact
+            ? "awaiting-visual-evidence"
+            : committedVoiceSettlement
+              ? "current-settlement"
+              : committedVoiceSourceRecord
+                ? "effective-question-source-ledger"
+                : "missing";
+          traceStoreRef.current.updateMetadata(trace.id, {
+            sourceLinkageVoiceAuthoritySource,
+            sourceLinkageVoiceLedgerRecordId:
+              committedVoiceSourceRecord?.recordId,
+            sourceLinkageVoiceSourceHashAvailable: Boolean(
+              voiceSourceHash
+            ),
+          });
           const sourceLinkageRequest =
             voiceSourceHash
               ? buildSourceLinkageAdjudicationRequest({
