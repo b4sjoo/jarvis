@@ -6,9 +6,9 @@ import {
   type CanonicalQuestionType,
 } from "./task-taxonomy.js";
 import type {
+  EffectiveInterviewTaskRelation,
   InterviewPlaybookPhase,
   InterviewSubtaskIntent,
-  InterviewTaskRelation,
 } from "./types.js";
 
 export type ResponseArtifactMutationDisposition =
@@ -39,7 +39,7 @@ export function authorizeResponseArtifactMutation(input: {
   parentQuestionType?: unknown;
   responseOwnerQuestionType?: unknown;
   responseOwnerSource: MeetingResponseOwnerSource;
-  relation: InterviewTaskRelation;
+  relation: EffectiveInterviewTaskRelation;
   subtaskIntent?: InterviewSubtaskIntent;
   codingPhase?: InterviewPlaybookPhase;
   requiredArtifacts?: AnswerArtifactSection[];

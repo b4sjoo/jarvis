@@ -5,6 +5,7 @@ import type {
 } from "@/lib/memory";
 import { resolveRetrievedMemoryRole } from "../memory/runtime-role.js";
 import type {
+  EffectiveInterviewTaskRelation,
   InterviewTaskRelation,
   ExplicitProjectSelection,
   ProjectBinding,
@@ -18,7 +19,7 @@ import type {
 export interface ResolveProjectBindingInput {
   existingBinding?: ProjectBinding;
   questionType?: MemoryQuestionType;
-  relation?: InterviewTaskRelation;
+  relation?: InterviewTaskRelation | EffectiveInterviewTaskRelation;
   requiresProjectBinding?: boolean;
   projectAnchor?: string;
   explicitProjectSelection?: string | ExplicitProjectSelection;

@@ -1,4 +1,7 @@
-import type { InterviewTaskRelation } from "./types";
+import type {
+  EffectiveInterviewTaskRelation,
+  InterviewTaskRelation,
+} from "./types";
 
 export type DiagramDomainEvidenceSource =
   | "current-question"
@@ -11,7 +14,9 @@ export interface DiagramDomainQueryContext {
   parentTopicIncluded: boolean;
 }
 
-const CONTINUITY_RELATIONS = new Set<InterviewTaskRelation>([
+const CONTINUITY_RELATIONS = new Set<
+  InterviewTaskRelation | EffectiveInterviewTaskRelation
+>([
   "followup-parent",
   "child-probe",
   "resume-parent",
@@ -27,7 +32,7 @@ export function buildCurrentTaskDiagramDomainContext({
 }: {
   currentQuestion?: string;
   parentTopic?: string;
-  relation: InterviewTaskRelation;
+  relation: InterviewTaskRelation | EffectiveInterviewTaskRelation;
   captureTitleFallback?: string;
 }): DiagramDomainQueryContext {
   const question = normalizeEvidence(currentQuestion);

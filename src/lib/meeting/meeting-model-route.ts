@@ -1,5 +1,8 @@
 import type { TYPE_PROVIDER } from "@/types";
-import type { InterviewTaskRelation, SelectedProviderState } from "./types";
+import type {
+  EffectiveInterviewTaskRelation,
+  SelectedProviderState,
+} from "./types";
 import {
   areCompatibleParentContinuityTypes,
   normalizeCanonicalQuestionType,
@@ -80,7 +83,7 @@ export interface MeetingResponseOwnerResolution {
   source: MeetingResponseOwnerSource;
   preBoundaryType?: CanonicalQuestionType;
   committedType?: CanonicalQuestionType;
-  relation: InterviewTaskRelation;
+  relation: EffectiveInterviewTaskRelation;
 }
 
 export function resolveMeetingResponseOwner(input: {
@@ -88,7 +91,7 @@ export function resolveMeetingResponseOwner(input: {
   postBoundaryParentType?: unknown;
   activeChildType?: unknown;
   proposedQuestionType?: unknown;
-  relation: InterviewTaskRelation;
+  relation: EffectiveInterviewTaskRelation;
   taskBoundaryCommitted: boolean;
   childOwnsResponse: boolean;
 }): MeetingResponseOwnerResolution {

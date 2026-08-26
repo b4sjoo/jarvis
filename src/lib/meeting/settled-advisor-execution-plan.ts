@@ -47,6 +47,7 @@ import {
   type WhiteboardFormatPreference,
 } from "./whiteboard-format-policy.js";
 import type {
+  EffectiveInterviewTaskRelation,
   InterviewPlaybookPhase,
   InterviewSubtaskIntent,
   InterviewTaskRelation,
@@ -129,7 +130,8 @@ export interface SettledAdvisorExecutionPlan {
   promptCurrentQuestionSourceHash: string;
   questionType: CurrentQuestionSettlementDecision["questionType"];
   relation: CurrentQuestionRelation;
-  taskRelation: InterviewTaskRelation;
+  taskRelation: EffectiveInterviewTaskRelation;
+  relationApplicable: boolean;
   responseAuthorized: boolean;
   responseAuthorityId?: string;
   responseIntent: SettledAdvisorResponseIntent;
@@ -196,7 +198,8 @@ export interface EffectiveAdvisorSettlementView {
   rawRelation: InterviewTaskRelation;
   taskRuntimeRevision: number;
   questionType: CanonicalQuestionType;
-  relation: InterviewTaskRelation;
+  relation: EffectiveInterviewTaskRelation;
+  relationApplicable: boolean;
   currentOnly: boolean;
   nullHypothesisApplied: boolean;
   nullHypothesisReason?:
@@ -214,6 +217,12 @@ export interface EffectiveAdvisorSettlementView {
   playbook?: SelectedInterviewPlaybook;
   playbookPhase?: InterviewPlaybookPhase;
   supportedFactAnchors: string[];
+}
+
+export function resolveEffectiveInterviewTaskRelation(
+  relation: InterviewTaskRelation
+): EffectiveInterviewTaskRelation {
+  return relation === "unknown" ? "none" : relation;
 }
 
 export function buildEffectiveAdvisorSettlementView(input: {
@@ -253,8 +262,8 @@ export function buildEffectiveAdvisorSettlementView(input: {
   let questionType = alreadyEffective
     ? settlement.questionType
     : rawQuestionType;
-  let relation = alreadyEffective
-    ? toInterviewTaskRelation(settlement.relation)
+  let relation: CurrentQuestionRelation = alreadyEffective
+    ? settlement.relation
     : rawRelation;
   let nullHypothesisReason = alreadyEffective
     ? settlement.nullHypothesisReason
@@ -303,52 +312,16 @@ export function buildEffectiveAdvisorSettlementView(input: {
     }
   }
 
-  const nullHypothesisApplied =
+  const preliminaryNullHypothesisApplied =
     alreadyEffective
       ? settlement.nullHypothesisApplied
       : questionType !== rawQuestionType || relation !== rawRelation;
-  const relationCurrentOnly = relation === "unknown";
+  const relationCurrentOnly =
+    relation === "unknown" || relation === "none";
   const relationReadsParent =
     relation === "followup-parent" ||
     relation === "resume-parent" ||
     relation === "child-probe";
-  const effectiveSettlement = settlement
-    ? alreadyEffective
-      ? settlement
-      : Object.freeze({
-          ...settlement,
-          effective: true as const,
-          effectiveRevision: input.taskRuntimeRevision,
-          rawQuestionType,
-          rawRelation,
-          nullHypothesisApplied,
-          nullHypothesisReason,
-          effectiveParentId: relationReadsParent
-            ? activeTask?.parent.id
-            : undefined,
-          effectiveParentRevision: relationReadsParent
-            ? activeTask?.parent.revisions
-            : undefined,
-          effectiveChildId:
-            relation === "child-probe" ? activeTask?.child?.id : undefined,
-          questionType,
-          relation,
-          activeParentId:
-            nullHypothesisApplied && relationReadsParent
-              ? activeTask?.parent.id
-              : settlement.activeParentId,
-          activeParentRevision:
-            nullHypothesisApplied && relationReadsParent
-              ? activeTask?.parent.revisions
-              : settlement.activeParentRevision,
-          reasons: nullHypothesisApplied
-            ? [
-                ...settlement.reasons,
-                `eventual-resolution:${nullHypothesisReason}`,
-              ]
-            : [...settlement.reasons],
-        })
-    : undefined;
   const startsNewParent = Boolean(
     settlement
       ? relation === "new-parent" && settlement.parentMutationAuthorized
@@ -378,6 +351,59 @@ export function buildEffectiveAdvisorSettlementView(input: {
       : undefined;
   const currentOnly =
     relationCurrentOnly || (relationReadsParent && !parent);
+  const relationApplicable = !relationCurrentOnly;
+  const effectiveRelation: EffectiveInterviewTaskRelation = relationCurrentOnly
+    ? "none"
+    : (relation as Exclude<InterviewTaskRelation, "unknown">);
+  const effectiveNullHypothesisReason = relationCurrentOnly
+    ? nullHypothesisReason ??
+      (activeTask?.parent
+        ? "active-parent-preserved"
+        : "no-parent-current-question")
+    : nullHypothesisReason;
+  const nullHypothesisApplied =
+    preliminaryNullHypothesisApplied ||
+    effectiveRelation !== rawRelation;
+  const effectiveSettlement = settlement
+    ? alreadyEffective && effectiveRelation === settlement.relation
+      ? settlement
+      : Object.freeze({
+        ...settlement,
+        effective: true as const,
+        effectiveRevision: input.taskRuntimeRevision,
+        rawQuestionType,
+        rawRelation,
+        nullHypothesisApplied,
+        nullHypothesisReason: effectiveNullHypothesisReason,
+        effectiveParentId: relationReadsParent
+          ? activeTask?.parent.id
+          : undefined,
+        effectiveParentRevision: relationReadsParent
+          ? activeTask?.parent.revisions
+          : undefined,
+        effectiveChildId:
+          relation === "child-probe" ? activeTask?.child?.id : undefined,
+        questionType,
+        relation: effectiveRelation,
+        activeParentId:
+          nullHypothesisApplied && relationReadsParent
+            ? activeTask?.parent.id
+            : settlement.activeParentId,
+        activeParentRevision:
+          nullHypothesisApplied && relationReadsParent
+            ? activeTask?.parent.revisions
+            : settlement.activeParentRevision,
+        reasons:
+          nullHypothesisApplied && effectiveNullHypothesisReason
+            ? Array.from(
+                new Set([
+                  ...settlement.reasons,
+                  `eventual-resolution:${effectiveNullHypothesisReason}`,
+                ])
+              )
+            : [...settlement.reasons],
+      })
+    : undefined;
   const contextReadScope: AdvisorContextReadScope =
     relation === "child-probe" && activeTask?.child && parent
       ? "active-child-read"
@@ -403,10 +429,11 @@ export function buildEffectiveAdvisorSettlementView(input: {
     rawRelation,
     taskRuntimeRevision: input.taskRuntimeRevision,
     questionType,
-    relation,
+    relation: effectiveRelation,
+    relationApplicable,
     currentOnly,
     nullHypothesisApplied,
-    nullHypothesisReason,
+    nullHypothesisReason: effectiveNullHypothesisReason,
     effectiveSettlement,
     contextReadScope,
     startsNewParent,
@@ -435,6 +462,7 @@ export function formatEffectiveAdvisorSettlementViewForTrace(
     effectiveAdvisorTaskRuntimeRevision: view.taskRuntimeRevision,
     effectiveAdvisorQuestionType: view.questionType,
     effectiveAdvisorRelation: view.relation,
+    effectiveAdvisorRelationApplicable: view.relationApplicable,
     effectiveAdvisorCurrentOnly: view.currentOnly,
     effectiveAdvisorNullHypothesisApplied:
       view.nullHypothesisApplied,
@@ -555,7 +583,11 @@ export function buildSettledAdvisorExecutionPlan(input: {
   promptCurrentQuestionSourceHash?: string;
   createdAt?: number;
 }): SettledAdvisorExecutionPlan {
-  const relation = toInterviewTaskRelation(input.settlement.relation);
+  const rawTaskRelation = toInterviewTaskRelation(
+    input.settlement.relation
+  );
+  const relationApplicable = rawTaskRelation !== "unknown";
+  const relation = resolveEffectiveInterviewTaskRelation(rawTaskRelation);
   const responseOnlyTaskScope = input.responseOnlyTaskScope
     ? cloneResponseOnlyTaskScope(input.responseOnlyTaskScope)
     : undefined;
@@ -813,8 +845,9 @@ export function buildSettledAdvisorExecutionPlan(input: {
       input.promptCurrentQuestionSourceHash ??
       input.settlement.sourceHash,
     questionType: responseOwner.questionType,
-    relation: input.settlement.relation,
+    relation,
     taskRelation: relation,
+    relationApplicable,
     responseAuthorized: input.settlement.responseAuthorized,
     ...(input.responseAuthorityId
       ? { responseAuthorityId: input.responseAuthorityId }
@@ -1063,6 +1096,8 @@ export function formatSettledAdvisorExecutionPlanForTrace(
     settledExecutionPlanQuestionType: plan.questionType,
     settledExecutionPlanRelation: plan.relation,
     settledExecutionPlanTaskRelation: plan.taskRelation,
+    settledExecutionPlanRelationApplicable:
+      plan.relationApplicable,
     settledExecutionPlanResponseAuthorized:
       plan.responseAuthorized,
     ...(plan.responseAuthorityId
@@ -1203,7 +1238,7 @@ function resolveContextReadScope(input: {
   responseOnlyTaskScope?: ResponseOnlyTaskScope;
   transientPersonalStatusDecision?: TransientPersonalStatusDecision;
   taskSnapshot?: ActiveMeetingTask;
-  relation: InterviewTaskRelation;
+  relation: EffectiveInterviewTaskRelation;
 }): AdvisorContextReadScope {
   if (input.transientPersonalStatusDecision) return "current-only";
   if (input.responseOnlyTaskScope) {
@@ -1254,7 +1289,7 @@ function resolveArtifactIntent(input: {
 
 function resolveTaskMutationPolicy(input: {
   settlement: CurrentQuestionSettlementDecision;
-  relation: InterviewTaskRelation;
+  relation: EffectiveInterviewTaskRelation;
   taskBoundaryCommitted: boolean;
   responseOnlyTaskScope?: ResponseOnlyTaskScope;
   transientPersonalStatusDecision?: TransientPersonalStatusDecision;

@@ -531,6 +531,7 @@ import {
   buildCommittedTaskBoundaryParent,
   buildQuestionTypeConsumerObservation,
   buildEffectiveAdvisorSettlementView,
+  resolveEffectiveInterviewTaskRelation,
   effectiveSettlementAuthorizesSourceTransition,
   settledExecutionPlanAuthorizesTaskContinuity,
   buildSettledAdvisorExecutionPlan,
@@ -11538,7 +11539,9 @@ export function useMeetingAssistant() {
       latestTurnText: latestTurn?.text,
       currentQuestion:
         advisorEvidencePacket.currentQuestion?.text ?? "",
-      relation: effectiveAdvisorSettlementView.relation,
+      relation: effectiveAdvisorSettlementView.relationApplicable
+        ? (effectiveAdvisorSettlementView.relation as InterviewTaskRelation)
+        : undefined,
       subtaskIntent: advisorTaskSignals.subtaskIntent,
       askFrame: advisorAskFrame ?? getAdvisorActiveAskFrame(promptContext),
       phaseControl: sourceOwnedPhaseControl,
@@ -11866,7 +11869,8 @@ export function useMeetingAssistant() {
           logicalQuestionRevision:
             advisorJob.logicalQuestionUnit.revision,
           existingTask: transitionParentBefore,
-          relation: effectiveAdvisorSettlementView.relation,
+          relation:
+            effectiveAdvisorSettlementView.relation as InterviewTaskRelation,
           authoritySource: taskBoundaryAuthoritySource,
           mutationAuthorized:
             taskMutationAuthorization.authorized,
@@ -12281,8 +12285,12 @@ export function useMeetingAssistant() {
             {
               questionType: responseOwner.questionType,
               taskRelation:
-                settledExecutionPlan?.taskRelation ??
-                effectiveAdvisorSettlementView.relation,
+                settledExecutionPlan?.relationApplicable === false ||
+                (!settledExecutionPlan &&
+                  !effectiveAdvisorSettlementView.relationApplicable)
+                  ? undefined
+                  : ((settledExecutionPlan?.taskRelation ??
+                      effectiveAdvisorSettlementView.relation) as InterviewTaskRelation),
               playbookId:
                 settledExecutionPlan?.playbookId ??
                 advisorRuntimePlaybook?.id,
@@ -12781,8 +12789,8 @@ export function useMeetingAssistant() {
             advisorQuestionType) !== "project-deep-dive" &&
           (settledExecutionPlan?.taskRelation ??
             effectiveAdvisorSettlementView.relation) !== "new-parent" &&
-          (settledExecutionPlan?.taskRelation ??
-            effectiveAdvisorSettlementView.relation) !== "unknown"
+          (settledExecutionPlan?.relationApplicable ??
+            effectiveAdvisorSettlementView.relationApplicable)
       ),
       runtimeToken: effectiveRuntimeCommitToken,
       currentOperationId: () => activeAdvisorJobRef.current?.id,
@@ -13968,8 +13976,12 @@ export function useMeetingAssistant() {
               inferredTurnIntentDecision?.action
             ),
             relation:
-              settledExecutionPlan?.taskRelation ??
-              effectiveAdvisorSettlementView.relation,
+              settledExecutionPlan?.relationApplicable === false ||
+              (!settledExecutionPlan &&
+                !effectiveAdvisorSettlementView.relationApplicable)
+                ? undefined
+                : ((settledExecutionPlan?.taskRelation ??
+                    effectiveAdvisorSettlementView.relation) as InterviewTaskRelation),
             meetingContext: sufficiencyMeetingContext,
             basePromptContext: promptContext,
             originalModelPromptText: advisorModelPromptText,
@@ -14134,6 +14146,7 @@ export function useMeetingAssistant() {
           settledExecutionPlan,
           advisorTaskMutationDecision.commitParent
         ) &&
+        effectiveAdvisorSettlementView.relationApplicable &&
         advisorTaskSignals.openingRoute?.commitParent !== false &&
         (effectiveAdvisorSettlementView.relation !== "new-parent" ||
           taskBoundaryCommittedBeforeAdvisor ||
@@ -14143,7 +14156,7 @@ export function useMeetingAssistant() {
           )) &&
         (!sourceOwnedTransitionResult ||
           sourceOwnedTransitionCommittedBeforeAdvisor);
-      const continuityRelation: InterviewTaskRelation =
+      const continuityRelation =
         taskBoundaryCommittedBeforeAdvisor
           ? "followup-parent"
           : effectiveAdvisorSettlementView.relation;
@@ -14192,7 +14205,10 @@ export function useMeetingAssistant() {
               existingInterviewTask
                 ? existingInterviewTask.stableKind
                 : advisorQuestionType,
-            relation: continuityRelation,
+            relation:
+              continuityRelation === "none"
+                ? "unknown"
+                : continuityRelation,
             subtaskIntent: advisorTaskSignals.subtaskIntent,
             question:
               advisorEvidenceSource === "screen"
@@ -28267,11 +28283,15 @@ export function useMeetingAssistant() {
             reconciledProjectBindingMetadata
           );
 
+          const effectiveScreenRelation =
+            resolveEffectiveInterviewTaskRelation(
+              screenRelationDecision.relation
+            );
           const screenResponseOwner = resolveMeetingResponseOwner({
             preBoundaryType: existingInterviewTask?.stableKind,
             postBoundaryParentType: existingInterviewTask?.stableKind,
             proposedQuestionType: settledScreenQuestionType,
-            relation: screenRelationDecision.relation,
+            relation: effectiveScreenRelation,
             taskBoundaryCommitted:
               screenSourceTransitionCommittedBeforeModel &&
               screenSourceOwnedTransitionResult?.candidate.kind ===
@@ -28291,7 +28311,7 @@ export function useMeetingAssistant() {
                   : undefined),
               responseOwnerQuestionType: screenResponseOwner.questionType,
               responseOwnerSource: screenResponseOwner.source,
-              relation: screenRelationDecision.relation,
+              relation: effectiveScreenRelation,
               requiredArtifacts: screenPhaseDecision.requiredArtifacts,
               creatingParent:
                 !existingInterviewTask &&

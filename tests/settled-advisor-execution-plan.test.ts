@@ -265,12 +265,13 @@ test("keeps active-parent abstention current-only without inventing compatibilit
   assert.equal(view.rawQuestionType, "unknown");
   assert.equal(view.rawRelation, "unknown");
   assert.equal(view.questionType, "unknown");
-  assert.equal(view.relation, "unknown");
+  assert.equal(view.relation, "none");
+  assert.equal(view.relationApplicable, false);
   assert.equal(view.currentOnly, true);
-  assert.equal(view.nullHypothesisApplied, false);
-  assert.equal(view.nullHypothesisReason, undefined);
+  assert.equal(view.nullHypothesisApplied, true);
+  assert.equal(view.nullHypothesisReason, "active-parent-preserved");
   assert.equal(view.effectiveSettlement?.questionType, "unknown");
-  assert.equal(view.effectiveSettlement?.relation, "unknown");
+  assert.equal(view.effectiveSettlement?.relation, "none");
   assert.equal(view.effectiveSettlement?.relationMutationAuthorized, false);
   assert.equal(view.effectiveSettlement?.effective, true);
   assert.equal(view.effectiveSettlement?.effectiveRevision, 4);
@@ -313,9 +314,10 @@ test("keeps active-child abstention current-only without borrowing its type", ()
   });
 
   assert.equal(view.questionType, "unknown");
-  assert.equal(view.relation, "unknown");
+  assert.equal(view.relation, "none");
+  assert.equal(view.relationApplicable, false);
   assert.equal(view.currentOnly, true);
-  assert.equal(view.nullHypothesisReason, undefined);
+  assert.equal(view.nullHypothesisReason, "active-parent-preserved");
   assert.equal(view.effectiveSettlement?.relationMutationAuthorized, false);
   assert.equal(view.effectiveSettlement?.effectiveChildId, undefined);
   assert.equal(view.contextReadScope, "current-only");
@@ -341,11 +343,12 @@ test("keeps an unresolved Screen relation current-only instead of inventing a pa
   });
 
   assert.equal(view.rawRelation, "unknown");
-  assert.equal(view.relation, "unknown");
+  assert.equal(view.relation, "none");
+  assert.equal(view.relationApplicable, false);
   assert.equal(view.currentOnly, true);
   assert.equal(view.startsNewParent, false);
   assert.equal(view.contextReadScope, "current-only");
-  assert.equal(view.nullHypothesisReason, undefined);
+  assert.equal(view.nullHypothesisReason, "active-parent-preserved");
 });
 
 test("uses compatible concrete type as a non-mutating parent continuity fallback", () => {
@@ -683,6 +686,19 @@ test("response-only plan routes from the current question without exposing paren
   );
   assert.equal(plan.responseIntent, "advise");
   assert.equal(plan.contextReadScope, "current-only");
+  assert.equal(plan.relation, "none");
+  assert.equal(plan.taskRelation, "none");
+  assert.equal(plan.relationApplicable, false);
+  const currentOnlyTrace =
+    formatSettledAdvisorExecutionPlanForTrace(plan);
+  assert.equal(
+    currentOnlyTrace.settledExecutionPlanRelation,
+    "none"
+  );
+  assert.equal(
+    currentOnlyTrace.settledExecutionPlanRelationApplicable,
+    false
+  );
   assert.equal(plan.artifactIntent, "preserve");
   assert.deepEqual(plan.taskMutationPolicy, { kind: "preserve" });
 });
@@ -831,6 +847,9 @@ test("relation abstention preserves task state without borrowing child response 
   assert.equal(plan.responseOwner.source, "current-question");
   assert.equal(plan.responseOwner.questionType, "unknown");
   assert.equal(plan.contextReadScope, "current-only");
+  assert.equal(plan.relation, "none");
+  assert.equal(plan.taskRelation, "none");
+  assert.equal(plan.relationApplicable, false);
   assert.deepEqual(plan.taskMutationPolicy, { kind: "preserve" });
   assert.equal(plan.taskSnapshot?.child?.id, "child-hnsw");
 });

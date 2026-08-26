@@ -636,6 +636,10 @@ export type InterviewTaskRelation =
   | "correction"
   | "unknown";
 
+export type EffectiveInterviewTaskRelation =
+  | Exclude<InterviewTaskRelation, "unknown">
+  | "none";
+
 export type HumanExpectedParentAction =
   | "create"
   | "preserve"
