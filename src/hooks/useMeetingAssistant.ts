@@ -8097,7 +8097,6 @@ export function useMeetingAssistant() {
         taskId: activeTaskIdentity.taskId,
         parentTaskId: activeTaskIdentity.parentTaskId,
         childTaskId: activeTaskIdentity.childTaskId,
-        taskSource: activeTaskIdentity.taskSource,
         questionType:
           normalizeQuestionTypeAlias(
             readStringFromTraceMetadata(
