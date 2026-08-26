@@ -28,7 +28,7 @@ export interface ScreenPreflightParsedCandidate<T> {
   confidence?: number;
 }
 
-export interface ScreenPreflightLateResultObservation {
+export interface ScreenPreflightLateResultObservation<T = unknown> {
   operationId: string;
   leaseRevision: number;
   observedAt: number;
@@ -36,6 +36,7 @@ export interface ScreenPreflightLateResultObservation {
   parseCompletedAt: number;
   canonicalQuestionType?: CanonicalQuestionType;
   confidence?: number;
+  result: T;
   committedOutcome: ScreenPreflightDeadlineDecision["outcome"];
   committedFallbackReason?: ScreenPreflightFallbackReason;
 }
@@ -64,7 +65,7 @@ export function createScreenPreflightDeadlineArbiter<T>({
   now?: () => number;
   schedule?: (callback: () => void, delayMs: number) => DeadlineTimer;
   cancelSchedule?: (timer: DeadlineTimer) => void;
-  onLateResult?: (observation: ScreenPreflightLateResultObservation) => void;
+  onLateResult?: (observation: ScreenPreflightLateResultObservation<T>) => void;
 }) {
   const deadlineAt = startedAt + Math.max(0, timeoutMs);
   let providerCompletedAt: number | undefined;
@@ -119,6 +120,7 @@ export function createScreenPreflightDeadlineArbiter<T>({
           parseCompletedAt: candidate.parseCompletedAt,
           canonicalQuestionType: candidate.canonicalQuestionType,
           confidence: candidate.confidence,
+          result: candidate.result,
           committedOutcome: committed.decision.outcome,
           committedFallbackReason: committed.decision.fallbackReason,
         });
@@ -137,6 +139,7 @@ export function createScreenPreflightDeadlineArbiter<T>({
         parseCompletedAt: candidate.parseCompletedAt,
         canonicalQuestionType: candidate.canonicalQuestionType,
         confidence: candidate.confidence,
+        result: candidate.result,
         committedOutcome: "fallback",
         committedFallbackReason: "timeout",
       });

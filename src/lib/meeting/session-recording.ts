@@ -384,6 +384,11 @@ export interface SessionCompactTraceSummary {
     lateResultObserved?: boolean;
     lateQuestionType?: string;
     lateConfidence?: number;
+    lateRepairStage?: string;
+    lateRepairAuthorized?: boolean;
+    lateRepairReason?: string;
+    lateRepairSourceOperationId?: string;
+    lateRepairQuestionType?: string;
   };
   playbookId?: string;
   playbookPhase?: string;
@@ -6350,6 +6355,26 @@ function buildScreenPreflightDeadlineSummary(
     lateConfidence: readFirstNumberFromMetadata(
       metadataSources,
       "screenPreflightLateConfidence"
+    ),
+    lateRepairStage: readFirstString(
+      metadataSources,
+      "lateScreenPreflightRepairStage"
+    ),
+    lateRepairAuthorized: readFirstBoolean(
+      metadataSources,
+      "lateScreenPreflightRepairAuthorized"
+    ),
+    lateRepairReason: readFirstString(
+      metadataSources,
+      "lateScreenPreflightRepairReason"
+    ),
+    lateRepairSourceOperationId: readFirstString(
+      metadataSources,
+      "lateScreenPreflightRepairSourceOperationId"
+    ),
+    lateRepairQuestionType: readFirstString(
+      metadataSources,
+      "lateScreenPreflightRepairQuestionType"
     ),
   };
 }

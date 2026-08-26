@@ -114,6 +114,10 @@ test("commits one timeout fallback and records a later result without mutation",
   assert.equal(resolution.decision.outcome, "fallback");
   assert.equal(harness.arbiter.readDecision(), resolution.decision);
   assert.equal(harness.lateResults.length, 1);
+  assert.deepEqual(
+    (harness.lateResults[0] as { result: unknown }).result,
+    { questionType: "coding" }
+  );
 });
 
 test("commits provider, parse, and abort failures without waiting for timeout", async () => {
@@ -173,6 +177,11 @@ test("persists deadline and late-result evidence in the compact recording summar
       screenPreflightLateResultObserved: true,
       screenPreflightLateQuestionType: "behavioral",
       screenPreflightLateConfidence: 1,
+      lateScreenPreflightRepairStage: "candidate",
+      lateScreenPreflightRepairAuthorized: true,
+      lateScreenPreflightRepairReason: "authorized",
+      lateScreenPreflightRepairSourceOperationId: "screen-op-1",
+      lateScreenPreflightRepairQuestionType: "behavioral",
       screenPreflightConsumerCoherent: true,
       screenPreflightConsumerConflicts: [],
     },
@@ -203,5 +212,10 @@ test("persists deadline and late-result evidence in the compact recording summar
     lateResultObserved: true,
     lateQuestionType: "behavioral",
     lateConfidence: 1,
+    lateRepairStage: "candidate",
+    lateRepairAuthorized: true,
+    lateRepairReason: "authorized",
+    lateRepairSourceOperationId: "screen-op-1",
+    lateRepairQuestionType: "behavioral",
   });
 });

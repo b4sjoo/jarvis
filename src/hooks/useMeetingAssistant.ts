@@ -216,6 +216,7 @@ import {
   SelectedProviderState,
   MeetingResponseActionMode,
   MeetingResponseConfig,
+  ManualScreenVoiceQuestionCapsule,
   ManualQuestionTypeCorrection,
   ManualQuestionTypeCorrectionSource,
   CurrentQuestionSettlementDecision,
@@ -381,6 +382,9 @@ import {
   createScreenPreflightDeadlineArbiter,
   formatScreenPreflightDeadlineDecisionForTrace,
   formatScreenPreflightLateResultForTrace,
+  authorizeLateScreenPreflightRepair,
+  formatLateScreenPreflightRepairForTrace,
+  LateScreenPreflightRepairLease,
   selectInterviewPlaybook,
   applyPlaybookPhaseDecisionToProgress,
   createInitialPlaybookPhaseProgress,
@@ -2238,6 +2242,16 @@ interface ManualCorrectionRuntimeTarget {
 interface CaptureScreenContextOptions {
   onCaptured?: () => void;
   requestedAt?: number;
+  latePreflightRepair?: LateScreenPreflightRepairRequest;
+}
+
+interface LateScreenPreflightRepairRequest {
+  lease: LateScreenPreflightRepairLease;
+  observation: ScreenObservation;
+  preflight: ScreenPreflightResult;
+  sourceTraceId: string;
+  voiceQuestionCapsule?: ManualScreenVoiceQuestionCapsule;
+  exactVisualEvidenceRecovery: boolean;
 }
 
 interface NativeAudioRecoveryAttemptContext {
@@ -3140,6 +3154,12 @@ export function useMeetingAssistant() {
   const screenOperationCoordinatorRef = useRef(
     new ScreenOperationCoordinator()
   );
+  const captureScreenContextRef = useRef<
+    ((
+      source?: ScreenObservation["source"],
+      options?: CaptureScreenContextOptions
+    ) => Promise<void>) | null
+  >(null);
   const manualCorrectionOperationCoordinatorRef = useRef(
     new ManualCorrectionOperationCoordinator()
   );
@@ -24515,6 +24535,42 @@ export function useMeetingAssistant() {
       const screenOperationId = createMeetingId("screen_operation");
       const screenOperationRequestedAt = options.requestedAt ?? Date.now();
       const screenRequestContextState = contextManagerRef.current.getState();
+      const latePreflightRepair = options.latePreflightRepair;
+      if (latePreflightRepair) {
+        const currentSettlement = currentQuestionSettlementRef.current;
+        const replayAuthorization = authorizeLateScreenPreflightRepair({
+          stage: "replay",
+          lease: latePreflightRepair.lease,
+          runtimeActive: runtimeActiveRef.current,
+          activeOperationId:
+            screenOperationCoordinatorRef.current.getActiveOperationId(),
+          currentSessionId: screenRequestContextState.sessionId,
+          currentRuntimeEpoch: runtimeEpochRef.current,
+          currentObservationId:
+            screenRequestContextState.screenObservations.at(-1)?.id,
+          currentSettlementId: currentSettlement?.settlementId,
+          currentSettlementRevision: currentSettlement?.revision,
+          currentVisibleAnswerRevision: visibleAnswerRevisionRef.current,
+          currentManualCorrectionRevision:
+            manualCorrectionRevisionRef.current,
+        });
+        const replayMetadata =
+          formatLateScreenPreflightRepairForTrace({
+            lease: latePreflightRepair.lease,
+            authorization: replayAuthorization,
+            stage: "replay",
+          });
+        sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+          stage: "late-screen-preflight-replay-admission",
+          traceId: latePreflightRepair.sourceTraceId,
+          ...replayMetadata,
+        });
+        if (!replayAuthorization.authorized) return;
+      }
+      const screenBaseVisibleAnswerRevision =
+        visibleAnswerRevisionRef.current;
+      const screenBaseManualCorrectionRevision =
+        manualCorrectionRevisionRef.current;
       const screenVoiceQuestionCandidate =
         selectManualScreenVoiceQuestionCapsule({
           sessionId: screenRequestContextState.sessionId,
@@ -24650,12 +24706,14 @@ export function useMeetingAssistant() {
             : undefined,
         });
       let screenVoiceQuestionCapsule =
-        screenVoiceQuestionBinding.disposition === "bind-voice"
+        latePreflightRepair?.voiceQuestionCapsule ??
+        (screenVoiceQuestionBinding.disposition === "bind-voice"
           ? screenVoiceQuestionBinding.candidate
-          : undefined;
+          : undefined);
       let screenExactVisualEvidenceRecovery =
+        latePreflightRepair?.exactVisualEvidenceRecovery ??
         screenVoiceQuestionBinding.reason ===
-        "awaiting-visual-evidence-recovery";
+          "awaiting-visual-evidence-recovery";
       const screenOperationClaim =
         screenOperationCoordinatorRef.current.claim(
           screenOperationId,
@@ -24693,6 +24751,13 @@ export function useMeetingAssistant() {
             ? "superseding"
             : "initial",
           screenOperationQueuePolicy: "latest-wins",
+          lateScreenPreflightRepairReplay: Boolean(latePreflightRepair),
+          lateScreenPreflightRepairSourceOperationId:
+            latePreflightRepair?.lease.sourceOperationId,
+          lateScreenPreflightRepairSourceObservationId:
+            latePreflightRepair?.lease.sourceObservationId,
+          lateScreenPreflightRepairQuestionType:
+            latePreflightRepair?.lease.questionType,
           supersedesScreenOperationId:
             screenOperationClaim.supersedesOperationId,
           supersedesScreenTraceId: screenOperationClaim.supersedesTraceId,
@@ -24765,6 +24830,9 @@ export function useMeetingAssistant() {
         | AnswerSufficiencyDecision
         | undefined;
       let screenAnswerSufficiencyQuestion = "";
+      let pendingLatePreflightRepair:
+        | LateScreenPreflightRepairRequest
+        | undefined;
       let screenSourceOwnedTransitionResult:
         | SourceOwnedTransitionCommitResult
         | undefined;
@@ -24998,13 +25066,21 @@ export function useMeetingAssistant() {
 
         captureStepId = traceStoreRef.current.startStep(
           trace.id,
-          "Screen capture command",
-          { target: "active-window" }
+          latePreflightRepair
+            ? "Screen observation replay"
+            : "Screen capture command",
+          {
+            target: latePreflightRepair
+              ? "existing-observation"
+              : "active-window",
+          }
         );
-        const observation = await captureScreenObservation({
-          source,
-          previousHash: latestScreenHashRef.current,
-        });
+        const observation = latePreflightRepair
+          ? latePreflightRepair.observation
+          : await captureScreenObservation({
+              source,
+              previousHash: latestScreenHashRef.current,
+            });
         screenCaptureSucceeded = true;
         const postCaptureAuthorization = readScreenAuthorization();
         const recoverableParentDrift =
@@ -25026,10 +25102,19 @@ export function useMeetingAssistant() {
           focusImageMediaType: observation.focusImageMediaType,
           captureTarget: observation.captureTarget,
         });
-        sessionRecordingManagerRef.current?.recordScreenCapture(
-          observation,
-          trace.id
-        );
+        if (latePreflightRepair) {
+          sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+            stage: "late-screen-preflight-observation-reused",
+            traceId: trace.id,
+            sourceTraceId: latePreflightRepair.sourceTraceId,
+            sourceObservationId: observation.id,
+          });
+        } else {
+          sessionRecordingManagerRef.current?.recordScreenCapture(
+            observation,
+            trace.id
+          );
+        }
         if (screenExactVisualEvidenceRecovery) {
           settleAwaitingVisualEvidenceRecovery(
             "consumed",
@@ -25037,7 +25122,7 @@ export function useMeetingAssistant() {
             trace.id
           );
         }
-        options.onCaptured?.();
+        if (!latePreflightRepair) options.onCaptured?.();
 
         const currentActiveAdvisor = activeAdvisorJobRef.current;
         const currentPendingAnswer = pendingAnswerRevisionRef.current;
@@ -25208,7 +25293,15 @@ export function useMeetingAssistant() {
           })
         );
 
-        contextManagerRef.current.addScreenObservation(observation);
+        if (
+          !contextManagerRef.current
+            .getState()
+            .screenObservations.some(
+              (candidate) => candidate.id === observation.id
+            )
+        ) {
+          contextManagerRef.current.addScreenObservation(observation);
+        }
         const contextState = contextManagerRef.current.getState();
 
         setState((previous) => ({
@@ -25261,15 +25354,70 @@ export function useMeetingAssistant() {
           sourceVoiceQuestionChars:
             screenVoiceQuestionCapsule?.text.length ?? 0,
         });
-        let screenPreflight: ScreenPreflightResult | undefined;
-        const shouldRunScreenPreflight = state.settings.screenContextEnabled;
+        let screenPreflight: ScreenPreflightResult | undefined =
+          latePreflightRepair?.preflight;
+        const shouldRunScreenPreflight = Boolean(
+          state.settings.screenContextEnabled && !screenPreflight
+        );
         traceStoreRef.current.updateMetadata(trace.id, {
-          screenPreflightEnabled: shouldRunScreenPreflight,
+          screenPreflightEnabled: Boolean(
+            shouldRunScreenPreflight || screenPreflight
+          ),
+          screenPreflightSource: latePreflightRepair
+            ? "late-valid-repair"
+            : shouldRunScreenPreflight
+              ? "provider"
+              : "disabled",
           memoryRetrievalEnabled: state.settings.useMemory,
           memoryRetrievalSkippedReason: state.settings.useMemory
             ? undefined
             : "use-memory-disabled",
         });
+
+        if (screenPreflight && latePreflightRepair) {
+          preflightStepId = traceStoreRef.current.startStep(
+            trace.id,
+            "Late valid screen preflight adopted",
+            {
+              sourceOperationId:
+                latePreflightRepair.lease.sourceOperationId,
+              sourceObservationId: observation.id,
+            }
+          );
+          const repairPreflightMetadata = {
+            ...formatQuestionTypeTraceMetadata(
+              screenPreflight.questionType,
+              screenPreflight.rawQuestionType
+            ),
+            askFrame: screenPreflight.askFrame,
+            topicDomain: screenPreflight.topicDomain,
+            projectAnchor: screenPreflight.projectAnchor,
+            classifierConfidence: screenPreflight.confidence,
+            behavioral: screenPreflight.isBehavioralInterview,
+            amazonLeadershipPrinciple:
+              screenPreflight.amazonLeadershipPrinciple,
+            screenPreflightFocusedEvidenceSummary:
+              screenPreflight.focusedEvidenceSummary,
+            screenPreflightCommittedQuestionType:
+              latePreflightRepair.lease.questionType,
+            screenPreflightOperationId:
+              latePreflightRepair.lease.sourceOperationId,
+            screenPreflightLeaseRevision:
+              latePreflightRepair.lease.sourcePreflightLeaseRevision,
+            screenPreflightDeadlineOutcome: "late-valid-repair",
+            screenPreflightLateRepairAdopted: true,
+          };
+          traceStoreRef.current.updateMetadata(
+            trace.id,
+            repairPreflightMetadata
+          );
+          traceStoreRef.current.finishStep(
+            trace.id,
+            preflightStepId,
+            "success",
+            repairPreflightMetadata
+          );
+        }
 
         if (shouldRunScreenPreflight) {
           const preflightStartedAt = Date.now();
@@ -25290,6 +25438,91 @@ export function useMeetingAssistant() {
                   traceId: trace.id,
                   ...metadata,
                 });
+                if (pendingLatePreflightRepair) return;
+                const lateQuestionType =
+                  normalizeCanonicalQuestionType(
+                    lateResult.canonicalQuestionType ??
+                      lateResult.result.canonicalQuestionType ??
+                      lateResult.result.questionType
+                  ) ?? "unknown";
+                const currentContext =
+                  contextManagerRef.current.getState();
+                const currentSettlement =
+                  currentQuestionSettlementRef.current;
+                const repairLease: LateScreenPreflightRepairLease = {
+                  sourceOperationId: screenOperationId,
+                  sourcePreflightLeaseRevision:
+                    lateResult.leaseRevision,
+                  sourceObservationId: observation.id,
+                  sessionId: screenRequestContextState.sessionId,
+                  runtimeEpoch: screenRuntimeToken.runtimeEpoch,
+                  settlementId:
+                    currentSettlement?.settlementId ?? "missing",
+                  settlementRevision:
+                    currentSettlement?.revision ?? -1,
+                  baseVisibleAnswerRevision:
+                    screenBaseVisibleAnswerRevision,
+                  manualCorrectionRevision:
+                    screenBaseManualCorrectionRevision,
+                  questionType: lateQuestionType,
+                  createdAt: lateResult.observedAt,
+                };
+                const repairAuthorization =
+                  authorizeLateScreenPreflightRepair({
+                    stage: "candidate",
+                    lease: repairLease,
+                    runtimeActive: runtimeActiveRef.current,
+                    activeOperationId:
+                      screenOperationCoordinatorRef.current.getActiveOperationId(),
+                    currentSessionId: currentContext.sessionId,
+                    currentRuntimeEpoch: runtimeEpochRef.current,
+                    currentObservationId:
+                      currentContext.screenObservations.at(-1)?.id,
+                    currentSettlementId:
+                      currentSettlement?.settlementId,
+                    currentSettlementRevision:
+                      currentSettlement?.revision,
+                    currentVisibleAnswerRevision:
+                      visibleAnswerRevisionRef.current,
+                    currentManualCorrectionRevision:
+                      manualCorrectionRevisionRef.current,
+                  });
+                const repairMetadata =
+                  formatLateScreenPreflightRepairForTrace({
+                    lease: repairLease,
+                    authorization: repairAuthorization,
+                    stage: "candidate",
+                  });
+                traceStoreRef.current.updateMetadata(
+                  trace.id,
+                  repairMetadata
+                );
+                sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+                  stage: "late-screen-preflight-repair-candidate",
+                  traceId: trace.id,
+                  ...repairMetadata,
+                });
+                if (!repairAuthorization.authorized) return;
+
+                pendingLatePreflightRepair = {
+                  lease: repairLease,
+                  observation,
+                  preflight: lateResult.result,
+                  sourceTraceId: trace.id,
+                  voiceQuestionCapsule: screenVoiceQuestionCapsule,
+                  exactVisualEvidenceRecovery:
+                    screenExactVisualEvidenceRecovery,
+                };
+                responseActionRevisionRef.current += 1;
+                traceStoreRef.current.updateMetadata(trace.id, {
+                  lateScreenPreflightRepairScheduled: true,
+                  lateScreenPreflightRepairScheduledAt: Date.now(),
+                  lateScreenPreflightRepairResponseActionRevision:
+                    responseActionRevisionRef.current,
+                });
+                analysisController?.abort(
+                  "late-valid-screen-preflight-repair"
+                );
               },
             });
           const preflightPromise = preflightScreenObservation({
@@ -29049,6 +29282,59 @@ export function useMeetingAssistant() {
         traceStoreRef.current.finishStep(trace.id, uiStepId, "success");
         traceStoreRef.current.finishTrace(trace.id, "success");
       } catch (error) {
+        if (pendingLatePreflightRepair) {
+          recordScreenQuestionTypeOutcome({
+            stage: "model-complete",
+            disposition: "cancelled-by-runtime-boundary",
+            modelCompleted: false,
+            reason: "late-valid-screen-preflight-repair",
+          });
+          if (screenGenerationLease) {
+            terminalizeGenerationLease({
+              lease: screenGenerationLease,
+              disposition: "superseded",
+              reason: "late-valid-screen-preflight-repair",
+              source: "screen-operation-authorization",
+              authority: "runtime-commit-boundary",
+              candidateFormed: Boolean(screenResponseCandidate),
+              traceId: trace.id,
+            });
+          }
+          analysisController?.abort(
+            "late-valid-screen-preflight-repair"
+          );
+          if (screenAnalysisAbortRef.current === analysisController) {
+            screenAnalysisAbortRef.current = null;
+          }
+          setState((previous) => ({
+            ...previous,
+            partialSuggestion: "",
+            error: null,
+          }));
+          const runningTrace = traceStoreRef.current
+            .getTraces()
+            .find((candidate) => candidate.id === trace.id);
+          if (runningTrace?.status === "running") {
+            for (const step of runningTrace.steps) {
+              if (step.status === "running") {
+                traceStoreRef.current.finishStep(
+                  trace.id,
+                  step.id,
+                  "cancelled",
+                  {
+                    lateScreenPreflightRepairScheduled: true,
+                  }
+                );
+              }
+            }
+            traceStoreRef.current.finishTrace(
+              trace.id,
+              "cancelled",
+              "late-valid-screen-preflight-repair"
+            );
+          }
+          return;
+        }
         recordScreenQuestionTypeOutcome({
           stage: "model-complete",
           disposition:
@@ -29204,6 +29490,51 @@ export function useMeetingAssistant() {
         }));
       } finally {
         screenOperationCoordinatorRef.current.release(screenOperationId);
+        const repair = pendingLatePreflightRepair;
+        if (repair) {
+          pendingLatePreflightRepair = undefined;
+          const replayContext = contextManagerRef.current.getState();
+          const replaySettlement = currentQuestionSettlementRef.current;
+          const replayAuthorization = authorizeLateScreenPreflightRepair({
+            stage: "replay",
+            lease: repair.lease,
+            runtimeActive: runtimeActiveRef.current,
+            activeOperationId:
+              screenOperationCoordinatorRef.current.getActiveOperationId(),
+            currentSessionId: replayContext.sessionId,
+            currentRuntimeEpoch: runtimeEpochRef.current,
+            currentObservationId:
+              replayContext.screenObservations.at(-1)?.id,
+            currentSettlementId: replaySettlement?.settlementId,
+            currentSettlementRevision: replaySettlement?.revision,
+            currentVisibleAnswerRevision:
+              visibleAnswerRevisionRef.current,
+            currentManualCorrectionRevision:
+              manualCorrectionRevisionRef.current,
+          });
+          const replayMetadata =
+            formatLateScreenPreflightRepairForTrace({
+              lease: repair.lease,
+              authorization: replayAuthorization,
+              stage: "terminal",
+            });
+          traceStoreRef.current.updateMetadata(trace.id, replayMetadata);
+          sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+            stage: "late-screen-preflight-repair-terminal",
+            traceId: trace.id,
+            ...replayMetadata,
+          });
+          refreshRecordedCompletedTrace(trace.id);
+          const replay = captureScreenContextRef.current;
+          if (replayAuthorization.authorized && replay) {
+            window.setTimeout(() => {
+              void replay(repair.observation.source, {
+                requestedAt: Date.now(),
+                latePreflightRepair: repair,
+              });
+            }, 0);
+          }
+        }
       }
     },
     [
@@ -29216,6 +29547,7 @@ export function useMeetingAssistant() {
       recordPreparationArtifactUse,
       recordPreparationKmbHintUses,
       recordPreparationPromptGuidanceUses,
+      refreshRecordedCompletedTrace,
       readRuntimeCommitSnapshot,
       resolveMeetingModelRoute,
       scheduleSourceLinkageAdjudication,
@@ -29230,6 +29562,8 @@ export function useMeetingAssistant() {
       terminalizeGenerationLease,
     ]
   );
+
+  captureScreenContextRef.current = captureScreenContext;
 
   const currentSuggestionText =
     state.partialSuggestion || state.latestSuggestion?.content || "";

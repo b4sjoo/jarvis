@@ -33,6 +33,7 @@ export * from "./critical-moment-evaluation";
 export * from "./critical-moment-ground-truth";
 export * from "./cross-domain-task-transition";
 export * from "./current-question-settlement";
+export * from "./late-screen-preflight-repair";
 export * from "./diagram-domain-query";
 export * from "./display-transcript";
 export * from "./eval-trace-metadata";
