@@ -2874,6 +2874,9 @@ export function useMeetingAssistant() {
     | undefined
   >(undefined);
   const runtimeRegressionStepIdRef = useRef<string | undefined>(undefined);
+  const stopRuntimeRegressionRunRef = useRef<
+    (() => Promise<boolean>) | null
+  >(null);
   useEffect(() => {
     if (state.status !== "idle") return;
 
@@ -9369,6 +9372,13 @@ export function useMeetingAssistant() {
   ]);
 
   const stop = useCallback(async () => {
+    if (
+      runtimeRegressionRunRef.current &&
+      stopRuntimeRegressionRunRef.current
+    ) {
+      await stopRuntimeRegressionRunRef.current();
+      return;
+    }
     const coordinator = captureLifecycleCoordinatorRef.current!;
     const lifecycleOperation = coordinator.claim("stop");
     const drainOperationId = `capture-stop:${lifecycleOperation.id}`;
@@ -23407,6 +23417,8 @@ export function useMeetingAssistant() {
     resetMeetingRuntimeForNewSession,
     stopSessionRecording,
   ]);
+
+  stopRuntimeRegressionRunRef.current = stopRuntimeRegressionRun;
 
   const resetRuntimeRegressionRun = useCallback(async () => {
     if (runtimeRegressionRunRef.current) {

@@ -42,6 +42,20 @@ test("routes manual text through canonical ingress and waits for terminal", () =
   assert.doesNotMatch(submit, /settleCurrentQuestion\(/);
 });
 
+test("delegates every ordinary stop to the active Replay Lab finalizer", () => {
+  const stop = sourceSlice(
+    hookSource,
+    "  const stop = useCallback(async () => {",
+    "  const buildAdvisorJob = useCallback"
+  );
+  assert.match(stop, /runtimeRegressionRunRef\.current/);
+  assert.match(stop, /stopRuntimeRegressionRunRef\.current/);
+  assert.match(
+    hookSource,
+    /stopRuntimeRegressionRunRef\.current = stopRuntimeRegressionRun/
+  );
+});
+
 test("keeps Replay Lab behind development and Debug gates", () => {
   assert.match(
     uiSource,
