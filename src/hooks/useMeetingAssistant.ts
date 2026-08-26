@@ -2926,12 +2926,21 @@ export function useMeetingAssistant() {
   const semanticTaxonomyEvidenceByTurnRef = useRef(
     new Map<string, SemanticTaxonomyTurnEvidence>()
   );
+  const runtimeInferenceProviderAdmissionRef = useRef<
+    RuntimeInferenceProviderAdmissionCoordinator | null
+  >(null);
+  if (runtimeInferenceProviderAdmissionRef.current === null) {
+    runtimeInferenceProviderAdmissionRef.current =
+      new RuntimeInferenceProviderAdmissionCoordinator();
+  }
   const taxonomyAdjudicationRuntimeRef = useRef<
     TaxonomyAdjudicationRuntime<TaxonomyAdjudicationRequestResult> | null
   >(null);
   if (taxonomyAdjudicationRuntimeRef.current === null) {
     taxonomyAdjudicationRuntimeRef.current =
-      new TaxonomyAdjudicationRuntime<TaxonomyAdjudicationRequestResult>();
+      new TaxonomyAdjudicationRuntime<TaxonomyAdjudicationRequestResult>(
+        runtimeInferenceProviderAdmissionRef.current
+      );
   }
   const taxonomyAdjudicationSettingsRef = useRef(
     INITIAL_STATE.settings.taxonomyAdjudication
@@ -2945,13 +2954,6 @@ export function useMeetingAssistant() {
       ResponseOpportunityRequestResult
     > | null
   >(null);
-  const runtimeInferenceProviderAdmissionRef = useRef<
-    RuntimeInferenceProviderAdmissionCoordinator | null
-  >(null);
-  if (runtimeInferenceProviderAdmissionRef.current === null) {
-    runtimeInferenceProviderAdmissionRef.current =
-      new RuntimeInferenceProviderAdmissionCoordinator();
-  }
   if (responseOpportunityRuntimeRef.current === null) {
     responseOpportunityRuntimeRef.current =
       new RuntimeInferenceOperationRuntime<
@@ -20253,6 +20255,9 @@ export function useMeetingAssistant() {
           };
           const metadata = {
             ...scheduledMetadata,
+            ...formatRuntimeInferenceSharedAdmissionForTrace(
+              settlement.sharedAdmission
+            ),
             ...formatRuntimeInferenceProviderOutcomeForTrace(
               settlement.result?.providerOutcome,
               "taxonomyAdjudication"

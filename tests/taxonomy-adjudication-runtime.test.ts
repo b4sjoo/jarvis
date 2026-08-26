@@ -6,6 +6,7 @@ import {
   createTaxonomyAdjudicationLease,
 } from "../src/lib/meeting/taxonomy-adjudication.js";
 import { TaxonomyAdjudicationRuntime } from "../src/lib/meeting/taxonomy-adjudication-runtime.js";
+import { RuntimeInferenceProviderAdmissionCoordinator } from "../src/lib/meeting/runtime-inference-provider-admission.js";
 
 function unit(revision: number): LogicalQuestionUnit {
   const text = `Design a recommendation service revision ${revision}`;
@@ -163,3 +164,68 @@ test("a superseded pending revision does not consume its requested slot", async 
   assert.ok(settlements.includes("trace-1:superseded:0"));
   assert.ok(settlements.includes("trace-2:completed:1"));
 });
+
+test("shares provider admission without consuming budget while queued", async () => {
+  const coordinator = new RuntimeInferenceProviderAdmissionCoordinator(1, 0);
+  let releaseBlocker: (() => void) | undefined;
+  const blocker = coordinator.run({
+    operationId: "response-opportunity",
+    lane: "critical",
+    signal: new AbortController().signal,
+    execute: () =>
+      new Promise<void>((resolve) => {
+        releaseBlocker = resolve;
+      }),
+  });
+  await waitFor(() => Boolean(releaseBlocker));
+
+  const runtime = new TaxonomyAdjudicationRuntime<number>(coordinator);
+  let executed = false;
+  let settlement:
+    | {
+        disposition: string;
+        startsAfter: number;
+        activeAtAdmission?: number;
+      }
+    | undefined;
+  runtime.schedule(
+    {
+      job: job(1),
+      execute: async () => {
+        executed = true;
+        return 1;
+      },
+      onSettled: (result) => {
+        settlement = {
+          disposition: result.disposition,
+          startsAfter: result.budget.startsAfter,
+          activeAtAdmission:
+            result.sharedAdmission?.activeCountAtAdmission,
+        };
+      },
+    },
+    0
+  );
+
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(executed, false);
+  assert.equal(settlement, undefined);
+  releaseBlocker?.();
+  await blocker;
+  await waitFor(() => Boolean(settlement));
+  assert.deepEqual(settlement, {
+    disposition: "completed",
+    startsAfter: 1,
+    activeAtAdmission: 1,
+  });
+});
+
+async function waitFor(predicate: () => boolean, timeoutMs = 500) {
+  const startedAt = Date.now();
+  while (!predicate()) {
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error("Timed out waiting for taxonomy admission state.");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+}

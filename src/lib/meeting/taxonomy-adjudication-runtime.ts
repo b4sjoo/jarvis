@@ -3,6 +3,10 @@ import type {
   TaxonomyAdjudicationRequest,
 } from "./taxonomy-adjudication.js";
 import { getRuntimeInferenceOperationDefinition } from "./runtime-inference.js";
+import type {
+  RuntimeInferenceProviderAdmissionCoordinator,
+  RuntimeInferenceSharedAdmissionReceipt,
+} from "./runtime-inference-provider-admission.js";
 
 const TAXONOMY_OPERATION =
   getRuntimeInferenceOperationDefinition("taxonomy-adjudication");
@@ -50,6 +54,7 @@ export interface TaxonomyAdjudicationRuntimeSettlement<Result> {
   startedAt?: number;
   completedAt: number;
   durationMs?: number;
+  sharedAdmission?: RuntimeInferenceSharedAdmissionReceipt;
   budget: TaxonomyAdjudicationBudgetSnapshot;
 }
 
@@ -72,9 +77,10 @@ interface ScheduledJob<Result> {
 
 interface ActiveJob<Result> extends ScheduledJob<Result> {
   controller: AbortController;
-  startedAt: number;
+  startedAt?: number;
   superseded: boolean;
   budget: TaxonomyAdjudicationBudgetSnapshot;
+  sharedAdmission?: RuntimeInferenceSharedAdmissionReceipt;
 }
 
 export class TaxonomyAdjudicationRuntime<Result> {
@@ -87,6 +93,10 @@ export class TaxonomyAdjudicationRuntime<Result> {
   >();
   private disposed = false;
   private currentOperationId?: string;
+
+  constructor(
+    private readonly admissionCoordinator?: RuntimeInferenceProviderAdmissionCoordinator
+  ) {}
 
   schedule(
     scheduled: Omit<ScheduledJob<Result>, "scheduledAt">,
@@ -159,38 +169,59 @@ export class TaxonomyAdjudicationRuntime<Result> {
       });
       return;
     }
-    const budget = this.readBudgetSnapshot(scheduled.job, true);
-    while (this.startsByUnitId.size > 32) {
-      const oldest = this.startsByUnitId.keys().next().value;
-      if (!oldest) break;
-      this.startsByUnitId.delete(oldest);
-    }
-
     const controller = new AbortController();
-    const startedAt = Date.now();
     const active: ActiveJob<Result> = {
       ...scheduled,
       controller,
-      startedAt,
       superseded: false,
-      budget,
+      budget: budgetBefore,
     };
     this.active = active;
-    active.onStarted?.(active.job, startedAt, budget);
-    void active
-      .execute(active.job, controller.signal)
+    const execute = () => {
+      const budget = this.readBudgetSnapshot(active.job, true);
+      while (this.startsByUnitId.size > 32) {
+        const oldest = this.startsByUnitId.keys().next().value;
+        if (!oldest) break;
+        this.startsByUnitId.delete(oldest);
+      }
+      const startedAt = Date.now();
+      active.startedAt = startedAt;
+      active.budget = budget;
+      active.onStarted?.(active.job, startedAt, budget);
+      return active.execute(active.job, controller.signal);
+    };
+    const execution = this.admissionCoordinator
+      ? this.admissionCoordinator.run({
+          operationId: active.job.lease.operationId,
+          lane: TAXONOMY_OPERATION.lane,
+          signal: controller.signal,
+          execute,
+          onAdmitted: (receipt) => {
+            active.sharedAdmission = receipt;
+          },
+        })
+      : execute();
+    void execution
       .then((result) => {
+        const completedAt = Date.now();
+        const startedAt = active.startedAt;
         active.onSettled({
           job: active.job,
           disposition: active.superseded ? "superseded" : "completed",
           result: active.superseded ? undefined : result,
           startedAt,
-          completedAt: Date.now(),
-          durationMs: Date.now() - startedAt,
-          budget,
+          completedAt,
+          durationMs:
+            startedAt === undefined
+              ? undefined
+              : completedAt - startedAt,
+          sharedAdmission: active.sharedAdmission,
+          budget: active.budget,
         });
       })
       .catch((error) => {
+        const completedAt = Date.now();
+        const startedAt = active.startedAt;
         active.onSettled({
           job: active.job,
           disposition:
@@ -199,9 +230,13 @@ export class TaxonomyAdjudicationRuntime<Result> {
               : "error",
           error,
           startedAt,
-          completedAt: Date.now(),
-          durationMs: Date.now() - startedAt,
-          budget,
+          completedAt,
+          durationMs:
+            startedAt === undefined
+              ? undefined
+              : completedAt - startedAt,
+          sharedAdmission: active.sharedAdmission,
+          budget: active.budget,
         });
       })
       .finally(() => {
