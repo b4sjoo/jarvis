@@ -24165,6 +24165,7 @@ export function useMeetingAssistant() {
       let preflightStepId: string | undefined;
       let modelStepId: string | undefined;
       let screenModelPromptText = "";
+      let screenModelCompletedAt: number | undefined;
       let screenGenerationLease: AnswerGenerationLease | undefined;
       let screenResponseCandidate:
         | Readonly<MeetingAIResponseCandidate>
@@ -24191,6 +24192,60 @@ export function useMeetingAssistant() {
       let screenSourceOwnedTransitionResult:
         | SourceOwnedTransitionCommitResult
         | undefined;
+      let screenQuestionTypeOutcomeReceipt:
+        | {
+            operationId: string;
+            sessionId: string;
+            runtimeEpoch: number;
+            logicalQuestionUnitId: string;
+            logicalQuestionUnitRevision: number;
+            proposedQuestionType: CanonicalQuestionType;
+            enforcementAuthorized: boolean;
+            settlementApplied: boolean;
+          }
+        | undefined;
+      const recordScreenQuestionTypeOutcome = (input: {
+        stage: QuestionTypeAdjudicationOutcomeStage;
+        disposition: QuestionTypeAdjudicationOutcomeDisposition;
+        settlement?: CurrentQuestionSettlementDecision;
+        modelCompleted?: boolean;
+        deliveryPending?: boolean;
+        visibleCommitted?: boolean;
+        visibleAnswerRevision?: number;
+        appliedToParent?: boolean;
+        reason: string;
+      }) => {
+        const receipt = screenQuestionTypeOutcomeReceipt;
+        if (!receipt) return;
+        recordQuestionTypeAdjudicationOutcome({
+          traceId: trace.id,
+          taskId:
+            contextManagerRef.current.getState().activeMeetingTask?.id,
+          operationId: receipt.operationId,
+          sessionId: receipt.sessionId,
+          runtimeEpoch: receipt.runtimeEpoch,
+          logicalQuestionUnitId: receipt.logicalQuestionUnitId,
+          logicalQuestionUnitRevision:
+            receipt.logicalQuestionUnitRevision,
+          settlementOperationId:
+            input.settlement?.operationId ?? receipt.operationId,
+          settlementId: input.settlement?.settlementId,
+          visibleAnswerRevision: input.visibleAnswerRevision,
+          proposedQuestionType: receipt.proposedQuestionType,
+          stage: input.stage,
+          disposition: input.disposition,
+          enforcementAuthorized: receipt.enforcementAuthorized,
+          settlementApplied: receipt.settlementApplied,
+          appliedToResponse:
+            receipt.enforcementAuthorized && receipt.settlementApplied,
+          appliedToSettlement: receipt.settlementApplied,
+          appliedToParent: input.appliedToParent,
+          modelCompleted: input.modelCompleted,
+          deliveryPending: input.deliveryPending,
+          visibleCommitted: input.visibleCommitted,
+          reason: input.reason,
+        });
+      };
       const readScreenAuthorization = () =>
         authorizeRuntimeCommit({
           token: screenRuntimeToken,
@@ -24282,6 +24337,15 @@ export function useMeetingAssistant() {
         ) {
           return false;
         }
+
+        recordScreenQuestionTypeOutcome({
+          stage: screenModelCompletedAt ? "model-complete" : "release",
+          disposition: "stale-dropped",
+          modelCompleted: Boolean(screenModelCompletedAt),
+          reason: decision.authorized
+            ? (leaseAuthorization?.reason ?? "screen-generation-lease-stale")
+            : decision.reason,
+        });
 
         if (screenGenerationLease) {
           const superseded =
@@ -25136,9 +25200,42 @@ export function useMeetingAssistant() {
                 fieldReview.waitBudgetMs,
                 "Screen Field Knowledge review window expired."
               );
-              if (outcome.enforcement.authorized && outcome.settlement) {
+              const settlementApplied = Boolean(
+                outcome.enforcement.authorized && outcome.settlement
+              );
+              if (settlementApplied && outcome.settlement) {
                 screenFieldKnowledgeReviewSettlement = outcome.settlement;
                 screenMemoryQuestionType = outcome.settlement.questionType;
+              }
+              screenQuestionTypeOutcomeReceipt = {
+                operationId:
+                  outcome.operationId ?? fieldReview.operationId,
+                sessionId:
+                  screenRelationLogicalQuestionUnit.sessionId,
+                runtimeEpoch:
+                  screenRelationLogicalQuestionUnit.runtimeEpoch,
+                logicalQuestionUnitId:
+                  screenRelationLogicalQuestionUnit.id,
+                logicalQuestionUnitRevision:
+                  screenRelationLogicalQuestionUnit.revision,
+                proposedQuestionType:
+                  outcome.enforcement.proposedQuestionType,
+                enforcementAuthorized:
+                  outcome.enforcement.authorized,
+                settlementApplied,
+              };
+              recordScreenQuestionTypeOutcome({
+                stage: "release",
+                disposition: settlementApplied
+                  ? "settlement-applied"
+                  : "enforcement-denied",
+                settlement: outcome.settlement,
+                reason: settlementApplied
+                  ? "screen-field-review-settlement-applied"
+                  : outcome.enforcement.reason,
+              });
+              if (!settlementApplied) {
+                screenQuestionTypeOutcomeReceipt = undefined;
               }
               traceStoreRef.current.updateMetadata(trace.id, {
                 screenFieldKnowledgeReviewDisposition: outcome.disposition,
@@ -25151,6 +25248,28 @@ export function useMeetingAssistant() {
                   Date.now() - fieldReviewStartedAt,
               });
             } catch (error) {
+              screenQuestionTypeOutcomeReceipt = {
+                operationId: fieldReview.operationId,
+                sessionId: screenRelationLogicalQuestionUnit.sessionId,
+                runtimeEpoch:
+                  screenRelationLogicalQuestionUnit.runtimeEpoch,
+                logicalQuestionUnitId:
+                  screenRelationLogicalQuestionUnit.id,
+                logicalQuestionUnitRevision:
+                  screenRelationLogicalQuestionUnit.revision,
+                proposedQuestionType: "field-knowledge",
+                enforcementAuthorized: false,
+                settlementApplied: false,
+              };
+              recordScreenQuestionTypeOutcome({
+                stage: "release",
+                disposition: "enforcement-denied",
+                reason:
+                  error instanceof Error
+                    ? error.message
+                    : "screen-field-review-window-expired",
+              });
+              screenQuestionTypeOutcomeReceipt = undefined;
               traceStoreRef.current.updateMetadata(trace.id, {
                 screenFieldKnowledgeReviewDisposition: "deadline-expired",
                 screenFieldKnowledgeReviewApplied: false,
@@ -26742,7 +26861,6 @@ export function useMeetingAssistant() {
         let screenStagedFirstVisiblePartialAt: number | undefined;
         let screenModelRequestStartedAt: number | undefined;
         let screenModelFirstContentAt: number | undefined;
-        let screenModelCompletedAt: number | undefined;
         let screenStagedVisible = false;
         const clearScreenStagedPartial = (reason: string) => {
           if (!screenStagedVisible) return;
@@ -27047,7 +27165,24 @@ export function useMeetingAssistant() {
           "Screen context analysis timed out."
         );
 
+        recordScreenQuestionTypeOutcome({
+          stage: "model-complete",
+          disposition: "model-completed",
+          settlement: screenCurrentQuestionSettlement,
+          modelCompleted: true,
+          appliedToParent:
+            screenCurrentQuestionSettlement?.typeAppliedToParent,
+          reason: "screen-model-completed",
+        });
+
         if (screenAnalysisAbortRef.current !== analysisController) {
+          recordScreenQuestionTypeOutcome({
+            stage: "model-complete",
+            disposition: "cancelled-by-new-job",
+            settlement: screenCurrentQuestionSettlement,
+            modelCompleted: true,
+            reason: "screen-operation-superseded-after-model",
+          });
           traceStoreRef.current.updateMetadata(
             trace.id,
             formatSourceOwnedTransitionForTrace(
@@ -28282,6 +28417,29 @@ export function useMeetingAssistant() {
             chunkCount: screenStagedChunkCount,
           }),
         });
+        if (screenVisibleAnswerCommitted) {
+          recordScreenQuestionTypeOutcome({
+            stage: "delivery",
+            disposition: "visible-committed",
+            settlement: screenCurrentQuestionSettlement,
+            modelCompleted: true,
+            visibleCommitted: true,
+            visibleAnswerRevision: visibleAnswerRevisionAfter,
+            appliedToParent:
+              screenCurrentQuestionSettlement?.typeAppliedToParent,
+            reason: "screen-stable-answer-visible-commit",
+          });
+        } else {
+          recordScreenQuestionTypeOutcome({
+            stage: "model-complete",
+            disposition: "suppressed",
+            settlement: screenCurrentQuestionSettlement,
+            modelCompleted: true,
+            reason:
+              screenGenerationCommit?.reason ??
+              screenStableCommitDecision.reason,
+          });
+        }
         if (
           screenWhiteboardRenderValidation &&
           parsedScreenMeetingAnswer.sections.whiteboard
@@ -28298,6 +28456,18 @@ export function useMeetingAssistant() {
         traceStoreRef.current.finishStep(trace.id, uiStepId, "success");
         traceStoreRef.current.finishTrace(trace.id, "success");
       } catch (error) {
+        recordScreenQuestionTypeOutcome({
+          stage: "model-complete",
+          disposition:
+            error instanceof Error && error.name === "AbortError"
+              ? "cancelled-by-runtime-boundary"
+              : "error",
+          modelCompleted: false,
+          reason:
+            error instanceof Error
+              ? error.message
+              : "screen-execution-error",
+        });
         if (!screenCaptureSucceeded) {
           const failedCaptureSupersession =
             decideManualScreenAdvisorSupersession({

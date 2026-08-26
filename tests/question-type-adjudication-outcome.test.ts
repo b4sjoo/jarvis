@@ -29,6 +29,7 @@ function outcome(
   disposition:
     | "settlement-applied"
     | "advisor-started"
+    | "model-completed"
     | "visible-committed",
   recordedAt: number
 ) {
@@ -88,6 +89,64 @@ test("joins proposal and post-release outcomes without rewriting the proposal", 
   assert.equal(report.metrics.joinCoverage, 1);
   assert.equal(report.rows[0]?.advisorJobId, "advisor-a");
   assert.equal(report.rows[0]?.visibleAnswerRevision, 7);
+  assert.equal(report.rows[0]?.finalDisposition, "visible-committed");
+});
+
+test("joins a Screen lifecycle without inventing an advisor start", () => {
+  const release = outcome("release", "settlement-applied", 20);
+  const modelComplete = createQuestionTypeAdjudicationOutcomeEvent({
+    operationId: "operation-a",
+    sessionId: "session-a",
+    runtimeEpoch: 3,
+    logicalQuestionUnitId: "lqu-a",
+    logicalQuestionUnitRevision: 2,
+    traceId: "trace-a",
+    taskId: "task-a",
+    settlementOperationId: "screen-settlement-a",
+    settlementId: "screen-settlement-a",
+    proposedQuestionType: "general-system-design",
+    stage: "model-complete",
+    disposition: "model-completed",
+    enforcementAuthorized: true,
+    settlementApplied: true,
+    appliedToResponse: true,
+    appliedToSettlement: true,
+    modelCompleted: true,
+    recordedAt: 30,
+  });
+  const delivery = createQuestionTypeAdjudicationOutcomeEvent({
+    operationId: "operation-a",
+    sessionId: "session-a",
+    runtimeEpoch: 3,
+    logicalQuestionUnitId: "lqu-a",
+    logicalQuestionUnitRevision: 2,
+    traceId: "trace-a",
+    taskId: "task-a",
+    settlementOperationId: "screen-settlement-a",
+    settlementId: "screen-settlement-a",
+    visibleAnswerRevision: 7,
+    proposedQuestionType: "general-system-design",
+    stage: "delivery",
+    disposition: "visible-committed",
+    enforcementAuthorized: true,
+    settlementApplied: true,
+    appliedToResponse: true,
+    appliedToSettlement: true,
+    modelCompleted: true,
+    visibleCommitted: true,
+    recordedAt: 40,
+  });
+  const report = buildQuestionTypeAdjudicationOutcomeReport({
+    decisions: [decision],
+    outcomes: [release, modelComplete, delivery],
+    now: 50,
+  });
+
+  assert.equal(report.metrics.joinCoverage, 1);
+  assert.equal(report.metrics.advisorStarted, 0);
+  assert.equal(report.metrics.modelCompleted, 1);
+  assert.equal(report.metrics.visibleCommitted, 1);
+  assert.equal(report.rows[0]?.finalStage, "delivery");
   assert.equal(report.rows[0]?.finalDisposition, "visible-committed");
 });
 
