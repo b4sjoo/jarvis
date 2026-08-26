@@ -508,6 +508,9 @@ import {
   updateWhiteboardArtifactFromAnswer,
   validateWhiteboardRenderCandidate,
   SessionRecordingManager,
+  createRuntimeRegressionRunRecord,
+  createRuntimeRegressionStepEvent,
+  type RuntimeRegressionStepTerminalDisposition,
   SttEvaluationCaptureManager,
   areCompatibleQuestionTypes,
   appendAdvisorGeneratedContinuityCapsule,
@@ -1145,6 +1148,11 @@ const INITIAL_STATE: MeetingAssistantState = {
     lifecycle: "idle",
     eventCount: 0,
     artifactCount: 0,
+  },
+  runtimeRegression: {
+    active: false,
+    status: "idle",
+    stepOrdinal: 0,
   },
   sttEvaluationCapture: {
     active: false,
@@ -2837,6 +2845,16 @@ export function useMeetingAssistant() {
   }
   const activeRef = useRef(false);
   const runtimeActiveRef = useRef(false);
+  const runtimeRegressionRunRef = useRef<
+    | {
+        scenarioRunId: string;
+        runtimeSessionId: string;
+        startedAt: number;
+        stepOrdinal: number;
+      }
+    | undefined
+  >(undefined);
+  const runtimeRegressionStepIdRef = useRef<string | undefined>(undefined);
   useEffect(() => {
     if (state.status !== "idle") return;
 
@@ -7641,6 +7659,7 @@ export function useMeetingAssistant() {
           error: null,
         }));
       }
+      return sessionRecording;
     } catch (error) {
       const message =
         error instanceof Error
@@ -7654,6 +7673,7 @@ export function useMeetingAssistant() {
           sessionRecordingManagerRef.current?.getState() ??
           previous.sessionRecording,
       }));
+      return undefined;
     }
   }, [
     aiProvider,
@@ -21212,13 +21232,21 @@ export function useMeetingAssistant() {
     async ({
       turn,
       segment,
+      transport = "accepted-stt",
+      scenarioRunId,
+      scenarioStepId,
     }: {
       turn: TranscriptTurn;
       segment: QueuedSpeechSegment;
+      transport?: "accepted-stt" | "manual-text";
+      scenarioRunId?: string;
+      scenarioStepId?: string;
     }) => {
       const traceId = segment.traceId;
       const ingressMetadata = {
-        canonicalTurnIngressTransport: "accepted-stt",
+        canonicalTurnIngressTransport: transport,
+        canonicalTurnIngressScenarioRunId: scenarioRunId,
+        canonicalTurnIngressScenarioStepId: scenarioStepId,
         canonicalTurnIngressTurnId: turn.id,
         canonicalTurnIngressSpeaker: turn.speaker,
         canonicalTurnIngressSource: turn.source,
@@ -23157,6 +23185,445 @@ export function useMeetingAssistant() {
     ]
   );
 
+  const waitForRuntimeRegressionTraceTerminal = useCallback(
+    (
+      traceId: string,
+      scenarioRunId: string,
+      timeoutMs = 180_000
+    ) =>
+      new Promise<MeetingTrace>((resolve, reject) => {
+        const startedAt = Date.now();
+        const poll = () => {
+          if (
+            runtimeRegressionRunRef.current?.scenarioRunId !==
+            scenarioRunId
+          ) {
+            reject(new Error("Runtime regression run is no longer active."));
+            return;
+          }
+          const trace = traceStoreRef.current
+            .getTraces()
+            .find((candidate) => candidate.id === traceId);
+          if (trace && trace.status !== "running") {
+            resolve(trace);
+            return;
+          }
+          if (Date.now() - startedAt >= timeoutMs) {
+            reject(new Error("Runtime regression step timed out."));
+            return;
+          }
+          window.setTimeout(poll, 100);
+        };
+        poll();
+      }),
+    []
+  );
+
+  const startRuntimeRegressionRun = useCallback(async () => {
+    if (!import.meta.env.DEV || !debugModeRef.current) {
+      setState((previous) => ({
+        ...previous,
+        error: "Replay Lab requires a development build with Debug Mode enabled.",
+      }));
+      return false;
+    }
+    if (activeRef.current || runtimeActiveRef.current) {
+      setState((previous) => ({
+        ...previous,
+        error: "Stop the active meeting before starting Replay Lab.",
+      }));
+      return false;
+    }
+    const recordingState =
+      sessionRecordingManagerRef.current?.getState();
+    if (recordingState?.lifecycle !== "idle") {
+      setState((previous) => ({
+        ...previous,
+        error: "Stop the active Session Recording before starting Replay Lab.",
+      }));
+      return false;
+    }
+
+    const scenarioRunId = createMeetingId("scenario_run");
+    const startedAt = Date.now();
+    setState((previous) => ({
+      ...previous,
+      runtimeRegression: {
+        active: false,
+        status: "starting",
+        scenarioRunId,
+        stepOrdinal: 0,
+      },
+      error: null,
+    }));
+    const recording = await startSessionRecording({
+      scriptedValidationLock: {
+        source: "scenario-runner",
+        scenarioRunId,
+      },
+    });
+    if (
+      !recording?.active ||
+      !recording.scriptedValidationForced ||
+      recording.scenarioRunId !== scenarioRunId
+    ) {
+      setState((previous) => ({
+        ...previous,
+        runtimeRegression: {
+          active: false,
+          status: "error",
+          scenarioRunId,
+          stepOrdinal: 0,
+          error: "Failed to create a forced scripted recording.",
+        },
+      }));
+      return false;
+    }
+
+    const runtimeSessionId =
+      contextManagerRef.current.getState().sessionId;
+    runtimeRegressionRunRef.current = {
+      scenarioRunId,
+      runtimeSessionId,
+      startedAt,
+      stepOrdinal: 0,
+    };
+    runtimeActiveRef.current = true;
+    if (state.settings.useMemory) {
+      void prewarmMemoryContextSnapshot(runtimeSessionId);
+    }
+    prewarmSemanticTaxonomyRuntime("scenario-runner-started");
+    sessionRecordingManagerRef.current?.recordRuntimeRegressionRun(
+      createRuntimeRegressionRunRecord({
+        scenarioRunId,
+        runtimeSessionId,
+        startedAt,
+      })
+    );
+    setState((previous) => ({
+      ...previous,
+      status: "listening",
+      sessionRecording: recording,
+      runtimeRegression: {
+        active: true,
+        status: "ready",
+        scenarioRunId,
+        stepOrdinal: 0,
+      },
+      error: null,
+    }));
+    return true;
+  }, [
+    prewarmSemanticTaxonomyRuntime,
+    startSessionRecording,
+    state.settings.useMemory,
+  ]);
+
+  const stopRuntimeRegressionRun = useCallback(async () => {
+    const run = runtimeRegressionRunRef.current;
+    if (!run) return false;
+    setState((previous) => ({
+      ...previous,
+      runtimeRegression: {
+        ...previous.runtimeRegression,
+        active: true,
+        status: "stopping",
+      },
+    }));
+    const endedAt = Date.now();
+    sessionRecordingManagerRef.current?.recordRuntimeRegressionRun(
+      createRuntimeRegressionRunRecord({
+        scenarioRunId: run.scenarioRunId,
+        runtimeSessionId: run.runtimeSessionId,
+        status: "stopped",
+        startedAt: run.startedAt,
+        endedAt,
+        reason: "manual-stop",
+      })
+    );
+    runtimeActiveRef.current = false;
+    runtimeRegressionRunRef.current = undefined;
+    runtimeRegressionStepIdRef.current = undefined;
+    advanceRuntimeEpoch("scenario-runner-stopped");
+    cancelActiveAdvisorJob("scenario-runner-stopped");
+    screenAnalysisAbortRef.current?.abort();
+    screenAnalysisAbortRef.current = null;
+    await stopSessionRecording("scenario-runner-stopped");
+    await resetMeetingRuntimeForNewSession("scenario-runner-stopped");
+    setState((previous) => ({
+      ...previous,
+      status: "idle",
+      runtimeRegression: {
+        active: false,
+        status: "idle",
+        stepOrdinal: 0,
+      },
+      error: null,
+    }));
+    return true;
+  }, [
+    advanceRuntimeEpoch,
+    cancelActiveAdvisorJob,
+    resetMeetingRuntimeForNewSession,
+    stopSessionRecording,
+  ]);
+
+  const resetRuntimeRegressionRun = useCallback(async () => {
+    if (runtimeRegressionRunRef.current) {
+      await stopRuntimeRegressionRun();
+    }
+    return startRuntimeRegressionRun();
+  }, [startRuntimeRegressionRun, stopRuntimeRegressionRun]);
+
+  const submitRuntimeRegressionText = useCallback(
+    async (value: string) => {
+      const text = value.replace(/\s+/g, " ").trim();
+      const run = runtimeRegressionRunRef.current;
+      if (!run || !runtimeActiveRef.current) {
+        setState((previous) => ({
+          ...previous,
+          error: "Start Replay Lab before submitting text.",
+        }));
+        return false;
+      }
+      if (!text) return false;
+      if (
+        runtimeRegressionStepIdRef.current ||
+        activeAdvisorJobRef.current
+      ) {
+        setState((previous) => ({
+          ...previous,
+          error: "Wait for the current replay step to finish.",
+        }));
+        return false;
+      }
+
+      const ordinal = run.stepOrdinal + 1;
+      run.stepOrdinal = ordinal;
+      const scenarioStepId = `step-${ordinal}`;
+      runtimeRegressionStepIdRef.current = scenarioStepId;
+      const startedAt = Date.now();
+      const trace = traceStoreRef.current.startTrace("voice", {
+        syntheticValidation: true,
+        scenarioRunId: run.scenarioRunId,
+        scenarioStepId,
+        scenarioStepOrdinal: ordinal,
+        scenarioInputKind: "them-text",
+        runtimeEpoch: runtimeEpochRef.current,
+        speaker: "them",
+        source: "manual-text",
+      });
+      const injectionStepId = traceStoreRef.current.startStep(
+        trace.id,
+        "Manual text replay injected",
+        {
+          scenarioRunId: run.scenarioRunId,
+          scenarioStepId,
+          ordinal,
+          textChars: text.length,
+        }
+      );
+      traceStoreRef.current.recordInput(
+        trace.id,
+        "runtime regression text input",
+        text,
+        {
+          scenarioRunId: run.scenarioRunId,
+          scenarioStepId,
+          ordinal,
+        }
+      );
+      traceStoreRef.current.finishStep(
+        trace.id,
+        injectionStepId,
+        "success"
+      );
+      const sourceHash = hashTaxonomySourceTurnIds([text]);
+      sessionRecordingManagerRef.current?.recordRuntimeRegressionStep(
+        createRuntimeRegressionStepEvent({
+          scenarioRunId: run.scenarioRunId,
+          scenarioStepId,
+          ordinal,
+          event: "injected",
+          inputKind: "them-text",
+          runtimeSessionId: run.runtimeSessionId,
+          traceId: trace.id,
+          textChars: text.length,
+          sourceHash,
+          occurredAt: startedAt,
+        })
+      );
+      setState((previous) => ({
+        ...previous,
+        runtimeRegression: {
+          active: true,
+          status: "running-step",
+          scenarioRunId: run.scenarioRunId,
+          stepOrdinal: ordinal,
+          currentStep: {
+            scenarioStepId,
+            ordinal,
+            inputKind: "them-text",
+            status: "pending",
+            traceId: trace.id,
+          },
+        },
+        error: null,
+      }));
+
+      const turn: TranscriptTurn = {
+        id: createMeetingId("turn"),
+        speaker: "them",
+        source: "system-audio",
+        text,
+        startedAt,
+        endedAt: startedAt,
+        isFinal: true,
+      };
+      const segment: QueuedSpeechSegment = {
+        audioBase64Chars: 0,
+        sessionId: `scenario:${run.scenarioRunId}`,
+        sequence: ordinal,
+        queuedAt: startedAt,
+        queueDepthAtEnqueue: 0,
+        speaker: "them",
+        source: "system-audio",
+        traceId: trace.id,
+        queueStepId: injectionStepId,
+      };
+
+      try {
+        await processCanonicalTurnIngress({
+          turn,
+          segment,
+          transport: "manual-text",
+          scenarioRunId: run.scenarioRunId,
+          scenarioStepId,
+        });
+        const terminalTrace =
+          await waitForRuntimeRegressionTraceTerminal(
+            trace.id,
+            run.scenarioRunId
+          );
+        const metadata = terminalTrace.metadata ?? {};
+        const terminalDisposition: RuntimeRegressionStepTerminalDisposition =
+          terminalTrace.status === "error"
+            ? "error"
+            : terminalTrace.status === "cancelled"
+              ? "cancelled"
+              : metadata.advisorOutputCommittedToUi === true
+                ? "visible"
+                : "suppressed";
+        sessionRecordingManagerRef.current?.recordRuntimeRegressionStep(
+          createRuntimeRegressionStepEvent({
+            scenarioRunId: run.scenarioRunId,
+            scenarioStepId,
+            ordinal,
+            event: "terminal",
+            inputKind: "them-text",
+            runtimeSessionId: run.runtimeSessionId,
+            traceId: trace.id,
+            logicalQuestionUnitId:
+              typeof metadata.currentQuestionSettlementUnitId === "string"
+                ? metadata.currentQuestionSettlementUnitId
+                : undefined,
+            settlementId:
+              typeof metadata.currentQuestionSettlementId === "string"
+                ? metadata.currentQuestionSettlementId
+                : undefined,
+            executionPlanId:
+              typeof metadata.settledExecutionPlanId === "string"
+                ? metadata.settledExecutionPlanId
+                : undefined,
+            visibleAnswerRevision:
+              typeof metadata.visibleAnswerRevisionAfter === "number"
+                ? metadata.visibleAnswerRevisionAfter
+                : undefined,
+            sourceHash,
+            terminalDisposition,
+            reason: terminalTrace.error,
+          })
+        );
+        setState((previous) => ({
+          ...previous,
+          runtimeRegression: {
+            active: true,
+            status: "ready",
+            scenarioRunId: run.scenarioRunId,
+            stepOrdinal: ordinal,
+            currentStep: {
+              scenarioStepId,
+              ordinal,
+              inputKind: "them-text",
+              status:
+                terminalDisposition === "visible"
+                  ? "visible"
+                  : terminalDisposition === "cancelled"
+                    ? "cancelled"
+                    : terminalDisposition === "error"
+                      ? "error"
+                      : "suppressed",
+              traceId: trace.id,
+              reason: terminalTrace.error,
+            },
+          },
+          error: terminalTrace.error ?? null,
+        }));
+        runtimeRegressionStepIdRef.current = undefined;
+        return true;
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Runtime regression text step failed.";
+        const currentTrace = traceStoreRef.current
+          .getTraces()
+          .find((candidate) => candidate.id === trace.id);
+        if (currentTrace?.status === "running") {
+          traceStoreRef.current.finishTrace(trace.id, "error", message);
+        }
+        sessionRecordingManagerRef.current?.recordRuntimeRegressionStep(
+          createRuntimeRegressionStepEvent({
+            scenarioRunId: run.scenarioRunId,
+            scenarioStepId,
+            ordinal,
+            event: "terminal",
+            inputKind: "them-text",
+            runtimeSessionId: run.runtimeSessionId,
+            traceId: trace.id,
+            sourceHash,
+            terminalDisposition: "error",
+            reason: message,
+          })
+        );
+        setState((previous) => ({
+          ...previous,
+          runtimeRegression: {
+            active: true,
+            status: "ready",
+            scenarioRunId: run.scenarioRunId,
+            stepOrdinal: ordinal,
+            currentStep: {
+              scenarioStepId,
+              ordinal,
+              inputKind: "them-text",
+              status: "error",
+              traceId: trace.id,
+              reason: message,
+            },
+          },
+          error: message,
+        }));
+        runtimeRegressionStepIdRef.current = undefined;
+        return false;
+      }
+    },
+    [
+      processCanonicalTurnIngress,
+      waitForRuntimeRegressionTraceTerminal,
+    ]
+  );
+
   const enqueueSpeechDetected = useCallback(
     (nativeEvent: NativeSpeechDetectedEvent) => {
       const authorizedByActiveCapture =
@@ -23455,6 +23922,14 @@ export function useMeetingAssistant() {
       mode: NativeAudioCaptureStartMode,
       recoveryAttempt?: NativeAudioRecoveryAttemptContext
     ) => {
+      if (runtimeRegressionRunRef.current) {
+        setState((previous) => ({
+          ...previous,
+          error:
+            "Stop Replay Lab before starting normal meeting audio.",
+        }));
+        return;
+      }
       const policy = getNativeAudioCaptureStartPolicy(mode);
       const pendingManualRecovery =
         mode === "manual-recovery"
@@ -33513,6 +33988,10 @@ export function useMeetingAssistant() {
     setSessionRecordingEnabled,
     scriptedValidation,
     setSessionScriptedValidation,
+    startRuntimeRegressionRun,
+    stopRuntimeRegressionRun,
+    resetRuntimeRegressionRun,
+    submitRuntimeRegressionText,
     setSttEvaluationCaptureEnabled,
     deleteSttEvaluationCapture,
     setResponseConfig,

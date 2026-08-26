@@ -2032,6 +2032,7 @@ export interface MeetingAssistantState {
   lastMemoryContext?: MemoryRetrievalResult;
   lastTraceExport?: MeetingTraceExportRecord;
   sessionRecording: MeetingSessionRecordingState;
+  runtimeRegression: import("./runtime-regression").RuntimeRegressionRunnerPresentation;
   sttEvaluationCapture: SttEvaluationCaptureState;
   humanEvaluations: TraceHumanEvaluation[];
   questionEvaluations: QuestionHumanEvaluation[];

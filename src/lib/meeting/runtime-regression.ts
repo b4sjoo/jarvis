@@ -48,6 +48,32 @@ export interface RuntimeRegressionStepEventV1 {
   occurredAt: number;
 }
 
+export type RuntimeRegressionRunnerStatus =
+  | "idle"
+  | "starting"
+  | "ready"
+  | "running-step"
+  | "stopping"
+  | "error";
+
+export interface RuntimeRegressionRunnerStepPresentation {
+  scenarioStepId: string;
+  ordinal: number;
+  inputKind: RuntimeRegressionInputKind;
+  status: "pending" | "visible" | "suppressed" | "error" | "cancelled";
+  traceId?: string;
+  reason?: string;
+}
+
+export interface RuntimeRegressionRunnerPresentation {
+  active: boolean;
+  status: RuntimeRegressionRunnerStatus;
+  scenarioRunId?: string;
+  stepOrdinal: number;
+  currentStep?: RuntimeRegressionRunnerStepPresentation;
+  error?: string;
+}
+
 export function createRuntimeRegressionRunRecord(input: {
   scenarioRunId: string;
   runtimeSessionId: string;

@@ -80,6 +80,7 @@ import type {
   ScreenCaptureTarget,
   SpeechCorrection,
   AnswerDeliveryPresentation,
+  RuntimeRegressionRunnerPresentation,
 } from "@/lib/meeting";
 import {
   MEETING_FOCUS_ACTION_EVENT,
@@ -137,6 +138,8 @@ import {
   PauseIcon,
   PlayIcon,
   RadioIcon,
+  RotateCcwIcon,
+  SendIcon,
   SettingsIcon,
   SlidersHorizontalIcon,
   SquareIcon,
@@ -1873,6 +1876,19 @@ export const MeetingAssistant = ({
                 onSessionRecordingChange={meeting.setSessionRecordingEnabled}
                 onSessionScriptedValidationChange={
                   meeting.setSessionScriptedValidation
+                }
+                runtimeRegression={meeting.runtimeRegression}
+                onStartRuntimeRegressionRun={
+                  meeting.startRuntimeRegressionRun
+                }
+                onStopRuntimeRegressionRun={
+                  meeting.stopRuntimeRegressionRun
+                }
+                onResetRuntimeRegressionRun={
+                  meeting.resetRuntimeRegressionRun
+                }
+                onSubmitRuntimeRegressionText={
+                  meeting.submitRuntimeRegressionText
                 }
                 sttEvaluationCapture={meeting.sttEvaluationCapture}
                 sttEvaluationCaptureCanEnable={
@@ -4023,6 +4039,11 @@ const ConfigurationsPanel = ({
   scriptedValidation,
   onSessionRecordingChange,
   onSessionScriptedValidationChange,
+  runtimeRegression,
+  onStartRuntimeRegressionRun,
+  onStopRuntimeRegressionRun,
+  onResetRuntimeRegressionRun,
+  onSubmitRuntimeRegressionText,
   sttEvaluationCapture,
   sttEvaluationCaptureCanEnable,
   onSttEvaluationCaptureChange,
@@ -4068,11 +4089,24 @@ const ConfigurationsPanel = ({
   scriptedValidation: boolean;
   onSessionRecordingChange: (enabled: boolean) => void;
   onSessionScriptedValidationChange: (enabled: boolean) => void;
+  runtimeRegression: RuntimeRegressionRunnerPresentation;
+  onStartRuntimeRegressionRun: () => Promise<boolean>;
+  onStopRuntimeRegressionRun: () => Promise<boolean>;
+  onResetRuntimeRegressionRun: () => Promise<boolean>;
+  onSubmitRuntimeRegressionText: (text: string) => Promise<boolean>;
   sttEvaluationCapture: SttEvaluationCaptureState;
   sttEvaluationCaptureCanEnable: boolean;
   onSttEvaluationCaptureChange: (enabled: boolean) => void;
   onDeleteSttEvaluationCapture: () => void;
 }) => {
+  const [replayLabOpen, setReplayLabOpen] = useState(false);
+  const [replayText, setReplayText] = useState("");
+
+  const submitReplayText = useCallback(async () => {
+    const accepted = await onSubmitRuntimeRegressionText(replayText);
+    if (accepted) setReplayText("");
+  }, [onSubmitRuntimeRegressionText, replayText]);
+
   return (
     <section className="min-w-0 overflow-hidden rounded-md border border-border/70">
       <button
@@ -4521,6 +4555,150 @@ const ConfigurationsPanel = ({
                 ) : null}
               </div>
             ) : null}
+            {import.meta.env.DEV && debugMode ? (
+              <div className="border-t border-border/60 pt-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <MessageSquareTextIcon className="h-3.5 w-3.5 shrink-0" />
+                    <span className="text-[10px] font-medium uppercase text-muted-foreground">
+                      Replay Lab
+                    </span>
+                    <Badge
+                      variant="outline"
+                      className="h-5 rounded-sm px-1.5 text-[9px]"
+                    >
+                      {runtimeRegression.status}
+                    </Badge>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 px-2 text-[10px]"
+                    onClick={() => setReplayLabOpen((value) => !value)}
+                  >
+                    {replayLabOpen ? "Close" : "Open"}
+                  </Button>
+                </div>
+
+                {replayLabOpen ? (
+                  <div className="mt-2 space-y-2">
+                    {!runtimeRegression.active ? (
+                      <Button
+                        size="sm"
+                        className="h-8 w-full text-[10px]"
+                        disabled={
+                          runtimeRegression.status === "starting" ||
+                          sessionRecording.lifecycle !== "idle"
+                        }
+                        onClick={() => {
+                          void onStartRuntimeRegressionRun();
+                        }}
+                      >
+                        {runtimeRegression.status === "starting" ? (
+                          <Loader2Icon className="mr-1 h-3 w-3 animate-spin" />
+                        ) : (
+                          <PlayIcon className="mr-1 h-3 w-3" />
+                        )}
+                        Start Fresh Run
+                      </Button>
+                    ) : (
+                      <>
+                        <Textarea
+                          value={replayText}
+                          onChange={(event) =>
+                            setReplayText(event.target.value)
+                          }
+                          placeholder="Enter interviewer text"
+                          className="min-h-20 resize-y text-xs"
+                          disabled={
+                            runtimeRegression.status === "running-step" ||
+                            runtimeRegression.status === "stopping"
+                          }
+                          onKeyDown={(event) => {
+                            if (
+                              event.key === "Enter" &&
+                              (event.metaKey || event.ctrlKey)
+                            ) {
+                              event.preventDefault();
+                              void submitReplayText();
+                            }
+                          }}
+                        />
+                        <div className="flex items-center gap-1">
+                          <Button
+                            size="sm"
+                            className="h-8 flex-1 text-[10px]"
+                            disabled={
+                              !replayText.trim() ||
+                              runtimeRegression.status !== "ready"
+                            }
+                            onClick={() => {
+                              void submitReplayText();
+                            }}
+                          >
+                            {runtimeRegression.status === "running-step" ? (
+                              <Loader2Icon className="mr-1 h-3 w-3 animate-spin" />
+                            ) : (
+                              <SendIcon className="mr-1 h-3 w-3" />
+                            )}
+                            Send
+                          </Button>
+                          <Button
+                            size="icon"
+                            variant="outline"
+                            className="h-8 w-8"
+                            title="Reset replay run"
+                            disabled={
+                              runtimeRegression.status === "running-step" ||
+                              runtimeRegression.status === "stopping"
+                            }
+                            onClick={() => {
+                              void onResetRuntimeRegressionRun();
+                            }}
+                          >
+                            <RotateCcwIcon className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            size="icon"
+                            variant="outline"
+                            className="h-8 w-8"
+                            title="Stop replay run"
+                            disabled={
+                              runtimeRegression.status === "stopping"
+                            }
+                            onClick={() => {
+                              void onStopRuntimeRegressionRun();
+                            }}
+                          >
+                            <SquareIcon className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                        <div className="min-w-0 text-[10px] text-muted-foreground">
+                          <div className="truncate font-mono">
+                            {runtimeRegression.scenarioRunId}
+                          </div>
+                          {runtimeRegression.currentStep ? (
+                            <div className="mt-1 flex items-center justify-between gap-2">
+                              <span>
+                                Step {runtimeRegression.currentStep.ordinal}
+                              </span>
+                              <span>
+                                {runtimeRegression.currentStep.status}
+                              </span>
+                            </div>
+                          ) : null}
+                        </div>
+                      </>
+                    )}
+                    {runtimeRegression.error ? (
+                      <div className="text-[10px] text-red-600">
+                        {runtimeRegression.error}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
             <div className="space-y-1.5 rounded-sm border border-border/60 p-2">
               <div className="flex items-center justify-between gap-2">
                 <div>
@@ -4554,7 +4732,8 @@ const ConfigurationsPanel = ({
                     checked={scriptedValidation}
                     disabled={
                       sessionRecording.lifecycle === "starting" ||
-                      sessionRecording.lifecycle === "closing"
+                      sessionRecording.lifecycle === "closing" ||
+                      sessionRecording.scriptedValidationForced === true
                     }
                     onCheckedChange={onSessionScriptedValidationChange}
                   />
