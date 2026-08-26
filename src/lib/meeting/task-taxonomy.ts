@@ -776,6 +776,10 @@ export function inferQuestionTypeDecisionFromText(
     /\b(use|using|in|with)\s+(python|java|javascript|typescript|go|golang|rust|c\+\+|c#|swift|kotlin)\b/.test(
       normalized
     );
+  const hasExplicitCodingQuestionTask =
+    /\b(?:coding|algorithm|data structure|leetcode)\s+(?:questions?|section)\b/.test(
+      normalized
+    ) && /\b(?:implement|write|code|solve)\b/.test(normalized);
   const hasLanguageBoundImplementationDemonstration =
     /\b(?:show|demonstrate)\s+(?:me\s+)?how\s+(?:(?:you|we)\s+)?(?:would\s+)?(?:to\s+)?(?:write|implement|code)\b/.test(
       normalized
@@ -800,6 +804,9 @@ export function inferQuestionTypeDecisionFromText(
   }
   if (hasExplicitCodeOutputRequest) {
     addEvidence("coding", 0.98, "explicit-code-output-request");
+  }
+  if (hasExplicitCodingQuestionTask) {
+    addEvidence("coding", 0.98, "explicit-coding-question-task");
   }
   if (hasCodingArtifact) {
     addEvidence("coding", 0.94, "coding-artifact");
@@ -891,8 +898,9 @@ export function inferQuestionTypeDecisionFromText(
   }
 
   const hasCompatibleCodingEvidence = Boolean(
-    hasAlgorithmDesignRequest ||
+      hasAlgorithmDesignRequest ||
       hasExplicitCodeOutputRequest ||
+      hasExplicitCodingQuestionTask ||
       hasCodingActionObject ||
       hasCodingArtifact ||
       hasComplexityRequest ||
@@ -1057,6 +1065,7 @@ export function inferQuestionTypeDecisionFromText(
     hasCodingActionObject ||
     hasAlgorithmDesignRequest ||
     hasExplicitCodeOutputRequest ||
+    hasExplicitCodingQuestionTask ||
     hasExactCodingArtifact ||
     hasFunctionImplementationFrame ||
     hasExactLanguageBoundCodingFrame ||

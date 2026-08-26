@@ -470,6 +470,33 @@ test("uses action, object, and frame together for implement and stack questions"
   );
 });
 
+test("recognizes an explicit coding-question label only with a coding task payload", () => {
+  for (const question of [
+    "Let's do a coding question. Implement an LRU cache with O(1) complexity, get and put in Python.",
+    "Here is a coding question. Write a function that reverses a linked list.",
+  ]) {
+    const decision = inferQuestionTypeDecisionFromText(question);
+    assert.equal(decision.type, "coding", question);
+    assert.equal(decision.certainty, "exact-high", question);
+    assert.ok(
+      decision.evidence.includes("explicit-coding-question-task"),
+      question
+    );
+  }
+
+  for (const statement of [
+    "We may have coding questions later.",
+    "The coding questions were difficult.",
+    "Implement this feature in our existing service.",
+  ]) {
+    assert.notEqual(
+      inferQuestionTypeDecisionFromText(statement).type,
+      "coding",
+      statement
+    );
+  }
+});
+
 test("keeps the recorded recruiter project sequence out of coding", () => {
   const projectQuestions = [
     "Have you shipped a production backend API for an AI product?",
