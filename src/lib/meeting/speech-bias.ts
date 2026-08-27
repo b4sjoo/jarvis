@@ -100,32 +100,21 @@ export function buildSpeechBiasContext(
 
   const activeTask = context.activeMeetingTask;
   if (activeTask) {
-    addTerm(activeTask.parent.topic, "active-task", "high");
-    for (const anchor of activeTask.parent.supportedFactAnchors) {
-      addTerm(anchor, "active-task", "high");
-    }
-    for (const term of extractLikelyTerms(
-      [
-        activeTask.parent.topic,
-        activeTask.screen?.question,
-        activeTask.child?.question,
-        activeTask.child?.compactSummary,
-        activeTask.parent.supportedFactAnchors.join("\n"),
-      ].join("\n")
-    )) {
+    const sourceOwnedTaskText = [
+      activeTask.parent.topic,
+      activeTask.screen?.question,
+      activeTask.child?.question,
+      activeTask.parent.supportedFactAnchors.join("\n"),
+    ].join("\n");
+    for (const term of extractLikelyTerms(sourceOwnedTaskText)) {
       addTerm(term, "active-task", "high");
     }
 
-    const taskText = [
-      activeTask.parent.topic,
-      activeTask.screen?.question,
-      activeTask.parent.supportedFactAnchors.join(" "),
-    ].join(" ");
-    if (hasAnyTerm(taskText, AI_ML_DOMAIN_TERMS)) {
+    if (hasAnyTerm(sourceOwnedTaskText, AI_ML_DOMAIN_TERMS)) {
       for (const term of AI_ML_DOMAIN_TERMS) addTerm(term, "domain");
-    } else if (hasAnyTerm(taskText, AGENTIC_DOMAIN_TERMS)) {
+    } else if (hasAnyTerm(sourceOwnedTaskText, AGENTIC_DOMAIN_TERMS)) {
       for (const term of AGENTIC_DOMAIN_TERMS) addTerm(term, "domain");
-    } else if (hasAnyTerm(taskText, SEARCH_DOMAIN_TERMS)) {
+    } else if (hasAnyTerm(sourceOwnedTaskText, SEARCH_DOMAIN_TERMS)) {
       for (const term of SEARCH_DOMAIN_TERMS) addTerm(term, "domain");
     }
   }

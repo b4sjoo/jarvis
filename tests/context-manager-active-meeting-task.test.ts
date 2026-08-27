@@ -155,6 +155,41 @@ test("keeps generated screen answers out of source prompt and speech bias eviden
   );
 });
 
+test("keeps full task text out of speech bias while extracting bounded technical terms", () => {
+  const manager = new MeetingContextManager();
+  const parentTopic = "Explain OASIS retry behavior in detail";
+  const factAnchor = "The candidate implemented FAKEANCHOR retries with DLQ";
+  setTestTaskRuntime(manager, {
+    parent: makeInterviewTask({
+      stableKind: "project-deep-dive",
+      topic: parentTopic,
+      supportedFactAnchors: [factAnchor],
+      child: {
+        id: "child_1",
+        createdAt: now,
+        updatedAt: now + 1,
+        questionType: "field-knowledge",
+        relation: "child-probe",
+        intent: "concept-probe",
+        question: "How does HNSW connect to OpenSearch?",
+        compactSummary: "Generated GENSUMMARY must not bias STT.",
+        basedOnTurnIds: ["turn_child"],
+        basedOnObservationIds: [],
+      },
+    }),
+  });
+
+  const terms = buildSpeechBiasContext(manager.getState(), []).terms.map(
+    (term) => term.term
+  );
+  assert.equal(terms.includes(parentTopic), false);
+  assert.equal(terms.includes(factAnchor), false);
+  assert.equal(terms.includes("GENSUMMARY"), false);
+  for (const expected of ["OASIS", "FAKEANCHOR", "DLQ", "HNSW", "OpenSearch"]) {
+    assert.equal(terms.includes(expected), true, expected);
+  }
+});
+
 function makeScreenTask(
   overrides: Partial<ActiveScreenTask> = {}
 ): ActiveScreenTask {
