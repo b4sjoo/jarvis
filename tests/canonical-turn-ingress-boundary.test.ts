@@ -44,7 +44,7 @@ test("keeps STT transport concerns outside canonical ingress", () => {
   assert.doesNotMatch(ingress, /base64WavToBlob/);
 });
 
-test("joins residual response opportunity with type and relation before advisor dispatch", () => {
+test("joins every reviewed response opportunity before canonical publication and advisor dispatch", () => {
   const ingress = sourceSlice(
     "  const processCanonicalTurnIngress = useCallback(",
     "  const processQueuedSpeechSegment = useCallback"
@@ -58,16 +58,25 @@ test("joins residual response opportunity with type and relation before advisor 
   const responseScheduleAt = residualBranch.indexOf(
     "scheduleResponseOpportunityInference({"
   );
-  const residualReturnAt = residualBranch.indexOf(
-    'responseOpportunityLocalDecision.disposition ===\n          "runtime-required"'
+  const responseBranch = residualBranch.slice(responseScheduleAt);
+  const reviewedTurnReturnAt = responseBranch.indexOf(
+    "          return;\n        }"
   );
 
   assert.ok(semanticScheduleAt >= 0);
   assert.ok(responseScheduleAt > semanticScheduleAt);
-  assert.ok(residualReturnAt > responseScheduleAt);
+  assert.ok(reviewedTurnReturnAt >= 0);
+  assert.match(
+    ingress,
+    /runtimeIntentSettlementPending:\s*responseOpportunityLocalDecision\.runtimeReviewRequired/
+  );
   assert.match(
     residualBranch,
     /runtime-required"\s*\? "answer-refresh"\s*: taxonomyTurnGateAction/
+  );
+  assert.match(
+    source,
+    /authorizationLogicalQuestionUnit:\s*logicalQuestionUnit/
   );
   assert.match(
     residualBranch,
@@ -85,6 +94,14 @@ test("joins residual response opportunity with type and relation before advisor 
   const responseOpportunity = sourceSlice(
     "  const scheduleResponseOpportunityInference = useCallback(",
     "  const scheduleMeetingMetadataInference = useCallback"
+  );
+  assert.match(
+    responseOpportunity,
+    /publishCanonicalLogicalQuestionTarget\(\{[\s\S]*logicalQuestionPublicationStage: "canonical-published"/
+  );
+  assert.match(
+    responseOpportunity,
+    /logicalQuestionPublicationStage: "response-suppressed"/
   );
   assert.match(responseOpportunity, /onOutputAuthorized\(\{/);
   assert.doesNotMatch(responseOpportunity, /\bscheduleAdvisor\(/);

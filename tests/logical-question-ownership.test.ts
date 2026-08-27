@@ -88,7 +88,7 @@ test("materializes every non-filler turn as a recoverable logical question", () 
   );
 });
 
-test("keeps unresolved short intent provisional so it cannot invalidate a generation", () => {
+test("keeps every runtime-reviewed intent provisional so it cannot invalidate a generation", () => {
   const materialization = decideLogicalQuestionMaterialization({
     action: "answer-refresh",
     wordEquivalent: 2,

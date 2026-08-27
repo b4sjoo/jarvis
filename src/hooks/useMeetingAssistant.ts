@@ -15782,6 +15782,56 @@ export function useMeetingAssistant() {
           responseOpportunityEffectiveReason: reason,
         });
       };
+      let outputReleased = false;
+      const releaseOutput = (
+        intentDecision: AdvisorTurnIntentDecision,
+        releaseReason: string,
+        releasedLogicalQuestionUnit = logicalQuestionUnit
+      ) => {
+        if (outputReleased) return;
+        if (!runtimeActiveRef.current) {
+          traceStoreRef.current.updateMetadata(traceId, {
+            responseOpportunityDecisionApplied: false,
+            responseOpportunityReleaseReason:
+              "meeting-not-active-at-release",
+            logicalQuestionPublicationStage: "release-cancelled",
+          });
+          traceStoreRef.current.finishTrace(
+            traceId,
+            "cancelled",
+            "Meeting stopped before the response opportunity was released."
+          );
+          return;
+        }
+        outputReleased = true;
+        publishCanonicalLogicalQuestionTarget({
+          logicalQuestionUnit: releasedLogicalQuestionUnit,
+          traceId,
+          turn,
+          intentDecision,
+        });
+        traceStoreRef.current.updateMetadata(traceId, {
+          provisionalLogicalQuestionReleased: true,
+          provisionalLogicalQuestionReleaseReason: releaseReason,
+          provisionalTurnGenerationInvalidationBlocked: false,
+          logicalQuestionPublicationStage: "canonical-published",
+        });
+        onOutputAuthorized({
+          intentDecision,
+          logicalQuestionUnit: releasedLogicalQuestionUnit,
+        });
+      };
+      const releaseLocalFallback = (reason: string) => {
+        settleGenerationGateUnresolved(reason);
+        if (speculative) {
+          releaseOutput(
+            originalDecision,
+            `local-output-fallback:${reason}`
+          );
+          return;
+        }
+        finishTraceIfAuthoritative();
+      };
       const baseMetadata: Record<string, unknown> = {
         ...formatRuntimeInferenceOperationForTrace(
           "response-opportunity-inference"
@@ -15842,8 +15892,7 @@ export function useMeetingAssistant() {
           responseOpportunitySkipReason:
             "runtime-inference-disabled",
         });
-        settleGenerationGateUnresolved("runtime-inference-disabled");
-        finishTraceIfAuthoritative();
+        releaseLocalFallback("runtime-inference-disabled");
         return;
       }
 
@@ -15857,8 +15906,7 @@ export function useMeetingAssistant() {
           responseOpportunityDisposition: "provider-circuit-open",
           responseOpportunitySkipReason: "provider-circuit-open",
         });
-        settleGenerationGateUnresolved("provider-circuit-open");
-        finishTraceIfAuthoritative();
+        releaseLocalFallback("provider-circuit-open");
         return;
       }
 
@@ -15890,8 +15938,7 @@ export function useMeetingAssistant() {
           responseOpportunitySkipReason:
             "provider-configuration-error",
         });
-        settleGenerationGateUnresolved("provider-configuration-error");
-        finishTraceIfAuthoritative();
+        releaseLocalFallback("provider-configuration-error");
         return;
       }
 
@@ -15914,8 +15961,7 @@ export function useMeetingAssistant() {
           : sessionBudget.reason,
       });
       if (!sessionBudget.authorized) {
-        settleGenerationGateUnresolved(sessionBudget.reason);
-        finishTraceIfAuthoritative();
+        releaseLocalFallback(sessionBudget.reason);
         return;
       }
 
@@ -16122,14 +16168,16 @@ export function useMeetingAssistant() {
                 reason: generationGateReason,
               })
             : undefined;
-          const validAppliedDecision =
-            deferredAuthoritative && releaseDecision?.released
-              ? releaseDecision.advisorDecision
+          const validAppliedDecision = releaseDecision?.released
+            ? releaseDecision.advisorDecision
+            : undefined;
+          const fallbackAppliedDecision =
+            speculative && releaseUnresolved
+              ? originalDecision
               : undefined;
-          const decisionApplied =
-            Boolean(validAppliedDecision) ||
-            (speculative &&
-              generationGateDisposition === "output-authorized");
+          const effectiveAppliedDecision =
+            validAppliedDecision ?? fallbackAppliedDecision;
+          const decisionApplied = Boolean(effectiveAppliedDecision);
           const rawOutput = result?.rawOutput ?? "";
           const recordingActive =
             sessionRecordingManagerRef.current?.getState().active ?? false;
@@ -16201,7 +16249,7 @@ export function useMeetingAssistant() {
               }),
             responseOpportunityRawOutputStored: rawOutputStored,
             runtimeIntentReleasedAction:
-              validAppliedDecision?.action === "answer-refresh"
+              effectiveAppliedDecision?.action === "answer-refresh"
                 ? "answer"
                 : undefined,
             // Compatibility telemetry remains readable until Task 168
@@ -16284,51 +16332,21 @@ export function useMeetingAssistant() {
             );
           }
 
-          if (speculative) {
-            return;
-          }
-
           if (!authoritative) {
             refreshRecordedCompletedTrace(traceId);
             return;
           }
 
           if (
-            validAppliedDecision?.action === "answer-refresh"
+            effectiveAppliedDecision?.action === "answer-refresh"
           ) {
-            if (!runtimeActiveRef.current) {
-              traceStoreRef.current.updateMetadata(traceId, {
-                responseOpportunityDecisionApplied: false,
-                responseOpportunityReleaseReason:
-                  "meeting-not-active-at-release",
-                shortIntentGateDecisionApplied: false,
-                shortIntentGateDecisionApplyReason:
-                  "meeting-not-active-at-release",
-                runtimeIntentReleasedAction: undefined,
-              });
-              traceStoreRef.current.finishTrace(
-                traceId,
-                "cancelled",
-                "Meeting stopped before the response opportunity was released."
-              );
-              return;
-            }
-            publishCanonicalLogicalQuestionTarget({
-              logicalQuestionUnit: latestLogicalQuestionUnit,
-              traceId,
-              turn,
-              intentDecision: validAppliedDecision,
-            });
-            traceStoreRef.current.updateMetadata(traceId, {
-              provisionalLogicalQuestionReleased: true,
-              provisionalLogicalQuestionReleaseReason:
-                "runtime-response-opportunity",
-              provisionalTurnGenerationInvalidationBlocked: false,
-            });
-            onOutputAuthorized({
-              intentDecision: validAppliedDecision,
-              logicalQuestionUnit: latestLogicalQuestionUnit,
-            });
+            releaseOutput(
+              effectiveAppliedDecision,
+              validAppliedDecision
+                ? "runtime-response-opportunity"
+                : "local-output-authority-preserved",
+              latestLogicalQuestionUnit
+            );
             return;
           }
 
@@ -16339,6 +16357,7 @@ export function useMeetingAssistant() {
               result?.parseDisposition ??
               settlement.disposition,
             provisionalTurnGenerationInvalidationBlocked: true,
+            logicalQuestionPublicationStage: "response-suppressed",
           });
           traceStoreRef.current.finishTrace(traceId, "success");
         },
@@ -19437,10 +19456,7 @@ export function useMeetingAssistant() {
             : latestParent
               ? "followup-parent"
               : "unknown";
-          const latestLogicalQuestionUnit =
-            sourceKind === "screen" || manualCorrectionOwned
-              ? logicalQuestionUnit
-              : logicalQuestionUnitRef.current;
+          const latestLogicalQuestionUnit = logicalQuestionUnit;
           const latestSourceSettlementId = latestLogicalQuestionUnit
             ? createCurrentQuestionSourceSettlementId({
                 sessionId: latestLogicalQuestionUnit.sessionId,
@@ -19468,10 +19484,7 @@ export function useMeetingAssistant() {
                   taskRelationAdjudicationRuntimeRef.current?.getCurrentOperationId(),
                 sessionId: latestContext.sessionId,
                 runtimeEpoch: runtimeEpochRef.current,
-                logicalQuestionUnit:
-                  sourceKind === "screen" || manualCorrectionOwned
-                    ? logicalQuestionUnit
-                    : logicalQuestionUnitRef.current,
+                logicalQuestionUnit,
                 taskBoundaryEpoch: hashTaxonomyTaskBoundary({
                   parentId: latestParent?.id,
                   questionType: normalizeCanonicalQuestionType(
@@ -20372,7 +20385,7 @@ export function useMeetingAssistant() {
                 taxonomyAdjudicationRuntimeRef.current?.getCurrentOperationId(),
               sessionId: latestContext.sessionId,
               runtimeEpoch: runtimeEpochRef.current,
-              logicalQuestionUnit: logicalQuestionUnitRef.current,
+              logicalQuestionUnit,
               taskBoundaryEpoch: hashTaxonomyTaskBoundary({
                 parentId: latestParent?.id,
                 questionType: latestParentQuestionType,
@@ -20897,6 +20910,7 @@ export function useMeetingAssistant() {
         logicalQuestionUnit,
         lexical,
         questionTypeAxisConflict,
+        authorizationLogicalQuestionUnit: logicalQuestionUnit,
       });
       const taskRelationAdjudication = scheduleTaskRelationAdjudication({
         turn,
@@ -20974,12 +20988,6 @@ export function useMeetingAssistant() {
           const stale =
             currentContext.sessionId !== sessionId ||
             runtimeEpochRef.current !== runtimeEpoch ||
-            (logicalQuestionUnit
-              ? logicalQuestionUnitRef.current?.id !==
-                  logicalQuestionUnit.id ||
-                logicalQuestionUnitRef.current?.revision !==
-                  logicalQuestionUnit.revision
-              : false) ||
             currentContext.activeMeetingTask?.parent.id !== activeParentId ||
             currentContext.activeMeetingTask?.parent.revisions !==
               activeParentRevision ||
@@ -22522,8 +22530,7 @@ export function useMeetingAssistant() {
         decideLogicalQuestionPublication({
           materialization: logicalQuestionMaterialization,
           runtimeIntentSettlementPending:
-            responseOpportunityLocalDecision.disposition ===
-            "runtime-required",
+            responseOpportunityLocalDecision.runtimeReviewRequired,
         });
       traceStoreRef.current.updateMetadata(traceId, {
         canonicalLogicalQuestionMaterialized:
@@ -22904,11 +22911,6 @@ export function useMeetingAssistant() {
               );
             },
           });
-        }
-        if (
-          responseOpportunityLocalDecision.disposition ===
-          "runtime-required"
-        ) {
           return;
         }
       }
