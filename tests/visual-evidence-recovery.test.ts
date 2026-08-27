@@ -5,6 +5,10 @@ import {
   authorizeVisualRecoveryCommit,
   createAwaitingVisualEvidenceRecoveryFact,
   decideVisualRecoveryPostCommitRebase,
+  resolveBoundVisualRecoveryRelation,
+  resolveSourceLinkageFallback,
+  selectVisualRecoveryOpportunity,
+  upsertVisualRecoveryOpportunity,
 } from "../src/lib/meeting/visual-evidence-recovery.js";
 
 const resolution = {
@@ -214,5 +218,166 @@ test("reports the exact post-commit recovery authorization facet", () => {
       authorized: false,
       reason: "parent-revision-mismatch",
     }
+  );
+});
+
+test("keeps a parent opportunity suspended under a child and resumes it later", () => {
+  const parent = createAwaitingVisualEvidenceRecoveryFact({
+    resolution,
+    sessionId: "session-1",
+    runtimeEpoch: 4,
+    logicalQuestionUnitId: "question-parent-lines",
+    logicalQuestionRevision: 1,
+    answerRevision: 0,
+    visibleAnswerRevision: 2,
+    parentTaskId: "parent-coding",
+    parentRevision: 3,
+    ownerKind: "parent",
+    ownerBranchId: "parent-coding",
+    questionType: "coding",
+    questionText: "Explain lines 35 through 38.",
+    sourceHash: "voice-source",
+    manualCorrectionRevision: 0,
+    createdAt: 100,
+  });
+  assert.ok(parent);
+  const facts = upsertVisualRecoveryOpportunity(new Map(), parent);
+
+  const underChild = selectVisualRecoveryOpportunity({
+    facts: facts.values(),
+    sessionId: "session-1",
+    runtimeEpoch: 4,
+    manualCorrectionRevision: 0,
+    topology: {
+      parentId: "parent-coding",
+      parentQuestionType: "coding",
+      childId: "child-field",
+      childQuestionType: "field-knowledge",
+    },
+    screenQuestionType: "coding",
+    now: 200,
+  });
+  assert.equal(underChild.fact?.id, parent.id);
+  assert.equal(underChild.reason, "screen-type-parent-owner");
+  assert.deepEqual(
+    resolveBoundVisualRecoveryRelation({
+      fact: parent,
+      topology: {
+        parentId: "parent-coding",
+        childId: "child-field",
+      },
+    }),
+    {
+      authorized: true,
+      relation: "resume-parent",
+      reason: "bound-parent-resumed",
+      ownerBranchId: "parent-coding",
+    }
+  );
+
+  const afterResume = selectVisualRecoveryOpportunity({
+    facts: facts.values(),
+    sessionId: "session-1",
+    runtimeEpoch: 4,
+    manualCorrectionRevision: 0,
+    topology: {
+      parentId: "parent-coding",
+      parentQuestionType: "coding",
+    },
+    now: 300,
+  });
+  assert.equal(afterResume.fact?.id, parent.id);
+  const resumedParentRelation = resolveBoundVisualRecoveryRelation({
+    fact: parent,
+    topology: { parentId: "parent-coding" },
+  });
+  assert.equal(resumedParentRelation.authorized, true);
+  assert.equal(
+    resumedParentRelation.authorized
+      ? resumedParentRelation.relation
+      : undefined,
+    "followup-parent"
+  );
+});
+
+test("prefers the active child opportunity and expires removed owners", () => {
+  const child = createAwaitingVisualEvidenceRecoveryFact({
+    resolution,
+    sessionId: "session-1",
+    runtimeEpoch: 4,
+    logicalQuestionUnitId: "question-child-lines",
+    logicalQuestionRevision: 1,
+    answerRevision: 0,
+    visibleAnswerRevision: 3,
+    parentTaskId: "parent-coding",
+    parentRevision: 4,
+    ownerKind: "child",
+    ownerBranchId: "child-coding",
+    questionType: "coding",
+    questionText: "Explain the child implementation.",
+    sourceHash: "child-source",
+    manualCorrectionRevision: 0,
+    createdAt: 100,
+  });
+  assert.ok(child);
+
+  const selected = selectVisualRecoveryOpportunity({
+    facts: [child],
+    sessionId: "session-1",
+    runtimeEpoch: 4,
+    manualCorrectionRevision: 0,
+    topology: {
+      parentId: "parent-coding",
+      childId: "child-coding",
+    },
+    now: 200,
+  });
+  assert.equal(selected.reason, "active-child-owner");
+  const childRelation = resolveBoundVisualRecoveryRelation({
+    fact: child,
+    topology: {
+      parentId: "parent-coding",
+      childId: "child-coding",
+    },
+  });
+  assert.equal(childRelation.authorized, true);
+  assert.equal(
+    childRelation.authorized ? childRelation.relation : undefined,
+    "child-probe"
+  );
+
+  const removed = selectVisualRecoveryOpportunity({
+    facts: [child],
+    sessionId: "session-1",
+    runtimeEpoch: 4,
+    manualCorrectionRevision: 0,
+    topology: { parentId: "parent-coding" },
+    now: 300,
+  });
+  assert.equal(removed.fact, undefined);
+  assert.deepEqual(removed.expiredFactIds, [child.id]);
+});
+
+test("uses Question Type only for the Source Linkage failure fallback", () => {
+  assert.equal(
+    resolveSourceLinkageFallback({
+      voiceQuestionType: "coding",
+      screenQuestionType: "coding",
+    }),
+    "bind-voice"
+  );
+  assert.equal(
+    resolveSourceLinkageFallback({
+      voiceQuestionType: "coding",
+      screenQuestionType: "behavioral",
+    }),
+    "use-screen"
+  );
+  assert.equal(
+    resolveSourceLinkageFallback({
+      voiceQuestionType: "coding",
+      screenQuestionType: "unknown",
+    }),
+    "bind-voice"
   );
 });

@@ -233,12 +233,16 @@ export interface ManualScreenContinuityEvidenceDecision {
  */
 export function decideManualScreenContinuityEvidence(input: {
   exactVisualEvidenceRecovery: boolean;
+  exactVisualEvidenceRelation?:
+    | "followup-parent"
+    | "child-probe"
+    | "resume-parent";
   projectAnchorMatches: boolean;
   correctionTermOverlap: number;
 }): ManualScreenContinuityEvidenceDecision | undefined {
   if (input.exactVisualEvidenceRecovery) {
     return {
-      relation: "followup-parent",
+      relation: input.exactVisualEvidenceRelation ?? "followup-parent",
       reason: "screen-exact-visual-evidence-recovery",
       confidence: 1,
       relationEvidenceAuthorized: true,

@@ -312,9 +312,13 @@ import {
   projectStagedAnswerOnlyContent,
   detectAnswerSufficiencyShadow,
   projectAnswerResolution,
-  authorizeAwaitingVisualEvidenceRecovery,
   createAwaitingVisualEvidenceRecoveryFact,
   formatAwaitingVisualEvidenceRecoveryForTrace,
+  resolveBoundVisualRecoveryRelation,
+  resolveSourceLinkageFallback,
+  selectVisualRecoveryOpportunity,
+  upsertVisualRecoveryOpportunity,
+  type AwaitingVisualEvidenceRecoveryFact,
   decideVisualRecoveryPostCommitRebase,
   authorizeVisualRecoveryCommit,
   formatDisplayTranscriptForTrace,
@@ -2490,8 +2494,8 @@ export function useMeetingAssistant() {
     ManualCorrectionRuntimeTarget | undefined
   >(undefined);
   const awaitingVisualEvidenceRecoveryRef = useRef<
-    ReturnType<typeof createAwaitingVisualEvidenceRecoveryFact>
-  >(undefined);
+    Map<string, AwaitingVisualEvidenceRecoveryFact>
+  >(new Map());
   const pendingAnswerResolutionCommitByTraceRef = useRef(
     new Map<string, PendingAnswerResolutionCommitCandidate>()
   );
@@ -3544,24 +3548,29 @@ export function useMeetingAssistant() {
     (
       stage: "consumed" | "cancelled",
       reason: string,
-      traceId?: string
+      traceId?: string,
+      factId?: string
     ) => {
-      const fact = awaitingVisualEvidenceRecoveryRef.current;
-      if (!fact) return;
-      awaitingVisualEvidenceRecoveryRef.current = undefined;
-      const metadata = formatAwaitingVisualEvidenceRecoveryForTrace(fact, {
-        stage,
-        reason,
-      });
-      if (traceId) {
-        traceStoreRef.current.updateMetadata(traceId, metadata);
+      const facts = [...awaitingVisualEvidenceRecoveryRef.current.values()].filter(
+        (fact) => !factId || fact.id === factId
+      );
+      if (!facts.length) return;
+      for (const fact of facts) {
+        awaitingVisualEvidenceRecoveryRef.current.delete(fact.ownerBranchId);
+        const metadata = formatAwaitingVisualEvidenceRecoveryForTrace(fact, {
+          stage,
+          reason,
+        });
+        if (traceId) {
+          traceStoreRef.current.updateMetadata(traceId, metadata);
+        }
+        sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+          stage: `awaiting-visual-evidence-${stage}`,
+          traceId,
+          taskId: fact.parentTaskId,
+          ...metadata,
+        });
       }
-      sessionRecordingManagerRef.current?.recordCaptureLifecycle({
-        stage: `awaiting-visual-evidence-${stage}`,
-        traceId,
-        taskId: fact.parentTaskId,
-        ...metadata,
-      });
     },
     []
   );
@@ -13450,6 +13459,12 @@ export function useMeetingAssistant() {
     ) {
       const visualContext = contextManagerRef.current.getState();
       const visualParent = visualContext.activeMeetingTask?.parent;
+      const visualChild = visualContext.activeMeetingTask?.child;
+      const visualOwnerKind = visualChild
+        ? ("child" as const)
+        : visualParent
+          ? ("parent" as const)
+          : ("current-question" as const);
       const recovery = createAwaitingVisualEvidenceRecoveryFact({
         resolution: {
           state: "awaiting-evidence",
@@ -13469,6 +13484,18 @@ export function useMeetingAssistant() {
           visibleAnswerRevisionRef.current,
         parentTaskId: visualParent?.id,
         parentRevision: visualParent?.revisions,
+        ownerKind: visualOwnerKind,
+        ownerBranchId:
+          visualChild?.id ??
+          visualParent?.id ??
+          advisorJob.logicalQuestionUnit.id,
+        questionType:
+          currentQuestionSettlement?.questionType ??
+          visualChild?.questionType ??
+          visualParent?.questionType,
+        questionText:
+          advisorQuestionAnswerFocusText ||
+          advisorJob.logicalQuestionUnit.normalizedText,
         sourceHash: visualEvidenceQuestion.sourceHash,
         sourceSettlementId: currentQuestionSettlement?.settlementId,
         sourceTurnIds: advisorJob.logicalQuestionUnit.sourceTurnIds,
@@ -13476,7 +13503,11 @@ export function useMeetingAssistant() {
           manualCorrectionRevisionRef.current,
       });
       if (recovery) {
-        awaitingVisualEvidenceRecoveryRef.current = recovery;
+        awaitingVisualEvidenceRecoveryRef.current =
+          upsertVisualRecoveryOpportunity(
+            awaitingVisualEvidenceRecoveryRef.current,
+            recovery
+          );
       }
       const localContent = [
         "中文思路:",
@@ -15559,20 +15590,6 @@ export function useMeetingAssistant() {
       turn: TranscriptTurn;
       intentDecision: AdvisorTurnIntentDecision;
     }) => {
-      const pendingVisualRecovery = awaitingVisualEvidenceRecoveryRef.current;
-      if (
-        pendingVisualRecovery &&
-        (pendingVisualRecovery.logicalQuestionUnitId !==
-          logicalQuestionUnit.id ||
-          pendingVisualRecovery.logicalQuestionRevision !==
-            logicalQuestionUnit.revision)
-      ) {
-        settleAwaitingVisualEvidenceRecovery(
-          "cancelled",
-          "newer-substantive-logical-question",
-          traceId
-        );
-      }
       logicalQuestionUnitRef.current = logicalQuestionUnit;
       const logicalQuestionLease =
         createLogicalQuestionUnitLease(logicalQuestionUnit);
@@ -15619,7 +15636,7 @@ export function useMeetingAssistant() {
       });
       return target;
     },
-    [publishResponseRecoveryTarget, settleAwaitingVisualEvidenceRecovery]
+    [publishResponseRecoveryTarget]
   );
 
   const scheduleResponseOpportunityInference = useCallback(
@@ -24708,7 +24725,42 @@ export function useMeetingAssistant() {
         visibleAnswerRevisionRef.current;
       const screenBaseManualCorrectionRevision =
         manualCorrectionRevisionRef.current;
-      const screenVoiceQuestionCandidate =
+      const recoveryTopologyAtRequest = {
+        parentId: screenRequestContextState.activeMeetingTask?.parent.id,
+        parentQuestionType:
+          screenRequestContextState.activeMeetingTask?.parent.questionType,
+        childId: screenRequestContextState.activeMeetingTask?.child?.id,
+        childQuestionType:
+          screenRequestContextState.activeMeetingTask?.child?.questionType,
+        currentLogicalQuestionUnitId: logicalQuestionUnitRef.current?.id,
+      };
+      let selectedVisualRecovery = selectVisualRecoveryOpportunity({
+        facts: awaitingVisualEvidenceRecoveryRef.current.values(),
+        sessionId: screenRequestContextState.sessionId,
+        runtimeEpoch: runtimeEpochRef.current,
+        manualCorrectionRevision: manualCorrectionRevisionRef.current,
+        topology: recoveryTopologyAtRequest,
+      });
+      for (const expiredFactId of selectedVisualRecovery.expiredFactIds) {
+        settleAwaitingVisualEvidenceRecovery(
+          "cancelled",
+          "opportunity-owner-no-longer-current",
+          undefined,
+          expiredFactId
+        );
+      }
+      const recoveryQuestionCapsule = selectedVisualRecovery.fact
+        ? {
+            logicalQuestionUnitId:
+              selectedVisualRecovery.fact.logicalQuestionUnitId,
+            logicalQuestionRevision:
+              selectedVisualRecovery.fact.logicalQuestionRevision,
+            text: selectedVisualRecovery.fact.questionText,
+            sourceTurnIds: [...selectedVisualRecovery.fact.sourceTurnIds],
+          }
+        : undefined;
+      let screenVoiceQuestionCandidate =
+        recoveryQuestionCapsule ??
         selectManualScreenVoiceQuestionCapsule({
           sessionId: screenRequestContextState.sessionId,
           runtimeEpoch: runtimeEpochRef.current,
@@ -24764,38 +24816,11 @@ export function useMeetingAssistant() {
             ? pendingVoiceCandidate
             : activeVoiceCandidate ?? pendingVoiceCandidate;
       const visibleAnswerAtScreenRequest = stableAnswerRevisionRef.current;
-      const awaitingVisualEvidenceFact =
-        awaitingVisualEvidenceRecoveryRef.current;
-      const screenRequestParent =
-        screenRequestContextState.activeMeetingTask?.parent;
-      const awaitingVisualEvidenceAuthorization =
-        authorizeAwaitingVisualEvidenceRecovery({
-          fact: awaitingVisualEvidenceFact,
-          sessionId: screenRequestContextState.sessionId,
-          runtimeEpoch: runtimeEpochRef.current,
-          logicalQuestionUnitId:
-            screenVoiceQuestionCandidate?.logicalQuestionUnitId,
-          logicalQuestionRevision:
-            screenVoiceQuestionCandidate?.logicalQuestionRevision,
-          visibleAnswerRevision: visibleAnswerAtScreenRequest?.revision,
-          parentTaskId: screenRequestParent?.id,
-          parentRevision: screenRequestParent?.revisions,
-          manualCorrectionRevision: manualCorrectionRevisionRef.current,
-        });
-      if (
-        awaitingVisualEvidenceFact &&
-        !awaitingVisualEvidenceAuthorization.authorized
-      ) {
-        settleAwaitingVisualEvidenceRecovery(
-          "cancelled",
-          awaitingVisualEvidenceAuthorization.reason
-        );
-      }
       const unresolvedManualCorrectionTarget =
         latestManualCorrectionTargetRef.current?.resolvedAt
           ? undefined
           : latestManualCorrectionTargetRef.current?.logicalQuestionUnit;
-      const screenVoiceQuestionBinding =
+      let screenVoiceQuestionBinding =
         decideManualScreenVoiceQuestionBinding({
           candidate: screenVoiceQuestionCandidate,
           activeVoiceAttempt:
@@ -24823,16 +24848,6 @@ export function useMeetingAssistant() {
                   unresolvedManualCorrectionTarget.revision,
               }
             : undefined,
-          awaitingVisualEvidenceTarget:
-            awaitingVisualEvidenceAuthorization.authorized &&
-            awaitingVisualEvidenceFact
-              ? {
-                  logicalQuestionUnitId:
-                    awaitingVisualEvidenceFact.logicalQuestionUnitId,
-                  logicalQuestionRevision:
-                    awaitingVisualEvidenceFact.logicalQuestionRevision,
-                }
-              : undefined,
           visibleAnswer: visibleAnswerAtScreenRequest
             ? {
                 logicalQuestionUnitId:
@@ -24849,8 +24864,12 @@ export function useMeetingAssistant() {
           : undefined);
       let screenExactVisualEvidenceRecovery =
         latePreflightRepair?.exactVisualEvidenceRecovery ??
-        screenVoiceQuestionBinding.reason ===
-          "awaiting-visual-evidence-recovery";
+        false;
+      let boundVisualRecoveryRelation:
+        | "followup-parent"
+        | "child-probe"
+        | "resume-parent"
+        | undefined;
       const screenOperationClaim =
         screenOperationCoordinatorRef.current.claim(
           screenOperationId,
@@ -24907,10 +24926,10 @@ export function useMeetingAssistant() {
             screenVoiceQuestionBinding
           ),
           ...formatAwaitingVisualEvidenceRecoveryForTrace(
-            awaitingVisualEvidenceFact,
+            selectedVisualRecovery.fact,
             {
               stage: "authorized",
-              reason: awaitingVisualEvidenceAuthorization.reason,
+              reason: selectedVisualRecovery.reason,
             }
           ),
         },
@@ -25249,13 +25268,6 @@ export function useMeetingAssistant() {
         } else {
           sessionRecordingManagerRef.current?.recordScreenCapture(
             observation,
-            trace.id
-          );
-        }
-        if (screenExactVisualEvidenceRecovery) {
-          settleAwaitingVisualEvidenceRecovery(
-            "consumed",
-            "manual-screen-capture-succeeded",
             trace.id
           );
         }
@@ -25882,10 +25894,89 @@ export function useMeetingAssistant() {
           screenCurrentQuestionEvidenceText ||
           observation.captureTarget?.title?.trim() ||
           "";
+        selectedVisualRecovery = selectVisualRecoveryOpportunity({
+          facts: awaitingVisualEvidenceRecoveryRef.current.values(),
+          sessionId: preflightContextState.sessionId,
+          runtimeEpoch: runtimeEpochRef.current,
+          manualCorrectionRevision: manualCorrectionRevisionRef.current,
+          topology: {
+            parentId: preflightContextState.activeMeetingTask?.parent.id,
+            parentQuestionType:
+              preflightContextState.activeMeetingTask?.parent.questionType,
+            childId: preflightContextState.activeMeetingTask?.child?.id,
+            childQuestionType:
+              preflightContextState.activeMeetingTask?.child?.questionType,
+            currentLogicalQuestionUnitId: logicalQuestionUnitRef.current?.id,
+          },
+          screenQuestionType: screenPreflight?.questionType,
+        });
+        for (const expiredFactId of selectedVisualRecovery.expiredFactIds) {
+          settleAwaitingVisualEvidenceRecovery(
+            "cancelled",
+            "opportunity-owner-no-longer-current",
+            trace.id,
+            expiredFactId
+          );
+        }
+        if (selectedVisualRecovery.fact) {
+          screenVoiceQuestionCandidate = {
+            logicalQuestionUnitId:
+              selectedVisualRecovery.fact.logicalQuestionUnitId,
+            logicalQuestionRevision:
+              selectedVisualRecovery.fact.logicalQuestionRevision,
+            text: selectedVisualRecovery.fact.questionText,
+            sourceTurnIds: [...selectedVisualRecovery.fact.sourceTurnIds],
+          };
+          screenVoiceQuestionBinding = decideManualScreenVoiceQuestionBinding({
+            candidate: screenVoiceQuestionCandidate,
+            activeVoiceAttempt:
+              activeVoiceCandidate?.source === "live-turn"
+                ? {
+                    logicalQuestionUnitId:
+                      activeVoiceCandidate.logicalQuestionUnitId,
+                    logicalQuestionRevision:
+                      activeVoiceCandidate.logicalQuestionRevision,
+                  }
+                : undefined,
+            pendingVoiceDelivery:
+              pendingVoiceCandidate?.source === "live-turn"
+                ? {
+                    logicalQuestionUnitId:
+                      pendingVoiceCandidate.logicalQuestionUnitId,
+                    logicalQuestionRevision:
+                      pendingVoiceCandidate.logicalQuestionRevision,
+                  }
+                : undefined,
+            explicitRecoveryTarget: unresolvedManualCorrectionTarget
+              ? {
+                  logicalQuestionUnitId: unresolvedManualCorrectionTarget.id,
+                  logicalQuestionRevision:
+                    unresolvedManualCorrectionTarget.revision,
+                }
+              : undefined,
+            visibleAnswer: visibleAnswerAtScreenRequest
+              ? {
+                  logicalQuestionUnitId:
+                    visibleAnswerAtScreenRequest.logicalQuestionUnitId,
+                  logicalQuestionRevision:
+                    visibleAnswerAtScreenRequest.logicalQuestionRevision,
+                }
+              : undefined,
+          });
+          traceStoreRef.current.updateMetadata(trace.id, {
+            ...formatManualScreenVoiceQuestionBindingForTrace(
+              screenVoiceQuestionBinding
+            ),
+            visualRecoveryOpportunitySelectionReason:
+              selectedVisualRecovery.reason,
+            visualRecoveryOpportunityId: selectedVisualRecovery.fact.id,
+          });
+        }
         if (
           screenVoiceQuestionBinding.disposition === "use-screen" &&
           screenVoiceQuestionBinding.candidate &&
-          screenFallbackQuestion
+          screenFallbackQuestion &&
+          selectedVisualRecovery.fact
         ) {
           const voiceCandidate = screenVoiceQuestionBinding.candidate;
           const committedVoiceSettlement =
@@ -25896,11 +25987,11 @@ export function useMeetingAssistant() {
               ? currentQuestionSettlementRef.current
               : undefined;
           const recoveryVoiceFact =
-            awaitingVisualEvidenceFact?.logicalQuestionUnitId ===
+            selectedVisualRecovery.fact.logicalQuestionUnitId ===
               voiceCandidate.logicalQuestionUnitId &&
-            awaitingVisualEvidenceFact.logicalQuestionRevision ===
+            selectedVisualRecovery.fact.logicalQuestionRevision ===
               voiceCandidate.logicalQuestionRevision
-              ? awaitingVisualEvidenceFact
+              ? selectedVisualRecovery.fact
               : undefined;
           const committedVoiceSourceRecord =
             effectiveQuestionSourceLedgerRef.current.findLogicalQuestion({
@@ -25912,9 +26003,7 @@ export function useMeetingAssistant() {
                 voiceCandidate.logicalQuestionRevision,
             });
           const voiceSourceHash =
-            recoveryVoiceFact?.sourceHash ??
-            committedVoiceSettlement?.sourceHash ??
-            committedVoiceSourceRecord?.sourceHash;
+            recoveryVoiceFact?.sourceHash ?? committedVoiceSourceRecord?.sourceHash;
           const sourceLinkageVoiceAuthoritySource = recoveryVoiceFact
             ? "awaiting-visual-evidence"
             : committedVoiceSettlement
@@ -25963,39 +26052,81 @@ export function useMeetingAssistant() {
                 runtimeReleaseRequested: true,
               });
             if (sourceLinkageOutcomePromise) {
-              try {
-                const sourceLinkageOutcome = await withTimeout(
-                  sourceLinkageOutcomePromise,
-                  1_500,
-                  "Source linkage release window expired."
-                );
-                if (
-                  sourceLinkageOutcome.leaseAuthorized &&
-                  sourceLinkageOutcome.candidate?.decision === "bind-voice"
-                ) {
+              const sourceLinkageOutcome = await sourceLinkageOutcomePromise;
+              const fallbackDecision = resolveSourceLinkageFallback({
+                voiceQuestionType: recoveryVoiceFact?.questionType,
+                screenQuestionType: screenPreflight?.questionType,
+              });
+              const modelDecision =
+                sourceLinkageOutcome.leaseAuthorized &&
+                sourceLinkageOutcome.candidate?.decision !== "unclear"
+                  ? sourceLinkageOutcome.candidate?.decision
+                  : undefined;
+              const effectiveDecision = modelDecision ?? fallbackDecision;
+              if (
+                sourceLinkageOutcome.leaseAuthorized &&
+                effectiveDecision === "bind-voice" &&
+                recoveryVoiceFact
+              ) {
+                const linkageContextState = contextManagerRef.current.getState();
+                const branchRelation = resolveBoundVisualRecoveryRelation({
+                  fact: recoveryVoiceFact,
+                  topology: {
+                    parentId: linkageContextState.activeMeetingTask?.parent.id,
+                    parentQuestionType:
+                      linkageContextState.activeMeetingTask?.parent.questionType,
+                    childId: linkageContextState.activeMeetingTask?.child?.id,
+                    childQuestionType:
+                      linkageContextState.activeMeetingTask?.child?.questionType,
+                    currentLogicalQuestionUnitId:
+                      logicalQuestionUnitRef.current?.id,
+                  },
+                });
+                const currentQuestionOwner =
+                  recoveryVoiceFact.ownerKind === "current-question";
+                if (branchRelation.authorized || currentQuestionOwner) {
                   screenVoiceQuestionCapsule = voiceCandidate;
                   screenExactVisualEvidenceRecovery = true;
-                  if (recoveryVoiceFact) {
-                    settleAwaitingVisualEvidenceRecovery(
-                      "consumed",
-                      "source-linkage-bound-screen-evidence"
-                    );
-                  }
-                  traceStoreRef.current.updateMetadata(trace.id, {
-                    sourceLinkageAppliedToRuntime: true,
-                    sourceLinkageBoundVoiceLogicalQuestionUnitId:
-                      voiceCandidate.logicalQuestionUnitId,
-                    sourceLinkageBoundVoiceLogicalQuestionRevision:
-                      voiceCandidate.logicalQuestionRevision,
-                    manualScreenVoiceBindingOverriddenBySourceLinkage: true,
-                  });
+                  boundVisualRecoveryRelation = branchRelation.authorized
+                    ? branchRelation.relation
+                    : undefined;
                 }
-              } catch (error) {
+                traceStoreRef.current.updateMetadata(trace.id, {
+                  sourceLinkageAppliedToRuntime:
+                    branchRelation.authorized || currentQuestionOwner,
+                  sourceLinkageEffectiveDecision: effectiveDecision,
+                  sourceLinkageDecisionSource: modelDecision
+                    ? "model"
+                    : "type-fallback",
+                  sourceLinkageBoundVoiceLogicalQuestionUnitId:
+                    voiceCandidate.logicalQuestionUnitId,
+                  sourceLinkageBoundVoiceLogicalQuestionRevision:
+                    voiceCandidate.logicalQuestionRevision,
+                  sourceLinkageBoundBranchRelation:
+                    boundVisualRecoveryRelation,
+                  sourceLinkageBoundBranchRelationReason:
+                    branchRelation.reason,
+                  manualScreenVoiceBindingOverriddenBySourceLinkage: true,
+                });
+              } else {
+                if (
+                  sourceLinkageOutcome.leaseAuthorized &&
+                  recoveryVoiceFact &&
+                  effectiveDecision === "use-screen"
+                ) {
+                  settleAwaitingVisualEvidenceRecovery(
+                    "cancelled",
+                    "source-linkage-use-screen",
+                    trace.id,
+                    recoveryVoiceFact.id
+                  );
+                }
                 traceStoreRef.current.updateMetadata(trace.id, {
                   sourceLinkageAppliedToRuntime: false,
-                  sourceLinkageReleaseDisposition: "deadline-expired",
-                  sourceLinkageReleaseError:
-                    error instanceof Error ? error.message : String(error),
+                  sourceLinkageEffectiveDecision: effectiveDecision,
+                  sourceLinkageDecisionSource: modelDecision
+                    ? "model"
+                    : "type-fallback",
                 });
               }
             }
@@ -26489,6 +26620,8 @@ export function useMeetingAssistant() {
           corrections: speechCorrectionsRef.current,
           exactVisualEvidenceRecovery:
             screenExactVisualEvidenceRecovery,
+          exactVisualEvidenceRelation:
+            boundVisualRecoveryRelation,
         });
         const localScreenTaskRelation =
           screenSectionHintConsumption.disposition === "applied"
@@ -29407,6 +29540,17 @@ export function useMeetingAssistant() {
           }),
         });
         if (screenVisibleAnswerCommitted) {
+          if (
+            screenExactVisualEvidenceRecovery &&
+            selectedVisualRecovery.fact
+          ) {
+            settleAwaitingVisualEvidenceRecovery(
+              "consumed",
+              "bound-screen-answer-visible-committed",
+              trace.id,
+              selectedVisualRecovery.fact.id
+            );
+          }
           recordScreenQuestionTypeOutcome({
             stage: "delivery",
             disposition: "visible-committed",
@@ -36074,6 +36218,7 @@ function decideScreenTaskRelation({
   screenPreflight,
   corrections,
   exactVisualEvidenceRecovery,
+  exactVisualEvidenceRelation,
 }: {
   existingTask?: ActiveInterviewParent;
   taskKind: ScreenTaskKind;
@@ -36082,6 +36227,10 @@ function decideScreenTaskRelation({
   screenPreflight?: ScreenPreflightResult;
   corrections: SpeechCorrection[];
   exactVisualEvidenceRecovery: boolean;
+  exactVisualEvidenceRelation?:
+    | "followup-parent"
+    | "child-probe"
+    | "resume-parent";
 }): {
   relation: InterviewTaskRelation;
   reason: string;
@@ -36112,6 +36261,7 @@ function decideScreenTaskRelation({
 
   const exactRecoveryContinuity = decideManualScreenContinuityEvidence({
     exactVisualEvidenceRecovery,
+    exactVisualEvidenceRelation,
     projectAnchorMatches: false,
     correctionTermOverlap: 0,
   });

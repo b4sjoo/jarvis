@@ -1,4 +1,11 @@
+import {
+  normalizeCanonicalQuestionType,
+  type CanonicalQuestionType,
+} from "./task-taxonomy.js";
+
 export const AWAITING_VISUAL_EVIDENCE_TTL_MS = 5 * 60 * 1_000;
+
+export type VisualRecoveryOwnerKind = "parent" | "child" | "current-question";
 
 interface VisualEvidenceResolutionInput {
   state: "resolved" | "awaiting-evidence" | "failed";
@@ -16,6 +23,10 @@ export interface AwaitingVisualEvidenceRecoveryFact {
   visibleAnswerRevision: number;
   parentTaskId?: string;
   parentRevision?: number;
+  ownerKind: VisualRecoveryOwnerKind;
+  ownerBranchId: string;
+  questionType: CanonicalQuestionType;
+  questionText: string;
   sourceHash: string;
   sourceSettlementId?: string;
   sourceTurnIds: string[];
@@ -24,6 +35,44 @@ export interface AwaitingVisualEvidenceRecoveryFact {
   expiresAt: number;
   evidence: string[];
 }
+
+export interface VisualRecoveryActiveTopology {
+  parentId?: string;
+  parentQuestionType?: unknown;
+  childId?: string;
+  childQuestionType?: unknown;
+  currentLogicalQuestionUnitId?: string;
+}
+
+export interface VisualRecoveryOpportunitySelection {
+  fact?: AwaitingVisualEvidenceRecoveryFact;
+  reason:
+    | "active-child-owner"
+    | "screen-type-parent-owner"
+    | "active-parent-owner"
+    | "current-question-owner"
+    | "no-current-opportunity";
+  expiredFactIds: string[];
+}
+
+export type BoundVisualRecoveryRelationDecision =
+  | {
+      authorized: true;
+      relation: "followup-parent" | "child-probe" | "resume-parent";
+      reason:
+        | "bound-parent-preserved"
+        | "bound-child-preserved"
+        | "bound-parent-resumed";
+      ownerBranchId: string;
+    }
+  | {
+      authorized: false;
+      reason:
+        | "owner-parent-missing"
+        | "owner-child-missing"
+        | "owner-current-question-has-no-durable-relation";
+      ownerBranchId: string;
+    };
 
 export interface AwaitingVisualEvidenceRecoveryAuthorization {
   authorized: boolean;
@@ -185,6 +234,10 @@ export function createAwaitingVisualEvidenceRecoveryFact(input: {
   visibleAnswerRevision: number;
   parentTaskId?: string | null;
   parentRevision?: number | null;
+  ownerKind?: VisualRecoveryOwnerKind;
+  ownerBranchId?: string | null;
+  questionType?: unknown;
+  questionText?: string;
   sourceHash?: string | null;
   sourceSettlementId?: string | null;
   sourceTurnIds?: string[];
@@ -194,11 +247,19 @@ export function createAwaitingVisualEvidenceRecoveryFact(input: {
 }): AwaitingVisualEvidenceRecoveryFact | undefined {
   const parentTaskId = input.parentTaskId?.trim();
   const sourceHash = input.sourceHash?.trim();
+  const ownerKind =
+    input.ownerKind ?? (parentTaskId ? "parent" : "current-question");
+  const ownerBranchId =
+    input.ownerBranchId?.trim() ||
+    (ownerKind === "current-question"
+      ? input.logicalQuestionUnitId.trim()
+      : parentTaskId);
   if (
     input.resolution.state !== "awaiting-evidence" ||
     !input.resolution.awaitingVisualEvidence ||
     !input.logicalQuestionUnitId.trim() ||
-    !sourceHash
+    !sourceHash ||
+    !ownerBranchId
   ) {
     return undefined;
   }
@@ -223,6 +284,12 @@ export function createAwaitingVisualEvidenceRecoveryFact(input: {
     parentTaskId: parentTaskId || undefined,
     parentRevision:
       input.parentRevision === null ? undefined : input.parentRevision,
+    ownerKind,
+    ownerBranchId,
+    questionType:
+      normalizeCanonicalQuestionType(input.questionType) ?? "unknown",
+    questionText:
+      input.questionText?.trim() || input.resolution.evidence.join(" ").trim(),
     sourceHash,
     sourceSettlementId: input.sourceSettlementId?.trim() || undefined,
     sourceTurnIds: uniqueStrings(input.sourceTurnIds ?? []),
@@ -231,6 +298,153 @@ export function createAwaitingVisualEvidenceRecoveryFact(input: {
     expiresAt: createdAt + ttlMs,
     evidence: uniqueStrings(input.resolution.evidence),
   };
+}
+
+export function upsertVisualRecoveryOpportunity(
+  facts: ReadonlyMap<string, AwaitingVisualEvidenceRecoveryFact>,
+  fact: AwaitingVisualEvidenceRecoveryFact
+) {
+  const next = new Map(facts);
+  next.set(fact.ownerBranchId, fact);
+  return next;
+}
+
+export function selectVisualRecoveryOpportunity(input: {
+  facts: Iterable<AwaitingVisualEvidenceRecoveryFact>;
+  sessionId: string;
+  runtimeEpoch: number;
+  manualCorrectionRevision: number;
+  topology: VisualRecoveryActiveTopology;
+  screenQuestionType?: unknown;
+  now?: number;
+}): VisualRecoveryOpportunitySelection {
+  const now = input.now ?? Date.now();
+  const valid: AwaitingVisualEvidenceRecoveryFact[] = [];
+  const expiredFactIds: string[] = [];
+  for (const fact of input.facts) {
+    const ownerStillExists =
+      fact.ownerKind === "parent"
+        ? fact.parentTaskId === input.topology.parentId &&
+          fact.ownerBranchId === input.topology.parentId
+        : fact.ownerKind === "child"
+          ? fact.parentTaskId === input.topology.parentId &&
+            fact.ownerBranchId === input.topology.childId
+          : fact.ownerBranchId === input.topology.currentLogicalQuestionUnitId;
+    if (
+      fact.sessionId !== input.sessionId ||
+      fact.runtimeEpoch !== input.runtimeEpoch ||
+      fact.manualCorrectionRevision !== input.manualCorrectionRevision ||
+      now > fact.expiresAt ||
+      !ownerStillExists
+    ) {
+      expiredFactIds.push(fact.id);
+      continue;
+    }
+    valid.push(fact);
+  }
+
+  const parentFact = valid.find((fact) => fact.ownerKind === "parent");
+  const childFact = valid.find((fact) => fact.ownerKind === "child");
+  const currentQuestionFact = valid.find(
+    (fact) => fact.ownerKind === "current-question"
+  );
+  const screenType = normalizeCanonicalQuestionType(input.screenQuestionType);
+  const parentType = normalizeCanonicalQuestionType(
+    input.topology.parentQuestionType
+  );
+  if (
+    input.topology.childId &&
+    parentFact &&
+    screenType &&
+    screenType !== "unknown" &&
+    screenType === parentType
+  ) {
+    return {
+      fact: parentFact,
+      reason: "screen-type-parent-owner",
+      expiredFactIds,
+    };
+  }
+  if (input.topology.childId && childFact) {
+    return { fact: childFact, reason: "active-child-owner", expiredFactIds };
+  }
+  if (parentFact) {
+    return { fact: parentFact, reason: "active-parent-owner", expiredFactIds };
+  }
+  if (currentQuestionFact) {
+    return {
+      fact: currentQuestionFact,
+      reason: "current-question-owner",
+      expiredFactIds,
+    };
+  }
+  return { reason: "no-current-opportunity", expiredFactIds };
+}
+
+export function resolveSourceLinkageFallback(input: {
+  voiceQuestionType?: unknown;
+  screenQuestionType?: unknown;
+}): "bind-voice" | "use-screen" {
+  const voiceType = normalizeCanonicalQuestionType(input.voiceQuestionType);
+  const screenType = normalizeCanonicalQuestionType(input.screenQuestionType);
+  if (
+    !voiceType ||
+    voiceType === "unknown" ||
+    !screenType ||
+    screenType === "unknown"
+  ) {
+    return "bind-voice";
+  }
+  return voiceType === screenType ? "bind-voice" : "use-screen";
+}
+
+export function resolveBoundVisualRecoveryRelation(input: {
+  fact: AwaitingVisualEvidenceRecoveryFact;
+  topology: VisualRecoveryActiveTopology;
+}): BoundVisualRecoveryRelationDecision {
+  const { fact, topology } = input;
+  if (fact.ownerKind === "current-question") {
+    return {
+      authorized: false,
+      reason: "owner-current-question-has-no-durable-relation",
+      ownerBranchId: fact.ownerBranchId,
+    };
+  }
+  if (fact.ownerKind === "child") {
+    return fact.parentTaskId === topology.parentId &&
+      fact.ownerBranchId === topology.childId
+      ? {
+          authorized: true,
+          relation: "child-probe",
+          reason: "bound-child-preserved",
+          ownerBranchId: fact.ownerBranchId,
+        }
+      : {
+          authorized: false,
+          reason: "owner-child-missing",
+          ownerBranchId: fact.ownerBranchId,
+        };
+  }
+  if (fact.parentTaskId !== topology.parentId) {
+    return {
+      authorized: false,
+      reason: "owner-parent-missing",
+      ownerBranchId: fact.ownerBranchId,
+    };
+  }
+  return topology.childId
+    ? {
+        authorized: true,
+        relation: "resume-parent",
+        reason: "bound-parent-resumed",
+        ownerBranchId: fact.ownerBranchId,
+      }
+    : {
+        authorized: true,
+        relation: "followup-parent",
+        reason: "bound-parent-preserved",
+        ownerBranchId: fact.ownerBranchId,
+      };
 }
 
 export function authorizeAwaitingVisualEvidenceRecovery(input: {
@@ -309,6 +523,9 @@ export function formatAwaitingVisualEvidenceRecoveryForTrace(
       fact?.visibleAnswerRevision,
     awaitingVisualEvidenceRecoveryParentTaskId: fact?.parentTaskId,
     awaitingVisualEvidenceRecoveryParentRevision: fact?.parentRevision,
+    awaitingVisualEvidenceRecoveryOwnerKind: fact?.ownerKind,
+    awaitingVisualEvidenceRecoveryOwnerBranchId: fact?.ownerBranchId,
+    awaitingVisualEvidenceRecoveryQuestionType: fact?.questionType,
     awaitingVisualEvidenceRecoverySourceHash: fact?.sourceHash,
     awaitingVisualEvidenceRecoverySourceSettlementId:
       fact?.sourceSettlementId,

@@ -220,7 +220,7 @@ const DEFINITIONS: Record<
     workloadClass: "runtime",
     operationKind: "source-linkage-adjudication",
     lane: "critical",
-    timeoutMs: 1_500,
+    timeoutMs: 2_000,
     maxOutputTokens: 256,
     quiescenceMs: 0,
     maxStartsPerBudgetSlot: 1,
