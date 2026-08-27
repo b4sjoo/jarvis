@@ -10611,39 +10611,49 @@ export function useMeetingAssistant() {
       hasActiveChild: hasAdvisorActiveChild(promptContext),
       mutationAuthorized: taskMutationAuthorization.authorized,
     });
-    const preservedParentQuestionType = getAdvisorActiveQuestionType(promptContext);
+    const outputOnlyCurrentBranch =
+      advisorJob.taskMutationAuthority === "output-only-current-branch";
+    const preservedActiveQuestionType = outputOnlyCurrentBranch
+      ? getAdvisorCurrentBranchQuestionType(promptContext)
+      : getAdvisorActiveQuestionType(promptContext);
     const currentOnlyManualCorrection = Boolean(
       options.manualQuestionTypeCorrection &&
         options.responseOnlyTaskScopeOverride
     );
     let advisorTaskSignals =
-      advisorTaskMutationDecision.preserveParentType &&
-      preservedParentQuestionType &&
+      advisorTaskMutationDecision.preserveActiveTaskType &&
+      preservedActiveQuestionType &&
       !currentOnlyManualCorrection
         ? {
             ...routedAdvisorTaskSignals,
-            questionType: preservedParentQuestionType,
+            questionType: preservedActiveQuestionType,
             questionTypeDecision: undefined,
-            askFrame:
-              getAdvisorActiveAskFrame(promptContext) ??
-              semanticAdvisorTaskSignals.askFrame,
-            topicDomain:
-              getAdvisorActiveTopicDomain(promptContext) ??
-              semanticAdvisorTaskSignals.topicDomain,
+            askFrame: outputOnlyCurrentBranch
+              ? routedAdvisorTaskSignals.askFrame
+              : getAdvisorActiveAskFrame(promptContext) ??
+                semanticAdvisorTaskSignals.askFrame,
+            topicDomain: outputOnlyCurrentBranch
+              ? routedAdvisorTaskSignals.topicDomain
+              : getAdvisorActiveTopicDomain(promptContext) ??
+                semanticAdvisorTaskSignals.topicDomain,
             projectAnchor:
               getAdvisorActiveProjectAnchor(promptContext) ??
               semanticAdvisorTaskSignals.projectAnchor,
-            query: buildExplicitActionAdvisorTaskQuery(
-              promptContext,
-              options.currentSuggestion,
-              options.clarifyingFeedback
-            ),
+            query: outputOnlyCurrentBranch
+              ? routedAdvisorTaskSignals.query
+              : buildExplicitActionAdvisorTaskQuery(
+                  promptContext,
+                  options.currentSuggestion,
+                  options.clarifyingFeedback
+                ),
             taskRelation: advisorTaskMutationDecision.relation,
             taskRelationAuthorityDecision: undefined,
             relationEvidenceAuthorized: true,
             responseOnlyRelation: false,
             subtaskIntent: "unknown" as InterviewSubtaskIntent,
-            source: "explicit-action-preserve-parent",
+            source: outputOnlyCurrentBranch
+              ? "explicit-output-only-current-branch"
+              : "explicit-action-preserve-parent",
             reuseActivePlaybook: true,
             openingRoute: undefined,
             latestTurnTaxonomyBoundaryReason:
@@ -11421,8 +11431,8 @@ export function useMeetingAssistant() {
         advisorTaskMutationDecision: advisorTaskMutationDecision.reason,
         advisorTaskMutationCommitParent:
           advisorTaskMutationDecision.commitParent,
-        advisorTaskMutationPreserveParentType:
-          advisorTaskMutationDecision.preserveParentType,
+        advisorTaskMutationPreserveActiveTaskType:
+          advisorTaskMutationDecision.preserveActiveTaskType,
         advisorTaskMutationAllowExplicitRetype:
           advisorTaskMutationDecision.allowExplicitRetype,
         taskMutationAuthorized: taskMutationAuthorization.authorized,
@@ -32354,7 +32364,7 @@ export function useMeetingAssistant() {
         : "live",
       traceId: repairTrace.id,
       advisorJobSource: "force-advise",
-      taskMutationAuthority: "preserve-parent",
+      taskMutationAuthority: "output-only-current-branch",
       triggerTurnId: target.presentation.turnId,
       questionLineage: target.questionLineage,
       logicalQuestionUnit: target.logicalQuestionUnit,
@@ -35324,6 +35334,15 @@ function getAdvisorActiveQuestionType(context: AdvisorPromptContext) {
       context.taskRuntime.parent?.stableKind
   );
   return questionType === "unknown" ? undefined : questionType;
+}
+
+function getAdvisorCurrentBranchQuestionType(context: AdvisorPromptContext) {
+  return (
+    normalizeCanonicalQuestionType(
+      context.activeMeetingTask?.child?.questionType ??
+        context.taskRuntime.parent?.child?.questionType
+    ) ?? getAdvisorActiveQuestionType(context)
+  );
 }
 
 function getAdvisorActivePlaybook(context: AdvisorPromptContext) {

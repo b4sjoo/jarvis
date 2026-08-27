@@ -179,12 +179,13 @@ test("force advise owns answer authority without inheriting an automatic gate", 
     sessionId: "session-a",
     runtimeEpoch: 1,
     snapshotTurnCount: 1,
-    taskMutationAuthority: "preserve-parent",
+    taskMutationAuthority: "output-only-current-branch",
     responseOpportunityGenerationGateOperationId: "automatic-gate-a",
   });
 
   assert.equal(job.responseOpportunityGenerationGateOperationId, undefined);
   assert.equal(job.responseAuthoritySource, "human-force-advise");
+  assert.equal(job.taskMutationAuthority, "output-only-current-branch");
   const metadata = formatAdvisorTriggerJobForTrace(job, "scheduled");
   assert.equal(
     metadata.advisorJobAutomaticResponseOpportunityGateBypassed,
@@ -391,7 +392,7 @@ test("explicit response actions preserve the active parent", () => {
     {
       relation: "followup-parent",
       commitParent: true,
-      preserveParentType: true,
+      preserveActiveTaskType: true,
       allowExplicitRetype: false,
       reason: "explicit-action-preserve-parent",
     }
@@ -419,6 +420,37 @@ test("explicit response actions cannot create a parent without one", () => {
   assert.equal(decision.commitParent, false);
   assert.equal(decision.allowExplicitRetype, false);
   assert.equal(decision.reason, "explicit-action-without-parent");
+});
+
+test("force advise preserves the current branch without mutating topology", () => {
+  assert.deepEqual(
+    authorizeAdvisorTaskMutation({
+      authority: "output-only-current-branch",
+    }),
+    { authorized: false, reason: "manual-output-only" }
+  );
+  assert.deepEqual(
+    decideAdvisorTaskMutation({
+      authority: "output-only-current-branch",
+      resolvedRelation: "new-parent",
+      hasActiveParent: true,
+      hasActiveChild: true,
+    }),
+    {
+      relation: "child-probe",
+      commitParent: false,
+      preserveActiveTaskType: true,
+      allowExplicitRetype: false,
+      reason: "explicit-output-only-current-branch",
+    }
+  );
+  assert.deepEqual(
+    authorizeAdvisorOutputCommit({
+      authority: "output-only-current-branch",
+      executionAuthorized: true,
+    }),
+    { authorized: true, reason: "manual-action-output-authority" }
+  );
 });
 
 test("manual correction remains the only explicit retype authority", () => {
@@ -486,7 +518,7 @@ test("shadow execution cannot authorize output, task, or phase mutation", () => 
   });
   assert.equal(taskMutation.commitParent, false);
   assert.equal(taskMutation.relation, "new-parent");
-  assert.equal(taskMutation.preserveParentType, false);
+  assert.equal(taskMutation.preserveActiveTaskType, false);
   assert.equal(taskMutation.reason, "turn-intent-mutation-suppressed");
   assert.equal(phaseMutation.phase, "requirement_clarification");
   assert.equal(phaseMutation.action, "stay");
@@ -588,6 +620,13 @@ test("output authority follows execution without granting task mutation", () => 
   );
   assert.deepEqual(
     authorizeAdvisorOutputCommit({
+      authority: "output-only-current-branch",
+      executionAuthorized: true,
+    }),
+    { authorized: true, reason: "manual-action-output-authority" }
+  );
+  assert.deepEqual(
+    authorizeAdvisorOutputCommit({
       authority: "input-evidence",
       executionAuthorized: false,
       turnIntentDecision: allowed,
@@ -657,5 +696,27 @@ test("regenerate and speakable preserve phase while manual next can advance", ()
       manualDecision,
     }).phase,
     "design_framing"
+  );
+  assert.deepEqual(
+    decideAdvisorPhaseMutation({
+      authority: "output-only-current-branch",
+      taskMutationAuthorized: false,
+      manualPhaseAdvance: true,
+      currentPhase: "requirement_clarification",
+      hasActiveChild: true,
+      automaticDecision,
+      manualDecision,
+    }),
+    {
+      phase: "requirement_clarification",
+      flags: [],
+      requiredArtifacts: ["answer", "whiteboard"],
+      action: "stay",
+      reason: "explicit-output-only-current-branch-phase",
+      source: "automatic",
+      targetArtifact: "answer",
+      guardStatus: "automatic",
+      phaseFrom: "requirement_clarification",
+    }
   );
 });

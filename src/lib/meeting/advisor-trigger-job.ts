@@ -36,6 +36,7 @@ export type AdvisorJobSource =
 export type AdvisorTaskMutationAuthority =
   | "input-evidence"
   | "preserve-parent"
+  | "output-only-current-branch"
   | "runtime-intent-answer"
   | "runtime-type-repair"
   | "manual-correction";
@@ -157,12 +158,13 @@ export function resolveAdvisorLogicalQuestionAuthorizationTarget(input: {
 export interface AdvisorTaskMutationDecision {
   relation: InterviewTaskRelation;
   commitParent: boolean;
-  preserveParentType: boolean;
+  preserveActiveTaskType: boolean;
   allowExplicitRetype: boolean;
   reason:
     | "input-evidence-authority"
     | "manual-correction-authority"
     | "explicit-action-preserve-parent"
+    | "explicit-output-only-current-branch"
     | "explicit-action-without-parent"
     | "turn-intent-mutation-suppressed";
 }
@@ -173,6 +175,7 @@ export interface AdvisorTaskMutationAuthorization {
     | "substantive-input-authority"
     | "manual-correction-authority"
     | "explicit-action-authority"
+    | "manual-output-only"
     | "runtime-intent-action-only"
     | "runtime-type-repair-output-only"
     | "missing-turn-intent-decision"
@@ -301,11 +304,24 @@ export function decideAdvisorTaskMutation(input: {
   hasActiveChild: boolean;
   mutationAuthorized?: boolean;
 }): AdvisorTaskMutationDecision {
+  if (input.authority === "output-only-current-branch") {
+    return {
+      relation: input.hasActiveChild
+        ? "child-probe"
+        : input.hasActiveParent
+          ? "followup-parent"
+          : input.resolvedRelation,
+      commitParent: false,
+      preserveActiveTaskType: input.hasActiveParent,
+      allowExplicitRetype: false,
+      reason: "explicit-output-only-current-branch",
+    };
+  }
   if (input.mutationAuthorized === false) {
     return {
       relation: input.resolvedRelation,
       commitParent: false,
-      preserveParentType: false,
+      preserveActiveTaskType: false,
       allowExplicitRetype: false,
       reason: "turn-intent-mutation-suppressed",
     };
@@ -315,7 +331,7 @@ export function decideAdvisorTaskMutation(input: {
     return {
       relation: input.resolvedRelation,
       commitParent: true,
-      preserveParentType: false,
+      preserveActiveTaskType: false,
       allowExplicitRetype: true,
       reason: "manual-correction-authority",
     };
@@ -325,7 +341,7 @@ export function decideAdvisorTaskMutation(input: {
     return {
       relation: input.resolvedRelation,
       commitParent: true,
-      preserveParentType: false,
+      preserveActiveTaskType: false,
       allowExplicitRetype: false,
       reason: "input-evidence-authority",
     };
@@ -335,7 +351,7 @@ export function decideAdvisorTaskMutation(input: {
     return {
       relation: input.resolvedRelation,
       commitParent: false,
-      preserveParentType: true,
+      preserveActiveTaskType: true,
       allowExplicitRetype: false,
       reason: "explicit-action-without-parent",
     };
@@ -344,7 +360,7 @@ export function decideAdvisorTaskMutation(input: {
   return {
     relation: input.hasActiveChild ? "resume-parent" : "followup-parent",
     commitParent: true,
-    preserveParentType: true,
+    preserveActiveTaskType: true,
     allowExplicitRetype: false,
     reason: "explicit-action-preserve-parent",
   };
@@ -359,6 +375,9 @@ export function authorizeAdvisorTaskMutation(input: {
   }
   if (input.authority === "preserve-parent") {
     return { authorized: true, reason: "explicit-action-authority" };
+  }
+  if (input.authority === "output-only-current-branch") {
+    return { authorized: false, reason: "manual-output-only" };
   }
   if (input.authority === "runtime-intent-answer") {
     return { authorized: false, reason: "runtime-intent-action-only" };
@@ -397,7 +416,8 @@ export function authorizeAdvisorOutputCommit(input: {
   }
   if (
     input.authority === "manual-correction" ||
-    input.authority === "preserve-parent"
+    input.authority === "preserve-parent" ||
+    input.authority === "output-only-current-branch"
   ) {
     return { authorized: true, reason: "manual-action-output-authority" };
   }
@@ -444,6 +464,19 @@ export function decideAdvisorPhaseMutation(input: {
   automaticDecision: PlaybookPhaseDecision;
   manualDecision: PlaybookPhaseDecision;
 }): PlaybookPhaseDecision {
+  if (input.authority === "output-only-current-branch") {
+    return {
+      phase: input.currentPhase,
+      flags: [],
+      requiredArtifacts: [...input.automaticDecision.requiredArtifacts],
+      action: "stay",
+      reason: "explicit-output-only-current-branch-phase",
+      source: "automatic",
+      targetArtifact: "answer",
+      guardStatus: "automatic",
+      phaseFrom: input.currentPhase,
+    };
+  }
   if (input.manualPhaseAdvance) return input.manualDecision;
   if (input.taskMutationAuthorized === false) {
     return {
