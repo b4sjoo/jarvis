@@ -6,25 +6,23 @@ import {
 } from "./task-taxonomy.js";
 import type { InterviewTaskRelation } from "./types.js";
 
-export type TaskRelationAuthorityDisposition =
-  | "authorized"
-  | "response-only";
+export type TaskRelationLexicalHintDisposition = "response-only";
 
-export interface TaskRelationAuthorityDecision {
+export interface TaskRelationLexicalHintDecision {
   relation: InterviewTaskRelation;
   proposedRelation?: InterviewTaskRelation;
-  disposition: TaskRelationAuthorityDisposition;
+  disposition: TaskRelationLexicalHintDisposition;
   relationEvidenceAuthorized: boolean;
   reason: string;
   evidenceSpans: string[];
 }
 
-export function decideCrossTypeTaskRelationAuthority(input: {
+export function projectCrossTypeTaskRelationHint(input: {
   activeQuestionType?: unknown;
   candidateQuestionType?: unknown;
   currentText: string;
   explicitTaskSwitch?: boolean;
-}): TaskRelationAuthorityDecision | undefined {
+}): TaskRelationLexicalHintDecision | undefined {
   const activeQuestionType = normalizeCanonicalQuestionType(
     input.activeQuestionType
   );
@@ -90,10 +88,11 @@ export function decideCrossTypeTaskRelationAuthority(input: {
     candidateQuestionType !== "project-deep-dive"
   ) {
     return {
-      relation: "followup-parent",
-      disposition: "authorized",
-      relationEvidenceAuthorized: true,
-      reason: "explicit-design-parent-revision",
+      relation: "unknown",
+      proposedRelation: "followup-parent",
+      disposition: "response-only",
+      relationEvidenceAuthorized: false,
+      reason: "explicit-design-parent-revision-hint",
       evidenceSpans: designRevisionEvidence,
     };
   }
@@ -111,10 +110,11 @@ export function decideCrossTypeTaskRelationAuthority(input: {
     canParentQuestionTypeOwnChild(activeQuestionType, candidateQuestionType)
   ) {
     return {
-      relation: "child-probe",
-      disposition: "authorized",
-      relationEvidenceAuthorized: true,
-      reason: "explicit-parent-binding",
+      relation: "unknown",
+      proposedRelation: "child-probe",
+      disposition: "response-only",
+      relationEvidenceAuthorized: false,
+      reason: "explicit-parent-binding-hint",
       evidenceSpans: bindingEvidence,
     };
   }
@@ -144,20 +144,21 @@ export function decideCrossTypeTaskRelationAuthority(input: {
   };
 }
 
-export function decideActiveParentTaskRelationAuthority(input: {
+export function projectActiveParentTaskRelationHint(input: {
   hasLatestUsefulText: boolean;
   hasActiveChild: boolean;
   explicitResume: boolean;
   broadResumeProposal: boolean;
-}): TaskRelationAuthorityDecision | undefined {
+}): TaskRelationLexicalHintDecision | undefined {
   if (!input.hasLatestUsefulText) return undefined;
 
   if (input.hasActiveChild && input.explicitResume) {
     return {
-      relation: "resume-parent",
-      disposition: "authorized",
-      relationEvidenceAuthorized: true,
-      reason: "explicit-resume-parent",
+      relation: "unknown",
+      proposedRelation: "resume-parent",
+      disposition: "response-only",
+      relationEvidenceAuthorized: false,
+      reason: "explicit-resume-parent-hint",
       evidenceSpans: [],
     };
   }
@@ -202,8 +203,8 @@ export function isExplicitResumeParentTranscript(text: string) {
   );
 }
 
-export function formatTaskRelationAuthorityForTrace(
-  decision: TaskRelationAuthorityDecision | undefined
+export function formatTaskRelationLexicalHintForTrace(
+  decision: TaskRelationLexicalHintDecision | undefined
 ): Record<string, unknown> {
   if (!decision) return {};
   return {

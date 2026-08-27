@@ -732,10 +732,10 @@ import {
   upsertManualCorrectionTargetHistory,
   ManualCorrectionOperationCoordinator,
   decideInterviewTaskContinuityBranch,
-  decideActiveParentTaskRelationAuthority,
-  decideCrossTypeTaskRelationAuthority,
+  projectActiveParentTaskRelationHint,
+  projectCrossTypeTaskRelationHint,
   isExplicitResumeParentTranscript,
-  formatTaskRelationAuthorityForTrace,
+  formatTaskRelationLexicalHintForTrace,
   applyResponseOnlyTaskScopeToPromptContext,
   createResponseOnlyTaskScope,
   formatResponseOnlyTaskScopeForTrace,
@@ -1770,8 +1770,8 @@ interface AdvisorTaskSignals {
   projectAnchor?: string;
   query: string;
   taskRelation: InterviewTaskRelation;
-  taskRelationAuthorityDecision?: ReturnType<
-    typeof decideCrossTypeTaskRelationAuthority
+  taskRelationLexicalHint?: ReturnType<
+    typeof projectCrossTypeTaskRelationHint
   >;
   relationEvidenceAuthorized?: boolean;
   responseOnlyRelation?: boolean;
@@ -10369,10 +10369,10 @@ export function useMeetingAssistant() {
           ...resolvedAdvisorTaskSignals,
           questionType: logicalQuestionSectionHint.questionType,
           questionTypeDecision: undefined,
-          taskRelation: "new-parent" as InterviewTaskRelation,
-          taskRelationAuthorityDecision: undefined,
-          relationEvidenceAuthorized: true,
-          responseOnlyRelation: false,
+          taskRelation: "unknown" as InterviewTaskRelation,
+          taskRelationLexicalHint: undefined,
+          relationEvidenceAuthorized: false,
+          responseOnlyRelation: true,
           source: "interview-section-hint",
           reuseActivePlaybook: false,
           openingRoute: undefined,
@@ -10466,7 +10466,7 @@ export function useMeetingAssistant() {
               advisorQuestionSemanticEvidenceText
             ),
             taskRelation: "followup-parent" as const,
-            taskRelationAuthorityDecision: undefined,
+            taskRelationLexicalHint: undefined,
             relationEvidenceAuthorized: true,
             responseOnlyRelation: false,
             subtaskIntent: "unknown" as InterviewSubtaskIntent,
@@ -10491,7 +10491,7 @@ export function useMeetingAssistant() {
             questionType: currentQuestionSettlement.questionType,
             questionTypeDecision: undefined,
             taskRelation: currentQuestionSettlement.relation,
-            taskRelationAuthorityDecision: undefined,
+            taskRelationLexicalHint: undefined,
             relationEvidenceAuthorized: true,
             responseOnlyRelation: false,
             source: "current-question-settlement",
@@ -10532,10 +10532,10 @@ export function useMeetingAssistant() {
           askFrame: "unknown" as const,
           topicDomain: "unknown" as const,
           projectAnchor: undefined,
-          taskRelation: "logistics" as const,
-          taskRelationAuthorityDecision: undefined,
-          relationEvidenceAuthorized: true,
-          responseOnlyRelation: false,
+          taskRelation: "unknown" as const,
+          taskRelationLexicalHint: undefined,
+          relationEvidenceAuthorized: false,
+          responseOnlyRelation: true,
           subtaskIntent: "unknown" as const,
           source: "transient-personal-status",
           reuseActivePlaybook: false,
@@ -10647,7 +10647,7 @@ export function useMeetingAssistant() {
                   options.clarifyingFeedback
                 ),
             taskRelation: advisorTaskMutationDecision.relation,
-            taskRelationAuthorityDecision: undefined,
+            taskRelationLexicalHint: undefined,
             relationEvidenceAuthorized: true,
             responseOnlyRelation: false,
             subtaskIntent: "unknown" as InterviewSubtaskIntent,
@@ -11131,7 +11131,7 @@ export function useMeetingAssistant() {
             questionType: currentQuestionSettlement.questionType,
             questionTypeDecision: undefined,
             taskRelation: "new-parent",
-            taskRelationAuthorityDecision: undefined,
+            taskRelationLexicalHint: undefined,
             relationEvidenceAuthorized: true,
             responseOnlyRelation: false,
             source: "current-question-settlement",
@@ -19066,18 +19066,18 @@ export function useMeetingAssistant() {
       const explicitTaskSwitch =
         isTaskSwitchTranscript(currentText) ||
         Boolean(logicalQuestionUnit.taskBoundaryEvidence);
-      const crossTypeAuthority =
-        decideCrossTypeTaskRelationAuthority({
+      const crossTypeHint =
+        projectCrossTypeTaskRelationHint({
           activeQuestionType:
             activeMeetingTask.parent.questionType,
           candidateQuestionType: lexical.type,
           currentText,
           explicitTaskSwitch,
         });
-      const activeParentAuthority =
-        crossTypeAuthority?.disposition === "authorized"
-          ? crossTypeAuthority
-          : decideActiveParentTaskRelationAuthority({
+      const activeParentHint =
+        crossTypeHint
+          ? crossTypeHint
+          : projectActiveParentTaskRelationHint({
               hasLatestUsefulText: Boolean(currentText.trim()),
               hasActiveChild: Boolean(activeMeetingTask.child),
               explicitResume: Boolean(
@@ -19086,18 +19086,10 @@ export function useMeetingAssistant() {
               ),
               broadResumeProposal: false,
             });
-      const deterministicRelationAuthorized = Boolean(
-        activeParentAuthority?.disposition === "authorized" &&
-          activeParentAuthority.relationEvidenceAuthorized
-      );
+      const deterministicRelationAuthorized = false;
       const localRelation =
-        activeParentAuthority?.relation ?? "unknown";
-      const deterministicRelation =
-        deterministicRelationAuthorized &&
-        isRuntimeTaskRelation(localRelation) &&
-        localRelation !== "unknown"
-          ? localRelation
-          : undefined;
+        activeParentHint?.relation ?? "unknown";
+      const deterministicRelation = undefined;
       const evaluationActive = Boolean(
         debugModeRef.current || scriptedValidationRef.current
       );
@@ -19139,22 +19131,20 @@ export function useMeetingAssistant() {
         taskRelationAdjudicationDeterministicRelation:
           deterministicRelation,
         taskRelationAdjudicationLocalProposal:
-          activeParentAuthority?.proposedRelation,
+          activeParentHint?.proposedRelation,
         taskRelationAdjudicationLocalAuthorityReason:
-          activeParentAuthority?.reason,
+          activeParentHint?.reason,
         taskRelationAdjudicationLocalEvidenceSpans:
-          activeParentAuthority?.evidenceSpans,
+          activeParentHint?.evidenceSpans,
         runtimeLexicalRuleSetVersion: "runtime-lexical-rules-v1",
         taskRelationLexicalRuleId:
-          activeParentAuthority?.reason ?? "no-local-relation-rule",
+          activeParentHint?.reason ?? "no-local-relation-rule",
         taskRelationLexicalAuthorityStage:
-          deterministicRelationAuthorized
-            ? "structural-authority"
-            : activeParentAuthority
-              ? "prompt-hint"
-              : "observation-only",
+          activeParentHint
+            ? "prompt-hint"
+            : "observation-only",
         taskRelationLexicalMatchedSpans:
-          activeParentAuthority?.evidenceSpans ?? [],
+          activeParentHint?.evidenceSpans ?? [],
         taskRelationAdjudicationDeterministicAuthority:
           deterministicRelationAuthorized,
         taskRelationAdjudicationComparisonExpected:
@@ -35566,7 +35556,7 @@ function resolveAdvisorTaskSignals(
   if (hasAdvisorActiveTask(context) && activeQuestionType) {
     const hasActiveChild = hasAdvisorActiveChild(context);
     const explicitResumeText = latestThemText || latestUsefulText;
-    const explicitResumeDecision = decideActiveParentTaskRelationAuthority({
+    const explicitResumeDecision = projectActiveParentTaskRelationHint({
       hasLatestUsefulText: Boolean(latestUsefulText),
       hasActiveChild,
       explicitResume: Boolean(
@@ -35576,20 +35566,10 @@ function resolveAdvisorTaskSignals(
       ),
       broadResumeProposal: false,
     });
-    const latestParentKind = normalizeInterviewParentKind(latestQuestionType);
-    const latestIsParentKind = Boolean(
-      latestParentKind && isParentInterviewKind(latestParentKind)
-    );
-    const latestLooksLikeTask =
-      latestUsefulText &&
-      (hasQuestionOrTaskSignal(latestUsefulText) ||
-        isTaskSwitchTranscript(latestUsefulText) ||
-        explicitTaskBoundary);
-    const taskRelationAuthorityDecision =
-      explicitResumeDecision?.relation === "resume-parent" &&
-      explicitResumeDecision.relationEvidenceAuthorized
+    const taskRelationLexicalHint =
+      explicitResumeDecision?.proposedRelation === "resume-parent"
         ? explicitResumeDecision
-        : decideCrossTypeTaskRelationAuthority({
+        : projectCrossTypeTaskRelationHint({
             activeQuestionType,
             candidateQuestionType: latestQuestionType,
             currentText: latestUsefulText,
@@ -35597,114 +35577,9 @@ function resolveAdvisorTaskSignals(
               isTaskSwitchTranscript(latestUsefulText) ||
               explicitTaskBoundary,
           });
-    const authorizedNewParent =
-      taskRelationAuthorityDecision?.relation === "new-parent" &&
-      taskRelationAuthorityDecision.relationEvidenceAuthorized;
-    const useLatestAsChild =
-      taskRelationAuthorityDecision?.relation === "child-probe" &&
-      taskRelationAuthorityDecision.relationEvidenceAuthorized;
-    const useLatestAsParentFollowup =
-      taskRelationAuthorityDecision?.relation === "followup-parent" &&
-      taskRelationAuthorityDecision.relationEvidenceAuthorized;
-    const shouldStartNewParent =
-      Boolean(latestLooksLikeTask) &&
-      latestIsParentKind &&
-      latestParentKind !== undefined &&
-      authorizedNewParent;
-
-    if (shouldStartNewParent) {
-      return {
-        questionType: latestQuestionType,
-        questionTypeDecision: latestQuestionTypeDecision,
-        askFrame: latestAskFrame,
-        topicDomain: latestTopicDomain,
-        query: buildFocusedAdvisorTaskQuery(context, latestUsefulText),
-        taskRelation: "new-parent",
-        subtaskIntent: inferAdvisorSubtaskIntent(
-          latestUsefulText,
-          latestQuestionType
-        ),
-        projectAnchor: latestProjectAnchor,
-        source:
-          (openingRoute?.commitParent ? openingRoute.source : undefined) ??
-          (explicitTaskBoundary
-            ? "explicit-task-boundary"
-            : "latest-turn-new-parent"),
-        reuseActivePlaybook: false,
-        openingRoute,
-        latestTurnAskFrame: latestAskFrame,
-        latestTurnTaxonomyBoundaryReason: openingRoute?.commitParent
-          ? "opening-route"
-          : explicitTaskBoundary
-            ? "explicit-task-boundary"
-            : "latest-turn-classified",
-        taxonomyFallbackSuppressed: false,
-        unknownTaskMutationBlocked: false,
-      };
-    }
-
-    if (useLatestAsParentFollowup) {
-      return {
-        questionType: activeQuestionType,
-        questionTypeDecision: latestQuestionTypeDecision,
-        askFrame:
-          getAdvisorActiveAskFrame(context) ?? latestAskFrame,
-        topicDomain:
-          getAdvisorActiveTopicDomain(context) ?? latestTopicDomain,
-        query: buildFocusedAdvisorTaskQuery(
-          context,
-          latestUsefulText
-        ),
-        taskRelation: "followup-parent",
-        taskRelationAuthorityDecision,
-        relationEvidenceAuthorized: true,
-        responseOnlyRelation: false,
-        subtaskIntent: inferAdvisorSubtaskIntent(
-          latestUsefulText,
-          activeQuestionType
-        ),
-        projectAnchor:
-          getAdvisorActiveProjectAnchor(context) ??
-          latestProjectAnchor,
-        source: "explicit-design-parent-revision",
-        reuseActivePlaybook: true,
-        openingRoute,
-        latestTurnAskFrame: latestAskFrame,
-        latestTurnTaxonomyBoundaryReason:
-          "active-parent-continuity",
-        taxonomyFallbackSuppressed: false,
-        unknownTaskMutationBlocked: false,
-      };
-    }
-
-    if (useLatestAsChild) {
-      return {
-        questionType: latestQuestionType,
-        questionTypeDecision: latestQuestionTypeDecision,
-        askFrame: latestAskFrame,
-        topicDomain: latestTopicDomain,
-        query: buildFocusedAdvisorTaskQuery(context, latestUsefulText),
-        taskRelation: "child-probe",
-        taskRelationAuthorityDecision,
-        relationEvidenceAuthorized: true,
-        responseOnlyRelation: false,
-        subtaskIntent: inferAdvisorSubtaskIntent(
-          latestUsefulText,
-          latestQuestionType
-        ),
-        projectAnchor: latestProjectAnchor,
-        source: "latest-turn-child-probe",
-        reuseActivePlaybook: false,
-        openingRoute,
-        latestTurnAskFrame: latestAskFrame,
-        latestTurnTaxonomyBoundaryReason: "active-parent-continuity",
-        taxonomyFallbackSuppressed: false,
-        unknownTaskMutationBlocked: false,
-      };
-    }
 
     if (
-      taskRelationAuthorityDecision?.disposition === "response-only"
+      taskRelationLexicalHint?.disposition === "response-only"
     ) {
       return {
         questionType: latestQuestionType,
@@ -35713,7 +35588,7 @@ function resolveAdvisorTaskSignals(
         topicDomain: latestTopicDomain,
         query: latestUsefulText,
         taskRelation: "unknown",
-        taskRelationAuthorityDecision,
+        taskRelationLexicalHint,
         relationEvidenceAuthorized: false,
         responseOnlyRelation: true,
         subtaskIntent: inferAdvisorSubtaskIntent(
@@ -35736,24 +35611,20 @@ function resolveAdvisorTaskSignals(
       latestUsefulText,
       activeQuestionType
     );
-    const relationDecision =
-      taskRelationAuthorityDecision?.relation === "resume-parent" &&
-      taskRelationAuthorityDecision.relationEvidenceAuthorized
-        ? taskRelationAuthorityDecision
-        : decideActiveParentTaskRelationAuthority({
-        hasLatestUsefulText: Boolean(latestUsefulText),
-        hasActiveChild,
-        explicitResume: Boolean(
-          latestUsefulText &&
-            isExplicitResumeParentTranscript(latestUsefulText)
-        ),
-        broadResumeProposal: Boolean(
-          latestUsefulText &&
-            (latestQuestionType === activeQuestionType ||
-              latestSubtaskIntent === "metric-probe" ||
-              latestSubtaskIntent === "qps-estimation")
-        ),
-      });
+    const relationDecision = projectActiveParentTaskRelationHint({
+      hasLatestUsefulText: Boolean(latestUsefulText),
+      hasActiveChild,
+      explicitResume: Boolean(
+        latestUsefulText &&
+          isExplicitResumeParentTranscript(latestUsefulText)
+      ),
+      broadResumeProposal: Boolean(
+        latestUsefulText &&
+          (latestQuestionType === activeQuestionType ||
+            latestSubtaskIntent === "metric-probe" ||
+            latestSubtaskIntent === "qps-estimation")
+      ),
+    });
     const taskRelation = relationDecision?.relation ?? "unknown";
     const responseOnlyRelation =
       relationDecision?.disposition === "response-only";
@@ -35772,7 +35643,7 @@ function resolveAdvisorTaskSignals(
       projectAnchor: latestProjectAnchor,
       query: buildFocusedAdvisorTaskQuery(context, latestUsefulText),
       taskRelation,
-      taskRelationAuthorityDecision: relationDecision,
+      taskRelationLexicalHint: relationDecision,
       relationEvidenceAuthorized:
         relationDecision?.relationEvidenceAuthorized ?? false,
       responseOnlyRelation,
@@ -35840,8 +35711,8 @@ function formatAdvisorQuestionTypeDecisionForTrace(
       signals.relationEvidenceAuthorized ??
       signals.taskRelation !== "unknown",
     responseOnlyRelation: signals.responseOnlyRelation ?? false,
-    ...formatTaskRelationAuthorityForTrace(
-      signals.taskRelationAuthorityDecision
+    ...formatTaskRelationLexicalHintForTrace(
+      signals.taskRelationLexicalHint
     ),
   };
 
@@ -35961,7 +35832,7 @@ function applyManualQuestionTypeCorrectionToAdvisorSignals(
       .filter(Boolean)
       .join("\n"),
     taskRelation,
-    taskRelationAuthorityDecision: undefined,
+    taskRelationLexicalHint: undefined,
     relationEvidenceAuthorized: true,
     responseOnlyRelation: false,
     source: "manual-question-type-correction",
@@ -36582,7 +36453,7 @@ function decideScreenTaskRelation({
   const nextKind = normalizeInterviewParentKind(taskKind);
   const nextQuestionType = readMemoryQuestionType(taskKind) ?? "unknown";
   const currentText = question || screenEvidenceText;
-  const crossTypeAuthority = decideCrossTypeTaskRelationAuthority({
+  const crossTypeHint = projectCrossTypeTaskRelationHint({
     activeQuestionType: existingTask?.stableKind,
     candidateQuestionType: nextQuestionType,
     currentText,
@@ -36608,66 +36479,33 @@ function decideScreenTaskRelation({
     return exactRecoveryContinuity;
   }
 
-  if (
-    crossTypeAuthority?.relation === "new-parent" &&
-    crossTypeAuthority.relationEvidenceAuthorized
-  ) {
-    return {
-      relation: "new-parent",
-      reason: crossTypeAuthority.reason,
-      confidence: 1,
-      relationEvidenceAuthorized: true,
-      evidenceSpans: crossTypeAuthority.evidenceSpans,
-    };
-  }
-
   if (!nextKind || !isParentInterviewKind(nextKind)) {
-    if (crossTypeAuthority?.relation === "child-probe") {
-      return {
-        relation: "child-probe",
-        reason: crossTypeAuthority.reason,
-        confidence: 0.9,
-        relationEvidenceAuthorized: true,
-        evidenceSpans: crossTypeAuthority.evidenceSpans,
-      };
-    }
-
     return {
       relation: "unknown",
       proposedRelation:
-        crossTypeAuthority?.proposedRelation ?? "followup-parent",
+        crossTypeHint?.proposedRelation ?? "followup-parent",
       reason:
-        crossTypeAuthority?.reason ??
+        crossTypeHint?.reason ??
         "screen-nonparent-relation-unresolved",
       confidence: 0,
       relationEvidenceAuthorized: false,
       responseOnly: true,
-      evidenceSpans: crossTypeAuthority?.evidenceSpans,
+      evidenceSpans: crossTypeHint?.evidenceSpans,
     };
   }
 
   if (!isCompatibleParentKind(existingTask.stableKind, nextKind)) {
-    if (crossTypeAuthority?.relation === "child-probe") {
-      return {
-        relation: "child-probe",
-        reason: crossTypeAuthority.reason,
-        confidence: 0.9,
-        relationEvidenceAuthorized: true,
-        evidenceSpans: crossTypeAuthority.evidenceSpans,
-      };
-    }
-
     return {
       relation: "unknown",
       proposedRelation:
-        crossTypeAuthority?.proposedRelation ?? "new-parent",
+        crossTypeHint?.proposedRelation ?? "new-parent",
       reason:
-        crossTypeAuthority?.reason ??
+        crossTypeHint?.reason ??
         "screen-parent-kind-mismatch-nonauthoritative",
       confidence: 0,
       relationEvidenceAuthorized: false,
       responseOnly: true,
-      evidenceSpans: crossTypeAuthority?.evidenceSpans,
+      evidenceSpans: crossTypeHint?.evidenceSpans,
     };
   }
 
@@ -37233,20 +37071,6 @@ function normalizeTranscriptForGate(text: string) {
     .replace(/[^\p{L}\p{N}+#.()]+/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
-}
-
-function hasQuestionOrTaskSignal(text: string) {
-  const normalized = normalizeTranscriptForGate(text);
-  return (
-    /[?？]/.test(text) ||
-    /\b(can you|could you|would you|how would|how do|what is|what are|why|explain|describe|tell me|walk me through|design|build|implement|code|solve|compare|estimate|evaluate)\b/i.test(
-      text
-    ) ||
-    /请|怎么|如何|为什么|解释|设计|实现|写一个|比较|估算/.test(text) ||
-    /\b(system design|design a|design an|leetcode|algorithm|coding question|behavioral question)\b/i.test(
-      normalized
-    )
-  );
 }
 
 function isTaskSwitchTranscript(text: string) {

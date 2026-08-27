@@ -21,7 +21,7 @@ import {
   projectPrimaryAsk,
 } from "../src/lib/meeting/primary-ask-projection.js";
 import { createResponseOnlyTaskScope } from "../src/lib/meeting/response-only-task-scope.js";
-import { decideCrossTypeTaskRelationAuthority } from "../src/lib/meeting/task-relation-authority.js";
+import { projectCrossTypeTaskRelationHint } from "../src/lib/meeting/task-relation-authority.js";
 import type { SelectedInterviewPlaybook } from "../src/lib/meeting/types.js";
 import type { TransientPersonalStatusDecision } from "../src/lib/meeting/types.js";
 
@@ -950,7 +950,7 @@ test("semantic setup preserves a design parent and revises its whiteboard", () =
   });
   const answerFocusText = primaryAskAnswerFocusText(projection, text);
   const semanticEvidenceText = primaryAskClassifierText(projection, text);
-  const relation = decideCrossTypeTaskRelationAuthority({
+  const relation = projectCrossTypeTaskRelationHint({
     activeQuestionType: "general-system-design",
     candidateQuestionType: "field-knowledge",
     currentText: semanticEvidenceText,
@@ -961,15 +961,16 @@ test("semantic setup preserves a design parent and revises its whiteboard", () =
     "explain which components need to change."
   );
   assert.match(semanticEvidenceText, /add a surge pricing/i);
-  assert.equal(relation?.relation, "followup-parent");
-  assert.equal(relation?.relationEvidenceAuthorized, true);
+  assert.equal(relation?.relation, "unknown");
+  assert.equal(relation?.proposedRelation, "followup-parent");
+  assert.equal(relation?.relationEvidenceAuthorized, false);
 
   const plan = buildSettledAdvisorExecutionPlan({
     settlement: settlement({
       questionType: "general-system-design",
-      relation: relation?.relation ?? "unknown",
+      relation: relation?.proposedRelation ?? "unknown",
       typeMutationAuthorized: false,
-      relationMutationAuthorized: false,
+      relationMutationAuthorized: true,
       parentMutationAuthorized: false,
     }),
     activeMeetingTask: activeTask("general-system-design"),
