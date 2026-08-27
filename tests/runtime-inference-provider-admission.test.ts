@@ -72,6 +72,79 @@ test("caps concurrent provider work and reports admission receipts", async () =>
   assert.ok(activeCounts.every((count) => count <= 2));
 });
 
+test("isolates different provider fingerprints and shares identical configurations", async () => {
+  const isolated = new RuntimeInferenceProviderAdmissionCoordinator(1, 0);
+  isolated.configureProviderGroups({
+    fastFingerprint: "fast-a",
+    intelligentFingerprint: "smart-b",
+  });
+  const isolatedStarted: string[] = [];
+  const isolatedReleases = new Map<string, () => void>();
+  const run = (
+    coordinator: RuntimeInferenceProviderAdmissionCoordinator,
+    operationId: string,
+    providerTier: "fast" | "intelligent",
+    started: string[],
+    releases: Map<string, () => void>
+  ) =>
+    coordinator.run({
+      operationId,
+      lane: "critical",
+      providerTier,
+      signal: new AbortController().signal,
+      execute: () =>
+        new Promise<string>((resolve) => {
+          started.push(operationId);
+          releases.set(operationId, () => resolve(operationId));
+        }),
+    });
+  const isolatedFast = run(
+    isolated,
+    "fast",
+    "fast",
+    isolatedStarted,
+    isolatedReleases
+  );
+  const isolatedSmart = run(
+    isolated,
+    "smart",
+    "intelligent",
+    isolatedStarted,
+    isolatedReleases
+  );
+  await waitFor(() => isolatedStarted.length === 2);
+  isolatedReleases.get("fast")?.();
+  isolatedReleases.get("smart")?.();
+  await Promise.all([isolatedFast, isolatedSmart]);
+
+  const shared = new RuntimeInferenceProviderAdmissionCoordinator(1, 0);
+  shared.configureProviderGroups({
+    fastFingerprint: "same",
+    intelligentFingerprint: "same",
+  });
+  const sharedStarted: string[] = [];
+  const sharedReleases = new Map<string, () => void>();
+  const sharedFast = run(
+    shared,
+    "shared-fast",
+    "fast",
+    sharedStarted,
+    sharedReleases
+  );
+  const sharedSmart = run(
+    shared,
+    "shared-smart",
+    "intelligent",
+    sharedStarted,
+    sharedReleases
+  );
+  await waitFor(() => sharedStarted.length === 1);
+  sharedReleases.get(sharedStarted[0])?.();
+  await waitFor(() => sharedStarted.length === 2);
+  sharedReleases.get(sharedStarted[1])?.();
+  await Promise.all([sharedFast, sharedSmart]);
+});
+
 test("removes an aborted queued operation without consuming a slot", async () => {
   const coordinator = new RuntimeInferenceProviderAdmissionCoordinator(1, 0);
   let releaseActive: (() => void) | undefined;

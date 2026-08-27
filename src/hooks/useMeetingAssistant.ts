@@ -2197,6 +2197,10 @@ interface TaskRelationAdjudicationScheduleHandle {
   outcome: Promise<TaskRelationAdjudicationRuntimeOutcome>;
   affinityOutcome?: Promise<TaskRelationSplitAffinityOutcome>;
   canonicalOutcome?: Promise<TaskRelationSplitCanonicalResult>;
+  startCanonical?: (
+    foreground: boolean
+  ) => Promise<TaskRelationSplitCanonicalResult>;
+  cancelForegroundWork?: () => void;
   currentQuestion?: ProvisionalCurrentQuestion;
   deterministicProposal?: CurrentQuestionSettlementProposal;
   localQuestionType?: CanonicalQuestionType;
@@ -2228,6 +2232,10 @@ interface TaskRelationSplitScheduleHandle {
   operationId: string;
   affinityOutcome: Promise<TaskRelationSplitAffinityOutcome>;
   canonicalOutcome: Promise<TaskRelationSplitCanonicalResult>;
+  startCanonical: (
+    foreground: boolean
+  ) => Promise<TaskRelationSplitCanonicalResult>;
+  cancelForegroundWork: () => void;
 }
 
 interface RuntimeAdjudicationScheduleHandle {
@@ -6341,12 +6349,29 @@ export function useMeetingAssistant() {
     codingProvider: state.settings.codingModel,
     taxonomyAdjudicationProvider: state.settings.taxonomyAdjudication,
   });
-  meetingModelProviderSnapshotRef.current = {
-    providers: allAiProviders,
-    selectedProvider: selectedAIProvider,
-    codingProvider: state.settings.codingModel,
-    taxonomyAdjudicationProvider: state.settings.taxonomyAdjudication,
-  };
+  if (!runtimeActiveRef.current) {
+    meetingModelProviderSnapshotRef.current = {
+      providers: allAiProviders,
+      selectedProvider: selectedAIProvider,
+      codingProvider: state.settings.codingModel,
+      taxonomyAdjudicationProvider: state.settings.taxonomyAdjudication,
+    };
+  }
+  const fastRuntimeRoute = resolveRuntimeInferenceModelRouteFromSnapshot({
+    snapshot: meetingModelProviderSnapshotRef.current,
+    operationKind: "response-opportunity-inference",
+    reason: "runtime-provider-group-fast",
+  });
+  const intelligentRuntimeRoute =
+    resolveRuntimeInferenceModelRouteFromSnapshot({
+      snapshot: meetingModelProviderSnapshotRef.current,
+      operationKind: "question-type-adjudication",
+      reason: "runtime-provider-group-intelligent",
+    });
+  runtimeInferenceProviderAdmissionRef.current?.configureProviderGroups({
+    fastFingerprint: fastRuntimeRoute.configFingerprint,
+    intelligentFingerprint: intelligentRuntimeRoute.configFingerprint,
+  });
 
   const resolveMeetingModelRoute = useCallback(
     ({
@@ -18281,6 +18306,9 @@ export function useMeetingAssistant() {
         request.logicalQuestionUnitRevision,
         request.sourceHash,
       ].join(":");
+      let childAffinityOperationId: string | undefined;
+      let parentAffinityOperationId: string | undefined;
+      let canonicalOperationId: string | undefined;
       const readCurrentIdentity = (
         scheduled: TaskRelationSplitIdentity
       ): TaskRelationSplitIdentity => {
@@ -18342,6 +18370,11 @@ export function useMeetingAssistant() {
         const lease = createTaskRelationSplitLease({
           request: affinityRequest,
         });
+        if (affinityRequest.affinityKind === "child") {
+          childAffinityOperationId = lease.operationId;
+        } else {
+          parentAffinityOperationId = lease.operationId;
+        }
         const prefix =
           affinityRequest.affinityKind === "child"
             ? "taskRelationChildAffinity"
@@ -18352,11 +18385,18 @@ export function useMeetingAssistant() {
             : taskRelationParentAffinityRuntimeRef.current!;
         const baseMetadata = {
           ...formatRuntimeInferenceOperationForTrace(operationKind),
+          ...formatRuntimeInferenceModelRouteForTrace(modelRoute),
           [`${prefix}OperationId`]: lease.operationId,
           [`${prefix}SemanticPayloadDigest`]:
             prompts.semanticPayloadDigest,
           [`${prefix}ModelVisibleChars`]: prompts.modelVisibleChars,
           [`${prefix}MutationBlocked`]: true,
+          [`${prefix}ExecutionStage`]: runtimeReleaseRequested
+            ? "product"
+            : "evaluation",
+          [`${prefix}AdmissionLane`]: runtimeReleaseRequested
+            ? "critical"
+            : "evaluation",
         };
         traceStoreRef.current.updateMetadata(traceId, baseMetadata);
         traceStoreRef.current.recordInput(
@@ -18382,6 +18422,9 @@ export function useMeetingAssistant() {
               budgetKey: `${request.logicalQuestionUnitId}:${request.logicalQuestionUnitRevision}`,
               budgetSlot: `split:${splitManualCorrectionRevision}`,
               budgetReason: "task-relation-split-shadow",
+              admissionLane: runtimeReleaseRequested
+                ? "critical"
+                : "evaluation",
               traceId,
               lease,
               request: affinityRequest,
@@ -18527,7 +18570,11 @@ export function useMeetingAssistant() {
           resolveCanonicalOutcome = resolve;
         }
       );
-      void affinityOutcome.then(({ child, parent }) => {
+      let canonicalStarted = false;
+      const startCanonical = (foreground: boolean) => {
+        if (canonicalStarted) return canonicalOutcome;
+        canonicalStarted = true;
+        void affinityOutcome.then(({ child, parent }) => {
         const canonicalRequest = buildTaskRelationCanonicalShadowRequest({
           request,
           sessionId: contextState.sessionId,
@@ -18544,7 +18591,9 @@ export function useMeetingAssistant() {
         const modelRoute = resolveRuntimeInferenceModelRouteFromSnapshot({
           snapshot: meetingModelProviderSnapshotRef.current,
           operationKind,
-          reason: "task-relation-split-canonical-shadow",
+          reason: foreground
+            ? "task-relation-canonical-product-fallback"
+            : "task-relation-canonical-evaluation",
         });
         if (circuit.open || !modelRoute.provider) {
           const unavailableReason = circuit.open
@@ -18569,8 +18618,10 @@ export function useMeetingAssistant() {
         const lease = createTaskRelationSplitLease({
           request: canonicalRequest,
         });
+        canonicalOperationId = lease.operationId;
         const baseMetadata = {
           ...formatRuntimeInferenceOperationForTrace(operationKind),
+          ...formatRuntimeInferenceModelRouteForTrace(modelRoute),
           taskRelationSplitCanonicalOperationId: lease.operationId,
           taskRelationSplitCanonicalSemanticPayloadDigest:
             prompts.semanticPayloadDigest,
@@ -18585,6 +18636,10 @@ export function useMeetingAssistant() {
           taskRelationSplitParentPredecessorOutputHash:
             canonicalRequest.parentPredecessorOutputHash,
           taskRelationSplitCanonicalMutationBlocked: true,
+          taskRelationSplitCanonicalForeground: foreground,
+          taskRelationSplitCanonicalAdmissionLane: foreground
+            ? "critical"
+            : "evaluation",
         };
         traceStoreRef.current.updateMetadata(traceId, baseMetadata);
         traceStoreRef.current.recordInput(
@@ -18609,6 +18664,7 @@ export function useMeetingAssistant() {
             budgetKey: `${request.logicalQuestionUnitId}:${request.logicalQuestionUnitRevision}`,
             budgetSlot: `split:${splitManualCorrectionRevision}`,
             budgetReason: "task-relation-split-canonical-shadow",
+            admissionLane: foreground ? "critical" : "evaluation",
             traceId,
             lease,
             request: canonicalRequest,
@@ -18636,7 +18692,9 @@ export function useMeetingAssistant() {
           onStarted: (_job, canonicalStartedAt) => {
             stepId = traceStoreRef.current.startStep(
               traceId,
-              "Task relation split canonical shadow",
+              foreground
+                ? "Task relation canonical product fallback"
+                : "Task relation canonical evaluation",
               {
                 ...baseMetadata,
                 taskRelationSplitCanonicalStartedAt: canonicalStartedAt,
@@ -18784,16 +18842,46 @@ export function useMeetingAssistant() {
             });
           },
         });
-      }, (error) => {
-        resolveCanonicalOutcome?.({
-          unavailableReason:
-            error instanceof Error ? error.message : String(error),
+        }, (error) => {
+          resolveCanonicalOutcome?.({
+            unavailableReason:
+              error instanceof Error ? error.message : String(error),
+          });
         });
-      });
+        return canonicalOutcome;
+      };
+      if (!runtimeReleaseRequested) {
+        void startCanonical(false);
+      }
+      const cancelForegroundWork = () => {
+        if (
+          childAffinityOperationId &&
+          taskRelationChildAffinityRuntimeRef.current?.getCurrentOperationId() ===
+            childAffinityOperationId
+        ) {
+          taskRelationChildAffinityRuntimeRef.current.cancelAll("superseded");
+        }
+        if (
+          parentAffinityOperationId &&
+          taskRelationParentAffinityRuntimeRef.current?.getCurrentOperationId() ===
+            parentAffinityOperationId
+        ) {
+          taskRelationParentAffinityRuntimeRef.current.cancelAll("superseded");
+        }
+        if (
+          canonicalOperationId &&
+          taskRelationCanonicalShadowRuntimeRef.current?.getCurrentOperationId() ===
+            canonicalOperationId
+        ) {
+          taskRelationCanonicalShadowRuntimeRef.current.cancelAll("superseded");
+        }
+      };
       return {
         operationId: orderedOperationId,
         affinityOutcome,
         canonicalOutcome,
+        startCanonical,
+        cancelForegroundWork,
       };
     },
     [refreshRecordedCompletedTrace]
@@ -18909,6 +18997,8 @@ export function useMeetingAssistant() {
         }),
         affinityOutcome: splitHandle?.affinityOutcome,
         canonicalOutcome: splitHandle?.canonicalOutcome,
+        startCanonical: splitHandle?.startCanonical,
+        cancelForegroundWork: splitHandle?.cancelForegroundWork,
         currentQuestion,
         deterministicProposal,
         localQuestionType:
@@ -19665,6 +19755,8 @@ export function useMeetingAssistant() {
         outcome,
         affinityOutcome: splitHandle?.affinityOutcome,
         canonicalOutcome: splitHandle?.canonicalOutcome,
+        startCanonical: splitHandle?.startCanonical,
+        cancelForegroundWork: splitHandle?.cancelForegroundWork,
         currentQuestion,
         deterministicProposal,
         localQuestionType:
@@ -19718,6 +19810,9 @@ export function useMeetingAssistant() {
         screenTypeEvidenceAuthorized:
           input.screenTypeEvidenceAuthorized,
       });
+      if (decision.status === "unresolved") {
+        input.handle.startCanonical?.(true);
+      }
       if (
         decision.status === "unresolved" &&
         input.handle.canonicalOutcome &&
@@ -19769,6 +19864,12 @@ export function useMeetingAssistant() {
           finalizeWithNullHypothesis: true,
         });
       }
+      const foregroundTimedOut = waitDisposition.includes(
+        "deadline-expired"
+      );
+      if (foregroundTimedOut) {
+        input.handle.cancelForegroundWork?.();
+      }
       const clientError = Boolean(
         affinityOutcome?.child.clientError ||
           affinityOutcome?.parent.clientError ||
@@ -19777,6 +19878,7 @@ export function useMeetingAssistant() {
       const metadata = {
         ...formatOrderedTaskRelationResolutionForTrace(decision),
         taskRelationOrderedResolutionWaitBudgetMs: input.waitBudgetMs,
+        taskRelationOrderedResolutionSourceKind: input.sourceKind,
         taskRelationOrderedResolutionWaitMs: Math.max(
           0,
           Date.now() - startedAt
@@ -19795,6 +19897,8 @@ export function useMeetingAssistant() {
             ? "available"
             : canonicalOutcome?.unavailableReason,
         taskRelationOrderedResolutionClientError: clientError,
+        taskRelationOrderedResolutionLateWorkCancelled:
+          foregroundTimedOut,
       };
       traceStoreRef.current.updateMetadata(input.traceId, metadata);
       if (clientError) {

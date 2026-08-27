@@ -8,7 +8,11 @@ import {
   normalizeCanonicalQuestionType,
   type CanonicalQuestionType,
 } from "./task-taxonomy.js";
-import type { RuntimeInferenceOperationKind } from "./runtime-inference.js";
+import {
+  getRuntimeInferenceOperationDefinition,
+  type RuntimeInferenceOperationKind,
+  type RuntimeInferenceProviderTier,
+} from "./runtime-inference.js";
 
 export interface MeetingModelRouteResolution {
   provider: TYPE_PROVIDER | undefined;
@@ -51,6 +55,8 @@ export interface TaxonomyAdjudicationModelRouteResolution {
 
 export interface RuntimeInferenceModelRouteResolution {
   operationKind: RuntimeInferenceOperationKind;
+  providerTier: RuntimeInferenceProviderTier;
+  configFingerprint: string;
   provider: TYPE_PROVIDER | undefined;
   selectedProvider: SelectedProviderState;
   route: "main" | "runtime-inference-override";
@@ -359,6 +365,43 @@ export function resolveRuntimeInferenceModelRouteFromSnapshot({
   operationKind: RuntimeInferenceOperationKind;
   reason?: string;
 }): RuntimeInferenceModelRouteResolution {
+  const providerTier = getRuntimeInferenceOperationDefinition(
+    operationKind
+  ).providerTier;
+  if (providerTier === "intelligent") {
+    const mainProvider = snapshot.providers.find(
+      (candidate) => candidate.id === snapshot.selectedProvider.provider
+    );
+    const readiness = resolveProviderVariableReadiness(
+      mainProvider,
+      snapshot.selectedProvider
+    );
+    return {
+      operationKind,
+      providerTier,
+      configFingerprint: createProviderConfigFingerprint({
+        provider: mainProvider,
+        selectedProvider: snapshot.selectedProvider,
+      }),
+      provider: readiness.ready ? mainProvider : undefined,
+      selectedProvider: snapshot.selectedProvider,
+      route: "main",
+      reason,
+      fallbackReason: readiness.ready
+        ? undefined
+        : "main-provider-missing-required-variables",
+      mainProviderId: mainProvider?.id,
+      resolvedProviderId: readiness.ready ? mainProvider?.id : undefined,
+      resolutionSource: "execution-snapshot",
+      configurationStatus: readiness.ready
+        ? "ready"
+        : mainProvider
+          ? "missing-required-variables"
+          : "provider-not-found",
+      inheritedVariableKeys: [],
+      missingRequiredVariables: readiness.missingRequiredVariables,
+    };
+  }
   const taxonomyRoute =
     resolveTaxonomyAdjudicationModelRouteFromSnapshot({
       snapshot,
@@ -366,6 +409,11 @@ export function resolveRuntimeInferenceModelRouteFromSnapshot({
     });
   return {
     operationKind,
+    providerTier,
+    configFingerprint: createProviderConfigFingerprint({
+      provider: taxonomyRoute.provider,
+      selectedProvider: taxonomyRoute.selectedProvider,
+    }),
     provider: taxonomyRoute.provider,
     selectedProvider: taxonomyRoute.selectedProvider,
     route:
@@ -395,6 +443,8 @@ export function formatRuntimeInferenceModelRouteForTrace(
     runtimeInferenceModelRouteReason: route.reason,
     runtimeInferenceModelRouteFallbackReason: route.fallbackReason,
     runtimeInferenceOperationKind: route.operationKind,
+    runtimeInferenceProviderTier: route.providerTier,
+    runtimeInferenceProviderConfigFingerprint: route.configFingerprint,
     runtimeInferenceProviderId: route.resolvedProviderId,
     runtimeInferenceMainProviderId: route.mainProviderId,
     runtimeInferenceProviderConfigurationStatus:
@@ -403,6 +453,31 @@ export function formatRuntimeInferenceModelRouteForTrace(
     runtimeInferenceMissingRequiredVariables:
       route.missingRequiredVariables,
   };
+}
+
+export function createProviderConfigFingerprint(input: {
+  provider: TYPE_PROVIDER | undefined;
+  selectedProvider: SelectedProviderState;
+}) {
+  const serialized = JSON.stringify({
+    providerId: input.provider?.id ?? input.selectedProvider.provider,
+    curl: input.provider?.curl ?? "",
+    streaming: input.provider?.streaming ?? false,
+    responseContentPath: input.provider?.responseContentPath ?? "",
+    variables: Object.entries(input.selectedProvider.variables).sort(
+      ([left], [right]) => left.localeCompare(right)
+    ),
+  });
+  return [2_166_136_261, 2_246_822_519, 3_266_489_917, 668_265_263]
+    .map((seed) => {
+      let hash = seed;
+      for (const character of serialized) {
+        hash ^= character.charCodeAt(0);
+        hash = Math.imul(hash, 16_777_619);
+      }
+      return (hash >>> 0).toString(16).padStart(8, "0");
+    })
+    .join("");
 }
 
 export function formatTaxonomyAdjudicationModelRouteForTrace(

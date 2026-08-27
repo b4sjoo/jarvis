@@ -1,8 +1,13 @@
-import type { RuntimeInferenceLane } from "./runtime-inference.js";
+import type {
+  RuntimeInferenceLane,
+  RuntimeInferenceProviderTier,
+} from "./runtime-inference.js";
 
 export interface RuntimeInferenceSharedAdmissionReceipt {
   operationId: string;
   lane: RuntimeInferenceLane;
+  providerTier: RuntimeInferenceProviderTier;
+  providerGroupKey: string;
   queuedAt: number;
   admittedAt: number;
   waitMs: number;
@@ -16,6 +21,8 @@ interface PendingAdmission<T> {
   sequence: number;
   operationId: string;
   lane: RuntimeInferenceLane;
+  providerTier: RuntimeInferenceProviderTier;
+  providerGroupKey: string;
   queuedAt: number;
   eligibleAt: number;
   queueDepthAtEnqueue: number;
@@ -35,18 +42,29 @@ const LANE_PRIORITY: Record<RuntimeInferenceLane, number> = {
 
 export class RuntimeInferenceProviderAdmissionCoordinator {
   private readonly queue: PendingAdmission<unknown>[] = [];
-  private activeCount = 0;
+  private readonly activeCountByGroup = new Map<string, number>();
   private sequence = 0;
   private timer?: ReturnType<typeof setTimeout>;
+  private fastFingerprint = "default";
+  private intelligentFingerprint = "default";
 
   constructor(
     private readonly maxConcurrent = 3,
     private readonly nonCriticalGraceMs = 450
   ) {}
 
+  configureProviderGroups(input: {
+    fastFingerprint: string;
+    intelligentFingerprint: string;
+  }) {
+    this.fastFingerprint = input.fastFingerprint || "default";
+    this.intelligentFingerprint = input.intelligentFingerprint || "default";
+  }
+
   run<T>(input: {
     operationId: string;
     lane: RuntimeInferenceLane;
+    providerTier?: RuntimeInferenceProviderTier;
     signal: AbortSignal;
     execute: () => Promise<T>;
     onAdmitted?: (receipt: RuntimeInferenceSharedAdmissionReceipt) => void;
@@ -55,16 +73,22 @@ export class RuntimeInferenceProviderAdmissionCoordinator {
       return Promise.reject(createAbortError());
     }
     const queuedAt = Date.now();
+    const providerTier = input.providerTier ?? "fast";
+    const providerGroupKey = this.resolveProviderGroupKey(providerTier);
     return new Promise<T>((resolve, reject) => {
       const pending: PendingAdmission<T> = {
         sequence: this.sequence++,
         operationId: input.operationId,
         lane: input.lane,
+        providerTier,
+        providerGroupKey,
         queuedAt,
         eligibleAt:
           queuedAt +
           (input.lane === "critical" ? 0 : this.nonCriticalGraceMs),
-        queueDepthAtEnqueue: this.queue.length,
+        queueDepthAtEnqueue: this.queue.filter(
+          (candidate) => candidate.providerGroupKey === providerGroupKey
+        ).length,
         signal: input.signal,
         execute: input.execute,
         onAdmitted: input.onAdmitted,
@@ -88,10 +112,13 @@ export class RuntimeInferenceProviderAdmissionCoordinator {
     });
   }
 
-  readSnapshot() {
+  readSnapshot(providerTier: RuntimeInferenceProviderTier = "fast") {
+    const providerGroupKey = this.resolveProviderGroupKey(providerTier);
     return {
-      activeCount: this.activeCount,
-      queuedCount: this.queue.length,
+      activeCount: this.readActiveCount(providerGroupKey),
+      queuedCount: this.queue.filter(
+        (candidate) => candidate.providerGroupKey === providerGroupKey
+      ).length,
       maxConcurrent: this.maxConcurrent,
     };
   }
@@ -100,10 +127,15 @@ export class RuntimeInferenceProviderAdmissionCoordinator {
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
 
-    while (this.activeCount < this.maxConcurrent && this.queue.length) {
+    while (this.queue.length) {
       const now = Date.now();
       const eligible = this.queue
-        .filter((candidate) => candidate.eligibleAt <= now)
+        .filter(
+          (candidate) =>
+            candidate.eligibleAt <= now &&
+            this.readActiveCount(candidate.providerGroupKey) <
+              this.maxConcurrent
+        )
         .sort(
           (left, right) =>
             LANE_PRIORITY[left.lane] - LANE_PRIORITY[right.lane] ||
@@ -111,12 +143,16 @@ export class RuntimeInferenceProviderAdmissionCoordinator {
         );
       const next = eligible[0];
       if (!next) {
-        const delayMs = Math.max(
-          0,
-          Math.min(...this.queue.map((candidate) => candidate.eligibleAt)) -
-            now
-        );
-        this.timer = setTimeout(() => this.drain(), delayMs);
+        const futureEligibleAt = this.queue
+          .map((candidate) => candidate.eligibleAt)
+          .filter((eligibleAt) => eligibleAt > now);
+        if (futureEligibleAt.length) {
+          const delayMs = Math.max(
+            0,
+            Math.min(...futureEligibleAt) - now
+          );
+          this.timer = setTimeout(() => this.drain(), delayMs);
+        }
         return;
       }
 
@@ -133,23 +169,57 @@ export class RuntimeInferenceProviderAdmissionCoordinator {
       const receipt: RuntimeInferenceSharedAdmissionReceipt = {
         operationId: next.operationId,
         lane: next.lane,
+        providerTier: next.providerTier,
+        providerGroupKey: next.providerGroupKey,
         queuedAt: next.queuedAt,
         admittedAt,
         waitMs: Math.max(0, admittedAt - next.queuedAt),
         queueDepthAtEnqueue: next.queueDepthAtEnqueue,
-        queueDepthAtAdmission: this.queue.length,
-        activeCountAtAdmission: this.activeCount + 1,
+        queueDepthAtAdmission: this.queue.filter(
+          (candidate) =>
+            candidate.providerGroupKey === next.providerGroupKey
+        ).length,
+        activeCountAtAdmission:
+          this.readActiveCount(next.providerGroupKey) + 1,
         maxConcurrent: this.maxConcurrent,
       };
-      this.activeCount += 1;
+      this.incrementActiveCount(next.providerGroupKey);
       next.onAdmitted?.(receipt);
       void Promise.resolve()
         .then(next.execute)
         .then(next.resolve, next.reject)
         .finally(() => {
-          this.activeCount = Math.max(0, this.activeCount - 1);
+          this.decrementActiveCount(next.providerGroupKey);
           this.drain();
         });
+    }
+  }
+
+  private resolveProviderGroupKey(tier: RuntimeInferenceProviderTier) {
+    const fingerprint =
+      tier === "intelligent"
+        ? this.intelligentFingerprint
+        : this.fastFingerprint;
+    return `provider:${fingerprint}`;
+  }
+
+  private readActiveCount(groupKey: string) {
+    return this.activeCountByGroup.get(groupKey) ?? 0;
+  }
+
+  private incrementActiveCount(groupKey: string) {
+    this.activeCountByGroup.set(
+      groupKey,
+      this.readActiveCount(groupKey) + 1
+    );
+  }
+
+  private decrementActiveCount(groupKey: string) {
+    const next = Math.max(0, this.readActiveCount(groupKey) - 1);
+    if (next === 0) {
+      this.activeCountByGroup.delete(groupKey);
+    } else {
+      this.activeCountByGroup.set(groupKey, next);
     }
   }
 }
@@ -167,6 +237,9 @@ export function formatRuntimeInferenceSharedAdmissionForTrace(
       receipt?.activeCountAtAdmission,
     runtimeInferenceSharedMaxConcurrent: receipt?.maxConcurrent,
     runtimeInferenceSharedAdmissionLane: receipt?.lane,
+    runtimeInferenceSharedAdmissionProviderTier: receipt?.providerTier,
+    runtimeInferenceSharedAdmissionProviderGroupKey:
+      receipt?.providerGroupKey,
   };
 }
 

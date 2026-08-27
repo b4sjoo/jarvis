@@ -192,8 +192,9 @@ export class TaxonomyAdjudicationRuntime<Result> {
     };
     const execution = this.admissionCoordinator
       ? this.admissionCoordinator.run({
-          operationId: active.job.lease.operationId,
-          lane: TAXONOMY_OPERATION.lane,
+        operationId: active.job.lease.operationId,
+        lane: TAXONOMY_OPERATION.lane,
+        providerTier: TAXONOMY_OPERATION.providerTier,
           signal: controller.signal,
           execute,
           onAdmitted: (receipt) => {

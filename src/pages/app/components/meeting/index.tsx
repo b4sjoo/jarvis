@@ -4357,8 +4357,8 @@ const ConfigurationsPanel = ({
               taxonomyAdjudication.taskRelationMode !== "off" ||
               taxonomyAdjudication.meetingMetadataMode !== "off" ? (
                 <MeetingModelOverrideConfig
-                  label="Adjudication model"
-                  description="Optional fast model; defaults to the main model"
+                  label="Fast Runtime model"
+                  description="Used by bounded low-complexity checks; Question Type and Relation inherit the session's Main Advisor model"
                   providers={aiProviders}
                   value={taxonomyAdjudication}
                   onChange={(selected) => {

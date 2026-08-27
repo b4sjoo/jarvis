@@ -88,12 +88,15 @@ test("registers each atomic runtime operation with an isolated policy", () => {
   );
 
   assert.equal(taxonomy.lane, "critical");
+  assert.equal(taxonomy.providerTier, "fast");
   assert.equal(taxonomy.quiescenceMs, 450);
   assert.equal(questionType.lane, "critical");
-  assert.equal(questionType.timeoutMs, 5_000);
+  assert.equal(questionType.providerTier, "intelligent");
+  assert.equal(questionType.timeoutMs, 6_000);
   assert.equal(questionType.maxOutputTokens, 512);
   assert.equal(questionType.quiescenceMs, 350);
   assert.equal(responseOpportunity.lane, "critical");
+  assert.equal(responseOpportunity.providerTier, "fast");
   assert.equal(responseOpportunity.timeoutMs, 3_000);
   assert.equal(
     responseOpportunity.maxOutputTokens,
@@ -108,9 +111,12 @@ test("registers each atomic runtime operation with an isolated policy", () => {
   assert.equal(childAffinity.lane, "evaluation");
   assert.equal(parentAffinity.lane, "evaluation");
   assert.equal(canonicalRelation.lane, "evaluation");
-  assert.equal(childAffinity.timeoutMs, 5_500);
-  assert.equal(parentAffinity.timeoutMs, 5_500);
-  assert.equal(canonicalRelation.timeoutMs, 4_000);
+  assert.equal(childAffinity.providerTier, "intelligent");
+  assert.equal(parentAffinity.providerTier, "intelligent");
+  assert.equal(canonicalRelation.providerTier, "intelligent");
+  assert.equal(childAffinity.timeoutMs, 7_000);
+  assert.equal(parentAffinity.timeoutMs, 7_000);
+  assert.equal(canonicalRelation.timeoutMs, 6_000);
   assert.equal(relation.timeoutMs, 5_000);
   assert.equal(relation.maxOutputTokens, 512);
   assert.equal(childAffinity.maxOutputTokens, 512);
@@ -528,7 +534,7 @@ test("isolates provider circuits by operation and session", () => {
   );
 });
 
-test("resolves every runtime operation through the compatible taxonomy override", () => {
+test("routes Fast Runtime work through the override and Intelligent work through Main Advisor", () => {
   const snapshot: MeetingModelProviderSnapshot = {
     providers: [
       {
@@ -541,22 +547,36 @@ test("resolves every runtime operation through the compatible taxonomy override"
       provider: "shared",
       variables: { API_KEY: "secret", MODEL: "advisor" },
     },
-    codingProvider: { provider: "", variables: {} },
+    codingProvider: {
+      provider: "shared",
+      variables: { API_KEY: "secret", MODEL: "coding" },
+    },
     taxonomyAdjudicationProvider: {
       provider: "shared",
       variables: { MODEL: "runtime" },
     },
   };
-  const route = resolveRuntimeInferenceModelRouteFromSnapshot({
+  const fastRoute = resolveRuntimeInferenceModelRouteFromSnapshot({
     snapshot,
     operationKind: "task-relation-adjudication",
   });
+  const intelligentRoute = resolveRuntimeInferenceModelRouteFromSnapshot({
+    snapshot,
+    operationKind: "question-type-adjudication",
+  });
 
-  assert.equal(route.route, "runtime-inference-override");
-  assert.equal(route.operationKind, "task-relation-adjudication");
-  assert.equal(route.provider?.id, "shared");
-  assert.equal(route.selectedProvider.variables.API_KEY, "secret");
-  assert.equal(route.selectedProvider.variables.MODEL, "runtime");
+  assert.equal(fastRoute.route, "runtime-inference-override");
+  assert.equal(fastRoute.providerTier, "fast");
+  assert.equal(fastRoute.selectedProvider.variables.MODEL, "runtime");
+  assert.equal(intelligentRoute.route, "main");
+  assert.equal(intelligentRoute.providerTier, "intelligent");
+  assert.equal(intelligentRoute.provider?.id, "shared");
+  assert.equal(intelligentRoute.selectedProvider.variables.API_KEY, "secret");
+  assert.equal(intelligentRoute.selectedProvider.variables.MODEL, "advisor");
+  assert.notEqual(
+    fastRoute.configFingerprint,
+    intelligentRoute.configFingerprint
+  );
 });
 
 test("formats stable generic telemetry for the existing taxonomy operation", () => {
@@ -565,6 +585,7 @@ test("formats stable generic telemetry for the existing taxonomy operation", () 
     {
       modelWorkloadClass: "runtime",
       runtimeInferenceOperationKind: "taxonomy-adjudication",
+      runtimeInferenceProviderTier: "fast",
       runtimeInferenceLane: "critical",
       runtimeInferenceTimeoutMs: 4_000,
       runtimeInferenceMaxOutputTokens: 256,

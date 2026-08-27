@@ -2,6 +2,8 @@ import { RESPONSE_OPPORTUNITY_MAX_OUTPUT_TOKENS } from "./response-opportunity-c
 
 export type ModelWorkloadClass = "runtime" | "advisor" | "complex";
 
+export type RuntimeInferenceProviderTier = "fast" | "intelligent";
+
 export type RuntimeInferenceOperationKind =
   | "taxonomy-adjudication"
   | "question-type-adjudication"
@@ -24,6 +26,7 @@ export type RuntimeInferenceLane =
 export interface RuntimeInferenceOperationDefinition {
   workloadClass: "runtime";
   operationKind: RuntimeInferenceOperationKind;
+  providerTier: RuntimeInferenceProviderTier;
   lane: RuntimeInferenceLane;
   timeoutMs: number;
   maxOutputTokens: number;
@@ -45,6 +48,7 @@ export interface RuntimeInferenceEnvelope {
   requestId: string;
   workloadClass: "runtime";
   operationKind: RuntimeInferenceOperationKind;
+  providerTier: RuntimeInferenceProviderTier;
   lane: RuntimeInferenceLane;
   contextSnapshotId: string;
   contextSnapshotHash: string;
@@ -73,6 +77,7 @@ const RUNTIME_ENVELOPE_ONLY_KEYS = new Set([
   "requestId",
   "operationId",
   "operationKind",
+  "providerTier",
   "workloadClass",
   "lane",
   "contextSnapshotId",
@@ -120,6 +125,7 @@ const DEFINITIONS: Record<
   "taxonomy-adjudication": {
     workloadClass: "runtime",
     operationKind: "taxonomy-adjudication",
+    providerTier: "fast",
     lane: "critical",
     timeoutMs: 4_000,
     maxOutputTokens: 256,
@@ -129,8 +135,9 @@ const DEFINITIONS: Record<
   "question-type-adjudication": {
     workloadClass: "runtime",
     operationKind: "question-type-adjudication",
+    providerTier: "intelligent",
     lane: "critical",
-    timeoutMs: 5_000,
+    timeoutMs: 6_000,
     maxOutputTokens: 512,
     quiescenceMs: 350,
     maxStartsPerBudgetSlot: 1,
@@ -138,6 +145,7 @@ const DEFINITIONS: Record<
   "response-opportunity-inference": {
     workloadClass: "runtime",
     operationKind: "response-opportunity-inference",
+    providerTier: "fast",
     lane: "critical",
     timeoutMs: 3_000,
     maxOutputTokens: RESPONSE_OPPORTUNITY_MAX_OUTPUT_TOKENS,
@@ -147,6 +155,7 @@ const DEFINITIONS: Record<
   "meeting-metadata-inference": {
     workloadClass: "runtime",
     operationKind: "meeting-metadata-inference",
+    providerTier: "fast",
     lane: "background",
     timeoutMs: 5_000,
     maxOutputTokens: 256,
@@ -156,6 +165,7 @@ const DEFINITIONS: Record<
   "whiteboard-syntax-repair": {
     workloadClass: "runtime",
     operationKind: "whiteboard-syntax-repair",
+    providerTier: "fast",
     lane: "background",
     timeoutMs: 3_000,
     maxOutputTokens: 768,
@@ -165,6 +175,7 @@ const DEFINITIONS: Record<
   "task-relation-adjudication": {
     workloadClass: "runtime",
     operationKind: "task-relation-adjudication",
+    providerTier: "fast",
     lane: "critical",
     timeoutMs: 5_000,
     maxOutputTokens: 512,
@@ -174,8 +185,9 @@ const DEFINITIONS: Record<
   "task-relation-child-affinity": {
     workloadClass: "runtime",
     operationKind: "task-relation-child-affinity",
+    providerTier: "intelligent",
     lane: "evaluation",
-    timeoutMs: 5_500,
+    timeoutMs: 7_000,
     maxOutputTokens: 512,
     quiescenceMs: 0,
     maxStartsPerBudgetSlot: 1,
@@ -183,8 +195,9 @@ const DEFINITIONS: Record<
   "task-relation-parent-affinity": {
     workloadClass: "runtime",
     operationKind: "task-relation-parent-affinity",
+    providerTier: "intelligent",
     lane: "evaluation",
-    timeoutMs: 5_500,
+    timeoutMs: 7_000,
     maxOutputTokens: 512,
     quiescenceMs: 0,
     maxStartsPerBudgetSlot: 1,
@@ -192,8 +205,9 @@ const DEFINITIONS: Record<
   "task-relation-canonical-shadow": {
     workloadClass: "runtime",
     operationKind: "task-relation-canonical-shadow",
+    providerTier: "intelligent",
     lane: "evaluation",
-    timeoutMs: 4_000,
+    timeoutMs: 6_000,
     maxOutputTokens: 512,
     quiescenceMs: 0,
     maxStartsPerBudgetSlot: 1,
@@ -201,6 +215,7 @@ const DEFINITIONS: Record<
   "answer-resolution": {
     workloadClass: "runtime",
     operationKind: "answer-resolution",
+    providerTier: "fast",
     lane: "background",
     timeoutMs: 1_500,
     maxOutputTokens: 256,
@@ -210,6 +225,7 @@ const DEFINITIONS: Record<
   "evidence-requirement": {
     workloadClass: "runtime",
     operationKind: "evidence-requirement",
+    providerTier: "fast",
     lane: "critical",
     timeoutMs: 3_000,
     maxOutputTokens: 256,
@@ -219,6 +235,7 @@ const DEFINITIONS: Record<
   "source-linkage-adjudication": {
     workloadClass: "runtime",
     operationKind: "source-linkage-adjudication",
+    providerTier: "fast",
     lane: "critical",
     timeoutMs: 2_000,
     maxOutputTokens: 256,
@@ -275,6 +292,7 @@ export function createRuntimeInferenceInvocation<TSemanticPayload>(input: {
     requestId: input.requestId,
     workloadClass: "runtime",
     operationKind: input.operationKind,
+    providerTier: definition.providerTier,
     lane: definition.lane,
     contextSnapshotId: input.contextSnapshot.id,
     contextSnapshotHash: input.contextSnapshot.hash,
@@ -382,6 +400,7 @@ export function formatRuntimeInferenceOperationForTrace(
   return {
     modelWorkloadClass: definition.workloadClass,
     runtimeInferenceOperationKind: definition.operationKind,
+    runtimeInferenceProviderTier: definition.providerTier,
     runtimeInferenceLane: definition.lane,
     runtimeInferenceTimeoutMs: definition.timeoutMs,
     runtimeInferenceMaxOutputTokens: definition.maxOutputTokens,
