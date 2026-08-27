@@ -6,9 +6,7 @@ import {
 } from "./current-question-settlement.js";
 import {
   createTaskRelationSettlementProposal,
-  decideNarrowVoiceRelationRelease,
   type LlmTaskRelationAdjudication,
-  type NarrowVoiceRelationReleaseDecision,
 } from "./task-relation-adjudication.js";
 import {
   isParentCanonicalQuestionType,
@@ -17,7 +15,21 @@ import {
 
 export interface ManualQuestionTypeCorrectionSettlementResult {
   settlement: CurrentQuestionSettlementDecision;
-  relationRelease?: NarrowVoiceRelationReleaseDecision;
+  relationRelease?: ManualCorrectionRelationAdmissionDecision;
+}
+
+export interface ManualCorrectionRelationAdmissionDecision {
+  authorized: boolean;
+  reason:
+    | "ordered-relation-authorized"
+    | "candidate-missing"
+    | "candidate-relation-unknown"
+    | "candidate-confidence-below-threshold"
+    | "operation-lease-not-authorized";
+  releasedRelation?: Exclude<
+    LlmTaskRelationAdjudication["relation"],
+    "unknown"
+  >;
 }
 
 export function settleManualQuestionTypeCorrection(input: {
@@ -26,8 +38,6 @@ export function settleManualQuestionTypeCorrection(input: {
   correctedType: CanonicalQuestionType;
   activeParentId?: string;
   activeParentRevision?: number;
-  activeParentType?: unknown;
-  hasActiveChild: boolean;
   manualCorrectionRevision: number;
   relationCandidate?: LlmTaskRelationAdjudication;
   relationOperationLeaseAuthorized?: boolean;
@@ -55,22 +65,6 @@ export function settleManualQuestionTypeCorrection(input: {
       "relation-authority-withheld-from-type-control",
     ],
   };
-  const typeOnlySettlement = settleCurrentQuestion({
-    operationId: input.operationId,
-    currentQuestion: input.currentQuestion,
-    manualProposal,
-    activeParentId: input.activeParentId,
-    activeParentRevision: input.activeParentRevision,
-    manualCorrectionRevision: input.manualCorrectionRevision,
-    policy: {
-      allowLlmTypeRepair: false,
-      allowLlmRelationRepair: false,
-      allowLlmActionRepair: false,
-      runtimeMutationAuthorized: true,
-      questionComplete: true,
-      commitParent: false,
-    },
-  });
   const deterministicRelation =
     input.forceNewParentFromSourceIdentity &&
     isParentCanonicalQuestionType(input.correctedType)
@@ -106,20 +100,10 @@ export function settleManualQuestionTypeCorrection(input: {
       } satisfies CurrentQuestionSettlementProposal)
     : undefined;
   const relationRelease = input.activeParentId
-    ? decideNarrowVoiceRelationRelease({
-        sourceKind:
-          input.currentQuestion.sourceKind === "screen"
-            ? "mixed"
-            : input.currentQuestion.sourceKind,
-        activeParentQuestionType: input.activeParentType,
-        typeSettlement: typeOnlySettlement,
+    ? authorizeOrderedManualCorrectionRelation({
         candidate: input.relationCandidate,
-        hasActiveChild: input.hasActiveChild,
-        manualCorrectionActive: false,
-        manualTypeAuthorityAuthorized: true,
         operationLeaseAuthorized:
-          input.relationOperationLeaseAuthorized,
-        releaseWindowOpen: true,
+          input.relationOperationLeaseAuthorized === true,
       })
     : undefined;
   const llmRelationProposal =
@@ -155,5 +139,37 @@ export function settleManualQuestionTypeCorrection(input: {
         commitParent: true,
       },
     }),
+  };
+}
+
+function authorizeOrderedManualCorrectionRelation(input: {
+  candidate?: LlmTaskRelationAdjudication;
+  operationLeaseAuthorized: boolean;
+}): ManualCorrectionRelationAdmissionDecision {
+  if (!input.operationLeaseAuthorized) {
+    return {
+      authorized: false,
+      reason: "operation-lease-not-authorized",
+    };
+  }
+  if (!input.candidate) {
+    return { authorized: false, reason: "candidate-missing" };
+  }
+  if (input.candidate.relation === "unknown") {
+    return {
+      authorized: false,
+      reason: "candidate-relation-unknown",
+    };
+  }
+  if (input.candidate.confidence < 0.95) {
+    return {
+      authorized: false,
+      reason: "candidate-confidence-below-threshold",
+    };
+  }
+  return {
+    authorized: true,
+    reason: "ordered-relation-authorized",
+    releasedRelation: input.candidate.relation,
   };
 }

@@ -47,14 +47,16 @@ test("settles manual type authority and relation authority in one correction tra
     correctedType: "general-system-design",
     activeParentId: "parent-coding",
     activeParentRevision: 4,
-    activeParentType: "coding",
-    hasActiveChild: false,
     manualCorrectionRevision: 3,
     relationCandidate: relationCandidate({ relation: "new-parent" }),
     relationOperationLeaseAuthorized: true,
   });
 
   assert.equal(result.relationRelease?.authorized, true);
+  assert.equal(
+    result.relationRelease?.reason,
+    "ordered-relation-authorized"
+  );
   assert.equal(result.settlement.questionType, "general-system-design");
   assert.equal(result.settlement.relation, "new-parent");
   assert.equal(result.settlement.typeAuthoritySource, "manual-correction");
@@ -77,8 +79,6 @@ test("keeps the current parent when correction-owned relation adjudication absta
     correctedType: "general-system-design",
     activeParentId: "parent-design",
     activeParentRevision: 2,
-    activeParentType: "general-system-design",
-    hasActiveChild: false,
     manualCorrectionRevision: 4,
     relationCandidate: relationCandidate({
       relation: "unknown",
@@ -88,6 +88,10 @@ test("keeps the current parent when correction-owned relation adjudication absta
   });
 
   assert.equal(result.relationRelease?.authorized, false);
+  assert.equal(
+    result.relationRelease?.reason,
+    "candidate-relation-unknown"
+  );
   assert.equal(result.settlement.questionType, "general-system-design");
   assert.equal(result.settlement.relation, "unknown");
   assert.equal(result.settlement.typeMutationAuthorized, true);
@@ -111,8 +115,6 @@ test("deterministically creates or reseeds a parent only from exact source ident
     correctedType: "general-system-design",
     activeParentId: "parent-wrong-type",
     activeParentRevision: 1,
-    activeParentType: "coding",
-    hasActiveChild: false,
     manualCorrectionRevision: 5,
     forceNewParentFromSourceIdentity: true,
   });
@@ -141,8 +143,6 @@ test("preserves an exact active child while applying the corrected current type"
     correctedType: "field-knowledge",
     activeParentId: "parent-aiml",
     activeParentRevision: 7,
-    activeParentType: "ai-ml-system-design",
-    hasActiveChild: true,
     manualCorrectionRevision: 6,
     preserveActiveChildFromSourceIdentity: true,
   });

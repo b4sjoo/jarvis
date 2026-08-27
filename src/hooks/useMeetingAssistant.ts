@@ -31037,8 +31037,6 @@ export function useMeetingAssistant() {
             correctedType,
             activeParentId: activeTask?.parent.id,
             activeParentRevision: activeTask?.parent.revisions,
-            activeParentType: activeTask?.parent.questionType,
-            hasActiveChild: Boolean(activeTask?.child),
             manualCorrectionRevision:
               manualCorrectionRevisionRef.current,
             relationCandidate: orderedCorrectionRelationCandidate,
