@@ -4,10 +4,39 @@ import {
   authorizeResponseArtifactMutation,
   formatManualPhaseArtifactContractForTrace,
   formatResponseArtifactAuthorizationForTrace,
+  isExplicitCodingComplexityIntent,
   resolveAdvisorGenerationRequestedArtifacts,
 } from "../src/lib/meeting/response-artifact-authorization.js";
 import type { ActiveMeetingTask } from "../src/lib/meeting/active-meeting-task.js";
 import { decideManualNextPhaseTransition } from "../src/lib/meeting/playbook-phase.js";
+
+test("requires settled Coding type and explicit complexity language", () => {
+  for (const text of [
+    "What is the time complexity?",
+    "Explain the time and space complexities.",
+    "Can you optimize this solution?",
+    "What is the Big-O?",
+    "Is this O(n log n)?",
+  ]) {
+    assert.equal(
+      isExplicitCodingComplexityIntent({
+        text,
+        questionType: "coding",
+      }),
+      true,
+      text
+    );
+  }
+
+  for (const input of [
+    { text: "Tell me about a time you disagreed.", questionType: "coding" },
+    { text: "How much space would this service need?", questionType: "coding" },
+    { text: "Optimize the cache topology.", questionType: "general-system-design" },
+    { text: "What is the time complexity?", questionType: "field-knowledge" },
+  ]) {
+    assert.equal(isExplicitCodingComplexityIntent(input), false, input.text);
+  }
+});
 
 test("authorizes persistent answer and whiteboard updates for the canonical design parent", () => {
   const decision = authorizeResponseArtifactMutation({

@@ -34,6 +34,18 @@ export interface ResponseArtifactMutationAuthorization {
   allowParentContextMutation: boolean;
 }
 
+export function isExplicitCodingComplexityIntent(input: {
+  text: string;
+  questionType?: unknown;
+}) {
+  if (normalizeCanonicalQuestionType(input.questionType) !== "coding") {
+    return false;
+  }
+  return /\b(?:time|space)\s+complexity\b|\btime\s+and\s+space\s+complexit(?:y|ies)\b|\bbig[- ]?o\b|\bo\s*\([^)]{1,12}\)|\boptimi[sz](?:e|ed|ing|ation)\b/i.test(
+    input.text
+  );
+}
+
 export function resolveAdvisorGenerationRequestedArtifacts(input: {
   forceAnswerOnly?: boolean;
   runtimeTypeRepairAnswerOnly?: boolean;

@@ -783,6 +783,7 @@ import {
   restoreSuggestionProjectionAfterFailedManualCorrection,
   stageSuggestionProjectionForManualCorrection,
   authorizeResponseArtifactMutation,
+  isExplicitCodingComplexityIntent,
   authorizeSettledAdvisorExecutionPlan,
   rebaseSettledAdvisorExecutionPlanAfterOwnedParentMutation,
   formatResponseArtifactAuthorizationForTrace,
@@ -35971,7 +35972,12 @@ function inferAdvisorSubtaskIntent(
   if (/\b(qps|throughput|traffic|dau|mau|peak|capacity|scale)\b/.test(normalized)) {
     return "qps-estimation";
   }
-  if (/\b(complexity|time|space|big o|optimi[sz]e)\b/.test(normalized)) {
+  if (
+    isExplicitCodingComplexityIntent({
+      text,
+      questionType,
+    })
+  ) {
     return "complexity-probe";
   }
   if (
