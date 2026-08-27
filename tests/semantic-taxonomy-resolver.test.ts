@@ -86,9 +86,9 @@ test("accepted semantic evidence is only a rescue recommendation for lexical unk
   assert.equal(hybrid.wouldRescue, true);
 });
 
-test("legacy weighted evidence cannot veto semantic evidence after local abstention", () => {
+test("local abstention keeps semantic evidence non-authoritative in shadow", () => {
   const lexical = inferQuestionTypeDecisionFromText(
-    "Implement a stack and explain what a stack is."
+    "Could you contrast these two approaches for me?"
   );
   assert.equal(lexical.type, undefined);
   const hybrid = resolveHybridQuestionType({

@@ -2,13 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { LogicalQuestionUnit } from "../src/lib/meeting/logical-question-unit.js";
 import {
-  FIELD_KNOWLEDGE_REVIEW_WAIT_BUDGET_MS,
   QUESTION_TYPE_ENFORCEMENT_WAIT_BUDGET_MS,
+  SCREEN_FIELD_KNOWLEDGE_REVIEW_WAIT_BUDGET_MS,
   QuestionTypeAdjudicationCandidateCache,
   buildQuestionTypeAdjudicationCacheKey,
   buildQuestionTypeAdjudicationPrompts,
   buildQuestionTypeAdjudicationRequest,
   createQuestionTypeSettlementProposal,
+  decideOrderedVoiceQuestionTypeResolution,
   decideQuestionTypeAdjudicationEligibility,
   decideQuestionTypeEnforcement,
   normalizeQuestionTypeAdjudicationMode,
@@ -83,6 +84,81 @@ test("builds a bounded type-only request without local classifier evidence", () 
   assert.doesNotMatch(
     prompts.userMessage,
     /lexical|semantic|activeParent|playbookPhase/i
+  );
+});
+
+test("passes bounded source hints without granting them prompt authority", () => {
+  const request = buildQuestionTypeAdjudicationRequest({
+    logicalQuestionUnit: unit("Please design a URL shortener."),
+    structuredHints: {
+      sectionHintType: "general-system-design",
+      sectionHintSource: "immediate-transition",
+      openingRouteKind: "project-intro",
+      openingRouteType: "project-deep-dive",
+      lexicalPattern: "exact-general-system-design",
+      lexicalCandidateType: "general-system-design",
+    },
+  });
+  const prompts = buildQuestionTypeAdjudicationPrompts(request);
+
+  assert.deepEqual(request.structuredHints, {
+    sectionHintType: "general-system-design",
+    sectionHintSource: "immediate-transition",
+    openingRouteKind: "project-intro",
+    openingRouteType: "project-deep-dive",
+    lexicalPattern: "exact-general-system-design",
+    lexicalCandidateType: "general-system-design",
+    preparationPriorType: undefined,
+  });
+  assert.match(prompts.systemPrompt, /nonAuthoritativeHints/i);
+  assert.match(prompts.userMessage, /exact-general-system-design/);
+  assert.doesNotMatch(prompts.systemPrompt, /direct-concept-question/);
+});
+
+test("orders Voice type resolution as LLM, section hint, current type, then Unknown", () => {
+  assert.deepEqual(
+    decideOrderedVoiceQuestionTypeResolution({
+      llmSettlement: {
+        questionType: "coding",
+        confidence: 0.72,
+        typeMutationAuthorized: true,
+      },
+      llmAuthorized: true,
+      sectionHintType: "general-system-design",
+      currentBranchType: "behavioral",
+    }),
+    {
+      questionType: "coding",
+      stage: "runtime-llm",
+      reason: "valid-runtime-question-type",
+      confidence: 0.72,
+      typeEvidenceAuthorized: true,
+    }
+  );
+  assert.equal(
+    decideOrderedVoiceQuestionTypeResolution({
+      llmAuthorized: false,
+      sectionHintType: "ai-ml-system-design",
+      currentBranchType: "coding",
+    }).stage,
+    "section-hint-fallback"
+  );
+  assert.deepEqual(
+    decideOrderedVoiceQuestionTypeResolution({
+      llmAuthorized: false,
+      currentBranchType: "field-knowledge",
+    }),
+    {
+      questionType: "field-knowledge",
+      stage: "preserve-current-type",
+      reason: "runtime-unresolved-preserve-current-type",
+      confidence: 1,
+      typeEvidenceAuthorized: true,
+    }
+  );
+  assert.equal(
+    decideOrderedVoiceQuestionTypeResolution({ llmAuthorized: false }).stage,
+    "no-prior-unknown"
   );
 });
 
@@ -206,7 +282,7 @@ test("memoizes only cloned parsed candidates under provider and request identity
   );
 });
 
-test("keeps a full-scope Field Knowledge result observational", () => {
+test("accepts a full-scope Field Knowledge result from the Voice resolver", () => {
   const base = {
     mode: "enforcement" as const,
     localQuestionType: "unknown",
@@ -248,8 +324,8 @@ test("keeps a full-scope Field Knowledge result observational", () => {
   };
 
   assert.equal(
-    decideQuestionTypeEnforcement({ ...base, reviewScope: "full" }).reason,
-    "field-knowledge-requires-narrow-review"
+    decideQuestionTypeEnforcement({ ...base, reviewScope: "full" }).authorized,
+    true
   );
   const narrowCandidate = {
     schemaVersion: 1 as const,
@@ -327,7 +403,7 @@ test("keeps Field when Coding does not beat Field and Unknown combined", () => {
   );
 });
 
-test("requires automatic Field Knowledge review even when broad adjudication is off", () => {
+test("requires automatic Screen Field Knowledge review even when broad adjudication is off", () => {
   const request = buildQuestionTypeAdjudicationRequest({
     logicalQuestionUnit: unit("Implement an LRU cache."),
     reviewScope: "field-vs-coding",
@@ -348,7 +424,7 @@ test("requires automatic Field Knowledge review even when broad adjudication is 
   assert.equal(required.executionMode, "enforcement-window");
   assert.equal(required.reason, "field-knowledge-review-required");
   assert.ok(
-    FIELD_KNOWLEDGE_REVIEW_WAIT_BUDGET_MS >
+    SCREEN_FIELD_KNOWLEDGE_REVIEW_WAIT_BUDGET_MS >
       QUESTION_TYPE_ENFORCEMENT_WAIT_BUDGET_MS
   );
 
@@ -489,7 +565,7 @@ test("forces correction-owned Question Type through the registered enforcement w
   assert.equal(decision.reason, "correction-owned-runtime-execution");
 });
 
-test("waits only for lower-confidence, long, or multi-sentence type review", () => {
+test("reviews every eligible substantive Voice question in enforcement mode", () => {
   const exactHigh = inferQuestionTypeDecisionFromText(
     "Implement a stack in Python."
   );
@@ -504,8 +580,9 @@ test("waits only for lower-confidence, long, or multi-sentence type review", () 
     manualCorrectionActive: false,
     turnGateAction: "answer-refresh",
   });
-  assert.equal(simple.executionMode, "shadow-observation");
-  assert.equal(simple.reason, "high-confidence-simple-local-shadow");
+  assert.equal(simple.executionMode, "enforcement-window");
+  assert.equal(simple.reason, "enforcement-review-required");
+  assert.ok(simple.triggerReasons.includes("local-type-prompt-hint"));
 
   const lowerConfidence = decideQuestionTypeAdjudicationEligibility({
     mode: "enforcement",
@@ -518,7 +595,7 @@ test("waits only for lower-confidence, long, or multi-sentence type review", () 
   assert.equal(lowerConfidence.executionMode, "enforcement-window");
   assert.ok(
     lowerConfidence.triggerReasons.includes(
-      "local-confidence-below-enforcement-threshold"
+      "local-type-prompt-hint"
     )
   );
 
@@ -567,7 +644,7 @@ test("waits only for lower-confidence, long, or multi-sentence type review", () 
 test("migrates the legacy enabled flag to an explicit operation mode", () => {
   assert.equal(
     normalizeQuestionTypeAdjudicationMode(undefined, true),
-    "shadow"
+    "enforcement"
   );
   assert.equal(
     normalizeQuestionTypeAdjudicationMode(undefined, false),
@@ -644,7 +721,7 @@ test("Task 144 accepts only the proposed type while relation and parent stay blo
   assert.equal(enforcementPreview.parentMutationAuthorized, false);
 });
 
-test("authorizes only high-confidence unknown-to-concrete type repair", () => {
+test("authorizes a schema-valid concrete runtime type over the local proposal", () => {
   const logicalQuestionUnit = unit(
     "Design a URL shortener for me."
   );
@@ -691,12 +768,12 @@ test("authorizes only high-confidence unknown-to-concrete type repair", () => {
       localQuestionType: "unknown",
       proposedQuestionType: "general-system-design",
       confidence: 0.97,
-      minimumConfidence: 0.95,
+      minimumConfidence: 0,
     }
   );
 });
 
-test("keeps type enforcement narrow across confidence, authority, and timing guards", () => {
+test("keeps type enforcement bounded by authority and timing rather than heuristic confidence", () => {
   const logicalQuestionUnit = unit(
     "Design a URL shortener for me."
   );
@@ -747,8 +824,8 @@ test("keeps type enforcement narrow across confidence, authority, and timing gua
     decideQuestionTypeEnforcement({
       ...base,
       candidate: { ...candidate, confidence: 0.94 },
-    }).reason,
-    "candidate-confidence-below-threshold"
+    }).authorized,
+    true
   );
   assert.equal(
     decideQuestionTypeEnforcement({

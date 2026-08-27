@@ -22,11 +22,9 @@ import type { MeetingQuestionTypeAdjudicationMode } from "./types.js";
 
 export const QUESTION_TYPE_ADJUDICATION_SCHEMA_VERSION = 1;
 export const QUESTION_TYPE_ADJUDICATION_PROMPT_VERSION =
-  "question-type-adjudication-v3";
+  "question-type-adjudication-v4";
 export const QUESTION_TYPE_ADJUDICATION_MAX_OUTPUT_CHARS = 2_048;
-export const QUESTION_TYPE_ENFORCEMENT_MIN_CONFIDENCE = 0.95;
 export const QUESTION_TYPE_ENFORCEMENT_WAIT_BUDGET_MS = 2_000;
-export const FIELD_KNOWLEDGE_REVIEW_WAIT_BUDGET_MS = 4_500;
 export const SCREEN_FIELD_KNOWLEDGE_REVIEW_WAIT_BUDGET_MS = 5_500;
 export const SCREEN_FIELD_KNOWLEDGE_REVIEW_PROVIDER_TIMEOUT_MS = 6_000;
 
@@ -37,6 +35,31 @@ export interface QuestionTypeAdjudicationRequest {
   logicalQuestionUnitRevision: number;
   reviewScope?: "full" | "field-vs-coding";
   question: TaxonomyAdjudicationProjection;
+  structuredHints?: QuestionTypeStructuredHints;
+}
+
+export interface QuestionTypeStructuredHints {
+  sectionHintType?: CanonicalQuestionType;
+  sectionHintSource?: string;
+  openingRouteKind?: string;
+  openingRouteType?: CanonicalQuestionType;
+  lexicalPattern?: string;
+  lexicalCandidateType?: CanonicalQuestionType;
+  preparationPriorType?: CanonicalQuestionType;
+}
+
+export type OrderedQuestionTypeResolutionStage =
+  | "runtime-llm"
+  | "section-hint-fallback"
+  | "preserve-current-type"
+  | "no-prior-unknown";
+
+export interface OrderedQuestionTypeResolutionDecision {
+  questionType: CanonicalQuestionType;
+  stage: OrderedQuestionTypeResolutionStage;
+  reason: string;
+  confidence: number;
+  typeEvidenceAuthorized: boolean;
 }
 
 export interface QuestionTypeAdjudicationJob
@@ -135,8 +158,6 @@ export type QuestionTypeEnforcementReason =
   | "candidate-missing"
   | "candidate-type-unknown"
   | "field-coding-majority-not-met"
-  | "field-knowledge-requires-narrow-review"
-  | "candidate-confidence-below-threshold"
   | "settlement-type-mutation-not-authorized"
   | "advisor-release-window-closed";
 
@@ -334,13 +355,14 @@ export function normalizeQuestionTypeAdjudicationMode(
   ) {
     return value;
   }
-  return legacyEnabled ? "shadow" : "off";
+  return legacyEnabled ? "enforcement" : "off";
 }
 
 export function buildQuestionTypeAdjudicationRequest(input: {
   logicalQuestionUnit: LogicalQuestionUnit;
   reviewScope?: QuestionTypeAdjudicationRequest["reviewScope"];
   semanticQuestionText?: string;
+  structuredHints?: QuestionTypeStructuredHints;
 }): QuestionTypeAdjudicationRequest {
   const semanticQuestionText = input.semanticQuestionText
     ?.replace(/\s+/g, " ")
@@ -376,6 +398,62 @@ export function buildQuestionTypeAdjudicationRequest(input: {
     logicalQuestionUnitRevision: input.logicalQuestionUnit.revision,
     reviewScope: input.reviewScope ?? "full",
     question,
+    structuredHints: normalizeStructuredHints(input.structuredHints),
+  };
+}
+
+export function decideOrderedVoiceQuestionTypeResolution(input: {
+  llmSettlement?: Pick<
+    CurrentQuestionSettlementDecision,
+    "questionType" | "confidence" | "typeMutationAuthorized"
+  >;
+  llmAuthorized: boolean;
+  sectionHintType?: unknown;
+  currentBranchType?: unknown;
+}): OrderedQuestionTypeResolutionDecision {
+  const llmType = normalizeQuestionType(input.llmSettlement?.questionType);
+  if (
+    input.llmAuthorized &&
+    input.llmSettlement?.typeMutationAuthorized &&
+    llmType !== "unknown"
+  ) {
+    return {
+      questionType: llmType,
+      stage: "runtime-llm",
+      reason: "valid-runtime-question-type",
+      confidence: clampConfidence(input.llmSettlement.confidence),
+      typeEvidenceAuthorized: true,
+    };
+  }
+
+  const sectionHintType = normalizeQuestionType(input.sectionHintType);
+  if (sectionHintType !== "unknown") {
+    return {
+      questionType: sectionHintType,
+      stage: "section-hint-fallback",
+      reason: "runtime-unresolved-section-hint",
+      confidence: 1,
+      typeEvidenceAuthorized: true,
+    };
+  }
+
+  const currentBranchType = normalizeQuestionType(input.currentBranchType);
+  if (currentBranchType !== "unknown") {
+    return {
+      questionType: currentBranchType,
+      stage: "preserve-current-type",
+      reason: "runtime-unresolved-preserve-current-type",
+      confidence: 1,
+      typeEvidenceAuthorized: true,
+    };
+  }
+
+  return {
+    questionType: "unknown",
+    stage: "no-prior-unknown",
+    reason: "runtime-unresolved-without-type-prior",
+    confidence: 0,
+    typeEvidenceAuthorized: false,
   };
 }
 
@@ -467,31 +545,10 @@ export function decideQuestionTypeAdjudicationEligibility(input: {
     ]);
   }
 
-  const simpleHighConfidenceLocal = Boolean(
-    input.lexical.type &&
-      input.lexical.type !== "unknown" &&
-      input.lexical.confidence >=
-        QUESTION_TYPE_ENFORCEMENT_MIN_CONFIDENCE &&
-      wordEquivalent < 24 &&
-      sentenceCount <= 1 &&
-      input.projection.projectionReason === "within-limit" &&
-      input.projection.omittedSourceTurnIds.length === 0 &&
-      !input.sameAxisConflict?.conflict
-  );
-  if (simpleHighConfidenceLocal) {
-    return shadowObservation(
-      "high-confidence-simple-local-shadow",
-      ["local-confidence-at-least-enforcement-threshold"]
-    );
-  }
-
   const triggerReasons = [
     !input.lexical.type || input.lexical.type === "unknown"
       ? "local-type-abstained"
-      : input.lexical.confidence <
-          QUESTION_TYPE_ENFORCEMENT_MIN_CONFIDENCE
-        ? "local-confidence-below-enforcement-threshold"
-        : undefined,
+      : "local-type-prompt-hint",
     wordEquivalent >= 24 ? "long-question-unit" : undefined,
     sentenceCount >= 2 ? "multi-sentence-question-unit" : undefined,
     input.projection.projectionReason !== "within-limit" ||
@@ -523,6 +580,9 @@ export function buildQuestionTypeAdjudicationPrompts(
     question: {
       sourceTexts: request.question.sourceTurns.map((source) => source.text),
     },
+    ...(request.structuredHints
+      ? { nonAuthoritativeHints: request.structuredHints }
+      : {}),
   };
   const systemPrompt = request.reviewScope === "field-vs-coding"
     ? [
@@ -542,6 +602,7 @@ export function buildQuestionTypeAdjudicationPrompts(
       "Return one minified JSON object on one line with no markdown fence. Do not answer the interview question.",
       "Do not decide task relation, parent or child status, response action, playbook phase, evidence mode, or meeting metadata.",
       "Use only question.sourceTexts. Ignore quoted examples and classify the current primary or terminal ask.",
+      "nonAuthoritativeHints may contain bounded prior hypotheses. Treat them only as hints and override them whenever question.sourceTexts supports a different type.",
       "Allowed questionType values: behavioral, coding, general-system-design, ai-ml-system-design, project-deep-dive, field-knowledge, unknown.",
       "behavioral asks for a past personal situation or action.",
       "coding asks to implement, write, debug, or analyze code or an algorithm.",
@@ -663,7 +724,6 @@ export function decideQuestionTypeEnforcement(input: {
   operationLeaseAuthorized: boolean;
   advisorReleaseWindowOpen: boolean;
   reviewScope?: QuestionTypeAdjudicationRequest["reviewScope"];
-  minimumConfidence?: number;
 }): QuestionTypeEnforcementDecision {
   const localQuestionType =
     normalizeQuestionType(input.localQuestionType);
@@ -674,9 +734,7 @@ export function decideQuestionTypeEnforcement(input: {
   const minimumConfidence =
     input.reviewScope === "field-vs-coding"
       ? 0.5
-      : clampConfidence(
-          input.minimumConfidence ?? QUESTION_TYPE_ENFORCEMENT_MIN_CONFIDENCE
-        );
+      : 0;
   const reject = (
     reason: Exclude<QuestionTypeEnforcementReason, "authorized">
   ): QuestionTypeEnforcementDecision => ({
@@ -714,18 +772,6 @@ export function decideQuestionTypeEnforcement(input: {
   if (proposedQuestionType === "unknown") {
     return reject("candidate-type-unknown");
   }
-  if (
-    proposedQuestionType === "field-knowledge" &&
-    input.reviewScope !== "field-vs-coding"
-  ) {
-    return reject("field-knowledge-requires-narrow-review");
-  }
-  if (
-    input.reviewScope !== "field-vs-coding" &&
-    confidence < minimumConfidence
-  ) {
-    return reject("candidate-confidence-below-threshold");
-  }
   if (!input.settlement?.typeMutationAuthorized) {
     return reject("settlement-type-mutation-not-authorized");
   }
@@ -761,6 +807,19 @@ export function formatQuestionTypeEnforcementForTrace(
   };
 }
 
+export function formatOrderedQuestionTypeResolutionForTrace(
+  decision: OrderedQuestionTypeResolutionDecision | undefined
+) {
+  return {
+    questionTypeOrderedResolutionType: decision?.questionType,
+    questionTypeOrderedResolutionStage: decision?.stage,
+    questionTypeOrderedResolutionReason: decision?.reason,
+    questionTypeOrderedResolutionConfidence: decision?.confidence,
+    questionTypeOrderedResolutionEvidenceAuthorized:
+      decision?.typeEvidenceAuthorized,
+  };
+}
+
 export function formatQuestionTypeAdjudicationForTrace(input: {
   mode: MeetingQuestionTypeAdjudicationMode;
   eligibility?: QuestionTypeAdjudicationEligibilityDecision;
@@ -793,6 +852,16 @@ export function formatQuestionTypeAdjudicationForTrace(input: {
     questionTypeAdjudicationProjectionReason:
       input.request?.question.projectionReason,
     questionTypeAdjudicationDisposition: input.disposition,
+    questionTypeAdjudicationSectionHintType:
+      input.request?.structuredHints?.sectionHintType,
+    questionTypeAdjudicationOpeningRouteKind:
+      input.request?.structuredHints?.openingRouteKind,
+    questionTypeAdjudicationLexicalPattern:
+      input.request?.structuredHints?.lexicalPattern,
+    questionTypeAdjudicationLexicalCandidateType:
+      input.request?.structuredHints?.lexicalCandidateType,
+    questionTypeAdjudicationPreparationPriorType:
+      input.request?.structuredHints?.preparationPriorType,
     questionTypeAdjudicationCandidateType:
       input.candidate?.questionType,
     questionTypeAdjudicationConfidence:
@@ -948,6 +1017,37 @@ function countQuestionSentences(
 
 function normalizeQuestionType(value: unknown): CanonicalQuestionType {
   return isCanonicalQuestionType(value) ? value : "unknown";
+}
+
+function normalizeStructuredHints(
+  hints: QuestionTypeStructuredHints | undefined
+): QuestionTypeStructuredHints | undefined {
+  if (!hints) return undefined;
+  const normalized: QuestionTypeStructuredHints = {
+    sectionHintType: normalizeConcreteQuestionType(hints.sectionHintType),
+    sectionHintSource: normalizeHintLabel(hints.sectionHintSource),
+    openingRouteKind: normalizeHintLabel(hints.openingRouteKind),
+    openingRouteType: normalizeConcreteQuestionType(hints.openingRouteType),
+    lexicalPattern: normalizeHintLabel(hints.lexicalPattern),
+    lexicalCandidateType: normalizeConcreteQuestionType(
+      hints.lexicalCandidateType
+    ),
+    preparationPriorType: normalizeConcreteQuestionType(
+      hints.preparationPriorType
+    ),
+  };
+  return Object.values(normalized).some(Boolean) ? normalized : undefined;
+}
+
+function normalizeConcreteQuestionType(value: unknown) {
+  const questionType = normalizeQuestionType(value);
+  return questionType === "unknown" ? undefined : questionType;
+}
+
+function normalizeHintLabel(value: unknown) {
+  return typeof value === "string" && value.trim()
+    ? value.trim().slice(0, 120)
+    : undefined;
 }
 
 function clampConfidence(value: unknown) {

@@ -4282,8 +4282,8 @@ const ConfigurationsPanel = ({
                   </div>
                   <div className="mt-0.5 text-[10px] text-muted-foreground">
                     {taxonomyAdjudication.questionTypeMode === "enforcement"
-                      ? "High-confidence unknown-only repair"
-                      : "Shadow only; relation and parent stay blocked"}
+                      ? "Ordered Voice type settlement"
+                      : "Shadow only; runtime type stays unchanged"}
                   </div>
                 </div>
                 <Switch

@@ -116,7 +116,7 @@ export const EXPLICIT_ASK_AUTHORITY_CORPUS: ExplicitAskAuthorityFixture[] = [
     currentDisposition: "answer-primary-ask",
     expectedPrimaryAsk: "Explain how HNSW search works.",
     targetAdmission: true,
-    expectedLocalType: "field-knowledge",
+    expectedLocalType: undefined,
   },
   {
     id: "chinese-system-design",
@@ -151,7 +151,7 @@ export const AMBIGUOUS_TYPE_AUTHORITY_CORPUS: AmbiguousTypeAuthorityFixture[] = 
   {
     id: "model-concept-or-architecture",
     text: "Explain the model architecture.",
-    currentLocalType: "field-knowledge",
+    currentLocalType: undefined,
     targetDisposition: "abstain",
   },
 ];

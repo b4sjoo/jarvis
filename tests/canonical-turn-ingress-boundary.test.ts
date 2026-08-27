@@ -107,6 +107,27 @@ test("joins every reviewed response opportunity before canonical publication and
   assert.doesNotMatch(responseOpportunity, /\bscheduleAdvisor\(/);
 });
 
+test("settles Voice question type before Relation and passes one tuple to Advisor", () => {
+  const consumer = sourceSlice(
+    "  const scheduleAdvisorAfterQuestionTypeWindow = useCallback(",
+    "  const buildLogicalQuestionForTurn = useCallback("
+  );
+
+  assert.match(consumer, /decideOrderedVoiceQuestionTypeResolution/);
+  assert.match(
+    consumer,
+    /const effectiveType = resolveOrderedQuestionType\(\s*settledTypeOutcome\s*\)\.questionType/
+  );
+  assert.match(
+    consumer,
+    /settlementReleased \? settlement : undefined/
+  );
+  assert.doesNotMatch(
+    consumer,
+    /const fallbackType =[\s\S]{0,240}localQuestionType/
+  );
+});
+
 function sourceSlice(startMarker: string, endMarker: string) {
   const start = source.indexOf(startMarker);
   const end = source.indexOf(endMarker, start + startMarker.length);

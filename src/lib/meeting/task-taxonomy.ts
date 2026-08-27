@@ -660,7 +660,7 @@ export function inferQuestionTypeDecisionFromText(
   };
 
   const hasBehavioralFrame =
-    /\b(tell me about a time|give me an example|describe a time|conflict|disagree|missed a commitment|leadership principle|ownership|failure|mistake)\b/.test(
+    /\b(tell me about a time|give me an example|describe a time|conflict|disagree|missed a commitment|leadership principle)\b/.test(
       normalized
     );
 
@@ -931,21 +931,6 @@ export function inferQuestionTypeDecisionFromText(
     }
   }
 
-  const hasConceptQuestion =
-    /\b(what is|what are|explain|compare|why|how does|tradeoff|trade-off|pros and cons|advantages|disadvantages)\b/.test(
-      normalized
-    );
-  if (
-    hasConceptQuestion &&
-    !hasBehavioralFrame &&
-    !hasStrongPastProjectFrame &&
-    !hasExplicitProjectStackFrame &&
-    !hasStrongSystemDesignFrame &&
-    !hasComplexityRequest
-  ) {
-    addEvidence("field-knowledge", 0.88, "direct-concept-question");
-  }
-
   if (/\b(implement|build|write|solve)\b/.test(normalized)) {
     evidence.push("weak-action-verb");
   }
@@ -1028,14 +1013,6 @@ export function inferQuestionTypeDecisionFromText(
     /(?:人工智能|机器学习|大模型|检索增强|向量|嵌入|模型服务|智能体|评估|微调|特征库|推荐|排序|个性化|训练|推理)/.test(
       normalized
     );
-  const hasExactChineseConceptFrame =
-    /(?:什么是|解释|比较|为什么|如何工作|怎么工作|优缺点|权衡)/.test(
-      normalized
-    );
-  const ambiguousChineseArchitectureConceptFrame =
-    /(?:解释|描述|介绍).{0,10}(?:模型|系统|项目).{0,6}架构/.test(
-      normalized
-    );
   const hasExactBehavioralFrame =
     hasBehavioralFrame || hasExactChineseBehavioralFrame;
   const hasExactProjectFrame =
@@ -1075,8 +1052,6 @@ export function inferQuestionTypeDecisionFromText(
     hasExactChineseCodeOutputFrame ||
     hasExactChineseComplexityFrame;
   const hasExactAimlContext = hasAimlContext || hasExactChineseAimlContext;
-  const hasExactConceptFrame =
-    hasConceptQuestion || hasExactChineseConceptFrame;
   const exactCandidates = new Set<CanonicalQuestionType>();
 
   if (hasExactBehavioralFrame) {
@@ -1099,20 +1074,6 @@ export function inferQuestionTypeDecisionFromText(
         : "general-system-design"
     );
   }
-  if (
-    hasExactConceptFrame &&
-    !ambiguousArchitectureConceptFrame &&
-    !ambiguousChineseArchitectureConceptFrame &&
-    !hasExactBehavioralFrame &&
-    !hasExactProjectFrame &&
-    !hasExplicitProjectStackFrame &&
-    !hasExactSystemDesignFrame &&
-    !hasExactComplexityFrame &&
-    !hasExactChineseComplexityFrame
-  ) {
-    exactCandidates.add("field-knowledge");
-  }
-
   const conflictingTypes = [...exactCandidates];
   const type =
     exactCandidates.size === 1 ? conflictingTypes[0] : undefined;

@@ -403,7 +403,7 @@ test("infers canonical question type from lightweight text signals", () => {
   );
   assert.equal(
     inferCanonicalQuestionTypeFromText("Explain the tradeoff between BM25 and dense retrieval"),
-    "field-knowledge"
+    undefined
   );
   assert.equal(inferCanonicalQuestionTypeFromText("hello"), undefined);
 });
@@ -461,7 +461,7 @@ test("uses action, object, and frame together for implement and stack questions"
   );
   assert.equal(
     inferCanonicalQuestionTypeFromText("Explain the stack data structure"),
-    "field-knowledge"
+    undefined
   );
   assert.equal(inferCanonicalQuestionTypeFromText("implement"), undefined);
   assert.equal(
@@ -546,7 +546,7 @@ test("keeps generic complexity language out of the past-project signal", () => {
   }
 });
 
-test("distinguishes named-project implementation history from standalone concepts", () => {
+test("distinguishes named-project implementation history from lexical concept abstention", () => {
   const projectDecision = inferQuestionTypeDecisionFromText(
     "In the OASIS project, why did the OpenSearch Bulk API require NDJSON, and how were per-item partial failures handled?"
   );
@@ -560,9 +560,13 @@ test("distinguishes named-project implementation history from standalone concept
     "In the OpenSearch project, what is NDJSON?",
   ]) {
     const decision = inferQuestionTypeDecisionFromText(question);
-    assert.equal(decision.type, "field-knowledge", question);
+    assert.equal(decision.type, undefined, question);
     assert.ok(
       !decision.evidence.includes("named-project-implementation-frame"),
+      question
+    );
+    assert.ok(
+      !decision.evidence.includes("direct-concept-question"),
       question
     );
   }
