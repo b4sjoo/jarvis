@@ -403,6 +403,14 @@ export interface SessionCompactTraceSummary {
   whiteboardRevisionRequested?: boolean;
   turnGateAction?: string;
   turnGateReason?: string;
+  runtimeLexicalRuleSetVersion?: string;
+  responseOpportunityLocalRuleId?: string;
+  responseOpportunityLocalAuthorityStage?: string;
+  responseOpportunityLocalMatchedSpans: string[];
+  logicalQuestionPublicationStage?: string;
+  taskRelationLexicalRuleId?: string;
+  taskRelationLexicalAuthorityStage?: string;
+  taskRelationLexicalMatchedSpans: string[];
   advisorTurnIntent?: string;
   advisorTurnConfidence?: number;
   advisorTurnEnforcement?: string;
@@ -4844,6 +4852,38 @@ export function buildCompactTraceSummary({
     ),
     turnGateAction: readFirstString(metadataSources, "turnGateAction"),
     turnGateReason: readFirstString(metadataSources, "turnGateReason"),
+    runtimeLexicalRuleSetVersion: readFirstString(
+      metadataSources,
+      "runtimeLexicalRuleSetVersion"
+    ),
+    responseOpportunityLocalRuleId: readFirstString(
+      metadataSources,
+      "responseOpportunityLocalRuleId"
+    ),
+    responseOpportunityLocalAuthorityStage: readFirstString(
+      metadataSources,
+      "responseOpportunityLocalAuthorityStage"
+    ),
+    responseOpportunityLocalMatchedSpans: readFirstStringList(
+      metadataSources,
+      "responseOpportunityLocalMatchedSpans"
+    ),
+    logicalQuestionPublicationStage: readFirstString(
+      metadataSources,
+      "logicalQuestionPublicationStage"
+    ),
+    taskRelationLexicalRuleId: readFirstString(
+      metadataSources,
+      "taskRelationLexicalRuleId"
+    ),
+    taskRelationLexicalAuthorityStage: readFirstString(
+      metadataSources,
+      "taskRelationLexicalAuthorityStage"
+    ),
+    taskRelationLexicalMatchedSpans: readFirstStringList(
+      metadataSources,
+      "taskRelationLexicalMatchedSpans"
+    ),
     advisorTurnIntent: readFirstString(metadataSources, "advisorTurnIntent"),
     advisorTurnConfidence: readFirstNumberFromMetadata(
       metadataSources,

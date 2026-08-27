@@ -19115,6 +19115,17 @@ export function useMeetingAssistant() {
           activeParentAuthority?.reason,
         taskRelationAdjudicationLocalEvidenceSpans:
           activeParentAuthority?.evidenceSpans,
+        runtimeLexicalRuleSetVersion: "runtime-lexical-rules-v1",
+        taskRelationLexicalRuleId:
+          activeParentAuthority?.reason ?? "no-local-relation-rule",
+        taskRelationLexicalAuthorityStage:
+          deterministicRelationAuthorized
+            ? "structural-authority"
+            : activeParentAuthority
+              ? "prompt-hint"
+              : "observation-only",
+        taskRelationLexicalMatchedSpans:
+          activeParentAuthority?.evidenceSpans ?? [],
         taskRelationAdjudicationDeterministicAuthority:
           deterministicRelationAuthorized,
         taskRelationAdjudicationComparisonExpected:
@@ -19135,6 +19146,7 @@ export function useMeetingAssistant() {
           adjudicationReason,
         taskRelationAdjudicationBehaviorMutationBlocked: true,
         taskRelationAdjudicationAppliedToRuntime: false,
+        ...getActiveMeetingTaskTraceMetadata(activeMeetingTask),
       };
       traceStoreRef.current.updateMetadata(traceId, baseMetadata);
       if (!eligibility.eligible) {
@@ -22477,6 +22489,21 @@ export function useMeetingAssistant() {
         ),
         turnGateAction: turnGate.action,
         turnGateReason: turnGate.reason,
+        runtimeLexicalRuleSetVersion: "runtime-lexical-rules-v1",
+        responseOpportunityLocalRuleId:
+          responseOpportunityLocalDecision.reason,
+        responseOpportunityLocalAuthorityStage:
+          responseOpportunityLocalDecision.disposition ===
+          "deterministic-no-output"
+            ? "structural-authority"
+            : responseOpportunityLocalDecision.disposition ===
+                "deterministic-output"
+              ? "speculative-hint"
+              : "prompt-hint",
+        responseOpportunityLocalMatchedSpans: [
+          ...primaryAskProjection.primaryAskSpans.map((span) => span.text),
+          ...primaryAskProjection.setupSpans.map((span) => span.text),
+        ].slice(0, 8),
         memoryRetrievalSuppressedReason: turnGate.executionAuthorized
           ? undefined
           : `turn-intent:${turnGate.reason}`,
@@ -22506,6 +22533,12 @@ export function useMeetingAssistant() {
         ...formatLogicalQuestionPublicationForTrace(
           logicalQuestionPublication
         ),
+        logicalQuestionPublicationStage:
+          !logicalQuestionMaterialization.materialize
+            ? "not-materialized"
+            : logicalQuestionPublication.publishCanonical
+              ? "canonical-published"
+              : "provisional",
       });
       const gateStepId = traceStoreRef.current.startStep(
         traceId,

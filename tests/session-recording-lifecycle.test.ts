@@ -1228,6 +1228,15 @@ test("session summaries retain answer delivery and artifact stability evidence",
       answerDwellMs: 5_400,
       advisorIntentAuthoritySource: "runtime-intent-gate",
       responseOpportunityLocalDisposition: "runtime-required",
+      runtimeLexicalRuleSetVersion: "runtime-lexical-rules-v1",
+      responseOpportunityLocalRuleId:
+        "residual-response-opportunity-ambiguity",
+      responseOpportunityLocalAuthorityStage: "prompt-hint",
+      responseOpportunityLocalMatchedSpans: ["Explain the tradeoff."],
+      logicalQuestionPublicationStage: "provisional",
+      taskRelationLexicalRuleId: "explicit-parent-binding",
+      taskRelationLexicalAuthorityStage: "prompt-hint",
+      taskRelationLexicalMatchedSpans: ["for this system"],
       residualResponseOpportunityInferenceRequired: true,
       responseOpportunityDisposition: "completed",
       responseOpportunityDecision: "output-request",
@@ -1267,6 +1276,23 @@ test("session summaries retain answer delivery and artifact stability evidence",
   assert.ok(compactCall);
   const compact = parsePayload(compactCall);
   assert.equal(compact.answerDeliveryLockState, "update-ready");
+  assert.equal(
+    compact.runtimeLexicalRuleSetVersion,
+    "runtime-lexical-rules-v1"
+  );
+  assert.equal(
+    compact.responseOpportunityLocalRuleId,
+    "residual-response-opportunity-ambiguity"
+  );
+  assert.equal(compact.responseOpportunityLocalAuthorityStage, "prompt-hint");
+  assert.deepEqual(compact.responseOpportunityLocalMatchedSpans, [
+    "Explain the tradeoff.",
+  ]);
+  assert.equal(compact.logicalQuestionPublicationStage, "provisional");
+  assert.equal(compact.taskRelationLexicalRuleId, "explicit-parent-binding");
+  assert.deepEqual(compact.taskRelationLexicalMatchedSpans, [
+    "for this system",
+  ]);
   assert.deepEqual(compact.authorizedArtifacts, ["answer"]);
   assert.deepEqual(compact.candidateMutatedArtifacts, ["answer"]);
   assert.deepEqual(compact.lifecycleResetArtifacts, ["code", "complexity"]);
