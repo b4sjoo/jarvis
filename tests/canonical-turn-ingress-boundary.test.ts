@@ -128,6 +128,21 @@ test("settles Voice question type before Relation and passes one tuple to Adviso
   );
 });
 
+test("lets an authorized first-parent admission outrank implicit response-only scope", () => {
+  assert.match(
+    source,
+    /const implicitResponseOnlyScopeAllowed =\s*!llmTypeRepairFirstParentAdmission\.authorized;/
+  );
+  assert.match(
+    source,
+    /\(implicitResponseOnlyScopeAllowed &&\s*llmTypeOnlySettlement &&\s*advisorJob\.logicalQuestionUnit/
+  );
+  assert.match(
+    source,
+    /\(implicitResponseOnlyScopeAllowed &&\s*advisorTaskSignals\.responseOnlyRelation &&\s*advisorJob\.logicalQuestionUnit/
+  );
+});
+
 function sourceSlice(startMarker: string, endMarker: string) {
   const start = source.indexOf(startMarker);
   const end = source.indexOf(endMarker, start + startMarker.length);

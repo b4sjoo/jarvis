@@ -10776,10 +10776,12 @@ export function useMeetingAssistant() {
         ...boundedRecentHistoryMetadata,
       });
     }
+    const implicitResponseOnlyScopeAllowed =
+      !llmTypeRepairFirstParentAdmission.authorized;
     let responseOnlyTaskScope: ResponseOnlyTaskScope | undefined =
       options.responseOnlyTaskScopeOverride ??
-      (llmTypeOnlySettlement &&
-      !llmTypeRepairFirstParentAdmission.authorized &&
+      (implicitResponseOnlyScopeAllowed &&
+      llmTypeOnlySettlement &&
       advisorJob.logicalQuestionUnit
         ? createResponseOnlyTaskScope({
             logicalQuestionUnitId:
@@ -10795,7 +10797,8 @@ export function useMeetingAssistant() {
             contextReadScope: responseOnlyBaseContextReadScope,
           })
         : undefined) ??
-      (advisorTaskSignals.responseOnlyRelation &&
+      (implicitResponseOnlyScopeAllowed &&
+      advisorTaskSignals.responseOnlyRelation &&
       advisorJob.logicalQuestionUnit
         ? createResponseOnlyTaskScope({
             logicalQuestionUnitId:
