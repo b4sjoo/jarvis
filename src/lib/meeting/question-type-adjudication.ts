@@ -153,7 +153,10 @@ export interface QuestionTypeAdjudicationRuntimeOutcome {
   disposition: string;
   enforcement: QuestionTypeEnforcementDecision;
   settlement?: CurrentQuestionSettlementDecision;
+  candidate?: LlmQuestionTypeAdjudication;
   operationId?: string;
+  operationLeaseAuthorized: boolean;
+  providerTimedOut: boolean;
 }
 
 export const QUESTION_TYPE_ADJUDICATION_OUTCOME_SCHEMA_VERSION = 2;
@@ -385,6 +388,7 @@ export function decideQuestionTypeAdjudicationEligibility(input: {
   turnGateAction: string;
   sameAxisConflict?: RuntimeAxisConflictDecision<CanonicalQuestionType>;
   mandatoryFieldKnowledgeReview?: boolean;
+  forceRuntimeExecution?: boolean;
 }): QuestionTypeAdjudicationEligibilityDecision {
   const wordEquivalent = estimateWordEquivalents(
     input.projection.text
@@ -400,7 +404,11 @@ export function decideQuestionTypeAdjudicationEligibility(input: {
     wordEquivalent,
     sentenceCount,
   });
-  if (input.mode === "off" && !input.mandatoryFieldKnowledgeReview) {
+  if (
+    input.mode === "off" &&
+    !input.mandatoryFieldKnowledgeReview &&
+    !input.forceRuntimeExecution
+  ) {
     return skip("question-type-operation-off");
   }
   if (input.speaker !== "them") return skip("speaker-is-not-interviewer");
@@ -430,6 +438,16 @@ export function decideQuestionTypeAdjudicationEligibility(input: {
     return shadowObservation("non-answer-turn-shadow-observation", [
       `turn-gate:${input.turnGateAction || "unknown"}`,
     ]);
+  }
+  if (input.forceRuntimeExecution) {
+    return {
+      eligible: true,
+      reason: "correction-owned-runtime-execution",
+      triggerReasons: ["correction-owned-question-type-resettlement"],
+      executionMode: "enforcement-window",
+      wordEquivalent,
+      sentenceCount,
+    };
   }
   if (input.mandatoryFieldKnowledgeReview) {
     return {

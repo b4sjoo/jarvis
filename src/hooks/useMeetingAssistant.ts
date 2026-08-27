@@ -17553,6 +17553,11 @@ export function useMeetingAssistant() {
       sourceKind = "voice",
       sourceObservationIds = [],
       authorizationLogicalQuestionUnit,
+      semanticQuestionText,
+      forceRuntimeExecution = false,
+      waitBudgetMsOverride,
+      budgetSlotOverride,
+      operationIdOverride,
     }: {
       turn: Pick<TranscriptTurn, "speaker">;
       traceId: string;
@@ -17566,6 +17571,11 @@ export function useMeetingAssistant() {
       sourceKind?: "voice" | "screen" | "mixed";
       sourceObservationIds?: string[];
       authorizationLogicalQuestionUnit?: LogicalQuestionUnit;
+      semanticQuestionText?: string;
+      forceRuntimeExecution?: boolean;
+      waitBudgetMsOverride?: number;
+      budgetSlotOverride?: string;
+      operationIdOverride?: string;
     }): QuestionTypeAdjudicationScheduleHandle | undefined => {
       if (!logicalQuestionUnit) return undefined;
       const contextState = contextManagerRef.current.getState();
@@ -17580,6 +17590,7 @@ export function useMeetingAssistant() {
       );
       const mandatoryFieldKnowledgeReview = Boolean(
         localQuestionType === "field-knowledge" &&
+          !forceRuntimeExecution &&
           !manualAuthorityConflict
       );
       const request = buildQuestionTypeAdjudicationRequest({
@@ -17587,6 +17598,7 @@ export function useMeetingAssistant() {
         reviewScope: mandatoryFieldKnowledgeReview
           ? "field-vs-coding"
           : "full",
+        semanticQuestionText,
       });
       const eligibility = decideQuestionTypeAdjudicationEligibility({
         mode: mandatoryFieldKnowledgeReview ? "enforcement" : mode,
@@ -17597,10 +17609,12 @@ export function useMeetingAssistant() {
         turnGateAction,
         sameAxisConflict: questionTypeAxisConflict,
         mandatoryFieldKnowledgeReview,
+        forceRuntimeExecution,
       });
       const sourceOwnedSubstantive =
         turnGateAction === "answer-refresh" && request.question.safe;
       const effectiveQuestionTypeMode =
+        forceRuntimeExecution ||
         mandatoryFieldKnowledgeReview ||
         eligibility.executionMode === "enforcement-window"
           ? "enforcement"
@@ -17611,11 +17625,13 @@ export function useMeetingAssistant() {
           sourceOwnedSubstantive &&
           !manualAuthorityConflict
       );
-      const waitBudgetMs = mandatoryFieldKnowledgeReview
-        ? sourceKind === "screen"
-          ? SCREEN_FIELD_KNOWLEDGE_REVIEW_WAIT_BUDGET_MS
-          : FIELD_KNOWLEDGE_REVIEW_WAIT_BUDGET_MS
-        : QUESTION_TYPE_ENFORCEMENT_WAIT_BUDGET_MS;
+      const waitBudgetMs =
+        waitBudgetMsOverride ??
+        (mandatoryFieldKnowledgeReview
+          ? sourceKind === "screen"
+            ? SCREEN_FIELD_KNOWLEDGE_REVIEW_WAIT_BUDGET_MS
+            : FIELD_KNOWLEDGE_REVIEW_WAIT_BUDGET_MS
+          : QUESTION_TYPE_ENFORCEMENT_WAIT_BUDGET_MS);
       const providerTimeoutMs =
         sourceKind === "screen"
           ? SCREEN_FIELD_KNOWLEDGE_REVIEW_PROVIDER_TIMEOUT_MS
@@ -17636,6 +17652,8 @@ export function useMeetingAssistant() {
             advisorReleaseWindowOpen: true,
             reviewScope: request.reviewScope,
           }),
+          operationLeaseAuthorized: false,
+          providerTimedOut: false,
         }),
       });
       const circuit = questionTypeAdjudicationCircuitRef.current.read(
@@ -17669,6 +17687,8 @@ export function useMeetingAssistant() {
         questionTypeAdjudicationReviewScope: request.reviewScope,
         questionTypeAdjudicationMandatoryFieldReview:
           mandatoryFieldKnowledgeReview,
+        questionTypeAdjudicationCorrectionOwned:
+          forceRuntimeExecution,
       };
       traceStoreRef.current.updateMetadata(traceId, baseMetadata);
       if (!eligibility.eligible) {
@@ -17759,6 +17779,7 @@ export function useMeetingAssistant() {
         relation: activeRelation,
       });
       const lease = createTaxonomyAdjudicationLease({
+        operationId: operationIdOverride,
         sessionId: contextState.sessionId,
         runtimeEpoch: runtimeEpochRef.current,
         logicalQuestionUnit,
@@ -17876,9 +17897,11 @@ export function useMeetingAssistant() {
           operationKind: "question-type-adjudication",
           sessionId: contextState.sessionId,
           budgetKey: `${logicalQuestionUnit.id}:${logicalQuestionUnit.revision}`,
-          budgetSlot: "type",
+          budgetSlot: budgetSlotOverride ?? "type",
           budgetReason:
-            effectiveQuestionTypeMode === "enforcement"
+            forceRuntimeExecution
+              ? "correction-owned-question-type-resettlement"
+              : effectiveQuestionTypeMode === "enforcement"
               ? "question-type-settlement-proposal"
               : "question-type-observation",
           traceId,
@@ -18228,7 +18251,11 @@ export function useMeetingAssistant() {
             settlement: enforcement.authorized
               ? settlementPreview
               : undefined,
+            candidate: parsedValue,
             operationId: settlement.job.lease.operationId,
+            operationLeaseAuthorized: authorization.authorized,
+            providerTimedOut:
+              result?.providerOutcome?.status === "timed-out",
           });
           if (stepId) {
             traceStoreRef.current.finishStep(
@@ -33304,26 +33331,38 @@ export function useMeetingAssistant() {
         correctionOwnedOperationId
       ) {
         const adjudicationStartedAt = Date.now();
-        const modelRoute =
-          resolveTaxonomyAdjudicationModelRouteFromSnapshot({
-            snapshot: meetingModelProviderSnapshotRef.current,
-          });
-        const modelRouteMetadata =
-          formatTaxonomyAdjudicationModelRouteForTrace(modelRoute);
         const adjudicationStepId = traceStoreRef.current.startStep(
           repairTrace.id,
-          "Correction-owned semantic adjudication",
+          "Correction-owned Question Type adjudication",
           {
             ...formatCorrectionOwnedResettlementForTrace({
               trigger: correctionOwnedTrigger,
               operationId: correctionOwnedOperationId,
             }),
-            ...modelRouteMetadata,
             timeoutMs: CORRECTION_OWNED_ADJUDICATION_BUDGET_MS,
+            runtimeOperation: "question-type-adjudication",
+            providerTier: "intelligent",
           }
         );
-
-        if (!modelRoute.provider) {
+        const adjudicationHandle = scheduleQuestionTypeAdjudication({
+          turn: { speaker: "them" },
+          traceId: repairTrace.id,
+          turnGateAction: "answer-refresh",
+          logicalQuestionUnit: application.logicalQuestionUnit,
+          lexical: correctedQuestionTypeDecision,
+          sourceKind: correctionSourceKind,
+          sourceObservationIds: targetSourceObservationIds,
+          authorizationLogicalQuestionUnit:
+            application.logicalQuestionUnit,
+          semanticQuestionText: correctedSemanticEvidenceText,
+          forceRuntimeExecution: true,
+          waitBudgetMsOverride:
+            CORRECTION_OWNED_ADJUDICATION_BUDGET_MS,
+          budgetSlotOverride: `term-correction:${manualCorrectionRevisionRef.current}`,
+          operationIdOverride: correctionOwnedOperationId,
+        });
+        let timedOut = false;
+        if (!adjudicationHandle) {
           correctionOwnedResettlement = {
             disposition: "semantic-provider-unavailable",
             parentMutationAuthorized: false,
@@ -33333,155 +33372,67 @@ export function useMeetingAssistant() {
               ) ?? "unknown",
             relation: "unknown",
             confidence: 0,
-            reason: "taxonomy-adjudication-provider-unavailable",
+            reason: "question-type-operation-unavailable",
           };
-          activeCorrection = {
-            ...activeCorrection,
-            semanticAdjudicationStatus: "failed",
-            semanticAdjudicationDurationMs:
-              Date.now() - adjudicationStartedAt,
-            semanticResettlementDisposition:
-              correctionOwnedResettlement.disposition,
-          };
-          traceStoreRef.current.finishStep(
-            repairTrace.id,
-            adjudicationStepId,
-            "success",
-            {
-              ...formatCorrectionOwnedResettlementForTrace({
-                trigger: correctionOwnedTrigger,
-                decision: correctionOwnedResettlement,
-                operationId: correctionOwnedOperationId,
-                durationMs:
-                  activeCorrection.semanticAdjudicationDurationMs,
-              }),
-              fallback: "existing-parent-provisional-regeneration",
-            }
-          );
         } else {
-          const adjudicationParent =
-            contextManagerRef.current.getState().activeMeetingTask?.parent;
-          const adjudicationParentType =
-            normalizeCanonicalQuestionType(
-              adjudicationParent?.questionType
-            ) ?? "unknown";
-          const adjudicationRelation =
-            contextManagerRef.current.getState().activeMeetingTask?.child
-              ? "child-probe"
-              : adjudicationParent
-                ? "followup-parent"
-                : "unknown";
-          const taskBoundaryEpoch = hashTaxonomyTaskBoundary({
-            parentId: adjudicationParent?.id,
-            questionType: adjudicationParentType,
-            relation: adjudicationRelation,
-          });
-          const lease = createTaxonomyAdjudicationLease({
-            operationId: correctionOwnedOperationId,
-            sessionId: contextState.sessionId,
-            runtimeEpoch: runtimeEpochRef.current,
-            logicalQuestionUnit: application.logicalQuestionUnit,
-            taskBoundaryEpoch,
-            manualCorrectionRevision:
-              manualCorrectionRevisionRef.current,
-            expectedParentId: adjudicationParent?.id,
-            expectedParentRevision: adjudicationParent?.revisions,
-          });
-          const adjudicationRequest = buildQuestionTypeAdjudicationRequest({
-            logicalQuestionUnit: application.logicalQuestionUnit,
-            semanticQuestionText:
-              getLogicalQuestionSemanticEvidenceText(
-                application.logicalQuestionUnit
-              ),
-          });
-          const prompts =
-            buildQuestionTypeAdjudicationPrompts(adjudicationRequest);
-          const promptText = [
-            prompts.systemPrompt,
-            prompts.userMessage,
-          ].join("\n\n");
-          traceStoreRef.current.recordInput(
-            repairTrace.id,
-            "correction-owned question type model input",
-            promptText,
-            {
-              correctionOwnedAdjudicationOperationId:
-                correctionOwnedOperationId,
-              promptVersion: adjudicationRequest.promptVersion,
-              schemaVersion: adjudicationRequest.schemaVersion,
-              inputChars: promptText.length,
-              semanticPayloadDigest: prompts.semanticPayloadDigest,
-              modelVisibleChars: prompts.modelVisibleChars,
-            }
-          );
-          sessionRecordingManagerRef.current?.recordModelInput({
-            traceId: repairTrace.id,
-            taskId: contextState.activeMeetingTask?.id,
-            label: "correction-owned question type model input",
-            value: promptText,
-            metadata: {
-              correctionOwnedAdjudicationOperationId:
-                correctionOwnedOperationId,
-              promptVersion: adjudicationRequest.promptVersion,
-              schemaVersion: adjudicationRequest.schemaVersion,
-              inputChars: promptText.length,
-              semanticPayloadDigest: prompts.semanticPayloadDigest,
-              modelVisibleChars: prompts.modelVisibleChars,
-            },
-          });
-
-          const abortController = new AbortController();
-          let requestResult:
-            | QuestionTypeAdjudicationRequestResult
-            | undefined;
-          let timedOut = false;
           try {
-            requestResult = await withTimeout(
-              requestQuestionTypeAdjudication({
-                request: adjudicationRequest,
-                provider: modelRoute.provider,
-                selectedProvider: modelRoute.selectedProvider,
-                signal: abortController.signal,
-                executionIdentity: {
-                  requestId: correctionOwnedOperationId,
-                  executionPlanId: lease.operationId,
-                  modelId: readSelectedProviderModelId(
-                    modelRoute.selectedProvider
-                  ),
-                  sessionId: lease.sessionId,
-                  runtimeEpoch: lease.runtimeEpoch,
-                  logicalQuestionUnitId:
-                    adjudicationRequest.logicalQuestionUnitId,
-                  logicalQuestionRevision:
-                    adjudicationRequest.logicalQuestionUnitRevision,
-                },
-                onFirstToken: (at) => {
-                  traceStoreRef.current.updateMetadata(
-                    repairTrace.id,
-                    {
-                      correctionOwnedAdjudicationFirstTokenAt: at,
-                    }
-                  );
-                },
-              }),
+            const outcome = await withTimeout(
+              adjudicationHandle.outcome,
               CORRECTION_OWNED_ADJUDICATION_BUDGET_MS,
-              "Correction-owned semantic adjudication timed out."
+              "Correction-owned Question Type adjudication timed out."
             );
+            timedOut = outcome.providerTimedOut;
+            const latestContext = contextManagerRef.current.getState();
+            const latestParent = latestContext.activeMeetingTask?.parent;
+            const latestParentType =
+              normalizeCanonicalQuestionType(
+                latestParent?.questionType
+              ) ?? "unknown";
+            correctionOwnedResettlement =
+              resolveCorrectionOwnedTypeResettlement({
+                logicalQuestionUnit: application.logicalQuestionUnit,
+                sourceKind: correctionSourceKind,
+                sourceObservationIds: targetSourceObservationIds,
+                adjudication: outcome.candidate,
+                operationAuthorized:
+                  outcome.operationLeaseAuthorized,
+                operationAuthorizationReason:
+                  outcome.operationLeaseAuthorized
+                    ? undefined
+                    : outcome.disposition,
+                activeParentId: latestParent?.id,
+                activeParentRevision: latestParent?.revisions,
+                activeParentType: latestParentType,
+                targetOwnsActiveParent:
+                  correctionTargetOwnsParentOrigin({
+                    logicalQuestionUnit: application.logicalQuestionUnit,
+                    parent: latestContext.taskRuntime.parent,
+                  }),
+                manualCorrectionRevision:
+                  manualCorrectionRevisionRef.current,
+              });
           } catch (error) {
             timedOut =
               error instanceof Error &&
               error.message.includes("timed out");
-            abortController.abort(
-              timedOut
-                ? "correction-owned-adjudication-timeout"
-                : "correction-owned-adjudication-error"
-            );
+            if (
+              adjudicationHandle.operationId &&
+              questionTypeAdjudicationRuntimeRef.current?.getCurrentOperationId() ===
+                adjudicationHandle.operationId
+            ) {
+              questionTypeAdjudicationRuntimeRef.current.cancelAll(
+                "superseded"
+              );
+            }
             correctionOwnedResettlement = {
               disposition: timedOut
                 ? "semantic-result-timeout"
                 : "semantic-result-rejected",
               parentMutationAuthorized: false,
-              correctedType: adjudicationParentType,
+              correctedType:
+                normalizeCanonicalQuestionType(
+                  activeParentBeforeCorrection?.questionType
+                ) ?? "unknown",
               relation: "unknown",
               confidence: 0,
               reason:
@@ -33490,147 +33441,60 @@ export function useMeetingAssistant() {
                   : "correction-owned-adjudication-error",
             };
           }
-
-          if (requestResult) {
-            const latestContext =
-              contextManagerRef.current.getState();
-            const latestParent =
-              latestContext.activeMeetingTask?.parent;
-            const latestParentType =
-              normalizeCanonicalQuestionType(
-                latestParent?.questionType
-              ) ?? "unknown";
-            const latestRelation =
-              latestContext.activeMeetingTask?.child
-                ? "child-probe"
-                : latestParent
-                  ? "followup-parent"
-                  : "unknown";
-            const authorization =
-              authorizeTaxonomyAdjudicationLease(lease, {
-                currentOperationId: correctionOwnedOperationId,
-                sessionId: latestContext.sessionId,
-                runtimeEpoch: runtimeEpochRef.current,
-                logicalQuestionUnit:
-                  logicalQuestionUnitRef.current,
-                taskBoundaryEpoch: hashTaxonomyTaskBoundary({
-                  parentId: latestParent?.id,
-                  questionType: latestParentType,
-                  relation: latestRelation,
-                }),
-                manualCorrectionRevision:
-                  manualCorrectionRevisionRef.current,
-                activeParentId: latestParent?.id,
-                activeParentRevision: latestParent?.revisions,
-                logicalUnitClosed: false,
-                selfHealingBudgetConsumed: false,
-              });
-            const parsed = requestResult.parsed;
-            correctionOwnedResettlement =
-              resolveCorrectionOwnedTypeResettlement({
-                logicalQuestionUnit:
-                  application.logicalQuestionUnit,
-                sourceKind: correctionSourceKind,
-                sourceObservationIds: targetSourceObservationIds,
-                adjudication:
-                  parsed?.ok ? parsed.value : undefined,
-                operationAuthorized: authorization.authorized,
-                operationAuthorizationReason:
-                  authorization.authorized
-                    ? undefined
-                    : authorization.reason,
-                activeParentId: latestParent?.id,
-                activeParentRevision: latestParent?.revisions,
-                activeParentType: latestParentType,
-                targetOwnsActiveParent:
-                  correctionTargetOwnsParentOrigin({
-                    logicalQuestionUnit:
-                      application.logicalQuestionUnit,
-                    parent: latestContext.taskRuntime.parent,
-                  }),
-                manualCorrectionRevision:
-                  manualCorrectionRevisionRef.current,
-              });
-            if (requestResult.rawOutput) {
-              traceStoreRef.current.recordOutput(
-                repairTrace.id,
-                "correction-owned question type raw output",
-                requestResult.rawOutput.slice(
-                  0,
-                  QUESTION_TYPE_ADJUDICATION_MAX_OUTPUT_CHARS
-                ),
-                {
-                  providerDisposition:
-                    requestResult.providerDisposition,
-                  parseDisposition:
-                    requestResult.parseDisposition,
-                  ...formatRuntimeInferenceProviderOutcomeForTrace(
-                    requestResult.providerOutcome,
-                    "correctionOwnedAdjudication"
-                  ),
-                  truncated:
-                    requestResult.rawOutput.length >
-                    QUESTION_TYPE_ADJUDICATION_MAX_OUTPUT_CHARS,
-                }
-              );
-            }
-          }
-
-          const adjudicationDurationMs =
-            Date.now() - adjudicationStartedAt;
-          activeCorrection = {
-            ...activeCorrection,
-            semanticAdjudicationStatus: timedOut
-              ? "timed-out"
-              : correctionOwnedResettlement?.disposition ===
-                    "semantic-result-stale"
-                ? "stale"
-                : correctionOwnedResettlement
-                  ? "succeeded"
-                  : "failed",
-            semanticAdjudicationCandidateType:
-              correctionOwnedResettlement?.correctedType,
-            semanticAdjudicationRelation:
-              correctionOwnedResettlement?.relation,
-            semanticAdjudicationConfidence:
-              correctionOwnedResettlement?.confidence,
-            semanticAdjudicationDurationMs:
-              adjudicationDurationMs,
-            semanticResettlementDisposition:
-              correctionOwnedResettlement?.disposition,
-            settlementId:
-              correctionOwnedResettlement?.settlement?.settlementId,
-          };
-          const adjudicationMetadata =
-            formatCorrectionOwnedResettlementForTrace({
-              trigger: correctionOwnedTrigger,
-              decision: correctionOwnedResettlement,
-              operationId: correctionOwnedOperationId,
-              durationMs: adjudicationDurationMs,
-              timedOut,
-            });
-          traceStoreRef.current.updateMetadata(
-            repairTrace.id,
-            adjudicationMetadata
-          );
-          traceStoreRef.current.updateMetadata(
-            trace.id,
-            adjudicationMetadata
-          );
-          traceStoreRef.current.finishStep(
-            repairTrace.id,
-            adjudicationStepId,
-            "success",
-            {
-              ...adjudicationMetadata,
-              fallback:
-                correctionOwnedResettlement
-                  ?.parentMutationAuthorized
-                  ? undefined
-                  : "existing-parent-provisional-regeneration",
-            }
-          );
         }
+
+        const adjudicationDurationMs =
+          Date.now() - adjudicationStartedAt;
+        activeCorrection = {
+          ...activeCorrection,
+          semanticAdjudicationStatus: timedOut
+            ? "timed-out"
+            : correctionOwnedResettlement?.disposition ===
+                  "semantic-result-stale"
+              ? "stale"
+              : correctionOwnedResettlement
+                ? "succeeded"
+                : "failed",
+          semanticAdjudicationCandidateType:
+            correctionOwnedResettlement?.correctedType,
+          semanticAdjudicationRelation:
+            correctionOwnedResettlement?.relation,
+          semanticAdjudicationConfidence:
+            correctionOwnedResettlement?.confidence,
+          semanticAdjudicationDurationMs: adjudicationDurationMs,
+          semanticResettlementDisposition:
+            correctionOwnedResettlement?.disposition,
+          settlementId:
+            correctionOwnedResettlement?.settlement?.settlementId,
+        };
+        const adjudicationMetadata =
+          formatCorrectionOwnedResettlementForTrace({
+            trigger: correctionOwnedTrigger,
+            decision: correctionOwnedResettlement,
+            operationId: correctionOwnedOperationId,
+            durationMs: adjudicationDurationMs,
+            timedOut,
+          });
+        traceStoreRef.current.updateMetadata(
+          repairTrace.id,
+          adjudicationMetadata
+        );
+        traceStoreRef.current.updateMetadata(
+          trace.id,
+          adjudicationMetadata
+        );
+        traceStoreRef.current.finishStep(
+          repairTrace.id,
+          adjudicationStepId,
+          "success",
+          {
+            ...adjudicationMetadata,
+            fallback:
+              correctionOwnedResettlement?.parentMutationAuthorized
+                ? undefined
+                : "existing-parent-provisional-regeneration",
+          }
+        );
       }
 
       if (correctionOwnedResettlement?.parentMutationAuthorized) {

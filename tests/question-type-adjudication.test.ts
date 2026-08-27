@@ -469,6 +469,26 @@ test("always observes eligible type turns while manual authority stays shadow-on
   );
 });
 
+test("forces correction-owned Question Type through the registered enforcement window", () => {
+  const request = buildQuestionTypeAdjudicationRequest({
+    logicalQuestionUnit: unit("Design a RAG system for trip planning."),
+  });
+  const exactHigh = inferQuestionTypeDecisionFromText(request.question.text);
+  const decision = decideQuestionTypeAdjudicationEligibility({
+    mode: "off",
+    speaker: "them",
+    projection: request.question,
+    lexical: exactHigh,
+    manualCorrectionActive: false,
+    turnGateAction: "answer-refresh",
+    forceRuntimeExecution: true,
+  });
+
+  assert.equal(decision.eligible, true);
+  assert.equal(decision.executionMode, "enforcement-window");
+  assert.equal(decision.reason, "correction-owned-runtime-execution");
+});
+
 test("waits only for lower-confidence, long, or multi-sentence type review", () => {
   const exactHigh = inferQuestionTypeDecisionFromText(
     "Implement a stack in Python."
