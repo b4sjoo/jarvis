@@ -4307,7 +4307,7 @@ const ConfigurationsPanel = ({
                     LLM Relation Adjudication
                   </div>
                   <div className="mt-0.5 text-[10px] text-muted-foreground">
-                    Evaluation-only Shadow; parent mutation blocked
+                    Ordered relation settlement; legacy comparison only in Debug or scripted sessions
                   </div>
                 </div>
                 <Switch

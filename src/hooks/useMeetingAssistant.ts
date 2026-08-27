@@ -115,10 +115,14 @@ import {
   buildTaskRelationCanonicalShadowRequest,
   compareTaskRelationSplitShadow,
   createTaskRelationSplitLease,
-  decideFirstBatchRelationRelease,
+  decideOrderedTaskRelationResolution,
   formatFirstBatchRelationReleaseForTrace,
-  projectFirstBatchRelationAdjudication,
+  formatOrderedTaskRelationResolutionForTrace,
+  projectOrderedTaskRelationAdjudication,
+  SCREEN_ORDERED_RELATION_FOREGROUND_BUDGET_MS,
+  VOICE_ORDERED_RELATION_FOREGROUND_BUDGET_MS,
   type FirstBatchRelationReleaseDecision,
+  type OrderedTaskRelationResolutionDecision,
   type TaskRelationAffinityAdjudication,
   type TaskRelationAffinityRequest,
   type TaskRelationCanonicalShadowAdjudication,
@@ -502,23 +506,18 @@ import {
   TaskRelationAdjudicationRuntimeOutcome,
   NarrowScreenRelationReleaseInput,
   TASK_RELATION_ADJUDICATION_MAX_OUTPUT_CHARS,
-  SCREEN_RELATION_RELEASE_ADMISSION_WAIT_BUDGET_MS,
-  SCREEN_RELATION_RELEASE_WAIT_BUDGET_MS,
   buildTaskRelationAdjudicationPrompts,
   buildTaskRelationAdjudicationRequest,
   compareTaskRelationAdjudication,
   createTaskRelationSettlementProposal,
   decideNarrowScreenRelationRelease,
-  decideNarrowVoiceRelationRelease,
   decideTaskRelationAdjudicationEligibility,
   formatNarrowScreenRelationReleaseForTrace,
-  formatNarrowVoiceRelationReleaseForTrace,
   formatTaskRelationAdjudicationForTrace,
   isRuntimeTaskRelation,
   normalizeTaskRelationAdjudicationMode,
   requestTaskRelationAdjudication,
   resolveTaskRelationBudgetSlot,
-  settleNarrowVoiceTypeRelation,
   isWhiteboardRevisionAuthorized,
   updateWhiteboardArtifactFromAnswer,
   validateWhiteboardRenderCandidate,
@@ -2197,6 +2196,11 @@ interface TaskRelationAdjudicationScheduleHandle {
   } | undefined>;
   outcome: Promise<TaskRelationAdjudicationRuntimeOutcome>;
   affinityOutcome?: Promise<TaskRelationSplitAffinityOutcome>;
+  canonicalOutcome?: Promise<TaskRelationSplitCanonicalResult>;
+  currentQuestion?: ProvisionalCurrentQuestion;
+  deterministicProposal?: CurrentQuestionSettlementProposal;
+  localQuestionType?: CanonicalQuestionType;
+  sourceKind?: "voice" | "screen" | "mixed";
 }
 
 interface TaskRelationSplitAffinityResult {
@@ -2204,11 +2208,26 @@ interface TaskRelationSplitAffinityResult {
   outputHash?: string;
   adjudication?: TaskRelationAffinityAdjudication;
   unavailableReason?: string;
+  clientError?: boolean;
 }
 
 interface TaskRelationSplitAffinityOutcome {
   child: TaskRelationSplitAffinityResult;
   parent: TaskRelationSplitAffinityResult;
+}
+
+interface TaskRelationSplitCanonicalResult {
+  operationId?: string;
+  outputHash?: string;
+  adjudication?: TaskRelationCanonicalShadowAdjudication;
+  unavailableReason?: string;
+  clientError?: boolean;
+}
+
+interface TaskRelationSplitScheduleHandle {
+  operationId: string;
+  affinityOutcome: Promise<TaskRelationSplitAffinityOutcome>;
+  canonicalOutcome: Promise<TaskRelationSplitCanonicalResult>;
 }
 
 interface RuntimeAdjudicationScheduleHandle {
@@ -18227,7 +18246,7 @@ export function useMeetingAssistant() {
     []
   );
 
-  const scheduleTaskRelationSplitShadow = useCallback(
+  const scheduleTaskRelationSplitRuntime = useCallback(
     ({
       traceId,
       taskId,
@@ -18238,7 +18257,7 @@ export function useMeetingAssistant() {
       taskId?: string;
       request: TaskRelationAdjudicationRequest;
       runtimeReleaseRequested?: boolean;
-    }): Promise<TaskRelationSplitAffinityOutcome> | undefined => {
+    }): TaskRelationSplitScheduleHandle | undefined => {
       const evaluationActive =
         debugModeRef.current ||
         Boolean(sessionRecordingManagerRef.current?.getState().active);
@@ -18254,6 +18273,14 @@ export function useMeetingAssistant() {
         runtimeEpoch: splitRuntimeEpoch,
         manualCorrectionRevision: splitManualCorrectionRevision,
       });
+      const orderedOperationId = [
+        "task-relation-ordered",
+        contextState.sessionId,
+        splitRuntimeEpoch,
+        request.logicalQuestionUnitId,
+        request.logicalQuestionUnitRevision,
+        request.sourceHash,
+      ].join(":");
       const readCurrentIdentity = (
         scheduled: TaskRelationSplitIdentity
       ): TaskRelationSplitIdentity => {
@@ -18305,6 +18332,7 @@ export function useMeetingAssistant() {
           });
           return Promise.resolve({
             unavailableReason: "provider-configuration-error",
+            clientError: true,
           });
         }
         const prompts = buildTaskRelationAffinityPrompts(affinityRequest);
@@ -18479,6 +18507,8 @@ export function useMeetingAssistant() {
                 outputHash: result?.outputHash,
                 adjudication,
                 unavailableReason,
+                clientError:
+                  result?.providerDisposition === "provider-auth-error",
               });
             },
           });
@@ -18489,6 +18519,14 @@ export function useMeetingAssistant() {
         runAffinity(splitRequests.child),
         runAffinity(splitRequests.parent),
       ]).then(([child, parent]) => ({ child, parent }));
+      let resolveCanonicalOutcome:
+        | ((outcome: TaskRelationSplitCanonicalResult) => void)
+        | undefined;
+      const canonicalOutcome = new Promise<TaskRelationSplitCanonicalResult>(
+        (resolve) => {
+          resolveCanonicalOutcome = resolve;
+        }
+      );
       void affinityOutcome.then(({ child, parent }) => {
         const canonicalRequest = buildTaskRelationCanonicalShadowRequest({
           request,
@@ -18509,11 +18547,16 @@ export function useMeetingAssistant() {
           reason: "task-relation-split-canonical-shadow",
         });
         if (circuit.open || !modelRoute.provider) {
+          const unavailableReason = circuit.open
+            ? "provider-circuit-open"
+            : "provider-configuration-error";
           traceStoreRef.current.updateMetadata(traceId, {
-            taskRelationSplitCanonicalDisposition: circuit.open
-              ? "provider-circuit-open"
-              : "provider-configuration-error",
+            taskRelationSplitCanonicalDisposition: unavailableReason,
             taskRelationSplitShadowWallTimeMs: Date.now() - startedAt,
+          });
+          resolveCanonicalOutcome?.({
+            unavailableReason,
+            clientError: !modelRoute.provider,
           });
           return;
         }
@@ -18725,10 +18768,33 @@ export function useMeetingAssistant() {
                 settlement.error
               );
             }
+            resolveCanonicalOutcome?.({
+              operationId: lease.operationId,
+              outputHash: result?.outputHash,
+              adjudication,
+              unavailableReason: adjudication
+                ? undefined
+                : !authorization.authorized
+                  ? authorization.reason
+                  : !predecessorAuthorization.authorized
+                    ? predecessorAuthorization.reason
+                    : result?.parseDisposition ?? settlement.disposition,
+              clientError:
+                result?.providerDisposition === "provider-auth-error",
+            });
           },
         });
+      }, (error) => {
+        resolveCanonicalOutcome?.({
+          unavailableReason:
+            error instanceof Error ? error.message : String(error),
+        });
       });
-      return affinityOutcome;
+      return {
+        operationId: orderedOperationId,
+        affinityOutcome,
+        canonicalOutcome,
+      };
     },
     [refreshRecordedCompletedTrace]
   );
@@ -18744,7 +18810,6 @@ export function useMeetingAssistant() {
       currentQuestion: suppliedCurrentQuestion,
       deterministicProposal,
       narrowScreenRelease,
-      narrowVoiceReleaseRequested = false,
       manualCorrectionOwned = false,
     }: {
       turn: Pick<TranscriptTurn, "speaker"> &
@@ -18757,7 +18822,6 @@ export function useMeetingAssistant() {
       currentQuestion?: ProvisionalCurrentQuestion;
       deterministicProposal?: CurrentQuestionSettlementProposal;
       narrowScreenRelease?: NarrowScreenRelationReleaseInput;
-      narrowVoiceReleaseRequested?: boolean;
       manualCorrectionOwned?: boolean;
     }): TaskRelationAdjudicationScheduleHandle | undefined => {
       if (!logicalQuestionUnit) return;
@@ -18799,31 +18863,13 @@ export function useMeetingAssistant() {
         } satisfies NarrowScreenRelationReleaseInput);
       const initialNarrowScreenRelease =
         decideNarrowScreenRelationRelease(releaseInput);
-      const voiceReleaseWindowRequested = Boolean(
-        configuredMode !== "off" &&
-          sourceKind === "voice" &&
-          narrowVoiceReleaseRequested
-      );
-      const manualCorrectionReleaseWindowRequested = Boolean(
-        configuredMode !== "off" && manualCorrectionOwned
-      );
       const releaseWindowRequested = Boolean(
         configuredMode !== "off" &&
-          (initialNarrowScreenRelease.requested ||
-            voiceReleaseWindowRequested ||
-            manualCorrectionReleaseWindowRequested)
+          turn.speaker === "them" &&
+          turnGateAction === "answer-refresh" &&
+          calculateWordEquivalent(logicalQuestionUnit.normalizedText) >= 3 &&
+          !manualCorrectionActive
       );
-      const immediateHandle = (
-        disposition: string
-      ): TaskRelationAdjudicationScheduleHandle => ({
-        releaseWindowRequested,
-        admission: Promise.resolve(undefined),
-        outcome: Promise.resolve({
-          disposition,
-          operationLeaseAuthorized: false,
-          narrowScreenRelease: initialNarrowScreenRelease,
-        }),
-      });
       const currentQuestion =
         suppliedCurrentQuestion ??
         createProvisionalCurrentQuestion({
@@ -18843,6 +18889,31 @@ export function useMeetingAssistant() {
         currentQuestion,
         recentTurns: contextState.transcriptTurns,
         ownerEvidenceSelection,
+      });
+      const splitHandle = scheduleTaskRelationSplitRuntime({
+        traceId,
+        taskId: activeMeetingTask.id,
+        request,
+        runtimeReleaseRequested: releaseWindowRequested,
+      });
+      const immediateHandle = (
+        disposition: string
+      ): TaskRelationAdjudicationScheduleHandle => ({
+        releaseWindowRequested,
+        operationId: splitHandle?.operationId,
+        admission: Promise.resolve(undefined),
+        outcome: Promise.resolve({
+          disposition,
+          operationLeaseAuthorized: false,
+          narrowScreenRelease: initialNarrowScreenRelease,
+        }),
+        affinityOutcome: splitHandle?.affinityOutcome,
+        canonicalOutcome: splitHandle?.canonicalOutcome,
+        currentQuestion,
+        deterministicProposal,
+        localQuestionType:
+          normalizeCanonicalQuestionType(lexical.type) ?? "unknown",
+        sourceKind,
       });
       const currentText = request.currentQuestion.text;
       const sourceOwnedCurrentText = turn.text?.trim() || currentText;
@@ -18881,18 +18952,14 @@ export function useMeetingAssistant() {
         localRelation !== "unknown"
           ? localRelation
           : undefined;
-      const evaluationActive =
-        debugModeRef.current ||
-        Boolean(
-          sessionRecordingManagerRef.current?.getState().active
-        );
+      const evaluationActive = Boolean(
+        debugModeRef.current || scriptedValidationRef.current
+      );
       const eligibility =
         decideTaskRelationAdjudicationEligibility({
           mode,
           evaluationActive,
-          runtimeReleaseRequested: releaseWindowRequested,
-          runtimeReleaseSourceKind:
-            sourceKind === "screen" ? "screen" : "voice",
+          runtimeReleaseRequested: false,
           speaker: turn.speaker,
           request,
           manualCorrectionActive,
@@ -18941,10 +19008,9 @@ export function useMeetingAssistant() {
         taskRelationAdjudicationEvaluationActive:
           evaluationActive,
         taskRelationAdjudicationConfiguredMode: configuredMode,
-        taskRelationAdjudicationVoiceReleaseRequested:
-          voiceReleaseWindowRequested,
-        taskRelationAdjudicationManualCorrectionReleaseRequested:
-          manualCorrectionReleaseWindowRequested,
+        taskRelationAdjudicationVoiceReleaseRequested: false,
+        taskRelationAdjudicationManualCorrectionReleaseRequested: false,
+        taskRelationOrderedResolutionRequested: releaseWindowRequested,
         ...formatNarrowScreenRelationReleaseForTrace(
           initialNarrowScreenRelease
         ),
@@ -19225,13 +19291,7 @@ export function useMeetingAssistant() {
           traceStoreRef.current.updateMetadata(traceId, metadata);
           stepId = traceStoreRef.current.startStep(
             traceId,
-            releaseWindowRequested
-              ? manualCorrectionReleaseWindowRequested
-                ? "Task relation adjudication correction release"
-                : voiceReleaseWindowRequested
-                ? "Task relation adjudication voice release"
-                : "Task relation adjudication screen release"
-              : "Task relation adjudication shadow",
+            "Task relation adjudication legacy shadow",
             metadata
           );
         },
@@ -19598,21 +19658,160 @@ export function useMeetingAssistant() {
           );
         },
       }, releaseWindowRequested ? 0 : undefined);
-      const affinityOutcome = scheduleTaskRelationSplitShadow({
-        traceId,
-        taskId: scheduledTaskId,
-        request,
-        runtimeReleaseRequested: releaseWindowRequested,
-      });
       return {
         releaseWindowRequested,
-        operationId: lease.operationId,
+        operationId: splitHandle?.operationId ?? lease.operationId,
         admission,
         outcome,
-        affinityOutcome,
+        affinityOutcome: splitHandle?.affinityOutcome,
+        canonicalOutcome: splitHandle?.canonicalOutcome,
+        currentQuestion,
+        deterministicProposal,
+        localQuestionType:
+          normalizeCanonicalQuestionType(lexical.type) ?? "unknown",
+        sourceKind,
       };
     },
-    [scheduleTaskRelationSplitShadow]
+    [scheduleTaskRelationSplitRuntime]
+  );
+
+  const resolveOrderedTaskRelationWithinWindow = useCallback(
+    async (input: {
+      handle: TaskRelationAdjudicationScheduleHandle;
+      traceId: string;
+      currentQuestionType: CanonicalQuestionType;
+      sourceKind: "voice" | "screen" | "mixed";
+      activeMeetingTask?: ActiveMeetingTask;
+      screenBoundaryPrior?: boolean;
+      screenTypeEvidenceAuthorized?: boolean;
+      waitBudgetMs: number;
+    }) => {
+      const startedAt = Date.now();
+      let affinityOutcome: TaskRelationSplitAffinityOutcome | undefined;
+      let canonicalOutcome: TaskRelationSplitCanonicalResult | undefined;
+      let waitDisposition = "affinity-unavailable";
+      const readRemainingBudget = () =>
+        Math.max(0, input.waitBudgetMs - (Date.now() - startedAt));
+      if (input.handle.affinityOutcome) {
+        try {
+          affinityOutcome = await withTimeout(
+            input.handle.affinityOutcome,
+            Math.max(1, readRemainingBudget()),
+            "Ordered relation affinity window expired."
+          );
+          waitDisposition = "affinity-settled";
+        } catch {
+          waitDisposition = "affinity-deadline-expired";
+        }
+      }
+      let decision = decideOrderedTaskRelationResolution({
+        sourceKind: input.sourceKind,
+        currentQuestionType: input.currentQuestionType,
+        activeParentQuestionType:
+          input.activeMeetingTask?.parent.questionType,
+        activeChildQuestionType:
+          input.activeMeetingTask?.child?.questionType,
+        hasActiveChild: Boolean(input.activeMeetingTask?.child),
+        childAffinity: affinityOutcome?.child.adjudication,
+        parentAffinity: affinityOutcome?.parent.adjudication,
+        screenBoundaryPrior: input.screenBoundaryPrior,
+        screenTypeEvidenceAuthorized:
+          input.screenTypeEvidenceAuthorized,
+      });
+      if (
+        decision.status === "unresolved" &&
+        input.handle.canonicalOutcome &&
+        readRemainingBudget() > 0
+      ) {
+        try {
+          canonicalOutcome = await withTimeout(
+            input.handle.canonicalOutcome,
+            Math.max(1, readRemainingBudget()),
+            "Ordered relation canonical window expired."
+          );
+          waitDisposition = canonicalOutcome.adjudication
+            ? "canonical-settled"
+            : "canonical-unresolved";
+        } catch {
+          waitDisposition = "canonical-deadline-expired";
+        }
+        decision = decideOrderedTaskRelationResolution({
+          sourceKind: input.sourceKind,
+          currentQuestionType: input.currentQuestionType,
+          activeParentQuestionType:
+            input.activeMeetingTask?.parent.questionType,
+          activeChildQuestionType:
+            input.activeMeetingTask?.child?.questionType,
+          hasActiveChild: Boolean(input.activeMeetingTask?.child),
+          childAffinity: affinityOutcome?.child.adjudication,
+          parentAffinity: affinityOutcome?.parent.adjudication,
+          canonical: canonicalOutcome?.adjudication,
+          screenBoundaryPrior: input.screenBoundaryPrior,
+          screenTypeEvidenceAuthorized:
+            input.screenTypeEvidenceAuthorized,
+        });
+      }
+      if (decision.status === "unresolved") {
+        decision = decideOrderedTaskRelationResolution({
+          sourceKind: input.sourceKind,
+          currentQuestionType: input.currentQuestionType,
+          activeParentQuestionType:
+            input.activeMeetingTask?.parent.questionType,
+          activeChildQuestionType:
+            input.activeMeetingTask?.child?.questionType,
+          hasActiveChild: Boolean(input.activeMeetingTask?.child),
+          childAffinity: affinityOutcome?.child.adjudication,
+          parentAffinity: affinityOutcome?.parent.adjudication,
+          canonical: canonicalOutcome?.adjudication,
+          screenBoundaryPrior: input.screenBoundaryPrior,
+          screenTypeEvidenceAuthorized:
+            input.screenTypeEvidenceAuthorized,
+          finalizeWithNullHypothesis: true,
+        });
+      }
+      const clientError = Boolean(
+        affinityOutcome?.child.clientError ||
+          affinityOutcome?.parent.clientError ||
+          canonicalOutcome?.clientError
+      );
+      const metadata = {
+        ...formatOrderedTaskRelationResolutionForTrace(decision),
+        taskRelationOrderedResolutionWaitBudgetMs: input.waitBudgetMs,
+        taskRelationOrderedResolutionWaitMs: Math.max(
+          0,
+          Date.now() - startedAt
+        ),
+        taskRelationOrderedResolutionWaitDisposition: waitDisposition,
+        taskRelationOrderedResolutionAffinityChildDisposition:
+          affinityOutcome?.child.adjudication
+            ? "available"
+            : affinityOutcome?.child.unavailableReason,
+        taskRelationOrderedResolutionAffinityParentDisposition:
+          affinityOutcome?.parent.adjudication
+            ? "available"
+            : affinityOutcome?.parent.unavailableReason,
+        taskRelationOrderedResolutionCanonicalDisposition:
+          canonicalOutcome?.adjudication
+            ? "available"
+            : canonicalOutcome?.unavailableReason,
+        taskRelationOrderedResolutionClientError: clientError,
+      };
+      traceStoreRef.current.updateMetadata(input.traceId, metadata);
+      if (clientError) {
+        setState((previous) => ({
+          ...previous,
+          error:
+            "Runtime relation model configuration failed. Jarvis preserved the current task; check the Runtime or Main Advisor provider settings.",
+        }));
+      }
+      return {
+        decision,
+        affinityOutcome,
+        canonicalOutcome,
+        metadata,
+      };
+    },
+    []
   );
 
   const scheduleTaxonomyAdjudicationShadow = useCallback(
@@ -19636,9 +19835,9 @@ export function useMeetingAssistant() {
       if (!logicalQuestionUnit) return;
       const contextState = contextManagerRef.current.getState();
       const settings = taxonomyAdjudicationSettingsRef.current;
-      const evaluationActive =
-        debugModeRef.current ||
-        Boolean(sessionRecordingManagerRef.current?.getState().active);
+      const evaluationActive = Boolean(
+        debugModeRef.current || scriptedValidationRef.current
+      );
       const projection = projectLogicalQuestionForAdjudication(
         logicalQuestionUnit
       );
@@ -20562,9 +20761,6 @@ export function useMeetingAssistant() {
         turnGateAction,
         logicalQuestionUnit,
         lexical,
-        narrowVoiceReleaseRequested: Boolean(
-          questionTypeAdjudication?.enforcementWindowRequested
-        ),
       });
       const runtimeAdjudication: RuntimeAdjudicationScheduleHandle = {
         questionType: questionTypeAdjudication,
@@ -20814,11 +21010,24 @@ export function useMeetingAssistant() {
   const scheduleAdvisorAfterQuestionTypeWindow = useCallback(
     (input: ScheduleAdvisorAfterTypeWindowInput) => {
       const questionTypeHandle = input.handle?.questionType;
-      if (!questionTypeHandle?.enforcementWindowRequested) return false;
-      const questionTypeWaitBudgetMs = questionTypeHandle.waitBudgetMs;
       const taskRelationHandle = input.handle?.taskRelation;
+      const questionTypeWindowRequested = Boolean(
+        questionTypeHandle?.enforcementWindowRequested
+      );
       const relationWindowRequested = Boolean(
         taskRelationHandle?.releaseWindowRequested
+      );
+      if (!questionTypeWindowRequested && !relationWindowRequested) {
+        return false;
+      }
+      const questionTypeWaitBudgetMs = questionTypeWindowRequested
+        ? questionTypeHandle?.waitBudgetMs ?? 0
+        : 0;
+      const foregroundWaitBudgetMs = Math.max(
+        questionTypeWaitBudgetMs,
+        relationWindowRequested
+          ? VOICE_ORDERED_RELATION_FOREGROUND_BUDGET_MS
+          : 0
       );
       const responseOpportunityGateOperationId =
         responseOpportunityGenerationGateRef.current.findOperationId({
@@ -20840,8 +21049,9 @@ export function useMeetingAssistant() {
 
       const dispatchAdvisor = (
         outcome: QuestionTypeAdjudicationRuntimeOutcome | undefined,
-        relationOutcome: TaskRelationAdjudicationRuntimeOutcome | undefined,
-        affinityOutcome: TaskRelationSplitAffinityOutcome | undefined,
+        orderedRelation:
+          | OrderedTaskRelationResolutionDecision
+          | undefined,
         waitDisposition: string
       ) => {
         if (advisorReleased) return;
@@ -20853,81 +21063,142 @@ export function useMeetingAssistant() {
           logicalQuestionUnitRef.current
         );
         const waitMs = Math.max(0, Date.now() - waitStartedAt);
-        const typeSettlement = outcome?.enforcement.authorized
-          ? outcome.settlement
-          : undefined;
         const latestContext = contextManagerRef.current.getState();
         const latestTask = latestContext.activeMeetingTask;
         const latestParent = latestTask?.parent;
         const currentQuestion = createProvisionalCurrentQuestion({
           logicalQuestionUnit: input.logicalQuestionUnit,
-          sourceKind: typeSettlement?.sourceKind ?? "voice",
+          sourceKind:
+            outcome?.settlement?.sourceKind ??
+            taskRelationHandle?.sourceKind ??
+            "voice",
           sourceObservationIds:
-            typeSettlement?.sourceObservationIds,
+            outcome?.settlement?.sourceObservationIds,
         });
-        const firstBatchRelationRelease = typeSettlement
-          ? decideFirstBatchRelationRelease({
-              currentQuestionType: typeSettlement.questionType,
-              activeParentQuestionType: latestParent?.questionType,
-              activeChildQuestionType: latestTask?.child?.questionType,
-              hasActiveChild: Boolean(latestTask?.child),
-              childAffinity: affinityOutcome?.child.adjudication,
-              parentAffinity: affinityOutcome?.parent.adjudication,
-            })
-          : undefined;
-        const releasedRelationCandidate = firstBatchRelationRelease
-          ? projectFirstBatchRelationAdjudication(
-              firstBatchRelationRelease
-            )
-          : undefined;
-        const affinityLeaseAuthorized = Boolean(
-          affinityOutcome?.parent.adjudication &&
-            (!latestTask?.child || affinityOutcome.child.adjudication)
-        );
-        const voiceRelationRelease = decideNarrowVoiceRelationRelease({
-          sourceKind: currentQuestion.sourceKind,
-          activeParentQuestionType: latestParent?.questionType,
-          typeSettlement,
-          candidate: relationOutcome?.candidate,
-          firstBatchRelease: firstBatchRelationRelease
-            ? {
-                authorized: firstBatchRelationRelease.authorized,
-                relation: firstBatchRelationRelease.relation,
-                confidence: firstBatchRelationRelease.confidence,
-                reason: firstBatchRelationRelease.reason,
-              }
-            : undefined,
-          hasActiveChild: Boolean(latestTask?.child),
-          manualCorrectionActive: Boolean(
-            manualCorrectionOperationCoordinatorRef.current.getActiveOperationId()
+        const authoritativeTypeSettlement =
+          outcome?.enforcement.authorized ? outcome.settlement : undefined;
+        const localQuestionType =
+          authoritativeTypeSettlement?.questionType ??
+          taskRelationHandle?.localQuestionType ??
+          "unknown";
+        const localProposal: CurrentQuestionSettlementProposal = {
+          ...(taskRelationHandle?.deterministicProposal ?? {
+            source: "deterministic-fast-path" as const,
+            sessionId: currentQuestion.sessionId,
+            runtimeEpoch: currentQuestion.runtimeEpoch,
+            logicalQuestionUnitId:
+              currentQuestion.logicalQuestionUnitId,
+            revision: currentQuestion.revision,
+            sourceHash: currentQuestion.sourceHash,
+            action: "answer" as const,
+            actionEvidenceAuthorized: true,
+          }),
+          questionType: localQuestionType,
+          relation:
+            orderedRelation?.stage ===
+              "source-topology-null-hypothesis" &&
+            orderedRelation.relation
+              ? orderedRelation.relation
+              : "unknown",
+          confidence: Math.max(
+            authoritativeTypeSettlement?.confidence ?? 0,
+            taskRelationHandle?.deterministicProposal?.confidence ?? 0.95
           ),
-          operationLeaseAuthorized:
-            affinityLeaseAuthorized,
-          releaseWindowOpen: true,
-        });
-        const settlementOperationId = outcome?.operationId;
-        const convergenceResult =
-          voiceRelationRelease.authorized &&
-          settlementOperationId &&
-          typeSettlement &&
-          releasedRelationCandidate &&
-          latestParent
-            ? settleNarrowVoiceTypeRelation({
-                operationId: settlementOperationId,
+          typeEvidenceAuthorized: localQuestionType !== "unknown",
+          relationEvidenceAuthorized: Boolean(
+            orderedRelation?.stage ===
+              "source-topology-null-hypothesis" &&
+              orderedRelation.relation
+          ),
+          expectedParentId: latestParent?.id,
+          expectedParentRevision: latestParent?.revisions,
+          reasons: [
+            ...(taskRelationHandle?.deterministicProposal?.reasons ?? []),
+            "ordered-relation-type-input",
+          ],
+        };
+        const relationCandidate = orderedRelation
+          ? projectOrderedTaskRelationAdjudication(orderedRelation)
+          : undefined;
+        const relationProposal =
+          relationCandidate && latestParent
+            ? createTaskRelationSettlementProposal({
                 currentQuestion,
-                typeSettlement,
-                relationCandidate: releasedRelationCandidate,
-                activeParentId: latestParent.id,
-                activeParentRevision: latestParent.revisions,
-                manualCorrectionRevision:
-                  manualCorrectionRevisionRef.current,
+                adjudication: relationCandidate,
+                expectedParentId: latestParent.id,
+                expectedParentRevision: latestParent.revisions,
               })
-            : {
-                reason: "release-not-authorized" as const,
-                settlement: undefined,
-              };
-        const convergedSettlement = convergenceResult.settlement;
-        const settlement = convergedSettlement ?? typeSettlement;
+            : undefined;
+        const authoritativeTypeRelationProposal:
+          | CurrentQuestionSettlementProposal
+          | undefined = authoritativeTypeSettlement
+          ? {
+              source: "llm-type-repair",
+              sessionId: currentQuestion.sessionId,
+              runtimeEpoch: currentQuestion.runtimeEpoch,
+              logicalQuestionUnitId:
+                currentQuestion.logicalQuestionUnitId,
+              revision: currentQuestion.revision,
+              sourceHash: currentQuestion.sourceHash,
+              questionType: authoritativeTypeSettlement.questionType,
+              relation:
+                relationCandidate?.relation ??
+                (orderedRelation?.stage ===
+                  "source-topology-null-hypothesis" &&
+                orderedRelation.relation
+                  ? orderedRelation.relation
+                  : "unknown"),
+              action: "answer",
+              confidence: Math.min(
+                authoritativeTypeSettlement.confidence,
+                relationCandidate?.confidence ??
+                  orderedRelation?.confidence ??
+                  authoritativeTypeSettlement.confidence
+              ),
+              typeEvidenceAuthorized: true,
+              relationEvidenceAuthorized: Boolean(
+                relationCandidate ||
+                  (orderedRelation?.stage ===
+                    "source-topology-null-hypothesis" &&
+                    orderedRelation.relation)
+              ),
+              actionEvidenceAuthorized: true,
+              expectedParentId: latestParent?.id,
+              expectedParentRevision: latestParent?.revisions,
+              reasons: ["ordered-relation-type-repair-input"],
+            }
+          : undefined;
+        const settlementOperationId =
+          relationProposal
+            ? taskRelationHandle?.operationId
+            : outcome?.operationId ?? taskRelationHandle?.operationId;
+        const settlement = settleCurrentQuestion({
+          operationId: settlementOperationId,
+          currentQuestion,
+          deterministicProposal: authoritativeTypeSettlement
+            ? undefined
+            : localProposal,
+          llmProposal:
+            authoritativeTypeRelationProposal ?? relationProposal,
+          activeParentId: latestParent?.id,
+          activeParentRevision: latestParent?.revisions,
+          manualCorrectionRevision:
+            manualCorrectionRevisionRef.current,
+          policy: {
+            allowLlmTypeRepair: Boolean(authoritativeTypeSettlement),
+            allowLlmRelationRepair: Boolean(relationProposal),
+            allowLlmActionRepair: Boolean(authoritativeTypeSettlement),
+            llmTypeRepairMinConfidence: 0.95,
+            llmRelationRepairMinConfidence: 0.95,
+            runtimeMutationAuthorized: true,
+            questionComplete: true,
+            commitParent: Boolean(orderedRelation?.relation),
+          },
+        });
+        const convergedSettlement = Boolean(
+          orderedRelation?.relation &&
+            settlement.relation === orderedRelation.relation
+        );
         const releaseEligible = Boolean(
           runtimeActiveRef.current &&
             leaseAuthorization.authorized &&
@@ -20951,9 +21222,11 @@ export function useMeetingAssistant() {
           questionTypeAdjudicationWaitMs: waitMs,
           questionTypeAdjudicationWaitDisposition: waitDisposition,
           questionTypeAdjudicationAppliedToRuntime:
-            releaseAuthorized,
+            Boolean(authoritativeTypeSettlement && releaseAuthorized),
           questionTypeAdjudicationAppliedType:
-            releaseAuthorized ? settlement?.questionType : undefined,
+            authoritativeTypeSettlement && releaseAuthorized
+              ? settlement.questionType
+              : undefined,
           questionTypeAdjudicationRelationMutationBlocked:
             !convergedSettlement,
           questionTypeAdjudicationParentMutationBlocked:
@@ -20969,30 +21242,32 @@ export function useMeetingAssistant() {
           ...formatQuestionTypeEnforcementForTrace(
             outcome?.enforcement
           ),
-          ...formatNarrowVoiceRelationReleaseForTrace(
-            voiceRelationRelease
-          ),
-          ...formatFirstBatchRelationReleaseForTrace(
-            firstBatchRelationRelease
+          ...formatOrderedTaskRelationResolutionForTrace(
+            orderedRelation
           ),
           runtimeSettlementConverged:
-            Boolean(convergedSettlement),
+            convergedSettlement,
           runtimeSettlementConvergenceReason:
-            convergenceResult.reason,
+            convergedSettlement
+              ? "ordered-relation-settled"
+              : orderedRelation?.responseOnly
+                ? "ordered-relation-current-only"
+                : "ordered-relation-not-settled",
           runtimeSettlementOperationId: settlementOperationId,
           runtimeSettlementTypeOperationId: outcome?.operationId,
           runtimeSettlementRelationOperationId:
-            affinityOutcome?.parent.operationId ??
-            relationOutcome?.operationId,
+            taskRelationHandle?.operationId,
           runtimeSettlementRelationCandidate:
-            releasedRelationCandidate?.relation ??
-            relationOutcome?.candidate?.relation,
+            orderedRelation?.relation,
+          runtimeSettlementAppliedToRuntime: releaseAuthorized,
         };
         const releaseTaskId =
           contextManagerRef.current.getState().activeMeetingTask?.id;
         traceStoreRef.current.updateMetadata(input.traceId, metadata);
         sessionRecordingManagerRef.current?.recordCaptureLifecycle({
-          stage: "question-type-enforcement-release",
+          stage: questionTypeWindowRequested
+            ? "question-type-enforcement-release"
+            : "ordered-relation-release",
           traceId: input.traceId,
           taskId: releaseTaskId,
           ...metadata,
@@ -21008,12 +21283,13 @@ export function useMeetingAssistant() {
                 ?.metadata ?? metadata,
           }
         );
-        recordQuestionTypeAdjudicationOutcome({
+        if (questionTypeWindowRequested) {
+          recordQuestionTypeAdjudicationOutcome({
           traceId: input.traceId,
           taskId: releaseTaskId,
           authority: runtimeTypeRepairOutputAuthority,
           operationId:
-            outcome?.operationId ?? questionTypeHandle.operationId,
+            outcome?.operationId ?? questionTypeHandle?.operationId,
           sessionId: logicalQuestionLease.sessionId,
           runtimeEpoch: logicalQuestionLease.runtimeEpoch,
           logicalQuestionUnitId:
@@ -21036,13 +21312,14 @@ export function useMeetingAssistant() {
           appliedToSettlement: releaseAuthorized,
           appliedToParent: false,
           reason: releaseAuthorized
-              ? convergedSettlement
+            ? convergedSettlement
                 ? "runtime-type-relation-settlement-authority-issued"
                 : "runtime-type-repair-authority-issued"
             : leaseAuthorization.authorized
               ? outcome?.enforcement.reason ?? waitDisposition
               : leaseAuthorization.reason,
-        });
+          });
+        }
 
         if (!runtimeActiveRef.current || !leaseAuthorization.authorized) {
           traceStoreRef.current.finishTrace(
@@ -21096,31 +21373,73 @@ export function useMeetingAssistant() {
       let settledTypeOutcome:
         | QuestionTypeAdjudicationRuntimeOutcome
         | undefined;
-      let settledRelationOutcome:
-        | TaskRelationAdjudicationRuntimeOutcome
+      let settledOrderedRelation:
+        | OrderedTaskRelationResolutionDecision
         | undefined;
-      let settledAffinityOutcome:
-        | TaskRelationSplitAffinityOutcome
-        | undefined;
-      let typeSettled = false;
-      let affinitySettled =
-        !relationWindowRequested ||
-        !taskRelationHandle?.affinityOutcome;
+      let typeSettled = !questionTypeWindowRequested;
+      let relationSettled = !relationWindowRequested;
+      let relationResolutionStarted = false;
       let responseOpportunitySettled =
         !responseOpportunityGateOperationId ||
         responseOpportunityGate?.disposition !== "pending";
 
-      const releaseWhenSettled = () => {
-        if (advisorReleased || !typeSettled) return;
-        if (!settledTypeOutcome?.enforcement.authorized) {
-          dispatchAdvisor(
-            settledTypeOutcome,
-            settledRelationOutcome,
-            settledAffinityOutcome,
-            "settled-without-repair-fail-open"
-          );
+      const startRelationResolution = () => {
+        if (
+          relationResolutionStarted ||
+          !relationWindowRequested ||
+          !taskRelationHandle
+        ) {
           return;
         }
+        relationResolutionStarted = true;
+        const effectiveType =
+          settledTypeOutcome?.enforcement.authorized
+            ? settledTypeOutcome.settlement?.questionType ??
+              taskRelationHandle.localQuestionType ??
+              "unknown"
+            : taskRelationHandle.localQuestionType ?? "unknown";
+        void resolveOrderedTaskRelationWithinWindow({
+          handle: taskRelationHandle,
+          traceId: input.traceId,
+          currentQuestionType: effectiveType,
+          sourceKind: taskRelationHandle.sourceKind ?? "voice",
+          activeMeetingTask:
+            contextManagerRef.current.getState().activeMeetingTask,
+          waitBudgetMs: VOICE_ORDERED_RELATION_FOREGROUND_BUDGET_MS,
+        }).then(
+          (resolution) => {
+            settledOrderedRelation = resolution.decision;
+            relationSettled = true;
+            releaseWhenSettled();
+          },
+          (error) => {
+            settledOrderedRelation = decideOrderedTaskRelationResolution({
+              sourceKind: taskRelationHandle.sourceKind ?? "voice",
+              currentQuestionType: effectiveType,
+              activeParentQuestionType:
+                contextManagerRef.current.getState().activeMeetingTask?.parent
+                  .questionType,
+              activeChildQuestionType:
+                contextManagerRef.current.getState().activeMeetingTask?.child
+                  ?.questionType,
+              hasActiveChild: Boolean(
+                contextManagerRef.current.getState().activeMeetingTask?.child
+              ),
+              finalizeWithNullHypothesis: true,
+            });
+            relationSettled = true;
+            traceStoreRef.current.updateMetadata(input.traceId, {
+              taskRelationOrderedResolutionInternalError:
+                error instanceof Error ? error.message : String(error),
+            });
+            releaseWhenSettled();
+          }
+        );
+      };
+
+      const releaseWhenSettled = () => {
+        if (advisorReleased || !typeSettled) return;
+        startRelationResolution();
         const firstParentNeedsCommittedOutputRequest =
           !contextManagerRef.current.getState().activeMeetingTask?.parent;
         if (
@@ -21129,27 +21448,50 @@ export function useMeetingAssistant() {
         ) {
           return;
         }
-        if (!affinitySettled) return;
+        if (!relationSettled) return;
         dispatchAdvisor(
           settledTypeOutcome,
-          settledRelationOutcome,
-          settledAffinityOutcome,
-          relationWindowRequested
-            ? "type-and-relation-settled-before-deadline"
-            : "type-settled-and-released-before-deadline"
+          settledOrderedRelation,
+          questionTypeWindowRequested && relationWindowRequested
+            ? "type-and-ordered-relation-settled-before-deadline"
+            : relationWindowRequested
+              ? "ordered-relation-settled-before-deadline"
+              : "type-settled-and-released-before-deadline"
         );
       };
 
       waitTimer = window.setTimeout(() => {
+        const fallbackType =
+          settledTypeOutcome?.enforcement.authorized
+            ? settledTypeOutcome.settlement?.questionType ??
+              taskRelationHandle?.localQuestionType ??
+              "unknown"
+            : taskRelationHandle?.localQuestionType ?? "unknown";
+        const fallbackRelation =
+          settledOrderedRelation ??
+          decideOrderedTaskRelationResolution({
+            sourceKind: taskRelationHandle?.sourceKind ?? "voice",
+            currentQuestionType: fallbackType,
+            activeParentQuestionType:
+              contextManagerRef.current.getState().activeMeetingTask?.parent
+                .questionType,
+            activeChildQuestionType:
+              contextManagerRef.current.getState().activeMeetingTask?.child
+                ?.questionType,
+            hasActiveChild: Boolean(
+              contextManagerRef.current.getState().activeMeetingTask?.child
+            ),
+            finalizeWithNullHypothesis: true,
+          });
         dispatchAdvisor(
           settledTypeOutcome,
-          settledRelationOutcome,
-          settledAffinityOutcome,
+          fallbackRelation,
           "deadline-expired-fail-open"
         );
-      }, questionTypeWaitBudgetMs);
+      }, foregroundWaitBudgetMs);
 
-      void questionTypeHandle.outcome.then(
+      if (questionTypeHandle && questionTypeWindowRequested) {
+        void questionTypeHandle.outcome.then(
         (outcome) => {
           if (!advisorReleased) {
             settledTypeOutcome = outcome;
@@ -21211,15 +21553,13 @@ export function useMeetingAssistant() {
         () => {
           typeSettled = true;
           releaseWhenSettled();
-        }
-      );
+          }
+        );
+      }
       if (relationWindowRequested && taskRelationHandle) {
         void taskRelationHandle.outcome.then(
           (outcome) => {
-            if (!advisorReleased) {
-              settledRelationOutcome = outcome;
-              return;
-            }
+            if (!advisorReleased) return;
 
             const metadata = {
               taskRelationAdjudicationAppliedToRuntime: false,
@@ -21246,19 +21586,6 @@ export function useMeetingAssistant() {
           },
           () => undefined
         );
-        if (taskRelationHandle.affinityOutcome) {
-          void taskRelationHandle.affinityOutcome.then(
-            (outcome) => {
-              settledAffinityOutcome = outcome;
-              affinitySettled = true;
-              releaseWhenSettled();
-            },
-            () => {
-              affinitySettled = true;
-              releaseWhenSettled();
-            }
-          );
-        }
       }
       if (
         responseOpportunityGateOperationId &&
@@ -21267,7 +21594,7 @@ export function useMeetingAssistant() {
         void responseOpportunityGenerationGateRef.current
           .wait(
             responseOpportunityGateOperationId,
-            questionTypeWaitBudgetMs
+            foregroundWaitBudgetMs
           )
           .then((gate) => {
             responseOpportunitySettled = true;
@@ -21281,9 +21608,14 @@ export function useMeetingAssistant() {
             }
           });
       }
+      releaseWhenSettled();
       return true;
     },
-    [recordQuestionTypeAdjudicationOutcome, scheduleAdvisor]
+    [
+      recordQuestionTypeAdjudicationOutcome,
+      resolveOrderedTaskRelationWithinWindow,
+      scheduleAdvisor,
+    ]
   );
 
   const buildLogicalQuestionForTurn = useCallback(
@@ -26632,6 +26964,10 @@ export function useMeetingAssistant() {
             ? true
             : screenTaskRelationDecision.relationEvidenceAuthorized ??
               localScreenTaskRelation !== "unknown";
+        const screenDirectRelationAuthority = Boolean(
+          screenSectionHintConsumption.disposition === "applied" ||
+            boundVisualRecoveryRelation
+        );
         const screenTypeEvidenceAuthorized = Boolean(
           screenFieldKnowledgeReviewSettlement?.typeMutationAuthorized ||
             screenSectionHintConsumption.disposition === "applied" ||
@@ -26703,7 +27039,9 @@ export function useMeetingAssistant() {
             revision: screenCurrentQuestion.revision,
             sourceHash: screenCurrentQuestion.sourceHash,
             questionType: screenMemoryQuestionType,
-            relation: localScreenTaskRelation,
+            relation: screenDirectRelationAuthority
+              ? localScreenTaskRelation
+              : "unknown",
             action: "answer",
             confidence: Math.max(
               screenTypeConfidence,
@@ -26712,8 +27050,10 @@ export function useMeetingAssistant() {
                 : screenTaskRelationDecision.confidence
             ),
             typeEvidenceAuthorized: screenTypeEvidenceAuthorized,
-            relationEvidenceAuthorized:
-              localScreenRelationEvidenceAuthorized,
+            relationEvidenceAuthorized: Boolean(
+              screenDirectRelationAuthority &&
+                localScreenRelationEvidenceAuthorized
+            ),
             actionEvidenceAuthorized: true,
             manualCorrectionRevision:
               manualCorrectionRevisionRef.current,
@@ -26747,33 +27087,39 @@ export function useMeetingAssistant() {
               allowLlmActionRepair: false,
               runtimeMutationAuthorized: Boolean(
                 readScreenAuthorization().authorized &&
+                  screenDirectRelationAuthority &&
                   localScreenRelationEvidenceAuthorized
               ),
               questionComplete: screenQuestionComplete,
-              commitParent: localScreenTaskRelation !== "unknown",
+              commitParent: Boolean(
+                screenDirectRelationAuthority &&
+                  localScreenTaskRelation !== "unknown"
+              ),
             },
           });
-          taskRelationAdjudicationHandle =
-            scheduleTaskRelationAdjudication({
-            turn: { speaker: "them" },
-            traceId: trace.id,
-            turnGateAction: "answer-refresh",
-            logicalQuestionUnit:
-              screenRelationLogicalQuestionUnit,
-            lexical: inferQuestionTypeDecisionFromText(
-              screenRelationQuestion,
-              {
-                interviewSessionBrief:
-                  screenPreparationRuntime.effectiveInterviewBrief ??
-                  preflightContextState.interviewSessionBrief,
-              }
-            ),
-            sourceKind: "screen",
-            currentQuestion: screenCurrentQuestion,
-            deterministicProposal:
-              screenDeterministicSettlementProposal,
-            narrowScreenRelease: narrowScreenReleaseInput,
-          });
+          if (!screenDirectRelationAuthority) {
+            taskRelationAdjudicationHandle =
+              scheduleTaskRelationAdjudication({
+                turn: { speaker: "them" },
+                traceId: trace.id,
+                turnGateAction: "answer-refresh",
+                logicalQuestionUnit:
+                  screenRelationLogicalQuestionUnit,
+                lexical: inferQuestionTypeDecisionFromText(
+                  screenRelationQuestion,
+                  {
+                    interviewSessionBrief:
+                      screenPreparationRuntime.effectiveInterviewBrief ??
+                      preflightContextState.interviewSessionBrief,
+                  }
+                ),
+                sourceKind: "screen",
+                currentQuestion: screenCurrentQuestion,
+                deterministicProposal:
+                  screenDeterministicSettlementProposal,
+                narrowScreenRelease: narrowScreenReleaseInput,
+              });
+          }
         }
         if (
           taskRelationAdjudicationHandle?.releaseWindowRequested &&
@@ -26781,30 +27127,21 @@ export function useMeetingAssistant() {
           screenDeterministicSettlementProposal
         ) {
           const waitStartedAt = Date.now();
-          let waitStage: "admission" | "execution" = "admission";
           try {
-            const admissionStartedAt = Date.now();
-            const admission = await withTimeout(
-              taskRelationAdjudicationHandle.admission,
-              SCREEN_RELATION_RELEASE_ADMISSION_WAIT_BUDGET_MS,
-              "Screen relation release admission window expired."
-            );
-            screenRelationAdmissionWaitMs = Math.max(
-              0,
-              Date.now() - admissionStartedAt
-            );
-            waitStage = "execution";
             const executionStartedAt = Date.now();
-            const affinityPromise =
-              taskRelationAdjudicationHandle.affinityOutcome ??
-              Promise.resolve(undefined);
-            const affinityOutcome = admission
-              ? await withTimeout(
-                  affinityPromise,
-                  SCREEN_RELATION_RELEASE_WAIT_BUDGET_MS,
-                  "Screen relation release execution window expired."
-                )
-              : await affinityPromise;
+            const resolution =
+              await resolveOrderedTaskRelationWithinWindow({
+                handle: taskRelationAdjudicationHandle,
+                traceId: trace.id,
+                currentQuestionType: screenMemoryQuestionType,
+                sourceKind: "screen",
+                activeMeetingTask:
+                  preflightContextState.activeMeetingTask,
+                screenBoundaryPrior: true,
+                screenTypeEvidenceAuthorized,
+                waitBudgetMs:
+                  SCREEN_ORDERED_RELATION_FOREGROUND_BUDGET_MS,
+              });
             screenRelationExecutionWaitMs = Math.max(
               0,
               Date.now() - executionStartedAt
@@ -26812,105 +27149,78 @@ export function useMeetingAssistant() {
             if (rejectStaleScreenOperation("post-relation-settlement")) {
               return;
             }
-            screenFirstBatchRelationRelease =
-              decideFirstBatchRelationRelease({
-                currentQuestionType: screenMemoryQuestionType,
-                activeParentQuestionType:
-                  preflightContextState.activeMeetingTask?.parent
-                    .questionType,
-                activeChildQuestionType:
-                  preflightContextState.activeMeetingTask?.child
-                    ?.questionType,
-                hasActiveChild: Boolean(
-                  preflightContextState.activeMeetingTask?.child
-                ),
-                childAffinity: affinityOutcome?.child.adjudication,
-                parentAffinity: affinityOutcome?.parent.adjudication,
-              });
+            screenFirstBatchRelationRelease = resolution.decision.matrix;
             const releasedRelationCandidate =
-              projectFirstBatchRelationAdjudication(
-                screenFirstBatchRelationRelease
+              projectOrderedTaskRelationAdjudication(
+                resolution.decision
               );
-            const affinityLeaseAuthorized = Boolean(
-              affinityOutcome?.parent.adjudication &&
-                (!preflightContextState.activeMeetingTask?.child ||
-                  affinityOutcome.child.adjudication)
-            );
-            const releaseDecision =
-              decideNarrowScreenRelationRelease({
-                ...narrowScreenReleaseInput,
-                firstBatchRelease: {
-                  authorized:
-                    screenFirstBatchRelationRelease.authorized,
-                  relation: screenFirstBatchRelationRelease.relation,
-                  confidence:
-                    screenFirstBatchRelationRelease.confidence,
-                  reason: screenFirstBatchRelationRelease.reason,
-                },
-                operationLeaseAuthorized:
-                  affinityLeaseAuthorized,
-                releaseWindowOpen: true,
-              });
             screenRelationSettlementWaitMs = Math.max(
               0,
               Date.now() - waitStartedAt
             );
             screenRelationSettlementWaitDisposition =
-              releaseDecision.authorized
-                ? "settled-and-released-before-deadline"
-                : "settled-without-release";
-            if (
-              releaseDecision.authorized &&
+              resolution.decision.responseOnly
+                ? "settled-current-only"
+                : "settled-and-released-before-deadline";
+            const nullHypothesisRelation =
+              resolution.decision.stage ===
+                "source-topology-null-hypothesis"
+                ? resolution.decision.relation
+                : undefined;
+            const orderedDeterministicProposal = {
+              ...screenDeterministicSettlementProposal,
+              relation: nullHypothesisRelation ?? "unknown",
+              relationEvidenceAuthorized: Boolean(
+                nullHypothesisRelation
+              ),
+              reasons: [
+                ...(screenDeterministicSettlementProposal.reasons ?? []),
+                `ordered-relation:${resolution.decision.reason}`,
+              ],
+            } satisfies CurrentQuestionSettlementProposal;
+            const llmRelationProposal =
               releasedRelationCandidate &&
               preflightContextState.activeMeetingTask?.parent
-            ) {
-              const llmRelationProposal =
-                createTaskRelationSettlementProposal({
-                  currentQuestion: screenCurrentQuestion,
-                  adjudication: releasedRelationCandidate,
-                  expectedParentId:
-                    preflightContextState.activeMeetingTask.parent.id,
-                  expectedParentRevision:
-                    preflightContextState.activeMeetingTask.parent.revisions,
-                });
-              screenCurrentQuestionSettlement = settleCurrentQuestion({
-                operationId:
-                  affinityOutcome?.parent.operationId ??
-                  taskRelationAdjudicationHandle.operationId,
-                currentQuestion: screenCurrentQuestion,
-                deterministicProposal:
-                  screenDeterministicSettlementProposal,
-                llmProposal: llmRelationProposal,
-                activeParentId:
-                  preflightContextState.activeMeetingTask.parent.id,
-                activeParentRevision:
-                  preflightContextState.activeMeetingTask.parent.revisions,
-                manualCorrectionRevision:
-                  manualCorrectionRevisionRef.current,
-                policy: {
-                  allowLlmTypeRepair: false,
-                  allowLlmRelationRepair: true,
-                  allowLlmActionRepair: false,
-                  llmRelationRepairMinConfidence: 0.95,
-                  runtimeMutationAuthorized: true,
-                  questionComplete: screenQuestionComplete,
-                  commitParent: true,
-                },
-              });
-            }
+                ? createTaskRelationSettlementProposal({
+                    currentQuestion: screenCurrentQuestion,
+                    adjudication: releasedRelationCandidate,
+                    expectedParentId:
+                      preflightContextState.activeMeetingTask.parent.id,
+                    expectedParentRevision:
+                      preflightContextState.activeMeetingTask.parent.revisions,
+                  })
+                : undefined;
+            screenCurrentQuestionSettlement = settleCurrentQuestion({
+              operationId: taskRelationAdjudicationHandle.operationId,
+              currentQuestion: screenCurrentQuestion,
+              deterministicProposal: orderedDeterministicProposal,
+              llmProposal: llmRelationProposal,
+              activeParentId:
+                preflightContextState.activeMeetingTask?.parent.id,
+              activeParentRevision:
+                preflightContextState.activeMeetingTask?.parent.revisions,
+              manualCorrectionRevision:
+                manualCorrectionRevisionRef.current,
+              policy: {
+                allowLlmTypeRepair: false,
+                allowLlmRelationRepair: Boolean(llmRelationProposal),
+                allowLlmActionRepair: false,
+                llmRelationRepairMinConfidence: 0.95,
+                runtimeMutationAuthorized: true,
+                questionComplete: screenQuestionComplete,
+                commitParent: Boolean(resolution.decision.relation),
+              },
+            });
             traceStoreRef.current.updateMetadata(trace.id, {
-              ...formatNarrowScreenRelationReleaseForTrace(
-                releaseDecision
+              ...formatOrderedTaskRelationResolutionForTrace(
+                resolution.decision
               ),
               ...formatFirstBatchRelationReleaseForTrace(
                 screenFirstBatchRelationRelease
               ),
               taskRelationAdjudicationWaitBudgetMs:
-                SCREEN_RELATION_RELEASE_WAIT_BUDGET_MS,
-              taskRelationAdjudicationAdmissionWaitBudgetMs:
-                SCREEN_RELATION_RELEASE_ADMISSION_WAIT_BUDGET_MS,
-              taskRelationAdjudicationAdmissionWaitMs:
-                screenRelationAdmissionWaitMs,
+                SCREEN_ORDERED_RELATION_FOREGROUND_BUDGET_MS,
+              taskRelationAdjudicationAdmissionWaitMs: 0,
               taskRelationAdjudicationExecutionWaitMs:
                 screenRelationExecutionWaitMs,
               taskRelationAdjudicationWaitMs: Math.max(
@@ -26919,8 +27229,9 @@ export function useMeetingAssistant() {
               ),
               taskRelationAdjudicationWaitDisposition:
                 screenRelationSettlementWaitDisposition,
-              taskRelationAdjudicationAppliedToSettlement:
-                releaseDecision.authorized,
+              taskRelationAdjudicationAppliedToSettlement: Boolean(
+                resolution.decision.relation
+              ),
             });
           } catch (error) {
             screenRelationSettlementWaitMs = Math.max(
@@ -26928,14 +27239,12 @@ export function useMeetingAssistant() {
               Date.now() - waitStartedAt
             );
             screenRelationSettlementWaitDisposition =
-              `${waitStage}-deadline-expired-response-only`;
+              "ordered-chain-error-response-only";
             traceStoreRef.current.updateMetadata(trace.id, {
               taskRelationScreenReleaseAuthorized: false,
               taskRelationScreenReleaseReason: "release-window-closed",
               taskRelationAdjudicationWaitBudgetMs:
-                SCREEN_RELATION_RELEASE_WAIT_BUDGET_MS,
-              taskRelationAdjudicationAdmissionWaitBudgetMs:
-                SCREEN_RELATION_RELEASE_ADMISSION_WAIT_BUDGET_MS,
+                SCREEN_ORDERED_RELATION_FOREGROUND_BUDGET_MS,
               taskRelationAdjudicationAdmissionWaitMs:
                 screenRelationAdmissionWaitMs,
               taskRelationAdjudicationExecutionWaitMs:
@@ -29855,6 +30164,7 @@ export function useMeetingAssistant() {
       recordPreparationPromptGuidanceUses,
       refreshRecordedCompletedTrace,
       readRuntimeCommitSnapshot,
+      resolveOrderedTaskRelationWithinWindow,
       resolveMeetingModelRoute,
       scheduleSourceLinkageAdjudication,
       scheduleTaskRelationAdjudication,
@@ -30533,8 +30843,11 @@ export function useMeetingAssistant() {
                 )
               ))
         );
-        let relationAdjudicationOutcome:
-          | TaskRelationAdjudicationRuntimeOutcome
+        let orderedCorrectionRelation:
+          | OrderedTaskRelationResolutionDecision
+          | undefined;
+        let orderedCorrectionRelationCandidate:
+          | ReturnType<typeof projectOrderedTaskRelationAdjudication>
           | undefined;
         let relationAdjudicationWaitDisposition = activeTask
           ? "not-requested"
@@ -30571,28 +30884,34 @@ export function useMeetingAssistant() {
           : undefined;
         if (relationAdjudicationHandle?.releaseWindowRequested) {
           const waitStartedAt = Date.now();
-          let waitStage: "admission" | "execution" = "admission";
           try {
-            const admission = await withTimeout(
-              relationAdjudicationHandle.admission,
-              SCREEN_RELATION_RELEASE_ADMISSION_WAIT_BUDGET_MS,
-              "Manual correction relation admission window expired."
-            );
-            waitStage = "execution";
-            relationAdjudicationOutcome = admission
-              ? await withTimeout(
-                  relationAdjudicationHandle.outcome,
-                  SCREEN_RELATION_RELEASE_WAIT_BUDGET_MS,
-                  "Manual correction relation execution window expired."
-                )
-              : await relationAdjudicationHandle.outcome;
+            const resolution =
+              await resolveOrderedTaskRelationWithinWindow({
+                handle: relationAdjudicationHandle,
+                traceId: correctionTrace.id,
+                currentQuestionType: correctedType,
+                sourceKind: correctionCurrentQuestionSourceKind,
+                activeMeetingTask: activeTask,
+                screenBoundaryPrior:
+                  correctionCurrentQuestionSourceKind === "screen",
+                screenTypeEvidenceAuthorized: true,
+                waitBudgetMs:
+                  correctionCurrentQuestionSourceKind === "screen"
+                    ? SCREEN_ORDERED_RELATION_FOREGROUND_BUDGET_MS
+                    : VOICE_ORDERED_RELATION_FOREGROUND_BUDGET_MS,
+              });
+            orderedCorrectionRelation = resolution.decision;
+            orderedCorrectionRelationCandidate =
+              projectOrderedTaskRelationAdjudication(
+                resolution.decision
+              );
             relationAdjudicationWaitDisposition =
-              relationAdjudicationOutcome.operationLeaseAuthorized
-                ? "settled-before-deadline"
-                : relationAdjudicationOutcome.disposition;
+              resolution.decision.responseOnly
+                ? "settled-current-only"
+                : "settled-before-deadline";
           } catch (error) {
             relationAdjudicationWaitDisposition =
-              `${waitStage}-deadline-expired`;
+              "ordered-chain-error";
             traceStoreRef.current.updateMetadata(
               correctionTrace.id,
               {
@@ -30618,9 +30937,9 @@ export function useMeetingAssistant() {
             hasActiveChild: Boolean(activeTask?.child),
             manualCorrectionRevision:
               manualCorrectionRevisionRef.current,
-            relationCandidate: relationAdjudicationOutcome?.candidate,
+            relationCandidate: orderedCorrectionRelationCandidate,
             relationOperationLeaseAuthorized:
-              relationAdjudicationOutcome?.operationLeaseAuthorized,
+              Boolean(orderedCorrectionRelationCandidate),
             forceNewParentFromSourceIdentity:
               !activeTask || correctionTargetOwnsActiveParent,
             preserveActiveChildFromSourceIdentity:
@@ -30668,14 +30987,13 @@ export function useMeetingAssistant() {
           correctionScopeReason: correctionScopeDecision.reason,
           boundaryDecisionReason: correctionScopeDecision.reason,
           manualCorrectionRelationOperationId:
-            relationAdjudicationOutcome?.operationId ??
             relationAdjudicationHandle?.operationId,
           manualCorrectionRelationCandidate:
-            relationAdjudicationOutcome?.candidate?.relation,
+            orderedCorrectionRelation?.relation,
           manualCorrectionRelationCandidateConfidence:
-            relationAdjudicationOutcome?.candidate?.confidence,
+            orderedCorrectionRelation?.confidence,
           manualCorrectionRelationLeaseAuthorized:
-            relationAdjudicationOutcome?.operationLeaseAuthorized ?? false,
+            Boolean(orderedCorrectionRelationCandidate),
           manualCorrectionRelationReleaseAuthorized:
             correctionSettlementResult.relationRelease?.authorized ?? false,
           manualCorrectionRelationReleaseReason:
@@ -31327,6 +31645,7 @@ export function useMeetingAssistant() {
       flushPendingSentenceCompletion,
       readRuntimeCommitSnapshot,
       recordHumanGroundTruthV2,
+      resolveOrderedTaskRelationWithinWindow,
       resolveMeetingModelRoute,
       runAdvisor,
       settleAwaitingVisualEvidenceRecovery,

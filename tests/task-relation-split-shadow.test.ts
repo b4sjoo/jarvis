@@ -16,6 +16,7 @@ import {
   createShuffledCanonicalRelationRequest,
   createTaskRelationSplitLease,
   decideFirstBatchRelationRelease,
+  decideOrderedTaskRelationResolution,
   hashTaskRelationSplitOutput,
   parseTaskRelationAffinityOutput,
   parseTaskRelationCanonicalShadowOutput,
@@ -271,6 +272,25 @@ test("feeds affinity semantics into canonical relation without lineage hashes", 
   );
 });
 
+test("omits child affinity when topology has no active child", () => {
+  const parentOnlyTask = task();
+  delete parentOnlyTask.child;
+  const base = buildTaskRelationAdjudicationRequest({
+    logicalQuestionUnit: unit("How should we monitor RAG freshness?"),
+    activeMeetingTask: parentOnlyTask,
+    recentTurns: [],
+  });
+  const canonical = buildTaskRelationCanonicalShadowRequest({
+    request: base,
+    sessionId: "session-a",
+    runtimeEpoch: 4,
+    manualCorrectionRevision: 0,
+    parent: { unavailableReason: "timed-out" },
+  });
+  assert.equal("child" in canonical.semanticPayload.affinity, false);
+  assert.equal(canonical.semanticPayload.affinity.parent.status, "unknown");
+});
+
 test("exposes ablation and shuffle as causal harness variants", () => {
   const base = buildTaskRelationCanonicalShadowRequest({
     request: request(),
@@ -292,13 +312,13 @@ test("exposes ablation and shuffle as causal harness variants", () => {
   });
   const ablated = createAblatedCanonicalRelationRequest(base);
   const shuffled = createShuffledCanonicalRelationRequest(base, {
-    child: { status: "unavailable" },
-    parent: { status: "unavailable" },
+    child: { status: "unknown" },
+    parent: { status: "unknown" },
   });
   assert.notEqual(ablated.semanticPayloadDigest, base.semanticPayloadDigest);
   assert.notEqual(shuffled.semanticPayloadDigest, base.semanticPayloadDigest);
   const ablatedPrompt = buildTaskRelationCanonicalShadowPrompts(ablated);
-  assert.match(ablatedPrompt.userMessage, /"status":"unavailable"/);
+  assert.match(ablatedPrompt.userMessage, /"status":"unknown"/);
   assert.doesNotMatch(
     ablatedPrompt.userMessage,
     /ablation|operation|mismatch|reason/
@@ -523,8 +543,86 @@ test("keeps uncertain affinity in Shadow and flags only the review band", () => 
   assert.equal(possibleError.authorized, false);
   assert.equal(possibleError.possibleRelationError, true);
   assert.equal(lowConfidence.possibleRelationError, false);
-  assert.equal(sameTypeIndependent.authorized, false);
-  assert.equal(sameTypeIndependent.reason, "same-type-independent-shadow");
+  assert.equal(sameTypeIndependent.authorized, true);
+  assert.equal(sameTypeIndependent.relation, "new-parent");
+  assert.equal(
+    sameTypeIndependent.reason,
+    "same-type-independent-new-parent"
+  );
+});
+
+test("ordered relation resolution prefers matrix, then canonical, then source null hypothesis", () => {
+  const matrix = decideOrderedTaskRelationResolution({
+    sourceKind: "voice",
+    currentQuestionType: "coding",
+    activeParentQuestionType: "behavioral",
+    hasActiveChild: false,
+    parentAffinity: affinity("parent", "independent", 0.99),
+  });
+  assert.equal(matrix.stage, "runtime-matrix");
+  assert.equal(matrix.relation, "new-parent");
+
+  const canonical = decideOrderedTaskRelationResolution({
+    sourceKind: "voice",
+    currentQuestionType: "coding",
+    activeParentQuestionType: "behavioral",
+    hasActiveChild: false,
+    parentAffinity: affinity("parent", "unclear", 0.99),
+    canonical: {
+      schemaVersion: 3,
+      relation: "new-parent",
+      confidence: 0.98,
+      currentQuestionEvidenceSpans: ["Solve an LRU cache"],
+      parentEvidenceSpans: [],
+    },
+  });
+  assert.equal(canonical.stage, "canonical-relation");
+  assert.equal(canonical.relation, "new-parent");
+
+  const unresolved = decideOrderedTaskRelationResolution({
+    sourceKind: "voice",
+    currentQuestionType: "coding",
+    activeParentQuestionType: "coding",
+    hasActiveChild: false,
+  });
+  assert.equal(unresolved.status, "unresolved");
+
+  const preserved = decideOrderedTaskRelationResolution({
+    sourceKind: "voice",
+    currentQuestionType: "coding",
+    activeParentQuestionType: "coding",
+    hasActiveChild: false,
+    finalizeWithNullHypothesis: true,
+  });
+  assert.equal(preserved.stage, "source-topology-null-hypothesis");
+  assert.equal(preserved.relation, "followup-parent");
+});
+
+test("ordered relation null hypothesis treats authoritative unbound Screen as a milestone", () => {
+  const screen = decideOrderedTaskRelationResolution({
+    sourceKind: "screen",
+    currentQuestionType: "behavioral",
+    activeParentQuestionType: "coding",
+    hasActiveChild: false,
+    screenBoundaryPrior: true,
+    screenTypeEvidenceAuthorized: true,
+    finalizeWithNullHypothesis: true,
+  });
+  assert.equal(screen.relation, "new-parent");
+  assert.equal(screen.reason, "screen-milestone-new-parent");
+
+  const activeChild = decideOrderedTaskRelationResolution({
+    sourceKind: "screen",
+    currentQuestionType: "coding",
+    activeParentQuestionType: "coding",
+    activeChildQuestionType: "field-knowledge",
+    hasActiveChild: true,
+    screenBoundaryPrior: true,
+    screenTypeEvidenceAuthorized: true,
+    finalizeWithNullHypothesis: true,
+  });
+  assert.equal(activeChild.responseOnly, true);
+  assert.equal(activeChild.relation, undefined);
 });
 
 function affinity(

@@ -23,6 +23,8 @@ export const TASK_RELATION_CANONICAL_SHADOW_SCHEMA_VERSION = 3;
 export const TASK_RELATION_SPLIT_MAX_OUTPUT_CHARS = 2_048;
 export const FIRST_BATCH_RELATION_RELEASE_MIN_CONFIDENCE = 0.95;
 export const FIRST_BATCH_RELATION_POSSIBLE_ERROR_MIN_CONFIDENCE = 0.9;
+export const VOICE_ORDERED_RELATION_FOREGROUND_BUDGET_MS = 3_000;
+export const SCREEN_ORDERED_RELATION_FOREGROUND_BUDGET_MS = 7_000;
 export const TASK_RELATION_CHILD_AFFINITY_PROMPT_VERSION =
   "task-relation-child-affinity-v2-compact";
 export const TASK_RELATION_PARENT_AFFINITY_PROMPT_VERSION =
@@ -120,7 +122,7 @@ export type ChildAffinitySemanticResult =
       currentEvidenceSpans: string[];
       childEvidenceSpans: string[];
     }
-  | { status: "unavailable" };
+  | { status: "unknown" };
 
 export type ParentAffinitySemanticResult =
   | {
@@ -130,7 +132,7 @@ export type ParentAffinitySemanticResult =
       currentEvidenceSpans: string[];
       parentEvidenceSpans: string[];
     }
-  | { status: "unavailable" };
+  | { status: "unknown" };
 
 export interface CanonicalRelationSemanticPayload {
   currentQuestion: { sourceTexts: string[] };
@@ -142,7 +144,7 @@ export interface CanonicalRelationSemanticPayload {
   activeChild?: { question: string };
   recentEvidence: TaskRelationRecentSemanticEvidence[];
   affinity: {
-    child: ChildAffinitySemanticResult;
+    child?: ChildAffinitySemanticResult;
     parent: ParentAffinitySemanticResult;
   };
 }
@@ -181,7 +183,7 @@ export type FirstBatchRelationReleaseReason =
   | "affinity-missing"
   | "affinity-unclear"
   | "affinity-below-release-threshold"
-  | "same-type-independent-shadow"
+  | "same-type-independent-new-parent"
   | "parent-related-type-incompatible"
   | "active-child-preserve-child"
   | "active-child-combination-not-released";
@@ -203,6 +205,222 @@ export interface FirstBatchRelationReleaseDecision {
   parentAffinityConfidence?: number;
   currentEvidenceSpans: string[];
   parentEvidenceSpans: string[];
+}
+
+export const ORDERED_RELATION_RESOLUTION_MIN_CONFIDENCE = 0.95;
+
+export type OrderedTaskRelationResolutionStage =
+  | "runtime-matrix"
+  | "canonical-relation"
+  | "source-topology-null-hypothesis";
+
+export type OrderedTaskRelationResolutionReason =
+  | FirstBatchRelationReleaseReason
+  | "canonical-authorized"
+  | "canonical-missing"
+  | "canonical-unknown"
+  | "canonical-confidence-below-threshold"
+  | "canonical-topology-incompatible"
+  | "voice-preserve-active-child"
+  | "voice-preserve-active-parent"
+  | "voice-current-only"
+  | "screen-milestone-new-parent"
+  | "screen-active-child-current-only"
+  | "screen-current-only";
+
+export interface OrderedTaskRelationResolutionDecision {
+  status: "resolved" | "unresolved";
+  stage?: OrderedTaskRelationResolutionStage;
+  relation?: Exclude<RuntimeTaskRelation, "unknown">;
+  responseOnly: boolean;
+  reason: OrderedTaskRelationResolutionReason;
+  confidence: number;
+  currentEvidenceSpans: string[];
+  parentEvidenceSpans: string[];
+  matrix: FirstBatchRelationReleaseDecision;
+}
+
+export function decideOrderedTaskRelationResolution(input: {
+  sourceKind: "voice" | "screen" | "mixed";
+  currentQuestionType: unknown;
+  activeParentQuestionType?: unknown;
+  activeChildQuestionType?: unknown;
+  hasActiveChild: boolean;
+  childAffinity?: TaskRelationAffinityAdjudication;
+  parentAffinity?: TaskRelationAffinityAdjudication;
+  canonical?: TaskRelationCanonicalShadowAdjudication;
+  screenBoundaryPrior?: boolean;
+  screenTypeEvidenceAuthorized?: boolean;
+  finalizeWithNullHypothesis?: boolean;
+}): OrderedTaskRelationResolutionDecision {
+  const currentQuestionType =
+    normalizeCanonicalQuestionType(input.currentQuestionType) ?? "unknown";
+  const activeParentQuestionType = normalizeCanonicalQuestionType(
+    input.activeParentQuestionType
+  );
+  const activeChildQuestionType = normalizeCanonicalQuestionType(
+    input.activeChildQuestionType
+  );
+  const matrix = decideFirstBatchRelationRelease({
+    currentQuestionType,
+    activeParentQuestionType,
+    activeChildQuestionType,
+    hasActiveChild: input.hasActiveChild,
+    childAffinity: input.childAffinity,
+    parentAffinity: input.parentAffinity,
+  });
+  if (matrix.authorized && matrix.relation) {
+    return {
+      status: "resolved",
+      stage: "runtime-matrix",
+      relation: matrix.relation,
+      responseOnly: false,
+      reason: matrix.reason,
+      confidence: matrix.confidence,
+      currentEvidenceSpans: [...matrix.currentEvidenceSpans],
+      parentEvidenceSpans: [...matrix.parentEvidenceSpans],
+      matrix,
+    };
+  }
+
+  const canonicalAuthorization = authorizeCanonicalRelationForTopology({
+    canonical: input.canonical,
+    currentQuestionType,
+    activeParentQuestionType,
+    activeChildQuestionType,
+    hasActiveChild: input.hasActiveChild,
+  });
+  if (canonicalAuthorization.authorized && input.canonical) {
+    return {
+      status: "resolved",
+      stage: "canonical-relation",
+      relation: input.canonical.relation as Exclude<
+        RuntimeTaskRelation,
+        "unknown"
+      >,
+      responseOnly: false,
+      reason: "canonical-authorized",
+      confidence: input.canonical.confidence,
+      currentEvidenceSpans: [
+        ...input.canonical.currentQuestionEvidenceSpans,
+      ],
+      parentEvidenceSpans: [...input.canonical.parentEvidenceSpans],
+      matrix,
+    };
+  }
+
+  const unresolvedReason: OrderedTaskRelationResolutionReason =
+    !input.canonical
+      ? "canonical-missing"
+      : input.canonical.relation === "unknown"
+        ? "canonical-unknown"
+        : input.canonical.confidence <
+            ORDERED_RELATION_RESOLUTION_MIN_CONFIDENCE
+          ? "canonical-confidence-below-threshold"
+          : "canonical-topology-incompatible";
+  if (!input.finalizeWithNullHypothesis) {
+    return {
+      status: "unresolved",
+      responseOnly: false,
+      reason: unresolvedReason,
+      confidence: input.canonical?.confidence ?? matrix.confidence,
+      currentEvidenceSpans:
+        input.canonical?.currentQuestionEvidenceSpans ??
+        matrix.currentEvidenceSpans,
+      parentEvidenceSpans:
+        input.canonical?.parentEvidenceSpans ?? matrix.parentEvidenceSpans,
+      matrix,
+    };
+  }
+
+  const sourceKind = input.sourceKind === "mixed" ? "voice" : input.sourceKind;
+  if (
+    sourceKind === "screen" &&
+    input.screenBoundaryPrior &&
+    input.screenTypeEvidenceAuthorized &&
+    !input.hasActiveChild &&
+    canQuestionTypeCreateParent(currentQuestionType)
+  ) {
+    return resolvedNullHypothesis({
+      relation: "new-parent",
+      reason: "screen-milestone-new-parent",
+      matrix,
+    });
+  }
+  if (sourceKind === "screen" && input.hasActiveChild) {
+    return resolvedNullHypothesis({
+      reason: "screen-active-child-current-only",
+      matrix,
+    });
+  }
+  if (
+    sourceKind === "voice" &&
+    input.hasActiveChild &&
+    activeChildQuestionType &&
+    currentQuestionType === activeChildQuestionType
+  ) {
+    return resolvedNullHypothesis({
+      relation: "child-probe",
+      reason: "voice-preserve-active-child",
+      matrix,
+    });
+  }
+  if (
+    sourceKind === "voice" &&
+    activeParentQuestionType &&
+    areCompatibleParentContinuityTypes(
+      currentQuestionType,
+      activeParentQuestionType
+    )
+  ) {
+    return resolvedNullHypothesis({
+      relation: "followup-parent",
+      reason: "voice-preserve-active-parent",
+      matrix,
+    });
+  }
+  return resolvedNullHypothesis({
+    reason:
+      sourceKind === "screen" ? "screen-current-only" : "voice-current-only",
+    matrix,
+  });
+}
+
+export function projectOrderedTaskRelationAdjudication(
+  decision: OrderedTaskRelationResolutionDecision
+): LlmTaskRelationAdjudication | undefined {
+  if (
+    decision.status !== "resolved" ||
+    !decision.relation ||
+    decision.stage === "source-topology-null-hypothesis" ||
+    decision.currentEvidenceSpans.length === 0
+  ) {
+    return undefined;
+  }
+  return {
+    schemaVersion: 3,
+    relation: decision.relation,
+    confidence: decision.confidence,
+    currentQuestionEvidenceSpans: [...decision.currentEvidenceSpans],
+    parentEvidenceSpans:
+      decision.relation === "new-parent"
+        ? []
+        : [...decision.parentEvidenceSpans],
+  };
+}
+
+export function formatOrderedTaskRelationResolutionForTrace(
+  decision: OrderedTaskRelationResolutionDecision | undefined
+) {
+  if (!decision) return {};
+  return {
+    taskRelationOrderedResolutionStatus: decision.status,
+    taskRelationOrderedResolutionStage: decision.stage,
+    taskRelationOrderedResolutionRelation: decision.relation,
+    taskRelationOrderedResolutionResponseOnly: decision.responseOnly,
+    taskRelationOrderedResolutionReason: decision.reason,
+    taskRelationOrderedResolutionConfidence: decision.confidence,
+  };
 }
 
 export function decideFirstBatchRelationRelease(input: {
@@ -393,9 +611,10 @@ export function decideFirstBatchRelationRelease(input: {
 
   if (currentQuestionType === activeParentQuestionType) {
     return decide({
-      authorized: false,
+      authorized: true,
+      relation: "new-parent",
       responseOnly: false,
-      reason: "same-type-independent-shadow",
+      reason: "same-type-independent-new-parent",
       confidence,
       possibleRelationError: false,
     });
@@ -792,7 +1011,9 @@ export function buildTaskRelationCanonicalShadowRequest(input: {
       input.request.recentSourceEvidence
     ),
     affinity: {
-      child: toChildAffinitySemanticResult(input.child),
+      ...(input.request.activeChild
+        ? { child: toChildAffinitySemanticResult(input.child) }
+        : {}),
       parent: toParentAffinitySemanticResult(input.parent),
     },
   };
@@ -1020,8 +1241,10 @@ export function createAblatedCanonicalRelationRequest(
   const semanticPayload: CanonicalRelationSemanticPayload = {
     ...request.semanticPayload,
     affinity: {
-      child: { status: "unavailable" },
-      parent: { status: "unavailable" },
+      ...(request.semanticPayload.activeChild
+        ? { child: { status: "unknown" as const } }
+        : {}),
+      parent: { status: "unknown" },
     },
   };
   return {
@@ -1140,7 +1363,7 @@ function toChildAffinitySemanticResult(
         currentEvidenceSpans: [...adjudication.currentEvidenceSpans],
         childEvidenceSpans: [...adjudication.branchEvidenceSpans],
       }
-    : { status: "unavailable" };
+    : { status: "unknown" };
 }
 
 function toParentAffinitySemanticResult(
@@ -1160,7 +1383,81 @@ function toParentAffinitySemanticResult(
         currentEvidenceSpans: [...adjudication.currentEvidenceSpans],
         parentEvidenceSpans: [...adjudication.branchEvidenceSpans],
       }
-    : { status: "unavailable" };
+    : { status: "unknown" };
+}
+
+function authorizeCanonicalRelationForTopology(input: {
+  canonical?: TaskRelationCanonicalShadowAdjudication;
+  currentQuestionType: CanonicalQuestionType;
+  activeParentQuestionType?: CanonicalQuestionType;
+  activeChildQuestionType?: CanonicalQuestionType;
+  hasActiveChild: boolean;
+}) {
+  const canonical = input.canonical;
+  if (!canonical) return { authorized: false as const };
+  if (
+    canonical.relation === "unknown" ||
+    canonical.confidence < ORDERED_RELATION_RESOLUTION_MIN_CONFIDENCE
+  ) {
+    return { authorized: false as const };
+  }
+  if (canonical.relation === "new-parent") {
+    return {
+      authorized: canQuestionTypeCreateParent(input.currentQuestionType),
+    } as const;
+  }
+  if (!input.activeParentQuestionType) {
+    return { authorized: false as const };
+  }
+  if (canonical.relation === "followup-parent") {
+    return {
+      authorized: areCompatibleParentContinuityTypes(
+        input.currentQuestionType,
+        input.activeParentQuestionType
+      ),
+    } as const;
+  }
+  if (canonical.relation === "child-probe") {
+    return {
+      authorized: Boolean(
+        (input.hasActiveChild &&
+          input.activeChildQuestionType &&
+          input.currentQuestionType === input.activeChildQuestionType) ||
+          canParentQuestionTypeOwnChild(
+            input.activeParentQuestionType,
+            input.currentQuestionType
+          )
+      ),
+    } as const;
+  }
+  return {
+    authorized: Boolean(
+      canonical.relation === "resume-parent" &&
+        input.hasActiveChild &&
+        areCompatibleParentContinuityTypes(
+          input.currentQuestionType,
+          input.activeParentQuestionType
+        )
+    ),
+  } as const;
+}
+
+function resolvedNullHypothesis(input: {
+  relation?: Exclude<RuntimeTaskRelation, "unknown">;
+  reason: OrderedTaskRelationResolutionReason;
+  matrix: FirstBatchRelationReleaseDecision;
+}): OrderedTaskRelationResolutionDecision {
+  return {
+    status: "resolved",
+    stage: "source-topology-null-hypothesis",
+    relation: input.relation,
+    responseOnly: !input.relation,
+    reason: input.reason,
+    confidence: 1,
+    currentEvidenceSpans: [],
+    parentEvidenceSpans: [],
+    matrix: input.matrix,
+  };
 }
 
 function currentQuestionCorpus(
