@@ -68,6 +68,20 @@ test("uses the topology null hypothesis only after Ordered Relation is unavailab
   assert.equal(decision.relation.relation, "followup-parent");
 });
 
+test("uses an authoritative Screen milestone as the bounded new-parent fallback", () => {
+  const decision = coordinateOrderedSettlement({
+    sourceKind: "screen",
+    currentQuestionType: "behavioral",
+    activeMeetingTask: task(),
+    screenBoundaryPrior: true,
+    screenTypeEvidenceAuthorized: true,
+  });
+
+  assert.equal(decision.stage, "topology-null-hypothesis");
+  assert.equal(decision.relation.relation, "new-parent");
+  assert.equal(decision.relation.reason, "screen-milestone-new-parent");
+});
+
 function task(): ActiveMeetingTask {
   return {
     id: "parent-design",

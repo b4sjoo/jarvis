@@ -27254,6 +27254,9 @@ export function useMeetingAssistant() {
         let screenFirstBatchRelationRelease:
           | FirstBatchRelationReleaseDecision
           | undefined;
+        let screenCoordinatorDecision:
+          | ReturnType<typeof coordinateOrderedSettlement>
+          | undefined;
         const narrowScreenReleaseInput = {
           sourceKind: "screen" as const,
           screenBoundaryPrior: true,
@@ -27396,32 +27399,37 @@ export function useMeetingAssistant() {
               return;
             }
             screenFirstBatchRelationRelease = resolution.decision.matrix;
+            screenCoordinatorDecision = coordinateOrderedSettlement({
+              sourceKind: "screen",
+              currentQuestionType: screenMemoryQuestionType,
+              activeMeetingTask:
+                preflightContextState.activeMeetingTask,
+              orderedRelation: resolution.decision,
+              screenBoundaryPrior: true,
+              screenTypeEvidenceAuthorized,
+            });
+            const coordinatedRelation = screenCoordinatorDecision.relation;
             const releasedRelationCandidate =
               projectOrderedTaskRelationAdjudication(
-                resolution.decision
+                coordinatedRelation
               );
             screenRelationSettlementWaitMs = Math.max(
               0,
               Date.now() - waitStartedAt
             );
             screenRelationSettlementWaitDisposition =
-              resolution.decision.responseOnly
+              coordinatedRelation.responseOnly
                 ? "settled-current-only"
                 : "settled-and-released-before-deadline";
-            const nullHypothesisRelation =
-              resolution.decision.stage ===
-                "source-topology-null-hypothesis"
-                ? resolution.decision.relation
-                : undefined;
             const orderedDeterministicProposal = {
               ...screenDeterministicSettlementProposal,
-              relation: nullHypothesisRelation ?? "unknown",
+              relation: coordinatedRelation.relation ?? "unknown",
               relationEvidenceAuthorized: Boolean(
-                nullHypothesisRelation
+                coordinatedRelation.relation
               ),
               reasons: [
                 ...(screenDeterministicSettlementProposal.reasons ?? []),
-                `ordered-relation:${resolution.decision.reason}`,
+                `ordered-relation:${coordinatedRelation.reason}`,
               ],
             } satisfies CurrentQuestionSettlementProposal;
             const llmRelationProposal =
@@ -27454,12 +27462,15 @@ export function useMeetingAssistant() {
                 llmRelationRepairMinConfidence: 0.95,
                 runtimeMutationAuthorized: true,
                 questionComplete: screenQuestionComplete,
-                commitParent: Boolean(resolution.decision.relation),
+                commitParent: Boolean(coordinatedRelation.relation),
               },
             });
             traceStoreRef.current.updateMetadata(trace.id, {
               ...formatOrderedTaskRelationResolutionForTrace(
-                resolution.decision
+                coordinatedRelation
+              ),
+              ...formatOrderedSettlementCoordinatorForTrace(
+                screenCoordinatorDecision
               ),
               ...formatFirstBatchRelationReleaseForTrace(
                 screenFirstBatchRelationRelease
@@ -27476,7 +27487,7 @@ export function useMeetingAssistant() {
               taskRelationAdjudicationWaitDisposition:
                 screenRelationSettlementWaitDisposition,
               taskRelationAdjudicationAppliedToSettlement: Boolean(
-                resolution.decision.relation
+                coordinatedRelation.relation
               ),
             });
           } catch (error) {
@@ -27506,6 +27517,71 @@ export function useMeetingAssistant() {
                 error instanceof Error ? error.message : String(error),
             });
           }
+        }
+        if (
+          !screenDirectRelationAuthority &&
+          screenCurrentQuestion &&
+          screenDeterministicSettlementProposal &&
+          !screenCurrentQuestionSettlement?.relationMutationAuthorized
+        ) {
+          screenCoordinatorDecision = coordinateOrderedSettlement({
+            sourceKind: "screen",
+            currentQuestionType: screenMemoryQuestionType,
+            activeMeetingTask:
+              preflightContextState.activeMeetingTask,
+            screenBoundaryPrior: true,
+            screenTypeEvidenceAuthorized,
+          });
+          const coordinatedRelation = screenCoordinatorDecision.relation;
+          const coordinatedProposal: CurrentQuestionSettlementProposal = {
+            ...screenDeterministicSettlementProposal,
+            relation: coordinatedRelation.relation ?? "unknown",
+            relationEvidenceAuthorized: Boolean(
+              coordinatedRelation.relation
+            ),
+            reasons: [
+              ...(screenDeterministicSettlementProposal.reasons ?? []),
+              `screen-coordinator:${coordinatedRelation.reason}`,
+            ],
+          };
+          screenCurrentQuestionSettlement = settleCurrentQuestion({
+            operationId:
+              taskRelationAdjudicationHandle?.operationId ??
+              `screen-coordinator:${screenCurrentQuestion.logicalQuestionUnitId}:${screenCurrentQuestion.revision}`,
+            currentQuestion: screenCurrentQuestion,
+            deterministicProposal: coordinatedProposal,
+            activeParentId:
+              preflightContextState.activeMeetingTask?.parent.id,
+            activeParentRevision:
+              preflightContextState.activeMeetingTask?.parent.revisions,
+            manualCorrectionRevision:
+              manualCorrectionRevisionRef.current,
+            policy: {
+              allowLlmTypeRepair: false,
+              allowLlmRelationRepair: false,
+              allowLlmActionRepair: false,
+              runtimeMutationAuthorized: Boolean(
+                readScreenAuthorization().authorized
+              ),
+              questionComplete: screenQuestionComplete,
+              commitParent: Boolean(coordinatedRelation.relation),
+            },
+          });
+          screenFirstBatchRelationRelease = coordinatedRelation.matrix;
+          traceStoreRef.current.updateMetadata(trace.id, {
+            ...formatOrderedTaskRelationResolutionForTrace(
+              coordinatedRelation
+            ),
+            ...formatOrderedSettlementCoordinatorForTrace(
+              screenCoordinatorDecision
+            ),
+            ...formatFirstBatchRelationReleaseForTrace(
+              screenFirstBatchRelationRelease
+            ),
+            taskRelationAdjudicationAppliedToSettlement: Boolean(
+              coordinatedRelation.relation
+            ),
+          });
         }
         sessionRecordingManagerRef.current?.recordTaskRelationAdjudicationDecision(
           {
@@ -27592,7 +27668,8 @@ export function useMeetingAssistant() {
           !settlementAuthorizesTaskTransition(
             screenCurrentQuestionSettlement
           ) &&
-          screenTaskRelationDecision.responseOnly &&
+          (screenCoordinatorDecision?.relation.responseOnly ??
+            screenTaskRelationDecision.responseOnly) &&
           screenSectionHintConsumption.disposition !== "applied"
             ? createResponseOnlyTaskScope({
                 logicalQuestionUnitId: `screen_${observation.id}`,
