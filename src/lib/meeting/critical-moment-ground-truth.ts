@@ -15,7 +15,6 @@ import type {
   ExpectedAdvisorAction,
   HumanEvaluationTaskRelation,
   HumanExpectedParentAction,
-  InterviewTaskRelation,
 } from "./types.js";
 
 export type CriticalMomentGroundTruthJoinStatus =
@@ -345,15 +344,17 @@ function mapLegacyAdvisorAction(
 
 function normalizeLegacyRelation(
   relation: string | undefined
-): InterviewTaskRelation | undefined {
+): HumanEvaluationTaskRelation | undefined {
   return relation === "new-parent" ||
     relation === "followup-parent" ||
     relation === "child-probe" ||
     relation === "resume-parent" ||
-    relation === "logistics" ||
-    relation === "correction" ||
-    relation === "unknown"
+    relation === "none"
     ? relation
+    : relation === "logistics" ||
+        relation === "correction" ||
+        relation === "unknown"
+      ? "none"
     : undefined;
 }
 

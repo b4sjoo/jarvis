@@ -528,6 +528,29 @@ test("drops correction-scope strings instead of treating them as task relations"
   );
 });
 
+test("projects legacy correction and logistics expectations to relation N/A", () => {
+  const evaluations = upsertQuestionHumanEvaluation(
+    [],
+    {
+      traceId: "trace_legacy_relation",
+      traceKind: "voice",
+      questionId: "question_legacy_relation",
+    },
+    {
+      expectedRelation: "correction",
+      taxonomyAdjudication: {
+        expectedRelation: "logistics",
+      },
+    }
+  );
+
+  assert.equal(evaluations[0]?.expectedRelation, "none");
+  assert.equal(
+    evaluations[0]?.taxonomyAdjudication?.expectedRelation,
+    "none"
+  );
+});
+
 test("preserves domain-resolved unknown settlement labels during normalization", () => {
   const storage = new Map<string, string>();
   Object.defineProperty(globalThis, "window", {

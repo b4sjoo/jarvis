@@ -1326,11 +1326,10 @@ function normalizeRelation(
     value === "followup-parent" ||
     value === "child-probe" ||
     value === "resume-parent" ||
-    value === "logistics" ||
-    value === "correction" ||
-    value === "unknown" ||
     value === "none"
     ? value
+    : value === "logistics" || value === "correction" || value === "unknown"
+      ? "none"
     : undefined;
 }
 

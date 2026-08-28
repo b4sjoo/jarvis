@@ -5230,11 +5230,11 @@ const CriticalMomentEvaluationPanel = ({
         candidate.proposedQuestionType ??
         "unknown"
     );
-    setExpectedRelation(groundTruth?.expectedRelation ?? "unknown");
+    setExpectedRelation(groundTruth?.expectedRelation ?? "none");
     setExpectedParentAction(
       groundTruth?.expectedParentAction ??
         evaluateTaskSettlementTupleCompatibilityV2({
-          relation: groundTruth?.expectedRelation ?? "unknown",
+          relation: groundTruth?.expectedRelation ?? "none",
           parentAction: "none",
         }).recommendedParentAction
     );
@@ -5655,9 +5655,6 @@ const evaluationTaskRelations: HumanEvaluationTaskRelation[] = [
   "followup-parent",
   "child-probe",
   "resume-parent",
-  "logistics",
-  "correction",
-  "unknown",
 ];
 
 const evaluationParentActions: HumanExpectedParentAction[] = [
@@ -6573,6 +6570,16 @@ const TraceHumanEvaluationPanel = ({
                   : "N/A")}
             </div>
             <div>
+              execution: {currentQuestionSettlementDisposition ?? "N/A"}
+              {typeof trace.metadata?.responseOnlyRelationDisposition ===
+              "string"
+                ? ` / ${trace.metadata.responseOnlyRelationDisposition}`
+                : ""}
+              {typeof trace.metadata?.responseOnlyContextReadScope === "string"
+                ? ` / ${trace.metadata.responseOnlyContextReadScope}`
+                : ""}
+            </div>
+            <div>
               applied: response{" "}
               {formatObservedBoolean(
                 questionTypeObservation.typeAppliedToResponse
@@ -6594,6 +6601,29 @@ const TraceHumanEvaluationPanel = ({
               </div>
             ) : null}
           </div>
+          {currentQuestionSettlementDisposition === "response-only" ||
+          typeof trace.metadata?.responseOnlyTaskScopeId === "string" ? (
+            <CriticalMomentButtonGroup
+              label="Response-only handling"
+              options={[
+                ["correct", "Correct"],
+                ["incorrect", "Wrong"],
+              ]}
+              value={
+                questionEvaluation?.taxonomyAdjudication
+                  ?.responseOnlyCorrect === undefined
+                  ? undefined
+                  : questionEvaluation.taxonomyAdjudication.responseOnlyCorrect
+                    ? "correct"
+                    : "incorrect"
+              }
+              onSelect={(value) =>
+                updateTaxonomyAdjudicationEvaluation({
+                  responseOnlyCorrect: value === "correct",
+                })
+              }
+            />
+          ) : null}
           {activeSettlementFact?.kind ===
           "expected-task-settlement" ? (
             <div className="mt-1 break-words font-mono text-[9px]">
@@ -6625,7 +6655,7 @@ const TraceHumanEvaluationPanel = ({
                 setExpectedQuestionType(
                   observedQuestionType ?? "unknown"
                 );
-                setExpectedRelation(observedRelation ?? "unknown");
+                setExpectedRelation(observedRelation ?? "none");
                 setExpectedParentAction(
                   observedParentAction ?? "none"
                 );
@@ -7556,7 +7586,7 @@ const TraceHumanEvaluationPanel = ({
                     ["followup-parent", "Follow-up"],
                     ["child-probe", "Child"],
                     ["resume-parent", "Resume"],
-                    ["unknown", "Unknown"],
+                    ["none", "N/A"],
                   ]}
                   value={
                     questionEvaluation?.taxonomyAdjudication

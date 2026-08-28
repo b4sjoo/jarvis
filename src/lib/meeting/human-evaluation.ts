@@ -12,7 +12,7 @@ import type {
   QuestionHumanEvaluation,
   TraceHumanEvaluation,
   QuestionInstanceLineage,
-  InterviewTaskRelation,
+  HumanEvaluationTaskRelation,
   PersonalStatusDomain,
 } from "./types";
 import { normalizeMemoryRetrievalEvaluationSnapshot } from "./memory-evaluation.js";
@@ -947,10 +947,15 @@ function mergeTaxonomyAdjudicationEvaluation(
   patch: QuestionHumanEvaluation["taxonomyAdjudication"]
 ) {
   if (!existing && !patch) return undefined;
-  return {
+  const merged = {
     ...existing,
     ...patch,
   };
+  const expectedRelation = normalizeInterviewTaskRelation(
+    merged.expectedRelation
+  );
+  const { expectedRelation: _legacyExpectedRelation, ...rest } = merged;
+  return expectedRelation ? { ...rest, expectedRelation } : rest;
 }
 
 function mergeProjectTrajectoryEvaluation(
@@ -1476,15 +1481,15 @@ function normalizeTaxonomyAdjudicationEvaluation(
 
 function normalizeInterviewTaskRelation(
   value: unknown
-): InterviewTaskRelation | undefined {
+): HumanEvaluationTaskRelation | undefined {
   return value === "new-parent" ||
     value === "followup-parent" ||
     value === "child-probe" ||
     value === "resume-parent" ||
-    value === "logistics" ||
-    value === "correction" ||
-    value === "unknown"
+    value === "none"
     ? value
+    : value === "logistics" || value === "correction" || value === "unknown"
+      ? "none"
     : undefined;
 }
 
