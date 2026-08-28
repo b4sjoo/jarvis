@@ -512,7 +512,6 @@ import {
   formatQuestionTypeAdjudicationOutcomeForTrace,
   formatQuestionTypeEnforcementForTrace,
   formatOrderedQuestionTypeResolutionForTrace,
-  normalizeQuestionTypeAdjudicationMode,
   requestQuestionTypeAdjudication,
   TaskRelationAdjudicationJob,
   TaskRelationAdjudicationRequestResult,
@@ -528,7 +527,6 @@ import {
   formatNarrowScreenRelationReleaseForTrace,
   formatTaskRelationAdjudicationForTrace,
   isRuntimeTaskRelation,
-  normalizeTaskRelationAdjudicationMode,
   requestTaskRelationAdjudication,
   resolveTaskRelationBudgetSlot,
   isWhiteboardRevisionAuthorized,
@@ -1491,18 +1489,8 @@ function normalizeTaxonomyAdjudicationSettings(
 ): MeetingTaxonomyAdjudicationSettings {
   const selectedProvider = normalizeMeetingCodingModelSettings(value);
   const parsed = isRecord(value) ? value : {};
-  const legacyEnabled =
-    typeof parsed.enabled === "boolean"
-      ? parsed.enabled
-      : DEFAULT_TAXONOMY_ADJUDICATION_SETTINGS.enabled;
-  const questionTypeMode = normalizeQuestionTypeAdjudicationMode(
-    parsed.questionTypeMode,
-    legacyEnabled
-  );
-  const taskRelationMode = normalizeTaskRelationAdjudicationMode(
-    parsed.taskRelationMode,
-    legacyEnabled
-  );
+  const questionTypeMode = "enforcement" as const;
+  const taskRelationMode = "shadow" as const;
   const meetingMetadataMode =
     parsed.meetingMetadataMode === "off" ||
     parsed.meetingMetadataMode === "shadow" ||
@@ -1510,10 +1498,7 @@ function normalizeTaxonomyAdjudicationSettings(
       ? parsed.meetingMetadataMode
       : DEFAULT_TAXONOMY_ADJUDICATION_SETTINGS.meetingMetadataMode;
   return {
-    enabled:
-      questionTypeMode !== "off" ||
-      taskRelationMode !== "off" ||
-      meetingMetadataMode !== "off",
+    enabled: true,
     questionTypeMode,
     taskRelationMode,
     meetingMetadataMode,

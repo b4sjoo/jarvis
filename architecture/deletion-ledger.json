@@ -1,7 +1,7 @@
 {
   "$schema": "./deletion-ledger.schema.json",
   "version": 1,
-  "updatedAt": "2026-08-14",
+  "updatedAt": "2026-08-28",
   "entries": [
     {
       "id": "task-runtime-legacy-active-screen-root",
@@ -200,6 +200,27 @@
       "deletionGate": "Migration is retryable and source deletion requires complete parse, import, count, and hash verification.",
       "rollbackBoundary": "Task 166 backup, staging, publication, and legacy startup-path retirement remain separate commits.",
       "status": "candidate"
+    },
+    {
+      "id": "runtime-type-relation-release-switches",
+      "symbolOrSurface": "Meeting configuration switches that can return released Question Type or Relation inference to shadow/off behavior",
+      "verdict": "delete",
+      "ownerTaskId": 168,
+      "replacement": "Fixed product release policy with Question Type enforcement, ordered Relation settlement, and Replay Lab fault injection",
+      "persistedDataImpact": "settings",
+      "historicalReader": "Meeting settings normalization pins legacy saved modes to the released product policy",
+      "proofCommands": [
+        "npm run verify:deletion-ledger",
+        "npm test",
+        "npm run build"
+      ],
+      "deletionGate": "The normal configuration UI exposes no Type or Relation release switch, and legacy saved off/shadow values cannot disable either product chain.",
+      "rollbackBoundary": "The UI removal and fixed settings normalization ship together; Runtime LLM fault behavior remains independently testable through Replay Lab.",
+      "status": "deleted",
+      "forbiddenPatterns": [
+        "LLM Type Enforcement",
+        "LLM Relation Adjudication"
+      ]
     }
   ]
 }

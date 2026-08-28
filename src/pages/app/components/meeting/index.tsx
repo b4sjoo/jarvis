@@ -4328,56 +4328,6 @@ const ConfigurationsPanel = ({
               <div className="flex items-center justify-between gap-2">
                 <div>
                   <div className="text-[10px] font-medium uppercase text-muted-foreground">
-                    LLM Type Enforcement
-                  </div>
-                  <div className="mt-0.5 text-[10px] text-muted-foreground">
-                    {taxonomyAdjudication.questionTypeMode === "enforcement"
-                      ? "Ordered Voice type settlement"
-                      : "Shadow only; runtime type stays unchanged"}
-                  </div>
-                </div>
-                <Switch
-                  checked={
-                    taxonomyAdjudication.questionTypeMode === "enforcement"
-                  }
-                  onCheckedChange={(enabled) => {
-                    onTaxonomyAdjudicationChange({
-                      ...taxonomyAdjudication,
-                      enabled: true,
-                      questionTypeMode: enabled
-                        ? "enforcement"
-                        : "shadow",
-                    });
-                  }}
-                />
-              </div>
-              <div className="flex items-center justify-between gap-2 border-t border-border/50 pt-2">
-                <div>
-                  <div className="text-[10px] font-medium uppercase text-muted-foreground">
-                    LLM Relation Adjudication
-                  </div>
-                  <div className="mt-0.5 text-[10px] text-muted-foreground">
-                    Ordered relation settlement; legacy comparison only in Debug or scripted sessions
-                  </div>
-                </div>
-                <Switch
-                  checked={
-                    taxonomyAdjudication.taskRelationMode !== "off"
-                  }
-                  onCheckedChange={(enabled) => {
-                    onTaxonomyAdjudicationChange({
-                      ...taxonomyAdjudication,
-                      enabled:
-                        enabled ||
-                        taxonomyAdjudication.questionTypeMode !== "off",
-                      taskRelationMode: enabled ? "shadow" : "off",
-                    });
-                  }}
-                />
-              </div>
-              <div className="flex items-center justify-between gap-2 border-t border-border/50 pt-2">
-                <div>
-                  <div className="text-[10px] font-medium uppercase text-muted-foreground">
                     Meeting Metadata Enforcement
                   </div>
                   <div className="mt-0.5 text-[10px] text-muted-foreground">
@@ -4403,28 +4353,22 @@ const ConfigurationsPanel = ({
                   }}
                 />
               </div>
-              {taxonomyAdjudication.questionTypeMode !== "off" ||
-              taxonomyAdjudication.taskRelationMode !== "off" ||
-              taxonomyAdjudication.meetingMetadataMode !== "off" ? (
-                <MeetingModelOverrideConfig
-                  label="Fast Runtime model"
-                  description="Used by bounded low-complexity checks; Question Type and Relation inherit the session's Main Advisor model"
-                  providers={aiProviders}
-                  value={taxonomyAdjudication}
-                  onChange={(selected) => {
-                    onTaxonomyAdjudicationChange({
-                      enabled: taxonomyAdjudication.enabled,
-                      questionTypeMode:
-                        taxonomyAdjudication.questionTypeMode,
-                      taskRelationMode:
-                        taxonomyAdjudication.taskRelationMode,
-                      meetingMetadataMode:
-                        taxonomyAdjudication.meetingMetadataMode,
-                      ...selected,
-                    });
-                  }}
-                />
-              ) : null}
+              <MeetingModelOverrideConfig
+                label="Fast Runtime model"
+                description="Used by bounded low-complexity checks; Question Type and Relation are always active and inherit the session's Main Advisor model"
+                providers={aiProviders}
+                value={taxonomyAdjudication}
+                onChange={(selected) => {
+                  onTaxonomyAdjudicationChange({
+                    enabled: true,
+                    questionTypeMode: "enforcement",
+                    taskRelationMode: "shadow",
+                    meetingMetadataMode:
+                      taxonomyAdjudication.meetingMetadataMode,
+                    ...selected,
+                  });
+                }}
+              />
             </div>
           </ConfigurationGroup>
 
