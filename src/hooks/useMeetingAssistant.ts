@@ -302,6 +302,7 @@ import {
   buildDiagramOverlayEvalTraceMetadata,
   buildCurrentTaskDiagramDomainContext,
   applyActiveQuestionTermCorrection,
+  reverseActiveQuestionTermCorrection,
   authorizeActiveQuestionTermCorrection,
   CORRECTION_OWNED_ADJUDICATION_BUDGET_MS,
   decideCorrectionOwnedAdjudicationTrigger,
@@ -34282,6 +34283,218 @@ export function useMeetingAssistant() {
     ]
   );
 
+  const deactivateSpeechCorrection = useCallback(
+    async (correctionId: string) => {
+      const correction = speechCorrectionsRef.current.find(
+        (candidate) => candidate.id === correctionId
+      );
+      if (!correction || correction.deactivatedAt) return;
+
+      const contextState = contextManagerRef.current.getState();
+      const currentLogicalQuestionUnit = logicalQuestionUnitRef.current;
+      const trace = traceStoreRef.current.startTrace(
+        contextState.activeMeetingTask?.screen ? "screen" : "voice",
+        {
+          source: "speech-correction-deactivation",
+          speechCorrectionId: correction.id,
+          currentLogicalQuestionUnitId: currentLogicalQuestionUnit?.id,
+          currentLogicalQuestionRevision:
+            currentLogicalQuestionUnit?.revision,
+        }
+      );
+      const deactivatedAt = Date.now();
+      const reversal = currentLogicalQuestionUnit
+        ? reverseActiveQuestionTermCorrection({
+            correction,
+            logicalQuestionUnit: currentLogicalQuestionUnit,
+            corrections: speechCorrectionsRef.current,
+            now: deactivatedAt,
+          })
+        : {
+            reversed: false as const,
+            reason: "correction-not-applied-to-current-lqu" as const,
+          };
+      const deactivatedCorrection: SpeechCorrection = {
+        ...correction,
+        deactivatedAt,
+        deactivationTraceId: trace.id,
+        deactivationOutcome: reversal.reversed
+          ? "current-lqu-reversed"
+          : "future-rule-deactivated",
+        reversalLogicalQuestionUnitRevision: reversal.reversed
+          ? reversal.nextRevision
+          : undefined,
+      };
+      const nextCorrections = speechCorrectionsRef.current.map((candidate) =>
+        candidate.id === correction.id ? deactivatedCorrection : candidate
+      );
+      speechCorrectionsRef.current = nextCorrections;
+      setState((previous) => ({
+        ...previous,
+        speechCorrections: nextCorrections,
+        error:
+          !reversal.reversed &&
+          reversal.reason === "source-pre-normalization-text-missing"
+            ? "Future replacement was stopped, but the current question could not be safely reversed because its raw source is unavailable."
+            : null,
+      }));
+      const deactivationMetadata = {
+        speechCorrectionId: correction.id,
+        speechCorrectionDeactivatedAt: deactivatedAt,
+        speechCorrectionDeactivationOutcome:
+          deactivatedCorrection.deactivationOutcome,
+        speechCorrectionDeactivationReason: reversal.reason,
+        speechCorrectionPreviousLogicalQuestionRevision: reversal.reversed
+          ? reversal.previousRevision
+          : currentLogicalQuestionUnit?.revision,
+        speechCorrectionNextLogicalQuestionRevision: reversal.reversed
+          ? reversal.nextRevision
+          : currentLogicalQuestionUnit?.revision,
+      };
+      traceStoreRef.current.updateMetadata(trace.id, deactivationMetadata);
+      sessionRecordingManagerRef.current?.recordSpeechCorrectionDeactivation({
+        correction: deactivatedCorrection,
+        traceId: trace.id,
+        taskId: contextState.activeMeetingTask?.id,
+        previousLogicalQuestionRevision: reversal.reversed
+          ? reversal.previousRevision
+          : currentLogicalQuestionUnit?.revision,
+        nextLogicalQuestionRevision: reversal.reversed
+          ? reversal.nextRevision
+          : currentLogicalQuestionUnit?.revision,
+        reason: reversal.reason,
+      });
+
+      if (!reversal.reversed) {
+        traceStoreRef.current.recordOutput(
+          trace.id,
+          "speech correction deactivated",
+          "Future speech replacement stopped.",
+          deactivationMetadata
+        );
+        traceStoreRef.current.finishTrace(trace.id, "success");
+        return;
+      }
+
+      manualCorrectionRevisionRef.current += 1;
+      settleAwaitingVisualEvidenceRecovery(
+        "cancelled",
+        "manual-term-correction-reversal",
+        trace.id
+      );
+      responseOpportunityRuntimeRef.current?.cancelAll("superseded");
+      responseOpportunityGenerationGateRef.current.cancelAll(
+        "manual-term-correction-reversal"
+      );
+      cancelActiveAdvisorJob("manual-term-correction-reversal");
+      currentQuestionSettlementRef.current = undefined;
+      settledAdvisorExecutionPlanRef.current = undefined;
+      taskBoundaryCandidateRef.current = undefined;
+      logicalQuestionUnitRef.current = reversal.logicalQuestionUnit;
+
+      const reversedLineage = createCanonicalLogicalQuestionLineage({
+        unit: reversal.logicalQuestionUnit,
+        traceId: trace.id,
+      });
+      currentQuestionLineageRef.current = reversedLineage;
+      const currentManualTarget = latestManualCorrectionTargetRef.current;
+      if (
+        currentManualTarget?.logicalQuestionUnit.id ===
+        reversal.logicalQuestionUnit.id
+      ) {
+        latestManualCorrectionTargetRef.current = {
+          ...currentManualTarget,
+          logicalQuestionUnit: reversal.logicalQuestionUnit,
+          logicalQuestionLease: createLogicalQuestionUnitLease(
+            reversal.logicalQuestionUnit
+          ),
+          questionLineage: reversedLineage,
+          settlement: undefined,
+          updatedAt: deactivatedAt,
+        };
+      }
+      const forceAdviseTarget = latestForceAdviseTargetRef.current;
+      if (
+        forceAdviseTarget?.logicalQuestionUnit.id ===
+        reversal.logicalQuestionUnit.id
+      ) {
+        latestForceAdviseTargetRef.current = {
+          ...forceAdviseTarget,
+          logicalQuestionUnit: reversal.logicalQuestionUnit,
+          logicalQuestionLease: createLogicalQuestionUnitLease(
+            reversal.logicalQuestionUnit
+          ),
+          questionLineage: reversedLineage,
+          presentation: {
+            ...forceAdviseTarget.presentation,
+            text: getLogicalQuestionAnswerFocusText(
+              reversal.logicalQuestionUnit
+            ),
+            logicalQuestionUnitRevision:
+              reversal.logicalQuestionUnit.revision,
+          },
+        };
+      }
+      const source =
+        reversal.logicalQuestionUnit.sources.find(
+          (candidate) =>
+            candidate.turnId === reversal.logicalQuestionUnit.currentTurnId
+        ) ?? reversal.logicalQuestionUnit.sources.at(-1);
+      const reversalTurn: TranscriptTurn = {
+        id: reversal.logicalQuestionUnit.currentTurnId,
+        speaker: "them",
+        text: getLogicalQuestionSemanticEvidenceText(
+          reversal.logicalQuestionUnit
+        ),
+        startedAt: source?.startedAt ?? deactivatedAt,
+        endedAt: source?.endedAt ?? deactivatedAt,
+        isFinal: true,
+        source: "system-audio",
+      };
+      const inferredIntent = decideAdvisorTurnIntent(reversalTurn.text, {
+        hasActiveTask: Boolean(contextState.activeMeetingTask),
+        hasRecentQuestionContext: true,
+      });
+      const reversalIntent: AdvisorTurnIntentDecision = {
+        ...inferredIntent,
+        action: "answer-refresh",
+        recommendedAction: "answer-refresh",
+        executionAuthorized: true,
+        reason: "manual-term-correction-reversal",
+      };
+      publishCanonicalLogicalQuestionTarget({
+        logicalQuestionUnit: reversal.logicalQuestionUnit,
+        traceId: trace.id,
+        turn: reversalTurn,
+        intentDecision: reversalIntent,
+      });
+      const runtimeAdjudication = scheduleSemanticTaxonomyShadow({
+        turn: reversalTurn,
+        traceId: trace.id,
+        turnGateAction: "answer-refresh",
+        logicalQuestionUnit: reversal.logicalQuestionUnit,
+      });
+      scheduleAdvisorAfterQuestionTypeWindow({
+        handle: runtimeAdjudication,
+        mode: contextState.activeMeetingTask?.screen
+          ? "screen-anchored"
+          : "live",
+        traceId: trace.id,
+        turnIntentDecision: reversalIntent,
+        triggerTurnId: reversalTurn.id,
+        questionLineage: reversedLineage,
+        logicalQuestionUnit: reversal.logicalQuestionUnit,
+      });
+    },
+    [
+      cancelActiveAdvisorJob,
+      publishCanonicalLogicalQuestionTarget,
+      scheduleAdvisorAfterQuestionTypeWindow,
+      scheduleSemanticTaxonomyShadow,
+      settleAwaitingVisualEvidenceRecovery,
+    ]
+  );
+
   useEffect(() => {
     let cancelled = false;
 
@@ -35117,6 +35330,7 @@ export function useMeetingAssistant() {
     applyResponseAction,
     answerClarifyingQuestion,
     submitSpeechCorrection,
+    deactivateSpeechCorrection,
     aiProviders: allAiProviders,
     criticalMomentCandidates,
     criticalMomentEvaluations,

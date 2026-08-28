@@ -9,6 +9,7 @@ import type {
   ActiveQuestionTermCorrection,
   MeetingAssistantSettings,
   MeetingTrace,
+  SpeechCorrection,
 } from "../src/lib/meeting/types.js";
 import type {
   CurrentQuestionSettlementDecision,
@@ -3156,6 +3157,49 @@ test("records a current-question term correction without copying provider state"
   assert.equal(summary.manualTermCorrectionLatencyMs, 250);
 
   await manager.stop("test-complete");
+});
+
+test("records speech correction deactivation and reversal revisions", async () => {
+  const native = new ControlledRecordingInvoke();
+  const manager = new SessionRecordingManager(undefined, native.invoke);
+  await manager.start(START_OPTIONS);
+  await settle();
+  const correction: SpeechCorrection = {
+    id: "correction-rag",
+    input: "RAG not rec",
+    term: "RAG",
+    from: "rec",
+    to: "RAG",
+    createdAt: 100,
+    appliedCount: 1,
+    deactivatedAt: 400,
+    deactivationTraceId: "trace-deactivation",
+    deactivationOutcome: "current-lqu-reversed",
+    reversalLogicalQuestionUnitRevision: 3,
+  };
+
+  manager.recordSpeechCorrectionDeactivation({
+    correction,
+    traceId: "trace-deactivation",
+    taskId: "task-rag",
+    previousLogicalQuestionRevision: 2,
+    nextLogicalQuestionRevision: 3,
+    reason: "current-lqu-correction-provenance",
+  });
+  await settle();
+
+  const write = native.calls.find(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath") ===
+        "runtime/speech-correction-deactivations.jsonl"
+  );
+  assert.ok(write);
+  const payload = JSON.parse(stringArg(write, "payload").trim());
+  assert.equal(payload.correctionId, "correction-rag");
+  assert.equal(payload.outcome, "current-lqu-reversed");
+  assert.equal(payload.previousLogicalQuestionRevision, 2);
+  assert.equal(payload.nextLogicalQuestionRevision, 3);
 });
 
 test("records preparation provenance, use receipts, and answer-bound feedback", async () => {

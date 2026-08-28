@@ -1512,6 +1512,12 @@ export const MeetingAssistant = ({
     setSpeechCorrectionInput("");
     void meeting.submitSpeechCorrection(correction);
   }, [meeting.submitSpeechCorrection, speechCorrectionInput]);
+  const handleSpeechCorrectionDeactivate = useCallback(
+    (correctionId: string) => {
+      void meeting.deactivateSpeechCorrection(correctionId);
+    },
+    [meeting.deactivateSpeechCorrection]
+  );
 
   const handleNewTaskConfirmation = useCallback(() => {
     if (!clarifyingQuestionKey) return;
@@ -1783,6 +1789,9 @@ export const MeetingAssistant = ({
               speechCorrectionInput={speechCorrectionInput}
               onSpeechCorrectionInputChange={setSpeechCorrectionInput}
               onSpeechCorrectionSubmit={handleSpeechCorrectionSubmit}
+              onSpeechCorrectionDeactivate={
+                handleSpeechCorrectionDeactivate
+              }
               speechCorrections={meeting.speechCorrections}
               status={meeting.status}
               error={meeting.error}
@@ -2050,7 +2059,10 @@ export const MeetingAssistant = ({
                       <Badge
                         key={correction.id}
                         variant="outline"
-                        className="flex max-w-full items-center gap-1 rounded-sm px-1.5 py-0 text-[10px]"
+                        className={cn(
+                          "flex max-w-full items-center gap-1 rounded-sm px-1.5 py-0 text-[10px]",
+                          correction.deactivatedAt && "opacity-55"
+                        )}
                         title={
                           correction.activeQuestion?.error
                             ? `${correction.input}: ${correction.activeQuestion.error}`
@@ -2074,7 +2086,23 @@ export const MeetingAssistant = ({
                                 correction.activeQuestion.regenerationStatus
                               )}`
                             : ""}
+                          {correction.deactivatedAt ? " · stopped" : ""}
                         </span>
+                        {!correction.deactivatedAt ? (
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="ghost"
+                            className="h-4 w-4 shrink-0 p-0"
+                            title="Stop future replacement"
+                            aria-label={`Stop correction ${correction.from ?? correction.term ?? correction.to ?? correction.id}`}
+                            onClick={() =>
+                              handleSpeechCorrectionDeactivate(correction.id)
+                            }
+                          >
+                            <XIcon className="h-2.5 w-2.5" />
+                          </Button>
+                        ) : null}
                       </Badge>
                     ))}
                   </div>
@@ -3048,6 +3076,7 @@ const FocusModePanel = ({
   speechCorrectionInput,
   onSpeechCorrectionInputChange,
   onSpeechCorrectionSubmit,
+  onSpeechCorrectionDeactivate,
   speechCorrections,
   status,
   error,
@@ -3089,6 +3118,7 @@ const FocusModePanel = ({
   speechCorrectionInput: string;
   onSpeechCorrectionInputChange: (value: string) => void;
   onSpeechCorrectionSubmit: () => void;
+  onSpeechCorrectionDeactivate: (correctionId: string) => void;
   speechCorrections: SpeechCorrection[];
   status: keyof typeof statusLabel;
   error: string | null;
@@ -3371,6 +3401,7 @@ const FocusModePanel = ({
                 value={speechCorrectionInput}
                 onChange={onSpeechCorrectionInputChange}
                 onSubmit={onSpeechCorrectionSubmit}
+                onDeactivate={onSpeechCorrectionDeactivate}
                 disabled={
                   status === "starting" || status === "reconnecting"
                 }
@@ -3531,6 +3562,7 @@ const SpeechCorrectionControl = ({
   value,
   onChange,
   onSubmit,
+  onDeactivate,
   disabled,
   corrections,
   compact = false,
@@ -3538,6 +3570,7 @@ const SpeechCorrectionControl = ({
   value: string;
   onChange: (value: string) => void;
   onSubmit: () => void;
+  onDeactivate: (correctionId: string) => void;
   disabled: boolean;
   corrections: SpeechCorrection[];
   compact?: boolean;
@@ -3574,7 +3607,10 @@ const SpeechCorrectionControl = ({
             <Badge
               key={correction.id}
               variant="outline"
-              className="flex max-w-full items-center gap-1 rounded-sm px-1.5 py-0 text-[10px]"
+              className={cn(
+                "flex max-w-full items-center gap-1 rounded-sm px-1.5 py-0 text-[10px]",
+                correction.deactivatedAt && "opacity-55"
+              )}
               title={
                 correction.activeQuestion?.error
                   ? `${correction.input}: ${correction.activeQuestion.error}`
@@ -3597,7 +3633,21 @@ const SpeechCorrectionControl = ({
                       correction.activeQuestion.regenerationStatus
                     )}`
                   : ""}
+                {correction.deactivatedAt ? " · stopped" : ""}
               </span>
+              {!correction.deactivatedAt ? (
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  className="h-4 w-4 shrink-0 p-0"
+                  title="Stop future replacement"
+                  aria-label={`Stop correction ${correction.from ?? correction.term ?? correction.to ?? correction.id}`}
+                  onClick={() => onDeactivate(correction.id)}
+                >
+                  <XIcon className="h-2.5 w-2.5" />
+                </Button>
+              ) : null}
             </Badge>
           ))}
         </div>

@@ -12,6 +12,7 @@ import {
   ManualQuestionTypeCorrection,
   QuestionHumanEvaluation,
   ScreenObservation,
+  SpeechCorrection,
   TraceHumanEvaluation,
   TranscriptTurn,
 } from "./types";
@@ -148,6 +149,7 @@ interface SessionRecordingEvent {
     | "active-meeting-task-snapshot"
     | "manual-question-type-correction"
     | "active-question-term-correction"
+    | "speech-correction-deactivation"
     | "semantic-taxonomy-decision"
     | "semantic-embedding-runtime"
     | "interviewer-intent-semantic-decision"
@@ -2292,6 +2294,43 @@ export class SessionRecordingManager {
       },
       [path],
       input.correction.correctionTraceId,
+      input.taskId
+    );
+  }
+
+  recordSpeechCorrectionDeactivation(input: {
+    correction: SpeechCorrection;
+    traceId: string;
+    taskId?: string;
+    previousLogicalQuestionRevision?: number;
+    nextLogicalQuestionRevision?: number;
+    reason?: string;
+  }) {
+    const session = this.getWritableSession({ traceId: input.traceId });
+    if (!session) return;
+    const artifactPath = "runtime/speech-correction-deactivations.jsonl";
+    const payload = {
+      version: 1,
+      recordedAt: Date.now(),
+      sessionId: session.sessionId,
+      traceId: input.traceId,
+      taskId: input.taskId,
+      correctionId: input.correction.id,
+      deactivatedAt: input.correction.deactivatedAt,
+      outcome: input.correction.deactivationOutcome,
+      previousLogicalQuestionRevision:
+        input.previousLogicalQuestionRevision,
+      nextLogicalQuestionRevision: input.nextLogicalQuestionRevision,
+      reason: input.reason,
+    };
+    this.enqueue(session, () =>
+      this.appendJsonl(session, artifactPath, payload)
+    );
+    this.recordEvent(
+      "speech-correction-deactivation",
+      payload,
+      [artifactPath],
+      input.traceId,
       input.taskId
     );
   }
