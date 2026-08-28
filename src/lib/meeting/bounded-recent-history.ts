@@ -138,7 +138,7 @@ export function decideBoundedRecentHistoryRead(input: {
   questionText: string;
   activeParentId?: string;
   relation: InterviewTaskRelation;
-  responseOnlyRelation?: boolean;
+  relationUnresolved?: boolean;
   responseAction?: MeetingResponseActionMode;
   hasManualCorrection?: boolean;
   transientPersonalStatus?: boolean;
@@ -192,7 +192,7 @@ export function decideBoundedRecentHistoryRead(input: {
     return denied("not-deictic", parentCapsules.length);
   }
   const relationCompatible =
-    input.responseOnlyRelation ||
+    input.relationUnresolved ||
     input.relation === "followup-parent" ||
     input.relation === "child-probe" ||
     input.relation === "resume-parent";

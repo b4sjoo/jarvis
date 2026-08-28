@@ -1782,7 +1782,6 @@ interface AdvisorTaskSignals {
     typeof projectCrossTypeTaskRelationHint
   >;
   relationEvidenceAuthorized?: boolean;
-  responseOnlyRelation?: boolean;
   subtaskIntent: InterviewSubtaskIntent;
   source: string;
   reuseActivePlaybook: boolean;
@@ -10379,7 +10378,6 @@ export function useMeetingAssistant() {
           taskRelation: "unknown" as InterviewTaskRelation,
           taskRelationLexicalHint: undefined,
           relationEvidenceAuthorized: false,
-          responseOnlyRelation: true,
           source: "interview-section-hint",
           reuseActivePlaybook: false,
           openingRoute: undefined,
@@ -10475,7 +10473,6 @@ export function useMeetingAssistant() {
             taskRelation: "followup-parent" as const,
             taskRelationLexicalHint: undefined,
             relationEvidenceAuthorized: true,
-            responseOnlyRelation: false,
             subtaskIntent: "unknown" as InterviewSubtaskIntent,
             source: "source-owned-phase-control",
             reuseActivePlaybook: true,
@@ -10505,7 +10502,6 @@ export function useMeetingAssistant() {
             relationEvidenceAuthorized: Boolean(
               committedSettlementRelation
             ),
-            responseOnlyRelation: !committedSettlementRelation,
             source: "current-question-settlement",
             reuseActivePlaybook:
               committedSettlementRelation !== "new-parent",
@@ -10548,7 +10544,6 @@ export function useMeetingAssistant() {
           taskRelation: "unknown" as const,
           taskRelationLexicalHint: undefined,
           relationEvidenceAuthorized: false,
-          responseOnlyRelation: true,
           subtaskIntent: "unknown" as const,
           source: "transient-personal-status",
           reuseActivePlaybook: false,
@@ -10658,7 +10653,6 @@ export function useMeetingAssistant() {
             taskRelation: advisorTaskMutationDecision.relation,
             taskRelationLexicalHint: undefined,
             relationEvidenceAuthorized: true,
-            responseOnlyRelation: false,
             subtaskIntent: "unknown" as InterviewSubtaskIntent,
             source: outputOnlyCurrentBranch
               ? "explicit-output-only-current-branch"
@@ -10692,9 +10686,10 @@ export function useMeetingAssistant() {
         relation: llmTypeOnlySettlement
           ? "unknown"
           : advisorTaskSignals.taskRelation,
-        responseOnlyRelation:
+        relationUnresolved:
           llmTypeOnlySettlement ||
-          advisorTaskSignals.responseOnlyRelation,
+          (advisorTaskSignals.taskRelation === "unknown" &&
+            !advisorTaskSignals.relationEvidenceAuthorized),
         responseAction: options.responseAction,
         hasManualCorrection: Boolean(
           options.manualQuestionTypeCorrection
@@ -35845,7 +35840,6 @@ function resolveAdvisorTaskSignals(
         taskRelation: "unknown",
         taskRelationLexicalHint,
         relationEvidenceAuthorized: false,
-        responseOnlyRelation: true,
         subtaskIntent: inferAdvisorSubtaskIntent(
           latestUsefulText,
           latestQuestionType
@@ -35881,7 +35875,7 @@ function resolveAdvisorTaskSignals(
       ),
     });
     const taskRelation = relationDecision?.relation ?? "unknown";
-    const responseOnlyRelation =
+    const relationUnresolved =
       relationDecision?.disposition === "response-only";
 
     return {
@@ -35901,17 +35895,16 @@ function resolveAdvisorTaskSignals(
       taskRelationLexicalHint: relationDecision,
       relationEvidenceAuthorized:
         relationDecision?.relationEvidenceAuthorized ?? false,
-      responseOnlyRelation,
       subtaskIntent: latestSubtaskIntent,
-      source: responseOnlyRelation
-        ? "active-parent-response-only"
+      source: relationUnresolved
+        ? "active-parent-relation-unresolved"
         : "active-parent",
       reuseActivePlaybook: true,
       openingRoute,
       latestTurnAskFrame: latestAskFrame,
       latestTurnTaxonomyBoundaryReason: "active-parent-continuity",
       taxonomyFallbackSuppressed: false,
-      unknownTaskMutationBlocked: responseOnlyRelation,
+      unknownTaskMutationBlocked: relationUnresolved,
     };
   }
 
@@ -35965,7 +35958,6 @@ function formatAdvisorQuestionTypeDecisionForTrace(
     relationEvidenceAuthorized:
       signals.relationEvidenceAuthorized ??
       signals.taskRelation !== "unknown",
-    responseOnlyRelation: signals.responseOnlyRelation ?? false,
     ...formatTaskRelationLexicalHintForTrace(
       signals.taskRelationLexicalHint
     ),
@@ -36089,7 +36081,6 @@ function applyManualQuestionTypeCorrectionToAdvisorSignals(
     taskRelation,
     taskRelationLexicalHint: undefined,
     relationEvidenceAuthorized: true,
-    responseOnlyRelation: false,
     source: "manual-question-type-correction",
     reuseActivePlaybook: correction.target !== "child",
     latestTurnTaxonomyBoundaryReason: "manual-question-type-correction",

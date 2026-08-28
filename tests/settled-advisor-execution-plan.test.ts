@@ -20,7 +20,6 @@ import {
   primaryAskClassifierText,
   projectPrimaryAsk,
 } from "../src/lib/meeting/primary-ask-projection.js";
-import { createResponseOnlyTaskScope } from "../src/lib/meeting/response-only-task-scope.js";
 import { projectCrossTypeTaskRelationHint } from "../src/lib/meeting/task-relation-authority.js";
 import type { SelectedInterviewPlaybook } from "../src/lib/meeting/types.js";
 import type { TransientPersonalStatusDecision } from "../src/lib/meeting/types.js";
@@ -450,7 +449,7 @@ test("does not reinterpret one effective settlement after the active branch chan
   assert.equal(replay.currentOnly, true);
 });
 
-test("keeps a response-only active-parent read inside the immutable plan", () => {
+test("keeps an explicit active-parent read inside the immutable plan", () => {
   const preservedTask = activeTask("ai-ml-system-design");
   const responseOnlySettlement = settlement({
     questionType: "coding",
@@ -458,17 +457,6 @@ test("keeps a response-only active-parent read inside the immutable plan", () =>
     relationAuthoritySource: "provisional",
     relationMutationAuthorized: false,
     parentMutationAuthorized: false,
-  });
-  const responseOnlyTaskScope = createResponseOnlyTaskScope({
-    logicalQuestionUnitId: responseOnlySettlement.logicalQuestionUnitId,
-    revision: responseOnlySettlement.revision,
-    sourceQuestion: "Implement a standalone stack.",
-    sourceTurnIds: ["turn-a"],
-    inferredType: "coding",
-    relationDisposition: "ambiguous",
-    preservedParent: preservedTask,
-    contextReadScope: "active-parent-read",
-    now: 100,
   });
   const plan = buildSettledAdvisorExecutionPlan({
     settlement: responseOnlySettlement,
@@ -481,14 +469,14 @@ test("keeps a response-only active-parent read inside the immutable plan", () =>
     memoryUseCase: "coding_interview",
     askFrame: "direct-answer",
     topicDomain: "backend",
-    responseOnlyTaskScope,
+    contextReadScopeOverride: "active-parent-read",
     createdAt: 100,
   });
 
   assert.equal(plan.taskSnapshot?.parent.id, preservedTask.parent.id);
   assert.equal(plan.contextReadScope, "active-parent-read");
   assert.deepEqual(plan.taskMutationPolicy, { kind: "preserve" });
-  assert.equal(plan.artifactIntent, "preserve");
+  assert.equal(plan.artifactIntent, "none");
   assert.equal(settledExecutionPlanAuthorizesTaskContinuity(plan, true), false);
 });
 
@@ -629,7 +617,7 @@ test("builds one immutable coding plan for route, prompt, memory, and artifacts"
   assert.equal(Object.isFrozen(plan.taskSnapshot?.parent), true);
 });
 
-test("response-only plan routes from the current question without exposing parent state", () => {
+test("current-only plan routes from the current question without borrowing parent authority", () => {
   const preservedTask = activeTask("ai-ml-system-design");
   const responseOnlySettlement = settlement({
     questionType: "coding",
@@ -637,17 +625,6 @@ test("response-only plan routes from the current question without exposing paren
     relationAuthoritySource: "provisional",
     relationMutationAuthorized: false,
     parentMutationAuthorized: false,
-  });
-  const responseOnlyTaskScope = createResponseOnlyTaskScope({
-    logicalQuestionUnitId:
-      responseOnlySettlement.logicalQuestionUnitId,
-    revision: responseOnlySettlement.revision,
-    sourceQuestion: "Implement a standalone stack.",
-    sourceTurnIds: ["turn-a"],
-    inferredType: "coding",
-    relationDisposition: "ambiguous",
-    preservedParent: preservedTask,
-    now: 100,
   });
   const plan = buildSettledAdvisorExecutionPlan({
     settlement: responseOnlySettlement,
@@ -660,29 +637,24 @@ test("response-only plan routes from the current question without exposing paren
     memoryUseCase: "coding_interview",
     askFrame: "direct-answer",
     topicDomain: "backend",
-    responseOnlyTaskScope,
     createdAt: 100,
   });
 
   assert.equal(plan.questionType, "coding");
   assert.equal(plan.responseOwner.source, "current-question");
   assert.equal(plan.modelRoute.route, "coding-override");
-  assert.equal(plan.taskSnapshot, undefined);
+  assert.equal(plan.taskSnapshot?.parent.id, preservedTask.parent.id);
   assert.equal(plan.expectedParentId, preservedTask.parent.id);
   assert.equal(
     plan.expectedParentRevision,
     preservedTask.parent.revisions
-  );
-  assert.equal(
-    plan.responseOnlyTaskScope?.scopeId,
-    responseOnlyTaskScope.scopeId
   );
   assert.equal(plan.artifactPolicy.allowCode, false);
   assert.equal(plan.artifactPolicy.allowWhiteboard, false);
   assert.equal(plan.artifactPolicy.allowParentContextMutation, false);
   assert.equal(
     plan.artifactPolicy.disposition,
-    "display-only-parent-continuity"
+    "rejected-incompatible-owner"
   );
   assert.equal(plan.responseIntent, "advise");
   assert.equal(plan.contextReadScope, "current-only");
@@ -699,11 +671,11 @@ test("response-only plan routes from the current question without exposing paren
     currentOnlyTrace.settledExecutionPlanRelationApplicable,
     false
   );
-  assert.equal(plan.artifactIntent, "preserve");
+  assert.equal(plan.artifactIntent, "none");
   assert.deepEqual(plan.taskMutationPolicy, { kind: "preserve" });
 });
 
-test("same-domain current-only repair keeps parent phase read-only without lending it to the response Playbook", () => {
+test("same-domain current-only repair keeps the response Playbook independent", () => {
   const preservedTask = activeTask("general-system-design", {
     playbookPhase: "design_framing",
   });
@@ -714,16 +686,6 @@ test("same-domain current-only repair keeps parent phase read-only without lendi
     relationAuthoritySource: "provisional",
     relationMutationAuthorized: false,
     parentMutationAuthorized: false,
-  });
-  const responseOnlyTaskScope = createResponseOnlyTaskScope({
-    logicalQuestionUnitId: repairedSettlement.logicalQuestionUnitId,
-    revision: repairedSettlement.revision,
-    sourceQuestion: "How does the retrieval tier scale?",
-    sourceTurnIds: ["turn-a"],
-    inferredType: "ai-ml-system-design",
-    relationDisposition: "ambiguous",
-    preservedParent: preservedTask,
-    now: 100,
   });
   const plan = buildSettledAdvisorExecutionPlan({
     settlement: repairedSettlement,
@@ -736,26 +698,16 @@ test("same-domain current-only repair keeps parent phase read-only without lendi
     memoryUseCase: "system_design_interview",
     askFrame: "hypothetical-design",
     topicDomain: "backend",
-    responseOnlyTaskScope,
     createdAt: 100,
   });
 
-  assert.equal(plan.taskSnapshot, undefined);
+  assert.equal(plan.taskSnapshot?.parent.id, preservedTask.parent.id);
   assert.equal(plan.playbookPhase, "requirement_clarification");
   assert.equal(plan.responsePlaybook?.questionType, "ai-ml-system-design");
   assert.equal(plan.responsePlaybook?.phase, "requirement_clarification");
   assert.equal(plan.parentTrajectoryPlaybook, undefined);
-  assert.equal(
-    plan.responseOnlyTaskScope?.readOnlyParentContinuity?.playbookPhase,
-    "design_framing"
-  );
-  assert.equal(plan.artifactIntent, "preserve");
+  assert.equal(plan.artifactIntent, "none");
   assert.equal(plan.artifactPolicy.allowWhiteboard, false);
-  assert.equal(
-    plan.responseOnlyTaskScope?.readOnlyParentContinuity
-      ?.artifactOwnerParentId,
-    preservedTask.parent.id
-  );
 });
 
 test("an authorized child owns its response Playbook while the parent Playbook remains read-only", () => {
@@ -916,12 +868,17 @@ test("a committed general-system-design settlement atomically leaves the coding 
 });
 
 test("settled design plans honor an explicit ASCII request", () => {
+  const task = activeTask("general-system-design");
   const designSettlement = settlement({
     questionType: "general-system-design",
+    relation: "followup-parent",
+    parentMutationAuthorized: false,
+    activeParentId: task.parent.id,
+    activeParentRevision: task.parent.revisions,
   });
   const plan = buildSettledAdvisorExecutionPlan({
     settlement: designSettlement,
-    activeMeetingTask: activeTask("general-system-design"),
+    activeMeetingTask: task,
     taskBoundaryCommitted: false,
     childOwnsResponse: false,
     providerSnapshot: providers,

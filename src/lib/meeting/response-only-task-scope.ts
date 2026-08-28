@@ -6,18 +6,13 @@ import type {
   InterviewTaskRelation,
 } from "./types.js";
 import { areCompatibleParentContinuityTypes } from "./task-taxonomy.js";
+import type { AdvisorContextReadScope } from "./advisor-context-read-scope.js";
 
 export type ResponseOnlyRelationDisposition =
   | "pending"
   | "ambiguous"
   | "timeout"
   | "invalid";
-
-export type AdvisorContextReadScope =
-  | "current-only"
-  | "active-parent-read"
-  | "active-child-read"
-  | "bounded-recent-history";
 
 export interface ResponseOnlyParentContinuity {
   parentId: string;

@@ -31,10 +31,7 @@ import {
   type QuestionTypeConsumerObservation,
   type QuestionTypePriorObservation,
 } from "./question-type-consumer-observation.js";
-import type {
-  AdvisorContextReadScope,
-  ResponseOnlyTaskScope,
-} from "./response-only-task-scope.js";
+import type { AdvisorContextReadScope } from "./advisor-context-read-scope.js";
 import {
   areCompatibleParentContinuityTypes,
   normalizeCanonicalQuestionType,
@@ -163,7 +160,6 @@ export interface SettledAdvisorExecutionPlan {
   factAnchorPolicy: SettledAdvisorFactAnchorPolicy;
   promptContract: SettledAdvisorPromptContract;
   artifactPolicy: ResponseArtifactMutationAuthorization;
-  responseOnlyTaskScope?: ResponseOnlyTaskScope;
   transientPersonalStatusDecision?: TransientPersonalStatusDecision;
   createdAt: number;
 }
@@ -572,7 +568,6 @@ export function buildSettledAdvisorExecutionPlan(input: {
   askFrame: TaskAskFrame;
   topicDomain: TaskTopicDomain;
   projectAnchor?: string;
-  responseOnlyTaskScope?: ResponseOnlyTaskScope;
   contextReadScopeOverride?: AdvisorContextReadScope;
   transientPersonalStatusDecision?: TransientPersonalStatusDecision;
   sourceQuestion?: string;
@@ -588,20 +583,10 @@ export function buildSettledAdvisorExecutionPlan(input: {
   );
   let relationApplicable = rawTaskRelation !== "unknown";
   let relation = resolveEffectiveInterviewTaskRelation(rawTaskRelation);
-  const responseOnlyTaskScope = input.responseOnlyTaskScope
-    ? cloneResponseOnlyTaskScope(input.responseOnlyTaskScope)
-    : undefined;
-  const responseOnlyReadsActiveBranch = Boolean(
-    responseOnlyTaskScope &&
-      responseOnlyTaskScope.contextReadScope !== "current-only"
-  );
   const taskSnapshot =
-    (!responseOnlyTaskScope || responseOnlyReadsActiveBranch) &&
     input.activeMeetingTask
     ? cloneActiveMeetingTask(input.activeMeetingTask)
     : undefined;
-  const readOnlyParentContinuity =
-    responseOnlyTaskScope?.readOnlyParentContinuity;
   const transientPersonalStatusDecision =
     input.transientPersonalStatusDecision
       ? cloneTransientPersonalStatusDecision(
@@ -622,12 +607,8 @@ export function buildSettledAdvisorExecutionPlan(input: {
         }
       : resolveMeetingResponseOwner({
           preBoundaryType: input.preBoundaryQuestionType,
-          postBoundaryParentType: responseOnlyTaskScope
-            ? undefined
-            : taskSnapshot?.parent.questionType,
-          activeChildType: responseOnlyTaskScope
-            ? undefined
-            : taskSnapshot?.child?.questionType,
+          postBoundaryParentType: taskSnapshot?.parent.questionType,
+          activeChildType: taskSnapshot?.child?.questionType,
           proposedQuestionType: input.settlement.questionType,
           relation,
           taskBoundaryCommitted: input.taskBoundaryCommitted,
@@ -702,13 +683,9 @@ export function buildSettledAdvisorExecutionPlan(input: {
     phase: playbookPhase,
     subtaskIntent: input.subtaskIntent,
   });
-  const artifactPolicy = authorizeResponseArtifactMutation({
-    parentTaskId:
-      readOnlyParentContinuity?.parentId ??
-      taskSnapshot?.parent.id,
-    parentQuestionType:
-      readOnlyParentContinuity?.questionType ??
-      taskSnapshot?.parent.questionType,
+  const candidateArtifactPolicy = authorizeResponseArtifactMutation({
+    parentTaskId: taskSnapshot?.parent.id,
+    parentQuestionType: taskSnapshot?.parent.questionType,
     responseOwnerQuestionType: responseOwner.questionType,
     responseOwnerSource: responseOwner.source,
     relation,
@@ -716,7 +693,7 @@ export function buildSettledAdvisorExecutionPlan(input: {
     codingPhase: playbookPhase,
     requiredArtifacts,
     creatingParent: input.taskBoundaryCommitted,
-    readOnlyParentContinuity: Boolean(readOnlyParentContinuity),
+    readOnlyParentContinuity: false,
   });
   const factAnchorPolicy = transientPersonalStatusDecision
     ? {
@@ -728,14 +705,36 @@ export function buildSettledAdvisorExecutionPlan(input: {
   const contextReadScope =
     input.contextReadScopeOverride ??
     resolveContextReadScope({
-      responseOnlyTaskScope,
       transientPersonalStatusDecision,
       taskSnapshot,
       relation,
     });
+  const taskMutationPolicy = resolveTaskMutationPolicy({
+    settlement: input.settlement,
+    relation,
+    taskBoundaryCommitted: input.taskBoundaryCommitted,
+    transientPersonalStatusDecision,
+    sourceQuestion: input.sourceQuestion,
+    explicitCommand: input.explicitTaskMutationCommand,
+    activeChildId: taskSnapshot?.child?.id,
+  });
+  const currentOnlyPreservesTask =
+    contextReadScope === "current-only" &&
+    taskMutationPolicy.kind === "preserve";
+  const artifactPolicy =
+    currentOnlyPreservesTask
+      ? {
+          ...candidateArtifactPolicy,
+          reason: `${candidateArtifactPolicy.reason}; current-only settlement forbids artifact mutation`,
+          allowLatestUsefulAnswer: false,
+          allowWhiteboard: false,
+          allowCode: false,
+          allowComplexity: false,
+          allowParentContextMutation: false,
+        }
+      : candidateArtifactPolicy;
   const artifactIntent = resolveArtifactIntent({
     responseAuthorized: input.settlement.responseAuthorized,
-    responseOnlyTaskScope,
     transientPersonalStatusDecision,
     artifactPolicy,
   });
@@ -744,32 +743,17 @@ export function buildSettledAdvisorExecutionPlan(input: {
     artifactIntent,
     sourceQuestion: input.sourceQuestion,
   });
-  const taskMutationPolicy = resolveTaskMutationPolicy({
-    settlement: input.settlement,
-    relation,
-    taskBoundaryCommitted: input.taskBoundaryCommitted,
-    responseOnlyTaskScope,
-    transientPersonalStatusDecision,
-    sourceQuestion: input.sourceQuestion,
-    explicitCommand: input.explicitTaskMutationCommand,
-    activeChildId: taskSnapshot?.child?.id,
-  });
-  if (
-    contextReadScope === "current-only" &&
-    taskMutationPolicy.kind === "preserve"
-  ) {
+  if (currentOnlyPreservesTask) {
     relationApplicable = false;
     relation = "none";
   }
   const expectedParentId =
     input.expectedActiveMeetingTask?.parent.id ??
     input.activeMeetingTask?.parent.id ??
-    responseOnlyTaskScope?.preservedParentId ??
     input.settlement.activeParentId;
   const expectedParentRevision =
     input.expectedActiveMeetingTask?.parent.revisions ??
     input.activeMeetingTask?.parent.revisions ??
-    responseOnlyTaskScope?.preservedParentRevision ??
     input.settlement.activeParentRevision;
   const postMutationParentId = taskSnapshot?.parent.id;
   const postMutationParentRevision = taskSnapshot?.parent.revisions;
@@ -799,7 +783,6 @@ export function buildSettledAdvisorExecutionPlan(input: {
     artifactIntent,
     whiteboardFormatPreference,
     taskMutationKind: taskMutationPolicy.kind,
-    responseOnlyTaskScopeId: responseOnlyTaskScope?.scopeId,
     transientPersonalStatusDecisionId:
       transientPersonalStatusDecision?.id,
   });
@@ -914,7 +897,6 @@ export function buildSettledAdvisorExecutionPlan(input: {
       contractId: `meeting-answer:${promptProfile}`,
     },
     artifactPolicy,
-    responseOnlyTaskScope,
     transientPersonalStatusDecision,
     createdAt: input.createdAt ?? Date.now(),
   };
@@ -974,7 +956,6 @@ export function rebaseSettledAdvisorExecutionPlanAfterOwnedParentMutation(
       artifactIntent: rebased.artifactIntent,
       whiteboardFormatPreference: rebased.whiteboardFormatPreference,
       taskMutationKind: rebased.taskMutationPolicy.kind,
-      responseOnlyTaskScopeId: rebased.responseOnlyTaskScope?.scopeId,
       transientPersonalStatusDecisionId:
         rebased.transientPersonalStatusDecision?.id,
     }),
@@ -1170,30 +1151,6 @@ export function formatSettledAdvisorExecutionPlanForTrace(
       plan.promptContract.contractId,
     settledExecutionPlanArtifactDisposition:
       plan.artifactPolicy.disposition,
-    settledExecutionPlanResponseOnlyScopeId:
-      plan.responseOnlyTaskScope?.scopeId,
-    settledExecutionPlanResponseOnlyDisposition:
-      plan.responseOnlyTaskScope?.relationDisposition,
-    settledExecutionPlanResponseOnlyPreservedParentId:
-      plan.responseOnlyTaskScope?.preservedParentId,
-    settledExecutionPlanReadOnlyParentType:
-      plan.responseOnlyTaskScope?.readOnlyParentContinuity
-        ?.questionType,
-    settledExecutionPlanReadOnlyParentPhase:
-      plan.responseOnlyTaskScope?.readOnlyParentContinuity
-        ?.playbookPhase,
-    settledExecutionPlanReadOnlyParentCompatible:
-      plan.responseOnlyTaskScope?.readOnlyParentContinuity
-        ?.compatibleWithInferredType,
-    settledExecutionPlanReadOnlyArtifactOwnerId:
-      plan.responseOnlyTaskScope?.readOnlyParentContinuity
-        ?.artifactOwnerParentId,
-    settledExecutionPlanResponseOnlyParentContextInjected:
-      plan.responseOnlyTaskScope
-        ? plan.contextReadScope === "active-parent-read" ||
-          plan.contextReadScope === "active-child-read" ||
-          plan.contextReadScope === "bounded-recent-history"
-        : undefined,
     settledExecutionPlanTransientPersonalStatusDecisionId:
       plan.transientPersonalStatusDecision?.id,
     settledExecutionPlanTransientPersonalStatusDomain:
@@ -1242,15 +1199,11 @@ function resolveResponseIntent(
 }
 
 function resolveContextReadScope(input: {
-  responseOnlyTaskScope?: ResponseOnlyTaskScope;
   transientPersonalStatusDecision?: TransientPersonalStatusDecision;
   taskSnapshot?: ActiveMeetingTask;
   relation: EffectiveInterviewTaskRelation;
 }): AdvisorContextReadScope {
   if (input.transientPersonalStatusDecision) return "current-only";
-  if (input.responseOnlyTaskScope) {
-    return input.responseOnlyTaskScope.contextReadScope;
-  }
   if (
     input.taskSnapshot?.child &&
     input.relation === "child-probe"
@@ -1269,19 +1222,11 @@ function resolveContextReadScope(input: {
 
 function resolveArtifactIntent(input: {
   responseAuthorized: boolean;
-  responseOnlyTaskScope?: ResponseOnlyTaskScope;
   transientPersonalStatusDecision?: TransientPersonalStatusDecision;
   artifactPolicy: ResponseArtifactMutationAuthorization;
 }): SettledAdvisorArtifactIntent {
   if (!input.responseAuthorized) return "none";
-  if (
-    input.responseOnlyTaskScope ||
-    input.transientPersonalStatusDecision
-  ) {
-    return input.responseOnlyTaskScope?.preservedParentId
-      ? "preserve"
-      : "none";
-  }
+  if (input.transientPersonalStatusDecision) return "none";
   if (
     input.artifactPolicy.allowCode ||
     input.artifactPolicy.allowComplexity
@@ -1298,16 +1243,12 @@ function resolveTaskMutationPolicy(input: {
   settlement: CurrentQuestionSettlementDecision;
   relation: EffectiveInterviewTaskRelation;
   taskBoundaryCommitted: boolean;
-  responseOnlyTaskScope?: ResponseOnlyTaskScope;
   transientPersonalStatusDecision?: TransientPersonalStatusDecision;
   sourceQuestion?: string;
   explicitCommand?: TaskLifecycleCommand;
   activeChildId?: string;
 }): TaskLifecycleCommand {
-  if (
-    input.responseOnlyTaskScope ||
-    input.transientPersonalStatusDecision
-  ) {
+  if (input.transientPersonalStatusDecision) {
     return { kind: "preserve" };
   }
   if (input.explicitCommand) return input.explicitCommand;
@@ -1407,12 +1348,6 @@ function cloneTransientPersonalStatusDecision(
   );
 }
 
-function cloneResponseOnlyTaskScope(scope: ResponseOnlyTaskScope) {
-  return deepFreeze(
-    JSON.parse(JSON.stringify(scope)) as ResponseOnlyTaskScope
-  );
-}
-
 function normalizeResponseOwnerType(value: unknown) {
   return normalizeCanonicalQuestionType(value) ?? undefined;
 }
@@ -1448,7 +1383,6 @@ function createExecutionPlanId(input: {
   artifactIntent: SettledAdvisorArtifactIntent;
   whiteboardFormatPreference: WhiteboardFormatPreference;
   taskMutationKind: TaskLifecycleCommand["kind"];
-  responseOnlyTaskScopeId?: string;
   transientPersonalStatusDecisionId?: string;
 }) {
   return `advisor_plan_${hashStableText(
@@ -1475,7 +1409,6 @@ function createExecutionPlanId(input: {
       input.artifactIntent,
       input.whiteboardFormatPreference,
       input.taskMutationKind,
-      input.responseOnlyTaskScopeId ?? "",
       input.transientPersonalStatusDecisionId ?? "",
     ].join("|")
   )}`;

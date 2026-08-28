@@ -18,7 +18,7 @@ import type {
   QuestionHumanEvaluation,
   HumanEvaluationCollectionProvenance,
 } from "./types.js";
-import type { AdvisorContextReadScope } from "./response-only-task-scope.js";
+import type { AdvisorContextReadScope } from "./advisor-context-read-scope.js";
 import type { SettledAdvisorArtifactIntent } from "./settled-advisor-execution-plan.js";
 import {
   projectQuestionTypeObservation,

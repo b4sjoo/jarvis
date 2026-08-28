@@ -65,10 +65,6 @@ import {
   type SettledAdvisorExecutionPlan,
   type SettledAdvisorExecutionPlanAuthorization,
 } from "./settled-advisor-execution-plan.js";
-import {
-  formatResponseOnlyTaskScopeForTrace,
-  type ResponseOnlyTaskScope,
-} from "./response-only-task-scope.js";
 import { serializeMeetingTraceExport } from "./trace.js";
 import {
   buildPreparationAnswerAttributionIndex,
@@ -3799,36 +3795,6 @@ export class SessionRecordingManager {
       [artifactPath],
       traceId,
       taskId
-    );
-  }
-
-  recordResponseOnlyTaskScope({
-    traceId,
-    scope,
-  }: {
-    traceId: string;
-    scope: ResponseOnlyTaskScope;
-  }) {
-    const session = this.getWritableSession({ traceId });
-    if (!session) return;
-    const artifactPath = "tasks/response-only-scopes.jsonl";
-    const metadata = formatResponseOnlyTaskScopeForTrace(scope);
-    const payload = {
-      version: 1,
-      recordedAt: Date.now(),
-      sessionId: session.sessionId,
-      traceId,
-      scope,
-    };
-    this.enqueue(session, () =>
-      this.appendJsonl(session, artifactPath, payload)
-    );
-    this.recordEvent(
-      "response-only-task-scope",
-      metadata,
-      [artifactPath],
-      traceId,
-      scope.preservedParentId
     );
   }
 
