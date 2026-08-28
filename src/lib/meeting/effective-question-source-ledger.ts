@@ -5,6 +5,9 @@ import {
   getLogicalQuestionSemanticEvidenceText,
   type LogicalQuestionUnit,
 } from "./logical-question-unit.js";
+import {
+  projectEffectiveLogicalQuestionSources,
+} from "./logical-question-effective-projection.js";
 import { projectPrimaryAsk } from "./primary-ask-projection.js";
 import {
   hasConstraintOrCorrectionSignal,
@@ -24,6 +27,8 @@ export interface EffectiveQuestionSourceRecord {
   logicalQuestionRevision: number;
   sourceHash: string;
   sourceTurnIds: string[];
+  correctionIds?: string[];
+  effectiveSourceTexts?: Array<{ turnId: string; text: string }>;
   text: string;
   startedAt: number;
   updatedAt: number;
@@ -140,6 +145,9 @@ export function createEffectiveQuestionSourceRecord(input: {
       text,
     });
   const child = input.activeMeetingTask?.child;
+  const sourceProjection = projectEffectiveLogicalQuestionSources(
+    input.logicalQuestionUnit
+  );
   const owner: EffectiveQuestionSourceOwner =
     input.settlement.relation === "child-probe" && child
       ? { kind: "active-child", parentId: parent.id, childId: child.id }
@@ -159,6 +167,10 @@ export function createEffectiveQuestionSourceRecord(input: {
     logicalQuestionRevision: input.logicalQuestionUnit.revision,
     sourceHash: input.settlement.sourceHash,
     sourceTurnIds: [...input.logicalQuestionUnit.sourceTurnIds],
+    correctionIds: [...sourceProjection.correctionIds],
+    effectiveSourceTexts: sourceProjection.effectiveSourceTexts.map(
+      (source) => ({ ...source })
+    ),
     text,
     startedAt: input.logicalQuestionUnit.startedAt,
     updatedAt: input.logicalQuestionUnit.updatedAt,
@@ -399,6 +411,12 @@ function cloneRecord(record: EffectiveQuestionSourceRecord) {
   return {
     ...record,
     sourceTurnIds: [...record.sourceTurnIds],
+    correctionIds: record.correctionIds
+      ? [...record.correctionIds]
+      : undefined,
+    effectiveSourceTexts: record.effectiveSourceTexts?.map((source) => ({
+      ...source,
+    })),
     owner: { ...record.owner },
   } as EffectiveQuestionSourceRecord;
 }

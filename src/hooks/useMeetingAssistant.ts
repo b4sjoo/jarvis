@@ -99,6 +99,7 @@ import {
   createSourceOwnedSetupCandidate,
   formatSourceOwnedSemanticContextSelectionForTrace,
   selectSourceOwnedSemanticContext,
+  SOURCE_OWNED_SETUP_MAX_CHARS,
   type SourceOwnedSetupCandidate,
 } from "@/lib/meeting/source-owned-semantic-context";
 import {
@@ -109,6 +110,7 @@ import {
 import {
   projectAdvisorTranscriptForLogicalQuestion,
   projectEffectiveLogicalQuestionSources,
+  projectEffectiveTextForSourceTurn,
 } from "@/lib/meeting/logical-question-effective-projection";
 import {
   coordinateOrderedSettlement,
@@ -12028,14 +12030,36 @@ export function useMeetingAssistant() {
         effectiveQuestionSourceRecord
       );
     }
+    const effectiveQuestionSourceRecords =
+      effectiveQuestionSourceLedgerRef.current.list();
     const effectiveQuestionSourceLedgerSize =
-      effectiveQuestionSourceLedgerRef.current.list().length;
+      effectiveQuestionSourceRecords.length;
     const effectiveQuestionSourceLedgerHistorySize =
       effectiveQuestionSourceLedgerRef.current.listHistory().length;
     const sourceOwnedSetupCandidate = latestSourceOwnedSetupRef.current;
+    const sourceOwnedSetupProjection = sourceOwnedSetupCandidate
+      ? projectEffectiveTextForSourceTurn({
+          turnId: sourceOwnedSetupCandidate.turnId,
+          text: sourceOwnedSetupCandidate.text,
+          effectiveRecords: effectiveQuestionSourceRecords,
+          logicalQuestionUnit: advisorJob.logicalQuestionUnit,
+          sessionId: effectiveSettlementContextState.sessionId,
+          runtimeEpoch: runtimeEpochRef.current,
+        })
+      : undefined;
+    const effectiveSourceOwnedSetupCandidate =
+      sourceOwnedSetupCandidate && sourceOwnedSetupProjection?.replaced
+        ? {
+            ...sourceOwnedSetupCandidate,
+            text: sourceOwnedSetupProjection.text.slice(
+              0,
+              SOURCE_OWNED_SETUP_MAX_CHARS
+            ),
+          }
+        : sourceOwnedSetupCandidate;
     const sourceOwnedSetupSelection =
       selectSourceOwnedSemanticContext({
-        candidate: sourceOwnedSetupCandidate,
+        candidate: effectiveSourceOwnedSetupCandidate,
         sessionId: effectiveSettlementContextState.sessionId,
         runtimeEpoch: runtimeEpochRef.current,
         logicalQuestionUnit: advisorJob.logicalQuestionUnit,
@@ -12053,7 +12077,7 @@ export function useMeetingAssistant() {
       traceStoreRef.current.updateMetadata(
         traceId,
         formatSourceOwnedSemanticContextSelectionForTrace(
-          sourceOwnedSetupCandidate,
+          effectiveSourceOwnedSetupCandidate,
           sourceOwnedSetupSelection
         )
       );
@@ -12070,6 +12094,14 @@ export function useMeetingAssistant() {
           effectiveQuestionSourceLedgerHistorySize -
             effectiveQuestionSourceLedgerSize
         ),
+        sourceOwnedSetupEffectiveProjectionApplied:
+          sourceOwnedSetupProjection?.replaced ?? false,
+        sourceOwnedSetupEffectiveLogicalQuestionUnitId:
+          sourceOwnedSetupProjection?.logicalQuestionUnitId,
+        sourceOwnedSetupEffectiveLogicalQuestionRevision:
+          sourceOwnedSetupProjection?.logicalQuestionRevision,
+        sourceOwnedSetupEffectiveCorrectionIds:
+          sourceOwnedSetupProjection?.correctionIds,
       });
     }
     advisorProjectAnchor = transientPersonalStatusDecision
@@ -13168,6 +13200,9 @@ export function useMeetingAssistant() {
           includedTurnIds:
             baseAdvisorModelPromptContext.advisorPromptSourceTurnIds,
           logicalQuestionUnit: advisorJob.logicalQuestionUnit,
+          effectiveRecords: effectiveQuestionSourceRecords,
+          sessionId: advisorJob.expectedSessionId,
+          runtimeEpoch: advisorJob.runtimeCommitToken.runtimeEpoch,
         });
     const effectiveBaseAdvisorModelPromptContext =
       advisorTranscriptProjection?.replaced
@@ -13188,6 +13223,12 @@ export function useMeetingAssistant() {
           advisorTranscriptProjection.correctionIds,
         advisorModelTranscriptAnchorTurnId:
           advisorTranscriptProjection.anchorTurnId,
+        advisorModelTranscriptAnchorTurnIds:
+          advisorTranscriptProjection.anchorTurnIds,
+        advisorModelTranscriptProjectedLogicalQuestionUnitIds:
+          advisorTranscriptProjection.projectedLogicalQuestionUnitIds,
+        advisorModelTranscriptProjectedTurnCount:
+          advisorTranscriptProjection.projectedTurnCount,
       });
     }
     const phaseNavigationPrompt = isPhaseNavigationAction(
