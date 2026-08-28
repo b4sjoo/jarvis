@@ -12043,6 +12043,10 @@ export function useMeetingAssistant() {
         effectiveQuestionSourceRecord
       );
     }
+    const effectiveQuestionSourceLedgerSize =
+      effectiveQuestionSourceLedgerRef.current.list().length;
+    const effectiveQuestionSourceLedgerHistorySize =
+      effectiveQuestionSourceLedgerRef.current.listHistory().length;
     const sourceOwnedSetupCandidate = latestSourceOwnedSetupRef.current;
     const sourceOwnedSetupSelection =
       selectSourceOwnedSemanticContext({
@@ -12074,7 +12078,13 @@ export function useMeetingAssistant() {
         effectiveQuestionSourceRecordOwnerKind:
           effectiveQuestionSourceRecord?.owner.kind,
         effectiveQuestionSourceLedgerSize:
-          effectiveQuestionSourceLedgerRef.current.list().length,
+          effectiveQuestionSourceLedgerSize,
+        effectiveQuestionSourceLedgerHistorySize,
+        effectiveQuestionSourceLedgerSupersededCount: Math.max(
+          0,
+          effectiveQuestionSourceLedgerHistorySize -
+            effectiveQuestionSourceLedgerSize
+        ),
       });
     }
     advisorProjectAnchor = transientPersonalStatusDecision
