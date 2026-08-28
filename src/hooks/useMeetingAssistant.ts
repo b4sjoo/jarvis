@@ -112,6 +112,10 @@ import {
   formatOrderedSettlementCoordinatorForTrace,
 } from "@/lib/meeting/ordered-settlement-coordinator";
 import {
+  applyEffectiveCurrentQuestionContext,
+  formatEffectiveCurrentQuestionContextForTrace,
+} from "@/lib/meeting/effective-current-question-context";
+import {
   authorizeTaskRelationSplitLease,
   authorizeTaskRelationCanonicalPredecessors,
   buildTaskRelationAffinityPrompts,
@@ -10698,23 +10702,6 @@ export function useMeetingAssistant() {
         responseOpportunityGate:
           refreshResponseOpportunityGenerationGate(),
       });
-    const responseOnlyPreservedTask =
-      options.responseOnlyTaskScopeOverride
-        ? originalPromptContext.activeMeetingTask
-        : llmTypeOnlySettlement
-          ? originalPromptContext.activeMeetingTask
-          : advisorTaskSignals.responseOnlyRelation
-            ? originalPromptContext.activeMeetingTask
-            : undefined;
-    const responseOnlyBaseContextReadScope =
-      resolveResponseOnlyContextReadScope({
-        preservedParent: responseOnlyPreservedTask,
-        proposedRelation:
-          !llmTypeOnlySettlement &&
-          advisorTaskSignals.relationEvidenceAuthorized
-            ? advisorTaskSignals.taskRelation
-            : undefined,
-      });
     const boundedRecentHistoryDecision =
       decideBoundedRecentHistoryRead({
         questionText:
@@ -10781,47 +10768,8 @@ export function useMeetingAssistant() {
         ...boundedRecentHistoryMetadata,
       });
     }
-    const implicitResponseOnlyScopeAllowed =
-      !llmTypeRepairFirstParentAdmission.authorized;
     let responseOnlyTaskScope: ResponseOnlyTaskScope | undefined =
-      options.responseOnlyTaskScopeOverride ??
-      (implicitResponseOnlyScopeAllowed &&
-      llmTypeOnlySettlement &&
-      advisorJob.logicalQuestionUnit
-        ? createResponseOnlyTaskScope({
-            logicalQuestionUnitId:
-              advisorJob.logicalQuestionUnit.id,
-            revision: advisorJob.logicalQuestionUnit.revision,
-            sourceQuestion: advisorQuestionAnswerFocusText,
-            sourceTurnIds:
-              advisorJob.logicalQuestionUnit.sourceTurnIds,
-            inferredType:
-              currentQuestionSettlement?.questionType ?? "unknown",
-            relationDisposition: "ambiguous",
-            preservedParent: responseOnlyPreservedTask,
-            contextReadScope: responseOnlyBaseContextReadScope,
-          })
-        : undefined) ??
-      (implicitResponseOnlyScopeAllowed &&
-      advisorTaskSignals.responseOnlyRelation &&
-      advisorJob.logicalQuestionUnit
-        ? createResponseOnlyTaskScope({
-            logicalQuestionUnitId:
-              advisorJob.logicalQuestionUnit.id,
-            revision: advisorJob.logicalQuestionUnit.revision,
-            sourceQuestion:
-              advisorQuestionAnswerFocusText,
-            sourceTurnIds:
-              advisorJob.logicalQuestionUnit.sourceTurnIds,
-            inferredType: advisorTaskSignals.questionType,
-            relationDisposition: "ambiguous",
-            preservedParent: responseOnlyPreservedTask,
-            contextReadScope:
-              boundedRecentHistoryDecision.authorized
-                ? "bounded-recent-history"
-                : responseOnlyBaseContextReadScope,
-          })
-        : undefined);
+      options.responseOnlyTaskScopeOverride;
     let responseMutationSuppressedByScope =
       Boolean(responseOnlyTaskScope) ||
       advisorJob.source === "force-advise";
@@ -11065,7 +11013,7 @@ export function useMeetingAssistant() {
           currentQuestionSourceObservationIds,
       });
       const currentParent =
-        responseOnlyPreservedTask?.parent ??
+        originalPromptContext.activeMeetingTask?.parent ??
         promptContext.activeMeetingTask?.parent;
       if (!currentQuestionSettlement) {
         const proposal = {
@@ -11612,7 +11560,6 @@ export function useMeetingAssistant() {
       buildEffectiveAdvisorSettlementView({
         settlement: currentQuestionSettlement,
         activeMeetingTask:
-          responseOnlyPreservedTask ??
           originalPromptContext.activeMeetingTask ??
           promptContext.activeMeetingTask,
         taskRuntimeRevision: promptContext.taskRuntime.revision,
@@ -11629,26 +11576,17 @@ export function useMeetingAssistant() {
       !responseOnlyTaskScope &&
       advisorJob.logicalQuestionUnit
     ) {
-      responseOnlyTaskScope = createResponseOnlyTaskScope({
-        logicalQuestionUnitId: advisorJob.logicalQuestionUnit.id,
-        revision: advisorJob.logicalQuestionUnit.revision,
-        sourceQuestion: advisorQuestionAnswerFocusText,
-        sourceTurnIds: advisorJob.logicalQuestionUnit.sourceTurnIds,
-        inferredType: effectiveAdvisorSettlementView.questionType,
-        relationDisposition: "ambiguous",
-        preservedParent: originalPromptContext.activeMeetingTask,
-        contextReadScope: "current-only",
+      promptContext = applyEffectiveCurrentQuestionContext({
+        context: promptContext,
+        logicalQuestionUnit: advisorJob.logicalQuestionUnit,
       });
-      promptContext = applyResponseOnlyTaskScopeToPromptContext(
-        promptContext,
-        responseOnlyTaskScope
-      );
-      responseMutationSuppressedByScope = true;
-      responseMutationSuppressed = true;
       if (traceId) {
         traceStoreRef.current.updateMetadata(
           traceId,
-          formatResponseOnlyTaskScopeForTrace(responseOnlyTaskScope)
+          formatEffectiveCurrentQuestionContextForTrace({
+            applied: true,
+            logicalQuestionUnit: advisorJob.logicalQuestionUnit,
+          })
         );
       }
     }
@@ -12177,7 +12115,6 @@ export function useMeetingAssistant() {
         settlement: currentQuestionSettlement,
         activeMeetingTask:
           contextManagerRef.current.getState().activeMeetingTask ??
-          responseOnlyPreservedTask ??
           originalPromptContext.activeMeetingTask ??
           promptContext.activeMeetingTask,
         taskRuntimeRevision: promptContext.taskRuntime.revision,
@@ -12282,7 +12219,7 @@ export function useMeetingAssistant() {
             effectiveAdvisorSettlementView.effectiveSettlement ??
             currentQuestionSettlement,
           activeMeetingTask:
-            responseOnlyPreservedTask ??
+            originalPromptContext.activeMeetingTask ??
             effectiveAdvisorActiveMeetingTask,
           preBoundaryQuestionType: preBoundaryResponseOwnerType,
           taskBoundaryCommitted:
