@@ -108,6 +108,10 @@ import {
 } from "@/lib/meeting/effective-question-source-ledger";
 import { projectAdvisorTranscriptForLogicalQuestion } from "@/lib/meeting/logical-question-effective-projection";
 import {
+  coordinateOrderedSettlement,
+  formatOrderedSettlementCoordinatorForTrace,
+} from "@/lib/meeting/ordered-settlement-coordinator";
+import {
   authorizeTaskRelationSplitLease,
   authorizeTaskRelationCanonicalPredecessors,
   buildTaskRelationAffinityPrompts,
@@ -21217,9 +21221,6 @@ export function useMeetingAssistant() {
       const relationWindowRequested = Boolean(
         taskRelationHandle?.releaseWindowRequested
       );
-      if (!questionTypeWindowRequested && !relationWindowRequested) {
-        return false;
-      }
       const questionTypeWaitBudgetMs = questionTypeWindowRequested
         ? questionTypeHandle?.waitBudgetMs ?? 0
         : 0;
@@ -21309,22 +21310,13 @@ export function useMeetingAssistant() {
             actionEvidenceAuthorized: true,
           }),
           questionType: resolvedQuestionType,
-          relation:
-            orderedRelation?.stage ===
-              "source-topology-null-hypothesis" &&
-            orderedRelation.relation
-              ? orderedRelation.relation
-              : "unknown",
+          relation: orderedRelation?.relation ?? "unknown",
           confidence: Math.max(
             orderedType.confidence,
             taskRelationHandle?.deterministicProposal?.confidence ?? 0.95
           ),
           typeEvidenceAuthorized: orderedType.typeEvidenceAuthorized,
-          relationEvidenceAuthorized: Boolean(
-            orderedRelation?.stage ===
-              "source-topology-null-hypothesis" &&
-              orderedRelation.relation
-          ),
+          relationEvidenceAuthorized: Boolean(orderedRelation?.relation),
           expectedParentId: latestParent?.id,
           expectedParentRevision: latestParent?.revisions,
           reasons: [
@@ -21604,24 +21596,36 @@ export function useMeetingAssistant() {
         | OrderedTaskRelationResolutionDecision
         | undefined;
       let typeSettled = !questionTypeWindowRequested;
-      let relationSettled = !relationWindowRequested;
+      let relationSettled = false;
       let relationResolutionStarted = false;
       let responseOpportunitySettled =
         !responseOpportunityGateOperationId ||
         responseOpportunityGate?.disposition !== "pending";
 
       const startRelationResolution = () => {
-        if (
-          relationResolutionStarted ||
-          !relationWindowRequested ||
-          !taskRelationHandle
-        ) {
-          return;
-        }
+        if (relationResolutionStarted) return;
         relationResolutionStarted = true;
         const effectiveType = resolveOrderedQuestionType(
           settledTypeOutcome
         ).questionType;
+        const activeMeetingTask =
+          contextManagerRef.current.getState().activeMeetingTask;
+        if (!relationWindowRequested || !taskRelationHandle) {
+          const coordinated = coordinateOrderedSettlement({
+            sourceKind: taskRelationHandle?.sourceKind ?? "voice",
+            currentQuestionType: effectiveType,
+            activeMeetingTask,
+          });
+          settledOrderedRelation = coordinated.relation;
+          relationSettled = true;
+          traceStoreRef.current.updateMetadata(input.traceId, {
+            ...formatOrderedSettlementCoordinatorForTrace(coordinated),
+            taskRelationAdjudicationDisposition: taskRelationHandle
+              ? "local-coordinator-fallback"
+              : "relation-handle-not-required",
+          });
+          return;
+        }
         void resolveOrderedTaskRelationWithinWindow({
           handle: taskRelationHandle,
           traceId: input.traceId,
@@ -21684,32 +21688,28 @@ export function useMeetingAssistant() {
         );
       };
 
-      waitTimer = window.setTimeout(() => {
+      if (foregroundWaitBudgetMs > 0 && !advisorReleased) {
+        waitTimer = window.setTimeout(() => {
         const fallbackType = resolveOrderedQuestionType(
           settledTypeOutcome
         ).questionType;
-        const fallbackRelation =
-          settledOrderedRelation ??
-          decideOrderedTaskRelationResolution({
-            sourceKind: taskRelationHandle?.sourceKind ?? "voice",
-            currentQuestionType: fallbackType,
-            activeParentQuestionType:
-              contextManagerRef.current.getState().activeMeetingTask?.parent
-                .questionType,
-            activeChildQuestionType:
-              contextManagerRef.current.getState().activeMeetingTask?.child
-                ?.questionType,
-            hasActiveChild: Boolean(
-              contextManagerRef.current.getState().activeMeetingTask?.child
-            ),
-            finalizeWithNullHypothesis: true,
-          });
+        const coordinated = coordinateOrderedSettlement({
+          sourceKind: taskRelationHandle?.sourceKind ?? "voice",
+          currentQuestionType: fallbackType,
+          activeMeetingTask:
+            contextManagerRef.current.getState().activeMeetingTask,
+          orderedRelation: settledOrderedRelation,
+        });
+        traceStoreRef.current.updateMetadata(input.traceId, {
+          ...formatOrderedSettlementCoordinatorForTrace(coordinated),
+        });
         dispatchAdvisor(
           settledTypeOutcome,
-          fallbackRelation,
+          coordinated.relation,
           "deadline-expired-fail-open"
         );
-      }, foregroundWaitBudgetMs);
+        }, foregroundWaitBudgetMs);
+      }
 
       if (questionTypeHandle && questionTypeWindowRequested) {
         void questionTypeHandle.outcome.then(
