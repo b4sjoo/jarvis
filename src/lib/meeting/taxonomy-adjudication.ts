@@ -1,5 +1,6 @@
 import { createMeetingId } from "./context-manager.js";
 import type { LogicalQuestionUnit } from "./logical-question-unit.js";
+import { projectEffectiveLogicalQuestionSources } from "./logical-question-effective-projection.js";
 import type {
   HybridQuestionTypeDecision,
   SemanticTaxonomyDecision,
@@ -1363,7 +1364,7 @@ function splitSentences(value: string) {
 function normalizeAdjudicationSourceTurns(
   unit: LogicalQuestionUnit
 ): TaxonomyAdjudicationSourceTurn[] {
-  const sources = unit.sources
+  const sources = projectEffectiveLogicalQuestionSources(unit).sources
     .map((source) => ({
       turnId: source.turnId,
       text: normalizeSpace(source.text),

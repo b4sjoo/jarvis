@@ -7,7 +7,10 @@ import {
   type CurrentQuestionSettlementProposal,
   type ProvisionalCurrentQuestion,
 } from "./current-question-settlement.js";
-import type { LogicalQuestionUnit } from "./logical-question-unit.js";
+import {
+  getLogicalQuestionSemanticEvidenceText,
+  type LogicalQuestionUnit,
+} from "./logical-question-unit.js";
 import type { RuntimeInferenceRuntimeJob } from "./runtime-inference-runtime.js";
 import { buildRuntimeInferenceModelInput } from "./runtime-inference.js";
 import { projectPrimaryAsk } from "./primary-ask-projection.js";
@@ -494,7 +497,9 @@ export function buildTaskRelationAdjudicationRequest(input: {
         .find((source) => source.text.trim()) ??
       input.logicalQuestionUnit.sources.at(-1);
     const text = boundText(
-      currentSource?.text ?? input.logicalQuestionUnit.normalizedText,
+      getLogicalQuestionSemanticEvidenceText(input.logicalQuestionUnit) ||
+        currentSource?.text ||
+        input.logicalQuestionUnit.normalizedText,
       Math.min(280, TASK_RELATION_ADJUDICATION_MAX_SOURCE_EVIDENCE_CHARS)
     );
     if (text && !isExcludedRecentRelationEvidenceText(text)) {

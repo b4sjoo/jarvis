@@ -106,6 +106,7 @@ import {
   EffectiveQuestionSourceLedger,
   selectOwnerScopedRelationEvidence,
 } from "@/lib/meeting/effective-question-source-ledger";
+import { projectAdvisorTranscriptForLogicalQuestion } from "@/lib/meeting/logical-question-effective-projection";
 import {
   authorizeTaskRelationSplitLease,
   authorizeTaskRelationCanonicalPredecessors,
@@ -13330,18 +13331,47 @@ export function useMeetingAssistant() {
           projectBindingDecision: undefined,
         }
       : promptContext;
+    const advisorTranscriptProjection = transientPersonalStatusDecision
+      ? undefined
+      : projectAdvisorTranscriptForLogicalQuestion({
+          turns: contextManagerRef.current.getState().transcriptTurns,
+          includedTurnIds:
+            baseAdvisorModelPromptContext.advisorPromptSourceTurnIds,
+          logicalQuestionUnit: advisorJob.logicalQuestionUnit,
+        });
+    const effectiveBaseAdvisorModelPromptContext =
+      advisorTranscriptProjection?.replaced
+        ? {
+            ...baseAdvisorModelPromptContext,
+            transcript: advisorTranscriptProjection.transcript,
+            latestTurn: advisorTranscriptProjection.latestTurn,
+          }
+        : baseAdvisorModelPromptContext;
+    if (traceId && advisorTranscriptProjection) {
+      traceStoreRef.current.updateMetadata(traceId, {
+        advisorModelTranscriptProjectionApplied:
+          advisorTranscriptProjection.replaced,
+        advisorModelTranscriptRawChars: advisorTranscriptProjection.rawChars,
+        advisorModelTranscriptEffectiveChars:
+          advisorTranscriptProjection.effectiveChars,
+        advisorModelTranscriptCorrectionIds:
+          advisorTranscriptProjection.correctionIds,
+        advisorModelTranscriptAnchorTurnId:
+          advisorTranscriptProjection.anchorTurnId,
+      });
+    }
     const phaseNavigationPrompt = isPhaseNavigationAction(
       options.responseAction
     )
       ? composePhaseNavigationPromptContext({
           action: options.responseAction,
-          promptContext: baseAdvisorModelPromptContext,
+          promptContext: effectiveBaseAdvisorModelPromptContext,
           currentSuggestion: options.currentSuggestion,
         })
       : undefined;
     const advisorModelPromptContext = {
       ...(phaseNavigationPrompt?.promptContext ??
-        baseAdvisorModelPromptContext),
+        effectiveBaseAdvisorModelPromptContext),
       ...(responseOwner.questionType === "coding"
         ? {
             codingSolutionManifestContext:

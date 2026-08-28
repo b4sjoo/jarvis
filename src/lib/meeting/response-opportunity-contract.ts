@@ -1,3 +1,6 @@
+import { projectEffectiveLogicalQuestionSources } from "./logical-question-effective-projection.js";
+import type { LogicalQuestionUnit } from "./logical-question-unit.js";
+
 export const RESPONSE_OPPORTUNITY_SCHEMA_VERSION = 3;
 export const RESPONSE_OPPORTUNITY_PROMPT_VERSION =
   "response-opportunity-v3-compact";
@@ -60,19 +63,14 @@ export interface ResponseOpportunitySemanticPayload {
   };
 }
 
-interface ResponseOpportunityLogicalQuestionUnitInput {
-  id: string;
-  revision: number;
-  currentTurnId: string;
-  sources: Array<{ turnId: string; text: string }>;
-}
-
 export function buildResponseOpportunityRequest(input: {
-  logicalQuestionUnit: ResponseOpportunityLogicalQuestionUnitInput;
+  logicalQuestionUnit: LogicalQuestionUnit;
   contextCapsule?: ResponseOpportunityContextCapsule;
   manualForceAdvise?: boolean;
 }): ResponseOpportunityRequest {
-  const selectedSources = input.logicalQuestionUnit.sources.slice(-2);
+  const selectedSources = projectEffectiveLogicalQuestionSources(
+    input.logicalQuestionUnit
+  ).sources.slice(-2);
   let remainingChars = RESPONSE_OPPORTUNITY_MAX_SOURCE_CHARS;
   const sourceSpans: ResponseOpportunitySourceSpan[] = [];
   for (const [index, source] of selectedSources.entries()) {

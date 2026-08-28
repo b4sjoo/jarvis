@@ -346,11 +346,9 @@ function replacePhrase(text: string, from: string, to: string) {
 function appendCorrectionOverlay(
   text: string,
   normalizedTerm: string,
-  replacedText?: string
+  _replacedText?: string
 ) {
-  const overlay = replacedText
-    ? `[Manual term correction: "${replacedText}" means "${normalizedTerm}".]`
-    : `[Manual term correction: the intended term is "${normalizedTerm}".]`;
+  const overlay = `[Manual term correction applied: the intended term is "${normalizedTerm}".]`;
   const availableTextChars = Math.max(
     0,
     LOGICAL_QUESTION_MAX_CHARS - overlay.length - 1

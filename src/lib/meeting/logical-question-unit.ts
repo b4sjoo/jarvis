@@ -242,6 +242,7 @@ export function getLogicalQuestionSemanticEvidenceText(
   ) {
     return projectedSemanticEvidence;
   }
+  if (!unit.primaryAskProjection) return projectedSemanticEvidence;
 
   const projectedAnswerFocus =
     unit.primaryAskProjection?.answerFocusText.trim() ||
