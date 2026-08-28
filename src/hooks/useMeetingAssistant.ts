@@ -31186,6 +31186,20 @@ export function useMeetingAssistant() {
             );
           }
         }
+        const correctionCoordinatorDecision = coordinateOrderedSettlement({
+          sourceKind: correctionCurrentQuestionSourceKind,
+          currentQuestionType: correctedType,
+          activeMeetingTask: activeTask,
+          orderedRelation: orderedCorrectionRelation,
+          screenBoundaryPrior:
+            correctionCurrentQuestionSourceKind === "screen",
+          screenTypeEvidenceAuthorized: true,
+        });
+        orderedCorrectionRelation = correctionCoordinatorDecision.relation;
+        orderedCorrectionRelationCandidate =
+          projectOrderedTaskRelationAdjudication(
+            correctionCoordinatorDecision.relation
+          );
         const correctionSettlementResult =
           settleManualQuestionTypeCorrection({
             operationId: eventId,
@@ -31260,6 +31274,9 @@ export function useMeetingAssistant() {
             relationAdjudicationWaitMs,
           manualCorrectionRelationWaitDisposition:
             relationAdjudicationWaitDisposition,
+          ...formatOrderedSettlementCoordinatorForTrace(
+            correctionCoordinatorDecision
+          ),
           manualCorrectionSourceIdentityReseed:
             !activeTask || correctionTargetOwnsActiveParent,
           manualCorrectionSourceIdentityPreservedChild:
@@ -31323,24 +31340,6 @@ export function useMeetingAssistant() {
               reason: `${selectedPlaybook.reason}; authoritative manual runtime correction`,
             }
           : undefined;
-        const correctionResponseOnlyTaskScope = currentOnlyCorrection
-          ? createResponseOnlyTaskScope({
-              logicalQuestionUnitId: correctionLogicalQuestionUnit.id,
-              revision: correctionLogicalQuestionUnit.revision,
-              sourceQuestion: correctionQuestionText,
-              sourceTurnIds:
-                correctionLogicalQuestionUnit.sourceTurnIds,
-              inferredType: correctedType,
-              relationDisposition: "ambiguous",
-              preservedParent: activeTask,
-              contextReadScope: resolveResponseOnlyContextReadScope({
-                preservedParent: activeTask,
-                proposedRelation:
-                  correctionSettledRuntimeRelation,
-              }),
-            })
-          : undefined;
-
         const mutationAuthorization = recordCorrectionAuthorization(
           correctionRuntimeToken,
           "pre-correction-mutation"
@@ -31417,9 +31416,8 @@ export function useMeetingAssistant() {
           correctionStatus: correction.status,
           correctionParentMutationApplied: false,
           correctionParentMutationDelegatedToAdvisor: true,
-          ...formatResponseOnlyTaskScopeForTrace(
-            correctionResponseOnlyTaskScope
-          ),
+          correctionCurrentOnlyViaEffectiveSettlement:
+            currentOnlyCorrection,
           correctionVisibleAnswerCleared: true,
           correctionReliableAnswerCleared: false,
           correctionPreviousReliableAnswerPreserved: true,
@@ -31644,8 +31642,6 @@ export function useMeetingAssistant() {
             correctionLineage ?? state.currentQuestionLineage
           ),
           logicalQuestionUnit: correctionLogicalQuestionUnit,
-          responseOnlyTaskScopeOverride:
-            correctionResponseOnlyTaskScope,
           currentQuestionSettlementOverride:
             correctionCurrentQuestionSettlement,
           promptTurnOverride:
