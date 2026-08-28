@@ -54,6 +54,7 @@ export interface OwnerScopedRelationEvidenceSelection {
     coveredTurnCount: number;
     branchEvidenceCount: number;
     parentEvidenceCount: number;
+    supersededRecordCount: number;
   };
 }
 
@@ -75,6 +76,12 @@ export class EffectiveQuestionSourceLedger {
   }
 
   list() {
+    return selectLatestEffectiveQuestionSourceRecords(this.records).map(
+      cloneRecord
+    );
+  }
+
+  listHistory() {
     return this.records.map(cloneRecord);
   }
 
@@ -84,14 +91,23 @@ export class EffectiveQuestionSourceLedger {
     logicalQuestionUnitId: string;
     logicalQuestionRevision: number;
   }) {
-    const record = [...this.records]
+    const matchingRecords = this.records.filter(
+      (candidate) =>
+        candidate.sessionId === input.sessionId &&
+        candidate.runtimeEpoch === input.runtimeEpoch &&
+        candidate.logicalQuestionUnitId === input.logicalQuestionUnitId
+    );
+    const latestRevision = matchingRecords.reduce(
+      (latest, candidate) =>
+        Math.max(latest, candidate.logicalQuestionRevision),
+      -1
+    );
+    if (input.logicalQuestionRevision !== latestRevision) return undefined;
+    const record = [...matchingRecords]
+      .sort(compareEffectiveQuestionSourceRecords)
       .reverse()
       .find(
         (candidate) =>
-          candidate.sessionId === input.sessionId &&
-          candidate.runtimeEpoch === input.runtimeEpoch &&
-          candidate.logicalQuestionUnitId ===
-            input.logicalQuestionUnitId &&
           candidate.logicalQuestionRevision ===
             input.logicalQuestionRevision
       );
@@ -166,7 +182,10 @@ export function selectOwnerScopedRelationEvidence(input: {
   const currentTurnIds = new Set(currentLogicalQuestionUnit.sourceTurnIds);
   let acknowledgementExcludedCount = 0;
   let logisticsExcludedCount = 0;
-  const ownedRecords = input.records.filter(
+  const latestRecords = selectLatestEffectiveQuestionSourceRecords(
+    input.records
+  );
+  const ownedRecords = latestRecords.filter(
     (record) =>
       record.sessionId === currentLogicalQuestionUnit.sessionId &&
       record.runtimeEpoch === currentLogicalQuestionUnit.runtimeEpoch &&
@@ -283,8 +302,25 @@ export function selectOwnerScopedRelationEvidence(input: {
       coveredTurnCount: coveredTurnIds.size,
       branchEvidenceCount: recentBranchEvidence.length,
       parentEvidenceCount: recentParentEvidence.length,
+      supersededRecordCount: input.records.length - latestRecords.length,
     },
   };
+}
+
+export function selectLatestEffectiveQuestionSourceRecords(
+  records: EffectiveQuestionSourceRecord[]
+) {
+  const latestByOwner = new Map<string, EffectiveQuestionSourceRecord>();
+  for (const record of records) {
+    const key = effectiveQuestionSourceOwnerKey(record);
+    const current = latestByOwner.get(key);
+    if (!current || compareEffectiveQuestionSourceRecords(current, record) < 0) {
+      latestByOwner.set(key, record);
+    }
+  }
+  return [...latestByOwner.values()]
+    .sort(compareEffectiveQuestionSourceRecords)
+    .map(cloneRecord);
 }
 
 function selectLquEvidence(
@@ -362,4 +398,29 @@ function cloneRecord(record: EffectiveQuestionSourceRecord) {
     sourceTurnIds: [...record.sourceTurnIds],
     owner: { ...record.owner },
   } as EffectiveQuestionSourceRecord;
+}
+
+function effectiveQuestionSourceOwnerKey(
+  record: EffectiveQuestionSourceRecord
+) {
+  return [
+    record.sessionId,
+    record.runtimeEpoch,
+    record.logicalQuestionUnitId,
+    record.owner.kind,
+    record.owner.parentId,
+    record.owner.kind === "active-child" ? record.owner.childId : "-",
+  ].join(":");
+}
+
+function compareEffectiveQuestionSourceRecords(
+  left: EffectiveQuestionSourceRecord,
+  right: EffectiveQuestionSourceRecord
+) {
+  return (
+    left.logicalQuestionRevision - right.logicalQuestionRevision ||
+    left.settledAt - right.settledAt ||
+    left.updatedAt - right.updatedAt ||
+    left.recordId.localeCompare(right.recordId)
+  );
 }

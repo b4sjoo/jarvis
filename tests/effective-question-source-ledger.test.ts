@@ -276,3 +276,112 @@ test("finds one exact committed Voice source for later Screen linkage", () => {
     undefined
   );
 });
+
+test("keeps append-only history while product selectors expose only the latest revision", () => {
+  const ledger = new EffectiveQuestionSourceLedger();
+  const revisionOne: EffectiveQuestionSourceRecord = {
+    recordId: "record-revision-1",
+    sessionId: "session-a",
+    runtimeEpoch: 3,
+    logicalQuestionUnitId: "lqu-corrected",
+    logicalQuestionRevision: 1,
+    sourceHash: "hash-revision-1",
+    sourceTurnIds: ["turn-corrected"],
+    text: "Design a ride-sharing system.",
+    startedAt: 10,
+    updatedAt: 20,
+    speechAct: "directive",
+    disposition: "answer-primary-ask",
+    relation: "followup-parent",
+    owner: { kind: "parent-mainline", parentId: "parent-design" },
+    settledAt: 21,
+  };
+  const revisionTwo: EffectiveQuestionSourceRecord = {
+    ...revisionOne,
+    recordId: "record-revision-2",
+    logicalQuestionRevision: 2,
+    sourceHash: "hash-revision-2",
+    text: "Design a RAG system.",
+    updatedAt: 30,
+    settledAt: 31,
+  };
+
+  ledger.upsert(revisionOne);
+  ledger.upsert(revisionTwo);
+
+  assert.equal(ledger.listHistory().length, 2);
+  assert.deepEqual(
+    ledger.list().map((record) => record.logicalQuestionRevision),
+    [2]
+  );
+  assert.equal(
+    ledger.findLogicalQuestion({
+      sessionId: "session-a",
+      runtimeEpoch: 3,
+      logicalQuestionUnitId: "lqu-corrected",
+      logicalQuestionRevision: 1,
+    }),
+    undefined
+  );
+  assert.equal(
+    ledger.findLogicalQuestion({
+      sessionId: "session-a",
+      runtimeEpoch: 3,
+      logicalQuestionUnitId: "lqu-corrected",
+      logicalQuestionRevision: 2,
+    })?.text,
+    "Design a RAG system."
+  );
+});
+
+test("drops superseded revisions before selecting relation evidence", () => {
+  const base: EffectiveQuestionSourceRecord = {
+    recordId: "record-old",
+    sessionId: "session-a",
+    runtimeEpoch: 3,
+    logicalQuestionUnitId: "lqu-shared",
+    logicalQuestionRevision: 1,
+    sourceHash: "hash-old",
+    sourceTurnIds: ["turn-old"],
+    text: "Design a ride-sharing system.",
+    startedAt: 10,
+    updatedAt: 20,
+    speechAct: "directive",
+    disposition: "answer-primary-ask",
+    relation: "followup-parent",
+    owner: { kind: "parent-mainline", parentId: "parent-rag" },
+    settledAt: 21,
+  };
+  const latest: EffectiveQuestionSourceRecord = {
+    ...base,
+    recordId: "record-latest",
+    logicalQuestionRevision: 2,
+    sourceHash: "hash-latest",
+    sourceTurnIds: ["turn-old"],
+    text: "Design a RAG system.",
+    updatedAt: 30,
+    settledAt: 31,
+  };
+
+  const selection = selectOwnerScopedRelationEvidence({
+    records: [base, latest],
+    currentLogicalQuestionUnit: unit(
+      "lqu-current",
+      "turn-current",
+      "What should we monitor?",
+      40
+    ),
+    activeMeetingTask: task(),
+    transcriptTurns: [
+      turn("turn-parent-root", "Design a production RAG system.", 0),
+      turn("turn-old", "Design a ride-sharing system.", 10),
+      turn("turn-current", "What should we monitor?", 40),
+    ],
+  });
+
+  assert.deepEqual(
+    selection.recentParentEvidence.map((record) => record.text),
+    ["Design a RAG system."]
+  );
+  assert.equal(selection.diagnostics.supersededRecordCount, 1);
+});
