@@ -5,6 +5,7 @@ import type { EffectiveCurrentQuestionSettlement } from "../src/lib/meeting/curr
 import {
   createEffectiveQuestionSourceRecord,
   EffectiveQuestionSourceLedger,
+  selectLatestEffectiveQuestionSourceRecords,
   selectOwnerScopedRelationEvidence,
   type EffectiveQuestionSourceRecord,
 } from "../src/lib/meeting/effective-question-source-ledger.js";
@@ -385,3 +386,123 @@ test("drops superseded revisions before selecting relation evidence", () => {
   );
   assert.equal(selection.diagnostics.supersededRecordCount, 1);
 });
+
+test("supersedes an old parent owner when the same LQU settles as a child", () => {
+  const ledger = new EffectiveQuestionSourceLedger();
+  const parentRecord = record({
+    recordId: "record-parent-revision-1",
+    logicalQuestionRevision: 1,
+    sourceHash: "hash-parent",
+    owner: { kind: "parent-mainline", parentId: "parent-rag" },
+    relation: "followup-parent",
+    settledAt: 20,
+  });
+  const childRecord = record({
+    recordId: "record-child-revision-2",
+    logicalQuestionRevision: 2,
+    sourceHash: "hash-child",
+    owner: {
+      kind: "active-child",
+      parentId: "parent-rag",
+      childId: "child-hnsw",
+    },
+    relation: "child-probe",
+    settledAt: 30,
+  });
+
+  ledger.upsert(parentRecord);
+  ledger.upsert(childRecord);
+
+  assert.equal(ledger.listHistory().length, 2);
+  assert.deepEqual(
+    ledger.list().map((candidate) => candidate.owner),
+    [childRecord.owner]
+  );
+});
+
+test("uses settlement time to supersede an owner at the same LQU revision", () => {
+  const ledger = new EffectiveQuestionSourceLedger();
+  ledger.upsert(
+    record({
+      recordId: "record-child-first",
+      owner: {
+        kind: "active-child",
+        parentId: "parent-rag",
+        childId: "child-hnsw",
+      },
+      relation: "child-probe",
+      settledAt: 20,
+    })
+  );
+  ledger.upsert(
+    record({
+      recordId: "record-parent-later",
+      sourceHash: "hash-parent-later",
+      owner: { kind: "parent-mainline", parentId: "parent-rag" },
+      relation: "resume-parent",
+      settledAt: 30,
+    })
+  );
+
+  assert.deepEqual(ledger.list().map((candidate) => candidate.recordId), [
+    "record-parent-later",
+  ]);
+});
+
+test("supersedes an old parent id without merging sessions or runtime epochs", () => {
+  const records = [
+    record({
+      recordId: "record-parent-old",
+      owner: { kind: "parent-mainline", parentId: "parent-old" },
+      settledAt: 10,
+    }),
+    record({
+      recordId: "record-parent-new",
+      sourceHash: "hash-parent-new",
+      owner: { kind: "parent-mainline", parentId: "parent-new" },
+      settledAt: 20,
+    }),
+    record({
+      recordId: "record-other-epoch",
+      runtimeEpoch: 4,
+      owner: { kind: "parent-mainline", parentId: "parent-epoch-4" },
+      settledAt: 30,
+    }),
+    record({
+      recordId: "record-other-session",
+      sessionId: "session-b",
+      owner: { kind: "parent-mainline", parentId: "parent-session-b" },
+      settledAt: 40,
+    }),
+  ];
+
+  const latest = selectLatestEffectiveQuestionSourceRecords(records);
+
+  assert.deepEqual(
+    latest.map((candidate) => candidate.recordId).sort(),
+    ["record-other-epoch", "record-other-session", "record-parent-new"]
+  );
+});
+
+function record(
+  overrides: Partial<EffectiveQuestionSourceRecord> = {}
+): EffectiveQuestionSourceRecord {
+  return {
+    recordId: "record-default",
+    sessionId: "session-a",
+    runtimeEpoch: 3,
+    logicalQuestionUnitId: "lqu-shared-owner-transition",
+    logicalQuestionRevision: 1,
+    sourceHash: "hash-default",
+    sourceTurnIds: ["turn-shared"],
+    text: "Explain the current topic.",
+    startedAt: 1,
+    updatedAt: 2,
+    speechAct: "question",
+    disposition: "answer-primary-ask",
+    relation: "followup-parent",
+    owner: { kind: "parent-mainline", parentId: "parent-default" },
+    settledAt: 3,
+    ...overrides,
+  };
+}

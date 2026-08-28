@@ -310,15 +310,18 @@ export function selectOwnerScopedRelationEvidence(input: {
 export function selectLatestEffectiveQuestionSourceRecords(
   records: EffectiveQuestionSourceRecord[]
 ) {
-  const latestByOwner = new Map<string, EffectiveQuestionSourceRecord>();
+  const latestByRevisionStream = new Map<
+    string,
+    EffectiveQuestionSourceRecord
+  >();
   for (const record of records) {
-    const key = effectiveQuestionSourceOwnerKey(record);
-    const current = latestByOwner.get(key);
+    const key = effectiveQuestionSourceRevisionStreamKey(record);
+    const current = latestByRevisionStream.get(key);
     if (!current || compareEffectiveQuestionSourceRecords(current, record) < 0) {
-      latestByOwner.set(key, record);
+      latestByRevisionStream.set(key, record);
     }
   }
-  return [...latestByOwner.values()]
+  return [...latestByRevisionStream.values()]
     .sort(compareEffectiveQuestionSourceRecords)
     .map(cloneRecord);
 }
@@ -400,16 +403,13 @@ function cloneRecord(record: EffectiveQuestionSourceRecord) {
   } as EffectiveQuestionSourceRecord;
 }
 
-function effectiveQuestionSourceOwnerKey(
+function effectiveQuestionSourceRevisionStreamKey(
   record: EffectiveQuestionSourceRecord
 ) {
   return [
     record.sessionId,
     record.runtimeEpoch,
     record.logicalQuestionUnitId,
-    record.owner.kind,
-    record.owner.parentId,
-    record.owner.kind === "active-child" ? record.owner.childId : "-",
   ].join(":");
 }
 
