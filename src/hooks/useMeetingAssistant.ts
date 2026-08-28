@@ -238,7 +238,6 @@ import {
   CurrentQuestionSettlementDecision,
   CurrentQuestionSettlementDisposition,
   AdvisorSourceOwnedSemanticContext,
-  ResponseOnlyTaskScope,
   ResponseOpportunityGenerationGateCoordinator,
   LogicalQuestionUnit,
   LogicalQuestionUnitLease,
@@ -746,10 +745,6 @@ import {
   projectCrossTypeTaskRelationHint,
   isExplicitResumeParentTranscript,
   formatTaskRelationLexicalHintForTrace,
-  applyResponseOnlyTaskScopeToPromptContext,
-  createResponseOnlyTaskScope,
-  formatResponseOnlyTaskScopeForTrace,
-  resolveResponseOnlyContextReadScope,
   runtimeTypeRepairLimitsGenerationToAnswer,
   toAdvisorGeneratedContinuityEvidence,
   classifyInterviewTransitionTurn,
@@ -2120,7 +2115,6 @@ interface RunAdvisorOptions {
   currentQuestionSettlementOverride?: CurrentQuestionSettlementDecision;
   runtimeTypeRepairOutputAuthority?: RuntimeTypeRepairOutputAuthority;
   settledExecutionPlanOverride?: SettledAdvisorExecutionPlan;
-  responseOnlyTaskScopeOverride?: ResponseOnlyTaskScope;
 }
 
 interface PendingAdvisorGenerationSupersession {
@@ -10633,14 +10627,10 @@ export function useMeetingAssistant() {
     const preservedActiveQuestionType = outputOnlyCurrentBranch
       ? getAdvisorCurrentBranchQuestionType(promptContext)
       : getAdvisorActiveQuestionType(promptContext);
-    const currentOnlyManualCorrection = Boolean(
-      options.manualQuestionTypeCorrection &&
-        options.responseOnlyTaskScopeOverride
-    );
     let advisorTaskSignals =
       advisorTaskMutationDecision.preserveActiveTaskType &&
       preservedActiveQuestionType &&
-      !currentOnlyManualCorrection
+      !options.manualQuestionTypeCorrection
         ? {
             ...routedAdvisorTaskSignals,
             questionType: preservedActiveQuestionType,
@@ -10768,10 +10758,7 @@ export function useMeetingAssistant() {
         ...boundedRecentHistoryMetadata,
       });
     }
-    let responseOnlyTaskScope: ResponseOnlyTaskScope | undefined =
-      options.responseOnlyTaskScopeOverride;
     let responseMutationSuppressedByScope =
-      Boolean(responseOnlyTaskScope) ||
       advisorJob.source === "force-advise";
     let responseMutationSuppressed =
       responseMutationSuppressedByScope ||
@@ -10786,37 +10773,6 @@ export function useMeetingAssistant() {
       promptContext,
       advisorScreenScopeDecision
     );
-    if (responseOnlyTaskScope) {
-      promptContext = applyResponseOnlyTaskScopeToPromptContext(
-        promptContext,
-        responseOnlyTaskScope
-      );
-      if (traceId) {
-        const responseOnlyMetadata =
-          formatResponseOnlyTaskScopeForTrace(
-            responseOnlyTaskScope
-          );
-        traceStoreRef.current.updateMetadata(
-          traceId,
-          responseOnlyMetadata
-        );
-        const responseOnlyStepId =
-          traceStoreRef.current.startStep(
-            traceId,
-            "Response-only task scope",
-            responseOnlyMetadata
-          );
-        traceStoreRef.current.finishStep(
-          traceId,
-          responseOnlyStepId,
-          "success"
-        );
-        sessionRecordingManagerRef.current?.recordResponseOnlyTaskScope({
-          traceId,
-          scope: responseOnlyTaskScope,
-        });
-      }
-    }
     const advisorPromptMode = resolveAdvisorRequestModeForScreenScope(
       mode,
       advisorScreenScopeDecision
@@ -11573,7 +11529,6 @@ export function useMeetingAssistant() {
     }
     if (
       effectiveAdvisorSettlementView.currentOnly &&
-      !responseOnlyTaskScope &&
       advisorJob.logicalQuestionUnit
     ) {
       promptContext = applyEffectiveCurrentQuestionContext({
@@ -11625,10 +11580,7 @@ export function useMeetingAssistant() {
       taskMutationAuthorization.authorized;
     const preservedPlaybookPhase = startsNewParentForPhase
       ? advisorPlaybook?.phase ?? "follow_up"
-      : responseOnlyTaskScope?.readOnlyParentContinuity
-            ?.compatibleWithInferredType
-        ? responseOnlyTaskScope.readOnlyParentContinuity.playbookPhase
-        : effectiveAdvisorSettlementView.playbookPhase ??
+      : effectiveAdvisorSettlementView.playbookPhase ??
         advisorPlaybook?.phase ??
         "follow_up";
     const automaticPlaybookPhaseDecision = decidePlaybookPhaseProgression({
@@ -11942,7 +11894,6 @@ export function useMeetingAssistant() {
       !manualPhaseAdvance &&
       !transientPersonalStatusDecision &&
       !responseMutationSuppressed &&
-      !responseOnlyTaskScope &&
       effectiveSettlementAuthorizesSourceTransition(
         effectiveAdvisorSettlementView
       ) &&
@@ -12239,7 +12190,6 @@ export function useMeetingAssistant() {
           askFrame: advisorAskFrame,
           topicDomain: advisorTopicDomain,
           projectAnchor: advisorProjectAnchor,
-          responseOnlyTaskScope,
           contextReadScopeOverride:
             boundedRecentHistoryDecision.authorized
               ? "bounded-recent-history"
@@ -27601,38 +27551,8 @@ export function useMeetingAssistant() {
         const settledScreenTaskKind =
           normalizeScreenQuestionType(settledScreenQuestionType) ??
           "unknown";
-        const screenResponseOnlyTaskScope =
-          !settlementAuthorizesTaskTransition(
-            screenCurrentQuestionSettlement
-          ) &&
-          (screenCoordinatorDecision?.relation.responseOnly ??
-            screenTaskRelationDecision.responseOnly) &&
-          screenSectionHintConsumption.disposition !== "applied"
-            ? createResponseOnlyTaskScope({
-                logicalQuestionUnitId: `screen_${observation.id}`,
-                revision: 1,
-                sourceQuestion:
-                  screenRelationQuestion,
-                inferredType: settledScreenQuestionType,
-                relationDisposition: "ambiguous",
-                preservedParent:
-                  preflightContextState.activeMeetingTask,
-                contextReadScope:
-                  resolveResponseOnlyContextReadScope({
-                    preservedParent:
-                      preflightContextState.activeMeetingTask,
-                    proposedRelation:
-                      screenCurrentQuestionSettlement
-                        ?.relationMutationAuthorized
-                        ? isRuntimeTaskRelation(
-                            screenCurrentQuestionSettlement.relation
-                          )
-                          ? screenCurrentQuestionSettlement.relation
-                          : undefined
-                        : undefined,
-                  }),
-              })
-            : undefined;
+        const screenCurrentOnly =
+          effectiveScreenSettlementView.currentOnly;
         const settledScreenRelation =
           screenCurrentQuestionSettlement?.relation;
         const provisionalScreenTaskRelation: InterviewTaskRelation =
@@ -27656,29 +27576,10 @@ export function useMeetingAssistant() {
             screenTaskRelationDecision.proposedRelation,
           screenTaskRelationEvidenceSpans:
             screenTaskRelationDecision.evidenceSpans,
-          ...formatResponseOnlyTaskScopeForTrace(
-            screenResponseOnlyTaskScope
-          ),
+          screenCurrentOnlyViaEffectiveSettlement: screenCurrentOnly,
           screenTaskRelationCommittedBeforeModel: false,
         });
-        if (screenResponseOnlyTaskScope) {
-          const responseOnlyStepId =
-            traceStoreRef.current.startStep(
-              trace.id,
-              "Response-only task scope",
-              formatResponseOnlyTaskScopeForTrace(
-                screenResponseOnlyTaskScope
-              )
-            );
-          traceStoreRef.current.finishStep(
-            trace.id,
-            responseOnlyStepId,
-            "success"
-          );
-          sessionRecordingManagerRef.current?.recordResponseOnlyTaskScope({
-            traceId: trace.id,
-            scope: screenResponseOnlyTaskScope,
-          });
+        if (screenCurrentOnly) {
           screenEvidencePacket = buildScreenEvidencePacket(
             preflightContextState,
             false
@@ -27717,14 +27618,14 @@ export function useMeetingAssistant() {
           playbookId: screenPlaybook?.id,
           currentPhase:
             provisionalScreenTaskRelation === "new-parent" ||
-            Boolean(screenResponseOnlyTaskScope)
+            screenCurrentOnly
               ? screenPlaybook?.phase
               : preflightContextState.activeMeetingTask?.parent.playbookPhase ??
                 preflightContextState.taskRuntime.parent?.playbookPhase ??
                 screenPlaybook?.phase,
           phaseProgress:
             provisionalScreenTaskRelation === "new-parent" ||
-            Boolean(screenResponseOnlyTaskScope)
+            screenCurrentOnly
               ? undefined
               : preflightContextState.activeMeetingTask?.parent.phaseProgress ??
                 preflightContextState.taskRuntime.parent?.phaseProgress,
@@ -27800,7 +27701,7 @@ export function useMeetingAssistant() {
             committedScreenQuestionSettlement
           );
         const screenTransitionCandidate =
-          screenResponseOnlyTaskScope ||
+          screenCurrentOnly ||
           !screenTransitionMutationAuthorized
           ? undefined
           : createSourceOwnedTransitionCandidate({
@@ -27982,7 +27883,7 @@ export function useMeetingAssistant() {
           contextManagerRef.current.getState();
         screenEvidencePacket = buildScreenEvidencePacket(
           screenExecutionContextState,
-          !screenResponseOnlyTaskScope
+          !screenCurrentOnly
         );
         screenMemoryQuery =
           buildAdvisorEvidenceRetrievalQuery(
@@ -28010,7 +27911,7 @@ export function useMeetingAssistant() {
           "success"
         );
         const existingScreenProjectBinding =
-          screenResponseOnlyTaskScope
+          screenCurrentOnly
             ? undefined
             : screenExecutionContextState.activeMeetingTask?.parent
                 .projectBinding ??
@@ -28026,7 +27927,7 @@ export function useMeetingAssistant() {
           buildCurrentTaskDiagramDomainContext({
             currentQuestion: screenPrimaryAskEvidenceText,
             parentTopic:
-              screenResponseOnlyTaskScope
+              screenCurrentOnly
                 ? undefined
                 : screenExecutionContextState.activeMeetingTask?.parent
                     .topic ??
@@ -28201,7 +28102,7 @@ export function useMeetingAssistant() {
             screenExecutionContextState.transcriptTurns
           ),
           activeFactAnchors:
-            screenResponseOnlyTaskScope
+            screenCurrentOnly
               ? []
               : screenExecutionContextState.activeMeetingTask?.parent
                   .supportedFactAnchors ??
@@ -28594,11 +28495,11 @@ export function useMeetingAssistant() {
             interviewPlaybook: screenRuntimePlaybook,
             playbookPhaseDecision: screenGenerationPhaseDecision,
             activeMeetingTask:
-              screenResponseOnlyTaskScope
+              screenCurrentOnly
                 ? undefined
                 : screenExecutionContextState.activeMeetingTask,
             responseOnlyParentReadContext:
-              screenResponseOnlyTaskScope?.parentReadContext,
+              undefined,
             factAnchorDecision: screenFactAnchorDecision,
             projectBindingDecision: screenProjectBindingDecision,
             whiteboardFormatPreference:
@@ -29245,7 +29146,7 @@ export function useMeetingAssistant() {
           screenResultScopeDecision.action === "replace" &&
           screenSourceTransitionAllowsTaskMutation
         ) {
-          const existingInterviewTask = screenResponseOnlyTaskScope
+          const existingInterviewTask = screenCurrentOnly
             ? undefined
             : updatedContextState.taskRuntime.parent;
           const screenLanguage = inferTrustedProgrammingLanguage({
@@ -29308,7 +29209,7 @@ export function useMeetingAssistant() {
                 : screenTaskRelationDecision
                     .relationEvidenceAuthorized ??
                   provisionalScreenTaskRelation !== "unknown"),
-            responseOnly: Boolean(screenResponseOnlyTaskScope),
+            responseOnly: screenCurrentOnly,
             proposedRelation:
               screenTaskRelationDecision.proposedRelation,
             evidenceSpans:
@@ -29324,9 +29225,7 @@ export function useMeetingAssistant() {
               screenRelationDecision.proposedRelation,
             screenTaskRelationEvidenceSpans:
               screenRelationDecision.evidenceSpans,
-            ...formatResponseOnlyTaskScopeForTrace(
-              screenResponseOnlyTaskScope
-            ),
+            screenCurrentOnlyViaEffectiveSettlement: screenCurrentOnly,
           });
           const screenRelationStepId = traceStoreRef.current.startStep(
             trace.id,
@@ -29433,14 +29332,14 @@ export function useMeetingAssistant() {
           ];
           screenLatestUsefulAnswerMutationAuthorized =
             screenArtifactAuthorization.allowLatestUsefulAnswer &&
-            !screenResponseOnlyTaskScope;
+            !screenCurrentOnly;
           const screenContinuityRelation: InterviewTaskRelation =
             screenSourceTransitionCommittedBeforeModel &&
             screenSourceOwnedTransitionResult?.candidate.kind ===
               "new-parent"
               ? "followup-parent"
               : screenRelationDecision.relation;
-          const screenContinuity = screenResponseOnlyTaskScope
+          const screenContinuity = screenCurrentOnly
             ? {
                 task: undefined,
                 startedNewParent: false,
@@ -29539,7 +29438,7 @@ export function useMeetingAssistant() {
               }
             );
           }
-          if (!screenResponseOnlyTaskScope) {
+          if (!screenCurrentOnly) {
             const runtimeTransition =
               classifyCommittedTaskRuntimeTransition({
                 beforeParent: existingInterviewTask,
@@ -29833,7 +29732,7 @@ export function useMeetingAssistant() {
                 : undefined,
               publish: () => {
                 if (
-                  !screenResponseOnlyTaskScope &&
+                  !screenCurrentOnly &&
                   !screenSourceTransitionCommittedBeforeModel
                 ) {
                   recordCommittedPlaybookPhaseTransition({
