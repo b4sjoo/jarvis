@@ -872,7 +872,7 @@ export function applyManualQuestionTypeCorrectionToParent({
   const nextPhase = correctedPlaybook?.phase ?? "follow_up";
   const preserveWhiteboard =
     isWhiteboardParentType(parent.stableKind) &&
-    isWhiteboardParentType(decision.correctedType);
+    parent.stableKind === decision.correctedType;
   const preserveAnswerContinuity = areCompatibleParentContinuityTypes(
     parent.stableKind,
     decision.correctedType

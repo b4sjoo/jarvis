@@ -1109,7 +1109,7 @@ test("retypes a parent in place while resetting incompatible runtime state", () 
   assert.equal(next.whiteboardArtifact, undefined);
 });
 
-test("preserves the whiteboard when correcting between system-design parents", () => {
+test("clears the current whiteboard pointer when system-design type changes", () => {
   const whiteboard = makeWhiteboard("general_sd");
   const parent = makeInterviewParent({
     stableKind: "general-system-design",
@@ -1130,7 +1130,7 @@ test("preserves the whiteboard when correcting between system-design parents", (
   });
 
   assert.equal(next.stableKind, "ai-ml-system-design");
-  assert.equal(next.whiteboardArtifact, whiteboard);
+  assert.equal(next.whiteboardArtifact, undefined);
 });
 
 test("preserves useful-answer continuity only across compatible system-design retypes", () => {
@@ -1157,7 +1157,7 @@ test("preserves useful-answer continuity only across compatible system-design re
   assert.equal(next.previousUsefulAnswer, "Requirements summary");
 });
 
-test("keeps a same-question whiteboard draft but removes generated answer context", () => {
+test("clears a cross-type whiteboard even for the same source-owned question", () => {
   const parent = makeInterviewParent({
     stableKind: "general-system-design",
     startTurnId: "turn_origin",
@@ -1199,10 +1199,7 @@ test("keeps a same-question whiteboard draft but removes generated answer contex
   assert.equal(transition.parent.id, parent.id);
   assert.equal(transition.parent.latestUsefulAnswer, undefined);
   assert.equal(transition.parent.previousUsefulAnswer, undefined);
-  assert.equal(
-    transition.parent.whiteboardArtifact?.questionInstanceId,
-    lineage.questionInstanceId
-  );
+  assert.equal(transition.parent.whiteboardArtifact, undefined);
 });
 
 function makeActiveTask({
