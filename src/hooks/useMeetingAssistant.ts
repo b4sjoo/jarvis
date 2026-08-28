@@ -23667,6 +23667,16 @@ export function useMeetingAssistant() {
             speechBias
           );
           if (normalized.changed) {
+            turn.preNormalizationText ??= turn.text;
+            turn.appliedSpeechCorrectionIds = Array.from(
+              new Set(
+                normalized.appliedRules
+                  .map((rule) => rule.correctionId)
+                  .filter((correctionId): correctionId is string =>
+                    Boolean(correctionId)
+                  )
+              )
+            );
             turn.text = normalized.text;
             incrementAppliedSpeechCorrections(normalized.appliedRules);
             traceStoreRef.current.recordOutput(
@@ -35158,6 +35168,7 @@ function applySpeechCorrectionRuleCounts(
 
   return corrections.map((correction) => {
     const matched = rules.some((rule) => {
+      if (rule.correctionId) return rule.correctionId === correction.id;
       if (rule.source !== "emergency" && correction.from) return false;
       if (correction.from && correction.to) {
         return (

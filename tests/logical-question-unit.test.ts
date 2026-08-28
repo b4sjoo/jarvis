@@ -13,6 +13,7 @@ import {
   detectInterviewSectionTransition,
 } from "../src/lib/meeting/interview-section-transition.js";
 import { projectPrimaryAsk } from "../src/lib/meeting/primary-ask-projection.js";
+import { applyActiveQuestionTermCorrection } from "../src/lib/meeting/active-question-term-correction.js";
 
 function turn(
   id: string,
@@ -84,6 +85,53 @@ test("composes a bounded coding question with adjacent constraints", () => {
   assert.match(withComplexity.normalizedText, /every text file/);
   assert.match(withComplexity.normalizedText, /without os\.walk/);
   assert.match(withComplexity.normalizedText, /time complexity/);
+});
+
+test("retains an effective term correction across a bounded continuation", () => {
+  const initial = composeLogicalQuestionUnit({
+    currentTurn: turn("turn_problem", "Implement a rec client.", 1_000),
+    sessionId: "session-a",
+    runtimeEpoch: 1,
+  });
+  const corrected = applyActiveQuestionTermCorrection({
+    correction: {
+      id: "correction-rag",
+      input: "RAG not rec",
+      term: "RAG",
+      from: "rec",
+      to: "RAG",
+      createdAt: 1_500,
+      appliedCount: 0,
+    },
+    logicalQuestionUnit: initial,
+    correctionTraceId: "trace-correction",
+    manualCorrectionRevision: 1,
+  }).logicalQuestionUnit;
+  const continued = composeLogicalQuestionUnit({
+    currentTurn: turn(
+      "turn_followup",
+      "Use Python without os.walk.",
+      2_000
+    ),
+    sessionId: "session-a",
+    runtimeEpoch: 1,
+    intentDecision: decideAdvisorTurnIntent(
+      "Use Python without os.walk.",
+      { hasActiveTask: true, hasRecentQuestionContext: true }
+    ),
+    previousUnit: corrected,
+    now: 2_100,
+  });
+
+  assert.equal(continued.id, corrected.id);
+  assert.equal(continued.revision, corrected.revision + 1);
+  assert.match(continued.normalizedText, /RAG/);
+  assert.doesNotMatch(continued.normalizedText, /\brec\b/i);
+  assert.match(continued.normalizedText, /without os\.walk/i);
+  assert.deepEqual(
+    continued.termCorrectionOverlays?.map((overlay) => overlay.correctionId),
+    ["correction-rag"]
+  );
 });
 
 test("starts a new unit for an independent question or explicit switch", () => {

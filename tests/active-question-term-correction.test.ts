@@ -4,6 +4,7 @@ import {
   applyActiveQuestionTermCorrection,
   authorizeActiveQuestionTermCorrection,
   hasAppliedTermCorrection,
+  reverseActiveQuestionTermCorrection,
 } from "../src/lib/meeting/active-question-term-correction.js";
 import {
   getLogicalQuestionAnswerFocusText,
@@ -193,6 +194,100 @@ test("authorizes only the current manual correction revision", () => {
     }).reason,
     "manual-correction-revision-mismatch"
   );
+});
+
+test("reverses only a correction owned by the current LQU", () => {
+  const correction: SpeechCorrection = {
+    ...makeCorrection("RAG not rec"),
+    term: "RAG",
+    from: "rec",
+    to: "RAG",
+  };
+  const applied = applyActiveQuestionTermCorrection({
+    correction,
+    logicalQuestionUnit: makeLogicalQuestion(
+      "Explain rec and where its data is stored."
+    ),
+    correctionTraceId: "trace_correction",
+    manualCorrectionRevision: 3,
+  }).logicalQuestionUnit;
+
+  const reversed = reverseActiveQuestionTermCorrection({
+    correction,
+    logicalQuestionUnit: applied,
+    corrections: [correction],
+    now: 3_000,
+  });
+
+  assert.equal(reversed.reversed, true);
+  if (!reversed.reversed) return;
+  assert.equal(reversed.previousRevision, 3);
+  assert.equal(reversed.nextRevision, 4);
+  assert.match(reversed.logicalQuestionUnit.normalizedText, /Explain rec/);
+  assert.doesNotMatch(reversed.logicalQuestionUnit.normalizedText, /RAG/);
+  assert.equal(reversed.logicalQuestionUnit.termCorrectionOverlays, undefined);
+  assert.match(
+    reversed.logicalQuestionUnit.compositionReasons.join(" "),
+    /manual-term-correction-reversal/
+  );
+});
+
+test("does not reverse a literal target term without correction provenance", () => {
+  const correction: SpeechCorrection = {
+    ...makeCorrection("RAG not rec"),
+    term: "RAG",
+    from: "rec",
+    to: "RAG",
+  };
+  const result = reverseActiveQuestionTermCorrection({
+    correction,
+    logicalQuestionUnit: makeLogicalQuestion(
+      "Explain RAG and where its data is stored."
+    ),
+    corrections: [correction],
+  });
+
+  assert.deepEqual(result, {
+    reversed: false,
+    reason: "correction-not-applied-to-current-lqu",
+  });
+});
+
+test("reconstructs a source-level speech replacement from pre-normalization text", () => {
+  const correction: SpeechCorrection = {
+    ...makeCorrection("RAG not rec"),
+    term: "RAG",
+    from: "rec",
+    to: "RAG",
+  };
+  const logicalQuestionUnit: LogicalQuestionUnit = {
+    ...makeLogicalQuestion("Explain RAG."),
+    sources: [
+      {
+        turnId: "turn_1",
+        text: "Explain RAG.",
+        preNormalizationText: "Explain rec.",
+        appliedSpeechCorrectionIds: [correction.id],
+        startedAt: 1_000,
+        endedAt: 1_500,
+      },
+    ],
+  };
+
+  const reversed = reverseActiveQuestionTermCorrection({
+    correction,
+    logicalQuestionUnit,
+    corrections: [correction],
+  });
+
+  assert.equal(reversed.reversed, true);
+  if (!reversed.reversed) return;
+  assert.equal(reversed.logicalQuestionUnit.sources[0]?.text, "Explain rec.");
+  assert.equal(
+    reversed.logicalQuestionUnit.sources[0]?.appliedSpeechCorrectionIds,
+    undefined
+  );
+  assert.match(reversed.logicalQuestionUnit.normalizedText, /Explain rec/);
 });
 
 function makeLogicalQuestion(text: string): LogicalQuestionUnit {

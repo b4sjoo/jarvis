@@ -130,8 +130,15 @@ export function projectAdvisorTranscriptForLogicalQuestion(input: {
 export function collectLogicalQuestionCorrectionIds(unit: LogicalQuestionUnit) {
   return Array.from(
     new Set(
-      (unit.termCorrectionOverlays ?? [])
-        .map((overlay) => overlay.correctionId.trim())
+      [
+        ...(unit.termCorrectionOverlays ?? []).map(
+          (overlay) => overlay.correctionId
+        ),
+        ...unit.sources.flatMap(
+          (source) => source.appliedSpeechCorrectionIds ?? []
+        ),
+      ]
+        .map((correctionId) => correctionId.trim())
         .filter(Boolean)
     )
   );

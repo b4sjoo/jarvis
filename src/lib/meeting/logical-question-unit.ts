@@ -15,10 +15,15 @@ import {
   projectPrimaryAsk,
   type PrimaryAskProjection,
 } from "./primary-ask-projection.js";
+import {
+  applyTermCorrectionOverlaysToText,
+  TERM_CORRECTION_PROJECTION_MAX_CHARS,
+} from "./term-correction-projection.js";
 
 export const LOGICAL_QUESTION_MAX_PREVIOUS_TURNS = 3;
 export const LOGICAL_QUESTION_MAX_AGE_MS = 30_000;
-export const LOGICAL_QUESTION_MAX_CHARS = 1_200;
+export const LOGICAL_QUESTION_MAX_CHARS =
+  TERM_CORRECTION_PROJECTION_MAX_CHARS;
 export const REFERENTIAL_COMPLETION_MAX_PREVIOUS_TURNS = 2;
 export const REFERENTIAL_COMPLETION_MAX_AGE_MS = 45_000;
 export const REFERENTIAL_COMPLETION_MAX_WORD_EQUIVALENTS = 16;
@@ -28,6 +33,8 @@ export interface LogicalQuestionSource {
   text: string;
   startedAt: number;
   endedAt: number;
+  preNormalizationText?: string;
+  appliedSpeechCorrectionIds?: string[];
 }
 
 export interface LogicalQuestionUnit {
@@ -140,6 +147,34 @@ export function composeLogicalQuestionUnit(
   const normalized = primaryAskProjection?.normalizedPrimaryAsk
     ? boundPrimaryAsk(primaryAskProjection.normalizedPrimaryAsk)
     : joinBoundedSources(sources);
+  const termCorrectionOverlays = shouldExtend
+    ? previous?.termCorrectionOverlays?.map((overlay) => ({ ...overlay }))
+    : undefined;
+  const effectiveNormalizedText = termCorrectionOverlays?.length
+    ? applyTermCorrectionOverlaysToText(
+        normalized.text,
+        termCorrectionOverlays
+      )
+    : normalized.text;
+  const effectivePrimaryAskProjection = primaryAskProjection
+    ? termCorrectionOverlays?.length
+      ? {
+          ...primaryAskProjection,
+          normalizedPrimaryAsk: effectiveNormalizedText,
+          answerFocusText: effectiveNormalizedText,
+          semanticEvidenceText: applyTermCorrectionOverlaysToText(
+            primaryAskProjection.semanticEvidenceText,
+            termCorrectionOverlays
+          ),
+          semanticEvidenceRetentionReasons: Array.from(
+            new Set([
+              ...primaryAskProjection.semanticEvidenceRetentionReasons,
+              "manual-correction-overlay" as const,
+            ])
+          ),
+        }
+      : primaryAskProjection
+    : undefined;
 
   return {
     id: shouldExtend ? previous!.id : createMeetingId("logical_question"),
@@ -149,7 +184,7 @@ export function composeLogicalQuestionUnit(
     currentTurnId: input.currentTurn.id,
     sourceTurnIds,
     sources,
-    normalizedText: normalized.text,
+    normalizedText: effectiveNormalizedText,
     startedAt: sources[0]?.startedAt ?? input.currentTurn.startedAt,
     updatedAt: now,
     compositionReasons: shouldExtend
@@ -168,7 +203,8 @@ export function composeLogicalQuestionUnit(
           LOGICAL_QUESTION_MAX_PREVIOUS_TURNS + 1),
     sectionHint: input.sectionHint,
     taskBoundaryEvidence: input.taskBoundaryEvidence,
-    primaryAskProjection,
+    primaryAskProjection: effectivePrimaryAskProjection,
+    termCorrectionOverlays,
   };
 }
 
@@ -532,6 +568,10 @@ function toSource(turn: TranscriptTurn): LogicalQuestionSource {
     text: normalizeText(turn.text),
     startedAt: turn.startedAt,
     endedAt: turn.endedAt,
+    preNormalizationText: turn.preNormalizationText,
+    appliedSpeechCorrectionIds: turn.appliedSpeechCorrectionIds
+      ? [...turn.appliedSpeechCorrectionIds]
+      : undefined,
   };
 }
 

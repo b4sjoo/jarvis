@@ -70,6 +70,8 @@ export interface TranscriptTurn {
     | "duplicate-suppressed"
     | "debug-only";
   relatedTurnIds?: string[];
+  preNormalizationText?: string;
+  appliedSpeechCorrectionIds?: string[];
 }
 
 export type DisplayTranscriptFinalization =
@@ -131,6 +133,7 @@ export interface SpeechCorrectionRule {
   to: string;
   source: "emergency" | "bias";
   reason: string;
+  correctionId?: string;
 }
 
 export interface SpeechBiasContext {
@@ -156,6 +159,7 @@ export interface ActiveQuestionTermCorrection {
   correctionId: string;
   rawText: string;
   normalizedTerm: string;
+  sourceTerm?: string;
   replacedText?: string;
   logicalQuestionUnitId?: string;
   logicalQuestionUnitRevision?: number;
@@ -198,7 +202,15 @@ export interface SpeechCorrection {
   createdAt: number;
   appliedCount: number;
   activeQuestion?: ActiveQuestionTermCorrection;
+  deactivatedAt?: number;
+  deactivationTraceId?: string;
+  deactivationOutcome?: SpeechCorrectionDeactivationOutcome;
+  reversalLogicalQuestionUnitRevision?: number;
 }
+
+export type SpeechCorrectionDeactivationOutcome =
+  | "future-rule-deactivated"
+  | "current-lqu-reversed";
 
 export interface SpeechNormalizationResult {
   text: string;

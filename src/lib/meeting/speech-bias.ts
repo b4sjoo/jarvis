@@ -64,6 +64,9 @@ export function buildSpeechBiasContext(
   corrections: SpeechCorrection[],
   preparedTerms: PreparationSpeechBiasTerm[] = []
 ): SpeechBiasContext {
+  const activeCorrections = corrections.filter(
+    (correction) => !correction.deactivatedAt
+  );
   const terms: SpeechBiasTerm[] = [];
   const addTerm = (
     term: string | undefined,
@@ -125,12 +128,12 @@ export function buildSpeechBiasContext(
     }
   }
 
-  for (const correction of corrections) {
+  for (const correction of activeCorrections) {
     addTerm(correction.to ?? correction.term, "correction", "high");
   }
 
   const correctionRules = dedupeRules([
-    ...buildCorrectionRules(terms, corrections),
+    ...buildCorrectionRules(terms, activeCorrections, corrections),
     ...preparedTerms.flatMap((prepared) =>
       prepared.aliases
         .filter(
@@ -277,17 +280,19 @@ export function formatSpeechBiasPromptForTrace(bias: SpeechBiasContext) {
 
 function buildCorrectionRules(
   terms: SpeechBiasTerm[],
-  corrections: SpeechCorrection[]
+  activeCorrections: SpeechCorrection[],
+  allCorrections: SpeechCorrection[]
 ) {
   const rules: SpeechCorrectionRule[] = [];
 
-  for (const correction of corrections) {
+  for (const correction of activeCorrections) {
     if (correction.from && correction.to) {
       rules.push({
         from: correction.from,
         to: correction.to,
         source: "emergency",
         reason: "manual correction",
+        correctionId: correction.id,
       });
     }
   }
@@ -316,7 +321,24 @@ function buildCorrectionRules(
     });
   }
 
-  return dedupeRules(rules);
+  const deactivatedPairs = new Set(
+    allCorrections
+      .filter(
+        (correction) =>
+          correction.deactivatedAt && correction.from && correction.to
+      )
+      .map(
+        (correction) =>
+          `${correction.from!.toLowerCase()}->${correction.to!.toLowerCase()}`
+      )
+  );
+  return dedupeRules(rules).filter(
+    (rule) =>
+      rule.source === "emergency" ||
+      !deactivatedPairs.has(
+        `${rule.from.toLowerCase()}->${rule.to.toLowerCase()}`
+      )
+  );
 }
 
 function buildSpeechPrompt(
