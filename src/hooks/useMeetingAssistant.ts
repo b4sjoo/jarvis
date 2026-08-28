@@ -563,7 +563,6 @@ import {
   commitSourceOwnedTransition,
   createCurrentQuestionSourceSettlementId,
   createTaskBoundaryCandidate,
-  decideLlmTypeRepairFirstParentAdmission,
   createProvisionalCurrentQuestion,
   resolveCurrentQuestionSourceKind,
   CurrentQuestionSettlementProposal,
@@ -584,7 +583,6 @@ import {
   formatRuntimeInferenceOperationForTrace,
   getRuntimeInferenceOperationDefinition,
   formatCurrentQuestionSettlementForTrace,
-  finalizeCurrentQuestionFirstParentSettlement,
   settlementAuthorizesTaskTransition,
   formatCurrentQuestionTerminalNoAnswerForTrace,
   formatQuestionTypeConsumerObservationForTrace,
@@ -10681,18 +10679,6 @@ export function useMeetingAssistant() {
         currentQuestionSettlement.questionType !== "unknown" &&
         advisorJob.logicalQuestionUnit
     );
-    const llmTypeRepairFirstParentAdmission =
-      decideLlmTypeRepairFirstParentAdmission({
-        logicalQuestionUnit: advisorJob.logicalQuestionUnit,
-        settlement: currentQuestionSettlement,
-        hasActiveParent: Boolean(
-          originalPromptContext.activeMeetingTask?.parent
-        ),
-        outputAuthorityAuthorized:
-          runtimeTypeRepairOutputAuthorized,
-        responseOpportunityGate:
-          refreshResponseOpportunityGenerationGate(),
-      });
     const boundedRecentHistoryDecision =
       decideBoundedRecentHistoryRead({
         questionText:
@@ -11039,31 +11025,6 @@ export function useMeetingAssistant() {
       } else {
         currentQuestionSettlementDurationMs = 0;
       }
-      if (llmTypeRepairFirstParentAdmission.authorized) {
-        const finalizedFirstParentSettlement =
-          finalizeCurrentQuestionFirstParentSettlement({
-            currentQuestion: provisionalCurrentQuestion,
-            typeOnlySettlement: currentQuestionSettlement,
-          });
-        if (finalizedFirstParentSettlement) {
-          currentQuestionSettlement = finalizedFirstParentSettlement;
-          advisorTaskSignals = {
-            ...advisorTaskSignals,
-            questionType: currentQuestionSettlement.questionType,
-            questionTypeDecision: undefined,
-            taskRelation: "new-parent",
-            taskRelationLexicalHint: undefined,
-            relationEvidenceAuthorized: true,
-            responseOnlyRelation: false,
-            source: "current-question-settlement",
-            reuseActivePlaybook: false,
-            latestTurnTaxonomyBoundaryReason:
-              "current-question-settlement",
-            taxonomyFallbackSuppressed: true,
-            unknownTaskMutationBlocked: false,
-          };
-        }
-      }
       if (!responseMutationSuppressed) {
         currentQuestionSettlementRef.current =
           currentQuestionSettlement;
@@ -11244,9 +11205,7 @@ export function useMeetingAssistant() {
       settlement: currentQuestionSettlement,
       proposedQuestionType: advisorTaskSignals.questionType,
       proposedRelation: advisorTaskSignals.taskRelation,
-      authoritySource: llmTypeRepairFirstParentAdmission.authorized
-        ? "accepted-llm-type-first-parent"
-        : taskBoundaryAuthoritySource,
+      authoritySource: taskBoundaryAuthoritySource,
       sourceKind: currentQuestionSourceKind,
       sourceObservationIds: currentQuestionSourceObservationIds,
       confidence: advisorTaskSignals.openingRoute?.commitParent
@@ -11254,13 +11213,9 @@ export function useMeetingAssistant() {
         : questionTypeDecisionAuthorityConfidence(
             advisorTaskSignals.questionTypeDecision
           ),
-      questionComplete:
-        llmTypeRepairFirstParentAdmission.authorized || questionComplete,
-      mutationAuthorized:
-        llmTypeRepairFirstParentAdmission.authorized ||
-        taskMutationAuthorization.authorized,
-      commitParent:
-        llmTypeRepairFirstParentAdmission.authorized || commitParent,
+      questionComplete,
+      mutationAuthorized: taskMutationAuthorization.authorized,
+      commitParent,
     });
     const taskBoundaryCandidateIsImmediate = Boolean(
       taskBoundaryCandidate?.commitPolicy === "immediate"
@@ -11367,16 +11322,6 @@ export function useMeetingAssistant() {
           advisorJob.runtimeTypeRepairOutputAuthority,
           runtimeTypeRepairOutputAuthorization
         ),
-        llmTypeRepairFirstParentAdmissionAuthorized:
-          llmTypeRepairFirstParentAdmission.authorized,
-        llmTypeRepairFirstParentAdmissionReason:
-          llmTypeRepairFirstParentAdmission.reason,
-        llmTypeRepairFirstParentProposedRelation:
-          llmTypeRepairFirstParentAdmission.proposedRelation,
-        llmTypeRepairFirstParentAdmissionCommand:
-          llmTypeRepairFirstParentAdmission.command?.kind,
-        llmTypeRepairFirstParentAdmissionResponseOpportunityOperationId:
-          llmTypeRepairFirstParentAdmission.responseOpportunityOperationId,
         ...formatQuestionLineageForTrace(questionLineage),
         ...formatTransientPersonalStatusForTrace(
           transientPersonalStatusDecision

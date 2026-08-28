@@ -128,18 +128,18 @@ test("settles Voice question type before Relation and passes one tuple to Adviso
   );
 });
 
-test("lets an authorized first-parent admission outrank implicit response-only scope", () => {
+test("settles first-parent admission in the shared coordinator", () => {
   assert.match(
     source,
-    /const implicitResponseOnlyScopeAllowed =\s*!llmTypeRepairFirstParentAdmission\.authorized;/
+    /coordinateOrderedSettlement\(\{/
   );
-  assert.match(
+  assert.doesNotMatch(
     source,
-    /\(implicitResponseOnlyScopeAllowed &&\s*llmTypeOnlySettlement &&\s*advisorJob\.logicalQuestionUnit/
+    /implicitResponseOnlyScopeAllowed/
   );
-  assert.match(
+  assert.doesNotMatch(
     source,
-    /\(implicitResponseOnlyScopeAllowed &&\s*advisorTaskSignals\.responseOnlyRelation &&\s*advisorJob\.logicalQuestionUnit/
+    /finalizeCurrentQuestionFirstParentSettlement/
   );
 });
 
