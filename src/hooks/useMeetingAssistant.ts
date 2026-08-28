@@ -33451,6 +33451,33 @@ export function useMeetingAssistant() {
         | CurrentQuestionSettlementDecision
         | undefined;
       let correctionAtomicCommitRejectionReason: string | undefined;
+      const correctionTargetOwnsActiveParent =
+        correctionTargetOwnsParentOrigin({
+          logicalQuestionUnit: application.logicalQuestionUnit,
+          parent: contextState.taskRuntime.parent,
+        });
+      const correctionCurrentQuestion = createProvisionalCurrentQuestion({
+        logicalQuestionUnit: application.logicalQuestionUnit,
+        sourceKind: correctionSourceKind,
+        sourceObservationIds: targetSourceObservationIds,
+      });
+      const correctionRelationHandle =
+        correctionOwnedTrigger.shouldAdjudicate &&
+        !correctionTargetOwnsActiveParent
+          ? scheduleTaskRelationAdjudication({
+              turn: {
+                speaker: "them",
+                text: correctedSemanticEvidenceText,
+              },
+              traceId: repairTrace.id,
+              turnGateAction: "answer-refresh",
+              logicalQuestionUnit: application.logicalQuestionUnit,
+              lexical: correctedQuestionTypeDecision,
+              sourceKind: correctionSourceKind,
+              currentQuestion: correctionCurrentQuestion,
+              manualCorrectionOwned: true,
+            })
+          : undefined;
       if (
         correctionOwnedTrigger.shouldAdjudicate &&
         correctionOwnedOperationId
@@ -33513,6 +33540,66 @@ export function useMeetingAssistant() {
               normalizeCanonicalQuestionType(
                 latestParent?.questionType
               ) ?? "unknown";
+            const settledCorrectionType =
+              normalizeCanonicalQuestionType(
+                outcome.settlement?.questionType ??
+                  outcome.candidate?.questionType
+              ) ?? latestParentType;
+            let orderedCorrectionRelation:
+              | OrderedTaskRelationResolutionDecision
+              | undefined;
+            if (
+              correctionRelationHandle?.releaseWindowRequested &&
+              correctionRelationHandle
+            ) {
+              const elapsedMs = Date.now() - adjudicationStartedAt;
+              const remainingBudgetMs = Math.max(
+                1,
+                CORRECTION_OWNED_ADJUDICATION_BUDGET_MS - elapsedMs
+              );
+              try {
+                const relationResolution =
+                  await resolveOrderedTaskRelationWithinWindow({
+                    handle: correctionRelationHandle,
+                    traceId: repairTrace.id,
+                    currentQuestionType: settledCorrectionType,
+                    sourceKind: correctionSourceKind,
+                    activeMeetingTask: latestContext.activeMeetingTask,
+                    screenBoundaryPrior:
+                      correctionSourceKind === "screen",
+                    screenTypeEvidenceAuthorized: true,
+                    waitBudgetMs: remainingBudgetMs,
+                  });
+                orderedCorrectionRelation = relationResolution.decision;
+              } catch (error) {
+                traceStoreRef.current.updateMetadata(repairTrace.id, {
+                  correctionOrderedRelationError:
+                    error instanceof Error ? error.message : String(error),
+                });
+              }
+            }
+            const correctionCoordinatorDecision =
+              coordinateOrderedSettlement({
+                sourceKind: correctionSourceKind,
+                currentQuestionType: settledCorrectionType,
+                activeMeetingTask: latestContext.activeMeetingTask,
+                orderedRelation: orderedCorrectionRelation,
+                screenBoundaryPrior: correctionSourceKind === "screen",
+                screenTypeEvidenceAuthorized: true,
+              });
+            traceStoreRef.current.updateMetadata(repairTrace.id, {
+              ...formatOrderedSettlementCoordinatorForTrace(
+                correctionCoordinatorDecision
+              ),
+              correctionRelationOperationId:
+                correctionRelationHandle?.operationId,
+              correctionRelationParallelWithType: Boolean(
+                correctionRelationHandle
+              ),
+            });
+            const effectiveOrderedRelation = correctionTargetOwnsActiveParent
+              ? "followup-parent"
+              : correctionCoordinatorDecision.relation.relation;
             correctionOwnedResettlement =
               resolveCorrectionOwnedTypeResettlement({
                 logicalQuestionUnit: application.logicalQuestionUnit,
@@ -33529,12 +33616,13 @@ export function useMeetingAssistant() {
                 activeParentRevision: latestParent?.revisions,
                 activeParentType: latestParentType,
                 targetOwnsActiveParent:
-                  correctionTargetOwnsParentOrigin({
-                    logicalQuestionUnit: application.logicalQuestionUnit,
-                    parent: latestContext.taskRuntime.parent,
-                  }),
+                  correctionTargetOwnsActiveParent,
                 manualCorrectionRevision:
                   manualCorrectionRevisionRef.current,
+                orderedRelation: effectiveOrderedRelation,
+                orderedRelationReason: correctionTargetOwnsActiveParent
+                  ? "parent-origin-same-question"
+                  : correctionCoordinatorDecision.reason,
               });
           } catch (error) {
             timedOut =
@@ -33620,6 +33708,14 @@ export function useMeetingAssistant() {
                 : "existing-parent-provisional-regeneration",
           }
         );
+      }
+
+      if (
+        !correctionSettlementOverride &&
+        correctionOwnedResettlement?.settlement
+      ) {
+        correctionSettlementOverride =
+          correctionOwnedResettlement.settlement;
       }
 
       if (correctionOwnedResettlement?.parentMutationAuthorized) {
@@ -34149,36 +34245,6 @@ export function useMeetingAssistant() {
           !correctionExecutionPlan &&
           correctionOwnedResettlement?.disposition !==
             "same-domain-fast-path";
-        const correctionFallbackScope =
-          correctionNeedsCurrentOnlyFallback
-            ? createResponseOnlyTaskScope({
-                logicalQuestionUnitId:
-                  application.logicalQuestionUnit.id,
-                revision:
-                  application.logicalQuestionUnit.revision,
-                sourceQuestion: correctedAnswerFocusText,
-                sourceTurnIds:
-                  application.logicalQuestionUnit.sourceTurnIds,
-                inferredType:
-                  correctedQuestionTypeDecision.type ??
-                  "unknown",
-                relationDisposition:
-                  correctionOwnedResettlement?.disposition ===
-                  "semantic-result-timeout"
-                    ? "timeout"
-                    : "invalid",
-                preservedParent:
-                  advisorContext.activeMeetingTask,
-                contextReadScope: "current-only",
-              })
-            : undefined;
-        const correctionPromptContextOverride =
-          correctionFallbackScope
-            ? applyResponseOnlyTaskScopeToPromptContext(
-                contextManagerRef.current.buildAdvisorPromptContext(),
-                correctionFallbackScope
-              )
-            : undefined;
         traceStoreRef.current.updateMetadata(repairTrace.id, {
           correctionCurrentOnlyFallback:
             correctionNeedsCurrentOnlyFallback,
@@ -34203,10 +34269,6 @@ export function useMeetingAssistant() {
           taskMutationAuthority: "preserve-parent",
           questionLineage: correctedLineage,
           logicalQuestionUnit: application.logicalQuestionUnit,
-          promptContextOverride:
-            correctionPromptContextOverride,
-          responseOnlyTaskScopeOverride:
-            correctionFallbackScope,
           currentQuestionSettlementOverride:
             correctionSettlementOverride,
           settledExecutionPlanOverride:

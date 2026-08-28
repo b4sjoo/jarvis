@@ -306,6 +306,8 @@ export function resolveCorrectionOwnedTypeResettlement<
   sourceKind?: CurrentQuestionSourceKind;
   sourceObservationIds?: readonly string[];
   minConfidence?: number;
+  orderedRelation?: Exclude<CurrentQuestionRelation, "unknown">;
+  orderedRelationReason?: string;
 }): CorrectionOwnedResettlementDecision {
   const activeParentType =
     normalizeCanonicalQuestionType(input.activeParentType) ?? "unknown";
@@ -340,26 +342,37 @@ export function resolveCorrectionOwnedTypeResettlement<
       ? [...input.sourceObservationIds]
       : undefined,
   });
+  const typeProposal = createLlmTypeRepairSettlementProposal({
+    currentQuestion,
+    adjudication,
+    expectedParentId: input.activeParentId,
+    expectedParentRevision: input.activeParentRevision,
+  });
   const settlement = settleCurrentQuestion({
     currentQuestion,
-    llmProposal: createLlmTypeRepairSettlementProposal({
-      currentQuestion,
-      adjudication,
-      expectedParentId: input.activeParentId,
-      expectedParentRevision: input.activeParentRevision,
-    }),
+    llmProposal: input.orderedRelation
+      ? {
+          ...typeProposal,
+          relation: input.orderedRelation,
+          relationEvidenceAuthorized: true,
+          reasons: [
+            ...(typeProposal.reasons ?? []),
+            `ordered-relation:${input.orderedRelationReason ?? "coordinator"}`,
+          ],
+        }
+      : typeProposal,
     activeParentId: input.activeParentId,
     activeParentRevision: input.activeParentRevision,
     manualCorrectionRevision: input.manualCorrectionRevision,
     policy: {
       allowLlmTypeRepair: true,
-      allowLlmRelationRepair: false,
+      allowLlmRelationRepair: Boolean(input.orderedRelation),
       allowLlmActionRepair: false,
       llmTypeRepairMinConfidence:
         input.minConfidence ?? CORRECTION_OWNED_ADJUDICATION_MIN_CONFIDENCE,
       runtimeMutationAuthorized: true,
       questionComplete: true,
-      commitParent: false,
+      commitParent: Boolean(input.orderedRelation),
     },
   });
   const correctedType = settlement.questionType;
@@ -384,7 +397,7 @@ export function resolveCorrectionOwnedTypeResettlement<
       disposition: "same-domain-fast-path",
       parentMutationAuthorized: false,
       correctedType,
-      relation: "followup-parent",
+      relation: settlement.relation,
       confidence: adjudication.confidence,
       reason: "corrected-question-remains-in-active-parent-domain",
       settlement,
@@ -405,7 +418,7 @@ export function resolveCorrectionOwnedTypeResettlement<
     disposition: "same-question-retype",
     parentMutationAuthorized: true,
     correctedType,
-    relation: "followup-parent",
+    relation: settlement.relation,
     confidence: adjudication.confidence,
     reason: "human-correction-changed-current-question-domain",
     settlement,
