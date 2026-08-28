@@ -1,6 +1,5 @@
 import type { ActiveMeetingTask } from "./active-meeting-task";
 import type { LogicalQuestionUnit } from "./logical-question-unit";
-import { projectEffectiveLogicalQuestionSources } from "./logical-question-effective-projection.js";
 import type {
   AdvisorPromptContext,
   MeetingContextState,
@@ -706,12 +705,14 @@ function resolveLatestTurn(
     (turn) => turn.id === logicalQuestionUnit.currentTurnId
   );
   if (existing) {
-    const projection = projectEffectiveLogicalQuestionSources(
-      logicalQuestionUnit
+    const corrected = Boolean(
+      logicalQuestionUnit.termCorrectionOverlays?.length ||
+        logicalQuestionUnit.sources.some(
+          (source) => source.appliedSpeechCorrectionIds?.length
+        )
     );
-    return projection.corrected &&
-      logicalQuestionUnit.sourceTurnIds.includes(existing.id)
-      ? { ...existing, text: projection.answerFocusText }
+    return corrected && logicalQuestionUnit.sourceTurnIds.includes(existing.id)
+      ? { ...existing, text: logicalQuestionUnit.normalizedText.trim() }
       : { ...existing };
   }
 

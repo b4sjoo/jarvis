@@ -106,7 +106,10 @@ import {
   EffectiveQuestionSourceLedger,
   selectOwnerScopedRelationEvidence,
 } from "@/lib/meeting/effective-question-source-ledger";
-import { projectAdvisorTranscriptForLogicalQuestion } from "@/lib/meeting/logical-question-effective-projection";
+import {
+  projectAdvisorTranscriptForLogicalQuestion,
+  projectEffectiveLogicalQuestionSources,
+} from "@/lib/meeting/logical-question-effective-projection";
 import {
   coordinateOrderedSettlement,
   formatOrderedSettlementCoordinatorForTrace,
@@ -115,6 +118,7 @@ import {
   applyEffectiveCurrentQuestionContext,
   formatEffectiveCurrentQuestionContextForTrace,
 } from "@/lib/meeting/effective-current-question-context";
+import { reverseActiveQuestionTermCorrection } from "@/lib/meeting/term-correction-reversal";
 import {
   authorizeTaskRelationSplitLease,
   authorizeTaskRelationCanonicalPredecessors,
@@ -302,7 +306,6 @@ import {
   buildDiagramOverlayEvalTraceMetadata,
   buildCurrentTaskDiagramDomainContext,
   applyActiveQuestionTermCorrection,
-  reverseActiveQuestionTermCorrection,
   authorizeActiveQuestionTermCorrection,
   CORRECTION_OWNED_ADJUDICATION_BUDGET_MS,
   decideCorrectionOwnedAdjudicationTrigger,
@@ -15637,6 +15640,8 @@ export function useMeetingAssistant() {
         readResponseOpportunityContextCapsule();
       const request = buildResponseOpportunityRequest({
         logicalQuestionUnit,
+        effectiveSources:
+          projectEffectiveLogicalQuestionSources(logicalQuestionUnit).sources,
         contextCapsule,
       });
       const budgetKey = [
@@ -15976,6 +15981,10 @@ export function useMeetingAssistant() {
               : logicalQuestionUnit;
           const latestRequest = buildResponseOpportunityRequest({
             logicalQuestionUnit: latestLogicalQuestionUnit,
+            effectiveSources:
+              projectEffectiveLogicalQuestionSources(
+                latestLogicalQuestionUnit
+              ).sources,
             contextCapsule:
               readResponseOpportunityContextCapsule(),
           });

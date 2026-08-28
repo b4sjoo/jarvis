@@ -4,8 +4,8 @@ import {
   applyActiveQuestionTermCorrection,
   authorizeActiveQuestionTermCorrection,
   hasAppliedTermCorrection,
-  reverseActiveQuestionTermCorrection,
 } from "../src/lib/meeting/active-question-term-correction.js";
+import { reverseActiveQuestionTermCorrection } from "../src/lib/meeting/term-correction-reversal.js";
 import {
   getLogicalQuestionAnswerFocusText,
   getLogicalQuestionSemanticEvidenceText,

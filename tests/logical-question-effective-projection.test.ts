@@ -33,6 +33,8 @@ test("uses the corrected projection for taxonomy and response opportunity", () =
   const taxonomy = projectLogicalQuestionForAdjudication(corrected);
   const response = buildResponseOpportunityRequest({
     logicalQuestionUnit: corrected,
+    effectiveSources:
+      projectEffectiveLogicalQuestionSources(corrected).sources,
   });
 
   assert.match(taxonomy.text, /RAG/);
