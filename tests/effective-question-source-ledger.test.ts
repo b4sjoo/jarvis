@@ -224,6 +224,42 @@ test("does not revive a binding whose durable owner is no longer active", () => 
   );
 });
 
+test("does not fall back to an older revision after the winning child owner retires", () => {
+  const activeTask = task();
+  activeTask.child = undefined;
+  const revised = {
+    ...unit("lqu-rebound", "turn-current", "Continue the explanation.", 100),
+    revision: 3,
+  };
+  const parentRevision: EffectiveQuestionSourceRecord = record({
+    recordId: "record-parent-revision-1",
+    logicalQuestionUnitId: revised.id,
+    logicalQuestionRevision: 1,
+    relation: "followup-parent",
+    owner: { kind: "parent-mainline", parentId: "parent-rag" },
+  });
+  const childRevision: EffectiveQuestionSourceRecord = record({
+    recordId: "record-child-revision-2",
+    logicalQuestionUnitId: revised.id,
+    logicalQuestionRevision: 2,
+    relation: "child-probe",
+    owner: {
+      kind: "active-child",
+      parentId: "parent-rag",
+      childId: "child-hnsw",
+    },
+  });
+
+  assert.equal(
+    resolveRevisionStableTopologyBinding({
+      records: [parentRevision, childRevision],
+      logicalQuestionUnit: revised,
+      activeMeetingTask: activeTask,
+    }),
+    undefined
+  );
+});
+
 test("records only source-owned effective LQU projections", () => {
   const ledger = new EffectiveQuestionSourceLedger(2);
   const record = createEffectiveQuestionSourceRecord({

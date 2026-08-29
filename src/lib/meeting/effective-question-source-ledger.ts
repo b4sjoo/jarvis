@@ -166,12 +166,14 @@ export function resolveRevisionStableTopologyBinding(input: {
         record.runtimeEpoch === logicalQuestionUnit.runtimeEpoch &&
         record.logicalQuestionUnitId === logicalQuestionUnit.id &&
         record.logicalQuestionRevision <= logicalQuestionUnit.revision &&
-        isRevisionStableTopologyRelation(record.relation) &&
-        ownerMatchesActiveTask(record.owner, activeMeetingTask)
+        isRevisionStableTopologyRelation(record.relation)
     )
     .sort(compareEffectiveQuestionSourceRecords)
     .at(-1);
   if (latestBoundRecord) {
+    if (!ownerMatchesActiveTask(latestBoundRecord.owner, activeMeetingTask)) {
+      return undefined;
+    }
     return {
       relation: latestBoundRecord.relation as RevisionStableTopologyRelation,
       owner: { ...latestBoundRecord.owner },
