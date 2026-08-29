@@ -126,6 +126,10 @@ test("turns an accepted type adjudication into one answer-only refresh authority
   });
 
   assert.ok(authority);
+  assert.match(
+    authority.id,
+    /^runtime_type_adjudication_output_authority_/
+  );
   assert.deepEqual(authority.authorizedArtifacts, ["answer"]);
   assert.equal(authority.typeAuthority, "runtime-adjudication");
   assert.equal(authority.authorityScope, "type-only");

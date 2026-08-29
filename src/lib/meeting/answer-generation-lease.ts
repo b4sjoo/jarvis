@@ -292,7 +292,7 @@ export function createRuntimeTypeAdjudicationOutputAuthority(input: {
   }
 
   return {
-    id: createMeetingId("runtime_type_repair_output_authority"),
+    id: createMeetingId("runtime_type_adjudication_output_authority"),
     operationId: input.operationId,
     settlementId: input.settlement.settlementId,
     sessionId: input.settlement.sessionId,
