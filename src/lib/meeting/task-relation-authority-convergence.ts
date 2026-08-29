@@ -416,7 +416,13 @@ function toCandidateOperation(
   row: TaskRelationAdjudicationReflectionRow
 ): TaskRelationCounterfactualOperationV1 | undefined {
   const relation = toRuntimeRelation(row.candidateRelation);
-  if (!row.operationId || !row.sessionId || !row.parentId || !relation) {
+  if (
+    !row.operationId ||
+    !row.sessionId ||
+    !row.parentId ||
+    !relation ||
+    excludesRelationOnlyPathSimulation(row)
+  ) {
     return undefined;
   }
   return {
@@ -454,7 +460,8 @@ function toHumanExpectedOperation(
     !row.sessionId ||
     !row.parentId ||
     !relation ||
-    isCompatibleHumanTuple(row) !== true
+    isCompatibleHumanTuple(row) !== true ||
+    excludesRelationOnlyPathSimulation(row)
   ) {
     return undefined;
   }
@@ -498,6 +505,8 @@ function buildConvergenceRow(input: {
   );
   const scorable =
     expectedRelation && expectedTupleCompatible === true;
+  const pathSimulationExcluded =
+    excludesRelationOnlyPathSimulation(input.row);
   const observedCorrect =
     scorable && observedProductionDecision
       ? observedProductionDecision === expectedRelation
@@ -507,9 +516,11 @@ function buildConvergenceRow(input: {
       ? semanticCandidate === expectedRelation
       : undefined;
   const humanPathApplicable =
+    !pathSimulationExcluded &&
     input.humanResult?.counterfactualShadowApplicability ===
     "applicable";
   const candidatePathApplicable =
+    !pathSimulationExcluded &&
     input.candidateResult?.counterfactualShadowApplicability ===
     "applicable";
   const counterfactualPathCorrect =
@@ -546,9 +557,13 @@ function buildConvergenceRow(input: {
     semanticCorrect,
     productionApplicability: input.row.productionApplicability,
     counterfactualApplicability:
-      input.candidateResult?.counterfactualShadowApplicability,
+      pathSimulationExcluded
+        ? "not-evaluated"
+        : input.candidateResult?.counterfactualShadowApplicability,
     humanPathApplicability:
-      input.humanResult?.counterfactualShadowApplicability,
+      pathSimulationExcluded
+        ? "not-evaluated"
+        : input.humanResult?.counterfactualShadowApplicability,
     observedCorrect,
     counterfactualPathCorrect,
     counterfactualRescue:
@@ -565,9 +580,23 @@ function buildConvergenceRow(input: {
     stale: input.row.stale,
     mutationApplied: input.row.mutationApplied,
     contextOutcome: input.row.contextOutcome,
-    counterfactualReason: input.candidateResult?.reason,
-    humanPathReason: input.humanResult?.reason,
+    counterfactualReason: pathSimulationExcluded
+      ? "parent-action-outside-relation-only-simulator"
+      : input.candidateResult?.reason,
+    humanPathReason: pathSimulationExcluded
+      ? "parent-action-outside-relation-only-simulator"
+      : input.humanResult?.reason,
   };
+}
+
+function excludesRelationOnlyPathSimulation(
+  row: TaskRelationAdjudicationReflectionRow
+) {
+  return Boolean(
+    row.expectedRelation === "new-parent" &&
+      (row.expectedParentAction === "preserve" ||
+        row.expectedParentAction === "retype")
+  );
 }
 
 function projectionMetrics(

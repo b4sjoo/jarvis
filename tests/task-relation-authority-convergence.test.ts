@@ -180,7 +180,31 @@ test("keeps revision-stable new-parent retype labels in the denominator", () => 
 
   assert.equal(report.metrics.compatibleHumanLabels, 1);
   assert.equal(report.metrics.incompatibleHumanLabels, 0);
-  assert.equal(report.metrics.counterfactual.accuracy.denominator, 1);
+  assert.deepEqual(report.metrics.observed.accuracy, {
+    numerator: 1,
+    denominator: 1,
+    rate: 1,
+  });
+  assert.deepEqual(report.metrics.semantic.accuracy, {
+    numerator: 1,
+    denominator: 1,
+    rate: 1,
+  });
+  assert.equal(report.metrics.counterfactual.accuracy.denominator, 0);
+  assert.equal(
+    report.rows[0]?.counterfactualApplicability,
+    "not-evaluated"
+  );
+  assert.equal(
+    report.rows[0]?.humanPathApplicability,
+    "not-evaluated"
+  );
+  assert.equal(
+    report.rows[0]?.counterfactualReason,
+    "parent-action-outside-relation-only-simulator"
+  );
+  assert.equal(report.candidateBranches.length, 0);
+  assert.equal(report.humanExpectedBranches.length, 0);
 });
 
 test("keeps invalid structured output out of relation accuracy", () => {
