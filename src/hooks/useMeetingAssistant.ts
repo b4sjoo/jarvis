@@ -419,6 +419,7 @@ import {
   createInitialPlaybookPhaseProgress,
   decideManualNextPhaseTransition,
   decidePlaybookPhaseProgression,
+  composeScreenPlaybookPhaseInput,
   decideInterviewerAssumptionAuthorization,
   formatInterviewerAssumptionAuthorizationForTrace,
   formatPlaybookPhaseDecisionForTrace,
@@ -27927,24 +27928,29 @@ export function useMeetingAssistant() {
               screenSourcePacket.sourceOperationAuthority
                 .boundVoicePrimaryAsk,
           });
+        const screenFreshParentCreated = Boolean(
+          provisionalScreenTaskRelation === "new-parent" &&
+            screenCurrentQuestionSettlement?.parentMutationAuthorized ===
+              true
+        );
+        const screenPhaseInput = composeScreenPlaybookPhaseInput({
+          catalogPhase: screenPlaybook?.phase,
+          committedPhase:
+            preflightContextState.activeMeetingTask?.parent.playbookPhase ??
+            preflightContextState.taskRuntime.parent?.playbookPhase,
+          committedProgress:
+            preflightContextState.activeMeetingTask?.parent.phaseProgress ??
+            preflightContextState.taskRuntime.parent?.phaseProgress,
+          freshParentCreated: screenFreshParentCreated,
+          currentOnly: screenCurrentOnly,
+        });
         const screenPhaseDecision = decidePlaybookPhaseProgression({
           questionType: normalizeQuestionTypeAlias(
             settledScreenQuestionType
           ),
           playbookId: screenPlaybook?.id,
-          currentPhase:
-            provisionalScreenTaskRelation === "new-parent" ||
-            screenCurrentOnly
-              ? screenPlaybook?.phase
-              : preflightContextState.activeMeetingTask?.parent.playbookPhase ??
-                preflightContextState.taskRuntime.parent?.playbookPhase ??
-                screenPlaybook?.phase,
-          phaseProgress:
-            provisionalScreenTaskRelation === "new-parent" ||
-            screenCurrentOnly
-              ? undefined
-              : preflightContextState.activeMeetingTask?.parent.phaseProgress ??
-                preflightContextState.taskRuntime.parent?.phaseProgress,
+          currentPhase: screenPhaseInput.currentPhase,
+          phaseProgress: screenPhaseInput.phaseProgress,
           latestTurnText: screenQuestionOwnedByVoice
             ? screenPrimaryAskEvidenceText
             : "",
@@ -27952,9 +27958,7 @@ export function useMeetingAssistant() {
           relation: provisionalScreenTaskRelation,
           subtaskIntent: screenSubtaskIntent,
           askFrame: screenPreflight?.askFrame ?? screenMemoryAskFrame,
-          freshParentCreated:
-            screenCurrentQuestionSettlement?.parentMutationAuthorized ===
-            true,
+          freshParentCreated: screenPhaseInput.freshParentCreated,
         });
         const screenRuntimePlaybook =
           provisionalScreenTaskRelation === "child-probe"

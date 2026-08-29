@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   applyPlaybookPhaseDecisionToProgress,
+  composeScreenPlaybookPhaseInput,
   decideInterviewerAssumptionAuthorization,
   decideManualNextPhaseTransition,
   decidePlaybookPhaseProgression,
@@ -549,6 +550,40 @@ test("retains an implementation phase for a revision-stable coding origin", () =
       .playbookFreshParentCreated,
     false
   );
+});
+
+test("composes Screen phase from lifecycle authority instead of topology relation", () => {
+  const retained = composeScreenPlaybookPhaseInput({
+    catalogPhase: "baseline_reasoning",
+    committedPhase: "implementation_validation",
+    committedProgress: {
+      baseline_reasoning: true,
+      optimized_pseudocode: true,
+    },
+    freshParentCreated: false,
+    currentOnly: false,
+  });
+  assert.deepEqual(retained, {
+    currentPhase: "implementation_validation",
+    phaseProgress: {
+      baseline_reasoning: true,
+      optimized_pseudocode: true,
+    },
+    freshParentCreated: false,
+  });
+
+  const created = composeScreenPlaybookPhaseInput({
+    catalogPhase: "baseline_reasoning",
+    committedPhase: "implementation_validation",
+    committedProgress: { baseline_reasoning: true },
+    freshParentCreated: true,
+    currentOnly: false,
+  });
+  assert.deepEqual(created, {
+    currentPhase: "baseline_reasoning",
+    phaseProgress: undefined,
+    freshParentCreated: true,
+  });
 });
 
 test("initializes a playbook from the catalog only when phase is absent", () => {

@@ -716,6 +716,25 @@ export function resolvePlaybookState(input: {
   };
 }
 
+export function composeScreenPlaybookPhaseInput(input: {
+  catalogPhase?: InterviewPlaybookPhase;
+  committedPhase?: InterviewPlaybookPhase;
+  committedProgress?: Record<string, boolean>;
+  freshParentCreated: boolean;
+  currentOnly: boolean;
+}) {
+  const isolatedResponse = input.currentOnly || input.freshParentCreated;
+  return {
+    currentPhase: isolatedResponse
+      ? input.catalogPhase
+      : input.committedPhase ?? input.catalogPhase,
+    phaseProgress: isolatedResponse
+      ? undefined
+      : input.committedProgress,
+    freshParentCreated: input.freshParentCreated,
+  };
+}
+
 export function decideInterviewerAssumptionAuthorization(input: {
   text: string;
   speaker: "me" | "them" | "unknown";
