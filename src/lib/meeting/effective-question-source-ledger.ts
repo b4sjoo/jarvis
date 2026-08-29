@@ -197,7 +197,7 @@ export function resolveRevisionStableTopologyBinding(input: {
         childId: child.id,
       },
       source: "active-child-origin",
-      boundRevision: 1,
+      boundRevision: logicalQuestionUnit.revision,
     };
   }
 

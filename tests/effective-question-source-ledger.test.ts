@@ -191,7 +191,7 @@ test("keeps a child-origin revision on the same active child", () => {
         childId: "child-hnsw",
       },
       source: "active-child-origin",
-      boundRevision: 1,
+      boundRevision: 3,
     }
   );
 });
