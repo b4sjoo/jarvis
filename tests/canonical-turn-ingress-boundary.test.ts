@@ -144,7 +144,7 @@ test("settles first-parent admission in the shared coordinator", () => {
   );
   assert.match(
     consumer,
-    /convergedSettlement\s*\? "input-evidence"\s*:\s*releaseAuthorized\s*\? "runtime-type-repair"/
+    /convergedSettlement\s*\? "input-evidence"\s*:\s*releaseAuthorized\s*\? "runtime-type-adjudication-output-only"/
   );
   assert.doesNotMatch(
     source,

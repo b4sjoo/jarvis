@@ -32,6 +32,9 @@ import {
   type CurrentQuestionSettlementDisposition,
   type ProvisionalCurrentQuestion,
 } from "./current-question-settlement.js";
+import {
+  normalizeRuntimeAdjudicationAuthorityLabel,
+} from "./runtime-adjudication-authority.js";
 import type {
   CriticalMomentCandidate,
   CriticalMomentEvaluation,
@@ -8461,25 +8464,32 @@ function buildRawCurrentQuestionProposalSummary(
       metadataSources,
       "currentQuestionSettlementEvidenceMode"
     ),
-    authority: readFirstString(
-      metadataSources,
-      "currentQuestionSettlementAuthority"
+    authority: normalizeRuntimeAdjudicationAuthorityLabel(
+      readFirstString(metadataSources, "currentQuestionSettlementAuthority")
     ),
-    authoritySource: readFirstString(
-      metadataSources,
-      "currentQuestionSettlementAuthoritySource"
+    authoritySource: normalizeRuntimeAdjudicationAuthorityLabel(
+      readFirstString(
+        metadataSources,
+        "currentQuestionSettlementAuthoritySource"
+      )
     ),
-    typeAuthoritySource: readFirstString(
-      metadataSources,
-      "currentQuestionSettlementTypeAuthoritySource"
+    typeAuthoritySource: normalizeRuntimeAdjudicationAuthorityLabel(
+      readFirstString(
+        metadataSources,
+        "currentQuestionSettlementTypeAuthoritySource"
+      )
     ),
-    relationAuthoritySource: readFirstString(
-      metadataSources,
-      "currentQuestionSettlementRelationAuthoritySource"
+    relationAuthoritySource: normalizeRuntimeAdjudicationAuthorityLabel(
+      readFirstString(
+        metadataSources,
+        "currentQuestionSettlementRelationAuthoritySource"
+      )
     ),
-    actionAuthoritySource: readFirstString(
-      metadataSources,
-      "currentQuestionSettlementActionAuthoritySource"
+    actionAuthoritySource: normalizeRuntimeAdjudicationAuthorityLabel(
+      readFirstString(
+        metadataSources,
+        "currentQuestionSettlementActionAuthoritySource"
+      )
     ),
     typeMutationAuthorized: readFirstBoolean(
       metadataSources,

@@ -4,7 +4,7 @@ import {
   buildCommittedTaskBoundaryParent,
   commitTaskBoundaryCandidate,
   createTaskBoundaryCandidate,
-  decideLlmTypeRepairFirstParentAdmission,
+  decideRuntimeTypeAdjudicationFirstParentAdmission,
   expireTaskBoundaryCandidate,
   taskBoundarySurvivesAdvisorOutcome,
 } from "../src/lib/meeting/task-boundary-transaction.js";
@@ -112,7 +112,7 @@ test("admits the first parent only after type and response opportunity settle on
   const repairedSettlement = settleCurrentQuestion({
     currentQuestion,
     llmProposal: {
-      source: "llm-type-repair",
+      source: "runtime-adjudication",
       sessionId: unit.sessionId,
       runtimeEpoch: unit.runtimeEpoch,
       logicalQuestionUnitId: unit.id,
@@ -128,7 +128,7 @@ test("admits the first parent only after type and response opportunity settle on
     },
     manualCorrectionRevision: 0,
     policy: {
-      allowLlmTypeRepair: true,
+      allowRuntimeTypeAdjudication: true,
       runtimeMutationAuthorized: false,
       questionComplete: true,
       commitParent: false,
@@ -151,14 +151,14 @@ test("admits the first parent only after type and response opportunity settle on
     settledAt: 95,
   };
 
-  const decision = decideLlmTypeRepairFirstParentAdmission({
+  const decision = decideRuntimeTypeAdjudicationFirstParentAdmission({
     logicalQuestionUnit: unit,
     settlement: repairedSettlement,
     hasActiveParent: false,
     outputAuthorityAuthorized: true,
     responseOpportunityGate,
   });
-  const blockedWithParent = decideLlmTypeRepairFirstParentAdmission({
+  const blockedWithParent = decideRuntimeTypeAdjudicationFirstParentAdmission({
     logicalQuestionUnit: unit,
     settlement: repairedSettlement,
     hasActiveParent: true,
@@ -180,7 +180,7 @@ test("admits the first parent only after type and response opportunity settle on
   assert.equal(blockedWithParent.authorized, false);
   assert.equal(blockedWithParent.reason, "active-parent-present");
 
-  const pending = decideLlmTypeRepairFirstParentAdmission({
+  const pending = decideRuntimeTypeAdjudicationFirstParentAdmission({
     logicalQuestionUnit: unit,
     settlement: repairedSettlement,
     hasActiveParent: false,
@@ -205,7 +205,7 @@ test("admits the first parent only after type and response opportunity settle on
     repairedSettlement.settlementId
   );
   assert.equal(finalSettlement.questionType, "general-system-design");
-  assert.equal(finalSettlement.typeAuthoritySource, "llm-type-repair");
+  assert.equal(finalSettlement.typeAuthoritySource, "runtime-adjudication");
   assert.equal(finalSettlement.relation, "new-parent");
   assert.equal(
     finalSettlement.relationAuthoritySource,
@@ -260,7 +260,7 @@ test("admits a first parent with two coordinated primary asks", () => {
   const settlement = settleCurrentQuestion({
     currentQuestion,
     llmProposal: {
-      source: "llm-type-repair",
+      source: "runtime-adjudication",
       sessionId: unit.sessionId,
       runtimeEpoch: unit.runtimeEpoch,
       logicalQuestionUnitId: unit.id,
@@ -276,7 +276,7 @@ test("admits a first parent with two coordinated primary asks", () => {
     },
     manualCorrectionRevision: 0,
     policy: {
-      allowLlmTypeRepair: true,
+      allowRuntimeTypeAdjudication: true,
       runtimeMutationAuthorized: false,
       questionComplete: true,
       commitParent: false,
@@ -285,7 +285,7 @@ test("admits a first parent with two coordinated primary asks", () => {
   const request = buildResponseOpportunityRequest({
     logicalQuestionUnit: unit,
   });
-  const decision = decideLlmTypeRepairFirstParentAdmission({
+  const decision = decideRuntimeTypeAdjudicationFirstParentAdmission({
     logicalQuestionUnit: unit,
     settlement,
     hasActiveParent: false,
@@ -339,7 +339,7 @@ test("admits a contextual response gate without recomputing its leased source ha
   const repairedSettlement = settleCurrentQuestion({
     currentQuestion,
     llmProposal: {
-      source: "llm-type-repair",
+      source: "runtime-adjudication",
       sessionId: unit.sessionId,
       runtimeEpoch: unit.runtimeEpoch,
       logicalQuestionUnitId: unit.id,
@@ -355,7 +355,7 @@ test("admits a contextual response gate without recomputing its leased source ha
     },
     manualCorrectionRevision: 0,
     policy: {
-      allowLlmTypeRepair: true,
+      allowRuntimeTypeAdjudication: true,
       runtimeMutationAuthorized: false,
       questionComplete: true,
       commitParent: false,
@@ -375,7 +375,7 @@ test("admits a contextual response gate without recomputing its leased source ha
     contextCapsule,
   });
 
-  const decision = decideLlmTypeRepairFirstParentAdmission({
+  const decision = decideRuntimeTypeAdjudicationFirstParentAdmission({
     logicalQuestionUnit: unit,
     settlement: repairedSettlement,
     hasActiveParent: false,

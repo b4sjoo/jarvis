@@ -67,12 +67,12 @@ test("manual correction keeps immediate hard-override authority", () => {
   assert.equal(decision.protectActiveGeneration, false);
 });
 
-test("a settled runtime type repair can replace immediately", () => {
+test("a settled runtime type adjudication can replace immediately", () => {
   const incoming = job();
   incoming.refreshAuthority = {
     authorized: true,
-    kind: "runtime-type-repair",
-    reason: "runtime-type-repair",
+    kind: "runtime-type-adjudication-output-only",
+    reason: "runtime-type-adjudication-output-only",
     hardOverride: false,
     maySupersedeGeneration: true,
     authorityId: "authority-a",

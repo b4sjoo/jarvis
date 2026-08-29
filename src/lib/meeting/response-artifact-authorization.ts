@@ -48,11 +48,11 @@ export function isExplicitCodingComplexityIntent(input: {
 
 export function resolveAdvisorGenerationRequestedArtifacts(input: {
   forceAnswerOnly?: boolean;
-  runtimeTypeRepairAnswerOnly?: boolean;
+  runtimeTypeAdjudicationAnswerOnly?: boolean;
   settledPlanArtifacts?: readonly AnswerArtifactSection[];
   committedManualPhaseArtifacts?: readonly AnswerArtifactSection[];
 }): AnswerArtifactSection[] {
-  if (input.forceAnswerOnly || input.runtimeTypeRepairAnswerOnly) {
+  if (input.forceAnswerOnly || input.runtimeTypeAdjudicationAnswerOnly) {
     return ["answer"];
   }
 

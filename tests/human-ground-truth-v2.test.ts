@@ -1284,7 +1284,7 @@ test("separates the current-question winner from an unresolved durable parent", 
   );
   assert.equal(
     observed.observedCurrentQuestionTypeAuthority,
-    "llm-type-repair"
+    "runtime-adjudication"
   );
   assert.equal(observed.observedParentId, "parent_unknown");
   assert.equal(observed.observedParentType, "unknown");

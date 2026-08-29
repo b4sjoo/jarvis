@@ -1,11 +1,11 @@
 import {
-  createLlmTypeRepairSettlementProposal,
+  createRuntimeTypeAdjudicationSettlementProposal,
   createProvisionalCurrentQuestion,
   settleCurrentQuestion,
   type CurrentQuestionRelation,
   type CurrentQuestionSourceKind,
   type CurrentQuestionSettlementDecision,
-  type LlmTypeRepairSettlementCandidate,
+  type RuntimeTypeAdjudicationSettlementCandidate,
 } from "./current-question-settlement.js";
 import type { LogicalQuestionUnit } from "./logical-question-unit.js";
 import {
@@ -186,7 +186,7 @@ export function resolveCorrectionOwnedResettlement(input: {
   const settlement = settleCurrentQuestion({
     currentQuestion,
     llmProposal: {
-      source: "llm-type-repair",
+      source: "runtime-adjudication",
       sessionId: input.logicalQuestionUnit.sessionId,
       runtimeEpoch: input.logicalQuestionUnit.runtimeEpoch,
       logicalQuestionUnitId: input.logicalQuestionUnit.id,
@@ -211,10 +211,10 @@ export function resolveCorrectionOwnedResettlement(input: {
     activeParentRevision: input.activeParentRevision,
     manualCorrectionRevision: input.manualCorrectionRevision,
     policy: {
-      allowLlmTypeRepair: true,
+      allowRuntimeTypeAdjudication: true,
       allowLlmRelationRepair: true,
       allowLlmActionRepair: false,
-      llmTypeRepairMinConfidence:
+      runtimeTypeAdjudicationMinConfidence:
         input.minConfidence ??
         CORRECTION_OWNED_ADJUDICATION_MIN_CONFIDENCE,
       llmRelationRepairMinConfidence:
@@ -255,7 +255,7 @@ export function resolveCorrectionOwnedResettlement(input: {
     };
   }
   if (
-    settlement.typeAuthoritySource !== "llm-type-repair" ||
+    settlement.typeAuthoritySource !== "runtime-adjudication" ||
     !settlement.typeMutationAuthorized
   ) {
     return {
@@ -292,7 +292,7 @@ export function resolveCorrectionOwnedResettlement(input: {
 }
 
 export function resolveCorrectionOwnedTypeResettlement<
-  TCandidate extends LlmTypeRepairSettlementCandidate,
+  TCandidate extends RuntimeTypeAdjudicationSettlementCandidate,
 >(input: {
   logicalQuestionUnit: LogicalQuestionUnit;
   adjudication?: TCandidate;
@@ -342,7 +342,7 @@ export function resolveCorrectionOwnedTypeResettlement<
       ? [...input.sourceObservationIds]
       : undefined,
   });
-  const typeProposal = createLlmTypeRepairSettlementProposal({
+  const typeProposal = createRuntimeTypeAdjudicationSettlementProposal({
     currentQuestion,
     adjudication,
     expectedParentId: input.activeParentId,
@@ -365,10 +365,10 @@ export function resolveCorrectionOwnedTypeResettlement<
     activeParentRevision: input.activeParentRevision,
     manualCorrectionRevision: input.manualCorrectionRevision,
     policy: {
-      allowLlmTypeRepair: true,
+      allowRuntimeTypeAdjudication: true,
       allowLlmRelationRepair: Boolean(input.orderedRelation),
       allowLlmActionRepair: false,
-      llmTypeRepairMinConfidence:
+      runtimeTypeAdjudicationMinConfidence:
         input.minConfidence ?? CORRECTION_OWNED_ADJUDICATION_MIN_CONFIDENCE,
       runtimeMutationAuthorized: true,
       questionComplete: true,
@@ -379,7 +379,7 @@ export function resolveCorrectionOwnedTypeResettlement<
   if (
     correctedType === "unknown" ||
     !isParentCanonicalQuestionType(correctedType) ||
-    settlement.typeAuthoritySource !== "llm-type-repair" ||
+    settlement.typeAuthoritySource !== "runtime-adjudication" ||
     !settlement.typeMutationAuthorized
   ) {
     return {

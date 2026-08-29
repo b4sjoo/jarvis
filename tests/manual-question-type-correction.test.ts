@@ -60,7 +60,7 @@ test("settles manual type authority and relation authority in one correction tra
   assert.equal(result.settlement.questionType, "general-system-design");
   assert.equal(result.settlement.relation, "new-parent");
   assert.equal(result.settlement.typeAuthoritySource, "manual-correction");
-  assert.equal(result.settlement.relationAuthoritySource, "llm-type-repair");
+  assert.equal(result.settlement.relationAuthoritySource, "runtime-adjudication");
   assert.equal(result.settlement.parentMutationAuthorized, true);
 });
 

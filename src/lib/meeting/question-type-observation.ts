@@ -2,6 +2,9 @@ import {
   normalizeCanonicalQuestionType,
   type CanonicalQuestionType,
 } from "./task-taxonomy.js";
+import {
+  normalizeRuntimeAdjudicationAuthorityLabel,
+} from "./runtime-adjudication-authority.js";
 
 type ObservedTaskRelation =
   | "new-parent"
@@ -82,10 +85,11 @@ export function projectQuestionTypeObservation(input: {
 
   return {
     observedCurrentQuestionType,
-    observedCurrentQuestionTypeAuthority: readString(
-      metadata.currentQuestionSettlementTypeAuthoritySource ??
-        metadata.currentQuestionSettlementAuthoritySource
-    ),
+    observedCurrentQuestionTypeAuthority:
+      normalizeRuntimeAdjudicationAuthorityLabel(
+        metadata.currentQuestionSettlementTypeAuthoritySource ??
+          metadata.currentQuestionSettlementAuthoritySource
+      ),
     observedParentType,
     observedParentId,
     typeAppliedToResponse,

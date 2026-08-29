@@ -130,7 +130,7 @@ export function settleManualQuestionTypeCorrection(input: {
       activeParentRevision: input.activeParentRevision,
       manualCorrectionRevision: input.manualCorrectionRevision,
       policy: {
-        allowLlmTypeRepair: false,
+        allowRuntimeTypeAdjudication: false,
         allowLlmRelationRepair: true,
         allowLlmActionRepair: false,
         llmRelationRepairMinConfidence: 0.95,

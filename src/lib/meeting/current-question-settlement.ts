@@ -27,7 +27,7 @@ export {
 export type CurrentQuestionAuthority =
   | "explicit-manual"
   | "deterministic-fast-path"
-  | "llm-type-repair"
+  | "runtime-adjudication"
   | "provisional-only";
 
 export type CurrentQuestionAuthoritySource =
@@ -36,7 +36,7 @@ export type CurrentQuestionAuthoritySource =
   | "accepted-transcript"
   | "semantic-unknown-rescue"
   | "accepted-llm-type-first-parent"
-  | "llm-type-repair"
+  | "runtime-adjudication"
   | "provisional-only";
 
 export type CurrentQuestionRelation =
@@ -73,7 +73,7 @@ export interface CurrentQuestionMutationAuthorityDecision {
 export type CurrentQuestionSettlementProposalSource =
   | "manual-correction"
   | "deterministic-fast-path"
-  | "llm-type-repair";
+  | "runtime-adjudication";
 
 export type CurrentQuestionSettlementProposalRejectionReason =
   | "session-mismatch"
@@ -84,8 +84,8 @@ export type CurrentQuestionSettlementProposalRejectionReason =
   | "manual-correction-revision-mismatch"
   | "expected-parent-mismatch"
   | "expected-parent-revision-mismatch"
-  | "llm-type-repair-disabled"
-  | "llm-type-repair-low-confidence"
+  | "runtime-adjudication-disabled"
+  | "runtime-adjudication-low-confidence"
   | "question-type-unresolved"
   | "type-evidence-not-authorized"
   | "relation-evidence-not-authorized"
@@ -114,13 +114,13 @@ export interface CurrentQuestionSettlementProposal {
   reasons?: string[];
 }
 
-export interface LlmTypeRepairSettlementCandidate {
+export interface RuntimeTypeAdjudicationSettlementCandidate {
   questionType: CanonicalQuestionType;
   confidence: number;
 }
 
-export function createLlmTypeRepairSettlementProposal<
-  TCandidate extends LlmTypeRepairSettlementCandidate,
+export function createRuntimeTypeAdjudicationSettlementProposal<
+  TCandidate extends RuntimeTypeAdjudicationSettlementCandidate,
 >(input: {
   currentQuestion: ProvisionalCurrentQuestion;
   adjudication: TCandidate;
@@ -128,7 +128,7 @@ export function createLlmTypeRepairSettlementProposal<
   expectedParentRevision?: number;
 }): CurrentQuestionSettlementProposal {
   return {
-    source: "llm-type-repair",
+    source: "runtime-adjudication",
     sessionId: input.currentQuestion.sessionId,
     runtimeEpoch: input.currentQuestion.runtimeEpoch,
     logicalQuestionUnitId: input.currentQuestion.logicalQuestionUnitId,
@@ -156,10 +156,10 @@ export interface CurrentQuestionSettlementProposalRejection {
 }
 
 export interface CurrentQuestionSettlementPolicy {
-  allowLlmTypeRepair?: boolean;
+  allowRuntimeTypeAdjudication?: boolean;
   allowLlmRelationRepair?: boolean;
   allowLlmActionRepair?: boolean;
-  llmTypeRepairMinConfidence?: number;
+  runtimeTypeAdjudicationMinConfidence?: number;
   llmRelationRepairMinConfidence?: number;
   runtimeMutationAuthorized: boolean;
   questionComplete: boolean;
@@ -482,7 +482,7 @@ export function settleCurrentQuestion(input: {
   });
   const validLlm = validateSettlementProposal({
     proposal: input.llmProposal,
-    expectedSource: "llm-type-repair",
+    expectedSource: "runtime-adjudication",
     currentQuestion: input.currentQuestion,
     activeParentId: input.activeParentId,
     activeParentRevision: input.activeParentRevision,
@@ -627,7 +627,7 @@ export function finalizeCurrentQuestionFirstParentSettlement(input: {
     typeOnlySettlement.runtimeEpoch !== currentQuestion.runtimeEpoch ||
     typeOnlySettlement.sourceHash !== currentQuestion.sourceHash ||
     typeOnlySettlement.activeParentId !== undefined ||
-    typeOnlySettlement.typeAuthoritySource !== "llm-type-repair" ||
+    typeOnlySettlement.typeAuthoritySource !== "runtime-adjudication" ||
     !typeOnlySettlement.typeMutationAuthorized ||
     typeOnlySettlement.relationMutationAuthorized ||
     typeOnlySettlement.relation !== "unknown" ||
@@ -643,7 +643,7 @@ export function finalizeCurrentQuestionFirstParentSettlement(input: {
     questionType: typeOnlySettlement.questionType,
     relation,
     action,
-    authority: "llm-type-repair",
+    authority: "runtime-adjudication",
     typeAuthoritySource: typeOnlySettlement.typeAuthoritySource,
     relationAuthoritySource: "deterministic-fast-path",
     actionAuthoritySource: "deterministic-fast-path",
@@ -660,7 +660,7 @@ export function finalizeCurrentQuestionFirstParentSettlement(input: {
     sourceHash: currentQuestion.sourceHash,
     relation,
     action,
-    authority: "llm-type-repair",
+    authority: "runtime-adjudication",
     authoritySource: "accepted-llm-type-first-parent",
     relationAuthoritySource: "deterministic-fast-path",
     actionAuthoritySource: "deterministic-fast-path",
@@ -759,7 +759,7 @@ export function settleCurrentQuestionTerminalNoAnswer(input: {
 
   const validation = validateSettlementProposal({
     proposal: input.candidate.proposal,
-    expectedSource: "llm-type-repair",
+    expectedSource: "runtime-adjudication",
     currentQuestion: input.currentQuestion,
     activeParentId: input.activeParentId,
     activeParentRevision: input.activeParentRevision,
@@ -1024,9 +1024,9 @@ function resolveCurrentQuestionAuthority(
   if (
     source === "semantic-unknown-rescue" ||
     source === "accepted-llm-type-first-parent" ||
-    source === "llm-type-repair"
+    source === "runtime-adjudication"
   ) {
-    return "llm-type-repair";
+    return "runtime-adjudication";
   }
   return "provisional-only";
 }
@@ -1139,13 +1139,13 @@ function selectQuestionType(input: {
     const questionType =
       normalizeCanonicalQuestionType(llm.questionType) ?? "unknown";
     const minConfidence = clampConfidence(
-      input.policy.llmTypeRepairMinConfidence ?? 0.85
+      input.policy.runtimeTypeAdjudicationMinConfidence ?? 0.85
     );
-    if (!input.policy.allowLlmTypeRepair) {
+    if (!input.policy.allowRuntimeTypeAdjudication) {
       addProposalRejection(
         input.rejectedProposals,
         llm.source,
-        "llm-type-repair-disabled"
+        "runtime-adjudication-disabled"
       );
     } else if (questionType === "unknown") {
       addProposalRejection(
@@ -1163,7 +1163,7 @@ function selectQuestionType(input: {
       addProposalRejection(
         input.rejectedProposals,
         llm.source,
-        "llm-type-repair-low-confidence"
+        "runtime-adjudication-low-confidence"
       );
     } else {
       return selection(
@@ -1213,7 +1213,7 @@ function selectQuestionRelation(input: {
   if (llm?.relation && !isUnresolvedRelation(llm.relation)) {
     const minConfidence = clampConfidence(
       input.policy.llmRelationRepairMinConfidence ??
-        input.policy.llmTypeRepairMinConfidence ??
+        input.policy.runtimeTypeAdjudicationMinConfidence ??
         0.85
     );
     if (!input.policy.allowLlmRelationRepair) {
@@ -1347,8 +1347,8 @@ function proposalSourceToAuthoritySource(
   if (sources.includes("manual-correction")) {
     return "manual-correction";
   }
-  if (typeSource === "llm-type-repair") {
-    return "llm-type-repair";
+  if (typeSource === "runtime-adjudication") {
+    return "runtime-adjudication";
   }
   if (sources.includes("deterministic-fast-path")) {
     return "accepted-transcript";

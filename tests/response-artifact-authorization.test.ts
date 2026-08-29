@@ -296,7 +296,7 @@ test("keeps stronger Answer-only and settled-plan authority ahead of Manual Next
   );
   assert.deepEqual(
     resolveAdvisorGenerationRequestedArtifacts({
-      runtimeTypeRepairAnswerOnly: true,
+      runtimeTypeAdjudicationAnswerOnly: true,
       committedManualPhaseArtifacts: manualArtifacts,
     }),
     ["answer"]

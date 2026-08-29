@@ -882,7 +882,7 @@ test("narrowly converges authoritative voice type and relation into one parent s
     operationId: "type-operation-a",
     currentQuestion,
     llmProposal: {
-      source: "llm-type-repair",
+      source: "runtime-adjudication",
       sessionId: currentQuestion.sessionId,
       runtimeEpoch: currentQuestion.runtimeEpoch,
       logicalQuestionUnitId: currentQuestion.logicalQuestionUnitId,
@@ -902,10 +902,10 @@ test("narrowly converges authoritative voice type and relation into one parent s
     activeParentRevision: 3,
     manualCorrectionRevision: 0,
     policy: {
-      allowLlmTypeRepair: true,
+      allowRuntimeTypeAdjudication: true,
       allowLlmRelationRepair: false,
       allowLlmActionRepair: false,
-      llmTypeRepairMinConfidence: 0.95,
+      runtimeTypeAdjudicationMinConfidence: 0.95,
       runtimeMutationAuthorized: false,
       questionComplete: true,
       commitParent: false,
@@ -1006,7 +1006,7 @@ test("reports a source-hash mismatch instead of silently dropping convergence", 
   const typeSettlement = settleCurrentQuestion({
     currentQuestion: voiceQuestion,
     llmProposal: {
-      source: "llm-type-repair",
+      source: "runtime-adjudication",
       sessionId: voiceQuestion.sessionId,
       runtimeEpoch: voiceQuestion.runtimeEpoch,
       logicalQuestionUnitId: voiceQuestion.logicalQuestionUnitId,
@@ -1022,7 +1022,7 @@ test("reports a source-hash mismatch instead of silently dropping convergence", 
     },
     manualCorrectionRevision: 0,
     policy: {
-      allowLlmTypeRepair: true,
+      allowRuntimeTypeAdjudication: true,
       allowLlmRelationRepair: false,
       allowLlmActionRepair: false,
       runtimeMutationAuthorized: false,
@@ -1063,7 +1063,7 @@ test("narrow voice relation release accepts grounded same-type and follow-up rel
   const typeSettlement = settleCurrentQuestion({
     currentQuestion,
     llmProposal: {
-      source: "llm-type-repair",
+      source: "runtime-adjudication",
       sessionId: currentQuestion.sessionId,
       runtimeEpoch: currentQuestion.runtimeEpoch,
       logicalQuestionUnitId: currentQuestion.logicalQuestionUnitId,
@@ -1079,7 +1079,7 @@ test("narrow voice relation release accepts grounded same-type and follow-up rel
     },
     manualCorrectionRevision: 0,
     policy: {
-      allowLlmTypeRepair: true,
+      allowRuntimeTypeAdjudication: true,
       allowLlmRelationRepair: false,
       allowLlmActionRepair: false,
       runtimeMutationAuthorized: false,
@@ -1145,7 +1145,7 @@ test("narrow voice relation release rejects ungrounded branch mutations", () => 
   const typeSettlement = settleCurrentQuestion({
     currentQuestion,
     llmProposal: {
-      source: "llm-type-repair",
+      source: "runtime-adjudication",
       sessionId: currentQuestion.sessionId,
       runtimeEpoch: currentQuestion.runtimeEpoch,
       logicalQuestionUnitId: currentQuestion.logicalQuestionUnitId,
@@ -1161,7 +1161,7 @@ test("narrow voice relation release rejects ungrounded branch mutations", () => 
     },
     manualCorrectionRevision: 0,
     policy: {
-      allowLlmTypeRepair: true,
+      allowRuntimeTypeAdjudication: true,
       allowLlmRelationRepair: false,
       allowLlmActionRepair: false,
       runtimeMutationAuthorized: false,
@@ -1451,7 +1451,7 @@ test("Task 144 accepts relation evidence for preview while parent mutation remai
     activeParentRevision: 3,
     manualCorrectionRevision: 0,
     policy: {
-      allowLlmTypeRepair: false,
+      allowRuntimeTypeAdjudication: false,
       allowLlmRelationRepair: true,
       allowLlmActionRepair: false,
       runtimeMutationAuthorized: false,
@@ -1464,7 +1464,7 @@ test("Task 144 accepts relation evidence for preview while parent mutation remai
   assert.equal(preview.relation, "followup-parent");
   assert.equal(
     preview.relationAuthoritySource,
-    "llm-type-repair"
+    "runtime-adjudication"
   );
   assert.equal(preview.relationMutationAuthorized, true);
   assert.equal(preview.parentMutationAuthorized, false);
@@ -1525,7 +1525,7 @@ test("one settlement composes authoritative screen type with released LLM relati
     activeParentRevision: 3,
     manualCorrectionRevision: 0,
     policy: {
-      allowLlmTypeRepair: false,
+      allowRuntimeTypeAdjudication: false,
       allowLlmRelationRepair: true,
       allowLlmActionRepair: false,
       llmRelationRepairMinConfidence: 0.95,
@@ -1538,6 +1538,6 @@ test("one settlement composes authoritative screen type with released LLM relati
   assert.equal(settlement.questionType, "behavioral");
   assert.equal(settlement.typeAuthoritySource, "deterministic-fast-path");
   assert.equal(settlement.relation, "new-parent");
-  assert.equal(settlement.relationAuthoritySource, "llm-type-repair");
+  assert.equal(settlement.relationAuthoritySource, "runtime-adjudication");
   assert.equal(settlement.parentMutationAuthorized, true);
 });

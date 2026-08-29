@@ -54,13 +54,13 @@ export type TaskBoundaryAuthoritySource =
   | "accepted-llm-type-first-parent"
   | "semantic-unknown-rescue";
 
-export interface LlmTypeRepairFirstParentAdmissionDecision {
+export interface RuntimeTypeAdjudicationFirstParentAdmissionDecision {
   authorized: boolean;
   reason:
     | "authorized-committed-output-request"
     | "active-parent-present"
-    | "type-repair-output-not-authorized"
-    | "settlement-not-type-only-repair"
+    | "type-adjudication-output-not-authorized"
+    | "settlement-not-type-only-adjudication"
     | "question-type-not-parent-eligible"
     | "logical-question-mismatch"
     | "response-opportunity-missing"
@@ -245,34 +245,34 @@ export function createTaskBoundaryCandidate(
   };
 }
 
-export function decideLlmTypeRepairFirstParentAdmission(input: {
+export function decideRuntimeTypeAdjudicationFirstParentAdmission(input: {
   logicalQuestionUnit?: LogicalQuestionUnit;
   settlement?: CurrentQuestionSettlementDecision;
   hasActiveParent: boolean;
   outputAuthorityAuthorized: boolean;
   responseOpportunityGate?: ResponseOpportunityGenerationGateSnapshot;
-}): LlmTypeRepairFirstParentAdmissionDecision {
+}): RuntimeTypeAdjudicationFirstParentAdmissionDecision {
   if (input.hasActiveParent) {
     return firstParentDecision(false, "active-parent-present");
   }
   if (!input.outputAuthorityAuthorized) {
     return firstParentDecision(
       false,
-      "type-repair-output-not-authorized"
+      "type-adjudication-output-not-authorized"
     );
   }
 
   const settlement = input.settlement;
   if (
     !settlement ||
-    settlement.typeAuthoritySource !== "llm-type-repair" ||
+    settlement.typeAuthoritySource !== "runtime-adjudication" ||
     !settlement.typeMutationAuthorized ||
     settlement.relationMutationAuthorized ||
     settlement.relation !== "unknown"
   ) {
     return firstParentDecision(
       false,
-      "settlement-not-type-only-repair"
+      "settlement-not-type-only-adjudication"
     );
   }
   if (!isParentCanonicalQuestionType(settlement.questionType)) {
@@ -542,9 +542,9 @@ function clampConfidence(value: number | undefined) {
 
 function firstParentDecision(
   authorized: boolean,
-  reason: LlmTypeRepairFirstParentAdmissionDecision["reason"],
+  reason: RuntimeTypeAdjudicationFirstParentAdmissionDecision["reason"],
   responseOpportunityOperationId?: string
-): LlmTypeRepairFirstParentAdmissionDecision {
+): RuntimeTypeAdjudicationFirstParentAdmissionDecision {
   return {
     authorized,
     reason,

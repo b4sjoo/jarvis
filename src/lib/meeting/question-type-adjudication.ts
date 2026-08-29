@@ -12,7 +12,7 @@ import type {
   CurrentQuestionSettlementDecision,
 } from "./current-question-settlement.js";
 export {
-  createLlmTypeRepairSettlementProposal as createQuestionTypeSettlementProposal,
+  createRuntimeTypeAdjudicationSettlementProposal as createQuestionTypeSettlementProposal,
 } from "./current-question-settlement.js";
 import type { RuntimeInferenceRuntimeJob } from "./runtime-inference-runtime.js";
 import { buildRuntimeInferenceModelInput } from "./runtime-inference.js";

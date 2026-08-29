@@ -855,7 +855,7 @@ export function decideNarrowVoiceRelationRelease(
     return reject("type-settlement-missing", true);
   }
   if (
-    (input.typeSettlement.typeAuthoritySource !== "llm-type-repair" &&
+    (input.typeSettlement.typeAuthoritySource !== "runtime-adjudication" &&
       !(
         input.manualTypeAuthorityAuthorized &&
         input.typeSettlement.typeAuthoritySource === "manual-correction"
@@ -987,7 +987,7 @@ export function settleNarrowVoiceTypeRelation(input: {
   }
 
   const llmProposal: CurrentQuestionSettlementProposal = {
-    source: "llm-type-repair",
+    source: "runtime-adjudication",
     sessionId: input.currentQuestion.sessionId,
     runtimeEpoch: input.currentQuestion.runtimeEpoch,
     logicalQuestionUnitId: input.currentQuestion.logicalQuestionUnitId,
@@ -1022,10 +1022,10 @@ export function settleNarrowVoiceTypeRelation(input: {
       activeParentRevision: input.activeParentRevision,
       manualCorrectionRevision: input.manualCorrectionRevision,
       policy: {
-        allowLlmTypeRepair: true,
+        allowRuntimeTypeAdjudication: true,
         allowLlmRelationRepair: true,
         allowLlmActionRepair: true,
-        llmTypeRepairMinConfidence: VOICE_RELATION_RELEASE_MIN_CONFIDENCE,
+        runtimeTypeAdjudicationMinConfidence: VOICE_RELATION_RELEASE_MIN_CONFIDENCE,
         llmRelationRepairMinConfidence: VOICE_RELATION_RELEASE_MIN_CONFIDENCE,
         runtimeMutationAuthorized: true,
         questionComplete: true,
@@ -1489,7 +1489,7 @@ export function createTaskRelationSettlementProposal(input: {
   expectedParentRevision?: number;
 }): CurrentQuestionSettlementProposal {
   return {
-    source: "llm-type-repair",
+    source: "runtime-adjudication",
     sessionId: input.currentQuestion.sessionId,
     runtimeEpoch: input.currentQuestion.runtimeEpoch,
     logicalQuestionUnitId:

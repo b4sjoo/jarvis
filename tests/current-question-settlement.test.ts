@@ -203,7 +203,7 @@ test("authorizes active-parent scope only for a bound settled follow-up", () => 
       expectedParentId: "parent-a",
       expectedParentRevision: 3,
     }),
-    llmProposal: proposal("llm-type-repair", {
+    llmProposal: proposal("runtime-adjudication", {
       questionType: undefined,
       typeEvidenceAuthorized: false,
       relation: "followup-parent",
@@ -282,7 +282,7 @@ test("combines an LLM type with a deterministic first-parent relation", () => {
       relation: "new-parent",
       relationEvidenceAuthorized: true,
     }),
-    llmProposal: proposal("llm-type-repair", {
+    llmProposal: proposal("runtime-adjudication", {
       sourceHash: currentQuestion.sourceHash,
       questionType: "general-system-design",
       typeEvidenceAuthorized: true,
@@ -291,8 +291,8 @@ test("combines an LLM type with a deterministic first-parent relation", () => {
     }),
     manualCorrectionRevision: 0,
     policy: {
-      allowLlmTypeRepair: true,
-      llmTypeRepairMinConfidence: 0,
+      allowRuntimeTypeAdjudication: true,
+      runtimeTypeAdjudicationMinConfidence: 0,
       runtimeMutationAuthorized: true,
       questionComplete: true,
       commitParent: true,
@@ -300,7 +300,7 @@ test("combines an LLM type with a deterministic first-parent relation", () => {
   });
 
   assert.equal(settlement.questionType, "general-system-design");
-  assert.equal(settlement.typeAuthoritySource, "llm-type-repair");
+  assert.equal(settlement.typeAuthoritySource, "runtime-adjudication");
   assert.equal(settlement.relation, "new-parent");
   assert.equal(
     settlement.relationAuthoritySource,
@@ -370,7 +370,7 @@ test("keeps an unknown question response-capable but parent-ineligible", () => {
   assert.ok(decision.reasons.includes("question-type-unresolved"));
 });
 
-test("does not let type repair implicitly authorize relation or parent mutation", () => {
+test("does not let type adjudication implicitly authorize relation or parent mutation", () => {
   const currentQuestion = createProvisionalCurrentQuestion({
     logicalQuestionUnit: logicalQuestion(),
     sourceKind: "voice",
@@ -379,7 +379,7 @@ test("does not let type repair implicitly authorize relation or parent mutation"
     currentQuestion,
     proposedQuestionType: "general-system-design",
     proposedRelation: "new-parent",
-    authoritySource: "llm-type-repair",
+    authoritySource: "runtime-adjudication",
     typeEvidenceAuthorized: true,
     relationEvidenceAuthorized: false,
     runtimeMutationAuthorized: true,
@@ -387,7 +387,7 @@ test("does not let type repair implicitly authorize relation or parent mutation"
     commitParent: true,
   });
 
-  assert.equal(decision.authority, "llm-type-repair");
+  assert.equal(decision.authority, "runtime-adjudication");
   assert.equal(decision.typeMutationAuthorized, true);
   assert.equal(decision.relationMutationAuthorized, false);
   assert.equal(decision.parentMutationAuthorized, false);
@@ -454,11 +454,11 @@ test("manual evidence outranks deterministic and LLM proposals on the same revis
       manualCorrectionRevision: 4,
     }),
     deterministicProposal: proposal("deterministic-fast-path"),
-    llmProposal: proposal("llm-type-repair", {
+    llmProposal: proposal("runtime-adjudication", {
       questionType: "coding",
     }),
     policy: {
-      allowLlmTypeRepair: true,
+      allowRuntimeTypeAdjudication: true,
       runtimeMutationAuthorized: true,
       questionComplete: true,
       commitParent: true,
@@ -526,16 +526,16 @@ test("distinguishes provisional, response-only, committed, and stale disposition
   );
 });
 
-test("deterministic evidence outranks an enabled LLM type repair", () => {
+test("deterministic evidence outranks an enabled Runtime type adjudication", () => {
   const decision = settle({
     deterministicProposal: proposal("deterministic-fast-path", {
       questionType: "general-system-design",
     }),
-    llmProposal: proposal("llm-type-repair", {
+    llmProposal: proposal("runtime-adjudication", {
       questionType: "coding",
     }),
     policy: {
-      allowLlmTypeRepair: true,
+      allowRuntimeTypeAdjudication: true,
       runtimeMutationAuthorized: true,
       questionComplete: true,
       commitParent: true,
@@ -552,12 +552,12 @@ test("deterministic evidence outranks an enabled LLM type repair", () => {
 
 test("LLM can repair type without receiving relation or parent authority", () => {
   const decision = settle({
-    llmProposal: proposal("llm-type-repair", {
+    llmProposal: proposal("runtime-adjudication", {
       questionType: "coding",
       relation: "new-parent",
     }),
     policy: {
-      allowLlmTypeRepair: true,
+      allowRuntimeTypeAdjudication: true,
       runtimeMutationAuthorized: true,
       questionComplete: true,
       commitParent: true,
@@ -578,15 +578,15 @@ test("LLM can repair type without receiving relation or parent authority", () =>
 
 test("an operation-specific policy can authorize a high-confidence LLM relation", () => {
   const decision = settle({
-    llmProposal: proposal("llm-type-repair", {
+    llmProposal: proposal("runtime-adjudication", {
       questionType: "ai-ml-system-design",
       relation: "followup-parent",
       confidence: 0.96,
     }),
     policy: {
-      allowLlmTypeRepair: true,
+      allowRuntimeTypeAdjudication: true,
       allowLlmRelationRepair: true,
-      llmTypeRepairMinConfidence: 0.88,
+      runtimeTypeAdjudicationMinConfidence: 0.88,
       llmRelationRepairMinConfidence: 0.88,
       runtimeMutationAuthorized: true,
       questionComplete: true,
@@ -597,22 +597,22 @@ test("an operation-specific policy can authorize a high-confidence LLM relation"
   assert.equal(decision.questionType, "ai-ml-system-design");
   assert.equal(decision.relation, "followup-parent");
   assert.equal(decision.relationMutationAuthorized, true);
-  assert.equal(decision.relationAuthoritySource, "llm-type-repair");
+  assert.equal(decision.relationAuthoritySource, "runtime-adjudication");
   assert.equal(decision.parentMutationAuthorized, false);
 });
 
-test("LLM type repair can combine with separately authorized deterministic relation evidence", () => {
+test("Runtime type adjudication can combine with separately authorized deterministic relation evidence", () => {
   const decision = settle({
     deterministicProposal: proposal("deterministic-fast-path", {
       questionType: "unknown",
       relation: "new-parent",
     }),
-    llmProposal: proposal("llm-type-repair", {
+    llmProposal: proposal("runtime-adjudication", {
       questionType: "ai-ml-system-design",
       relation: "followup-parent",
     }),
     policy: {
-      allowLlmTypeRepair: true,
+      allowRuntimeTypeAdjudication: true,
       runtimeMutationAuthorized: true,
       questionComplete: true,
       commitParent: true,
@@ -621,7 +621,7 @@ test("LLM type repair can combine with separately authorized deterministic relat
 
   assert.equal(decision.questionType, "ai-ml-system-design");
   assert.equal(decision.relation, "new-parent");
-  assert.equal(decision.typeAuthoritySource, "llm-type-repair");
+  assert.equal(decision.typeAuthoritySource, "runtime-adjudication");
   assert.equal(
     decision.relationAuthoritySource,
     "deterministic-fast-path"
@@ -629,9 +629,9 @@ test("LLM type repair can combine with separately authorized deterministic relat
   assert.equal(decision.parentMutationAuthorized, true);
 });
 
-test("LLM type repair stays shadowed unless the operation enables it", () => {
+test("Runtime type adjudication stays shadowed unless the operation enables it", () => {
   const decision = settle({
-    llmProposal: proposal("llm-type-repair", {
+    llmProposal: proposal("runtime-adjudication", {
       questionType: "coding",
     }),
   });
@@ -641,7 +641,7 @@ test("LLM type repair stays shadowed unless the operation enables it", () => {
   assert.equal(decision.responseAuthorized, true);
   assert.ok(
     decision.rejectedProposals.some((rejection) =>
-      rejection.reasons.includes("llm-type-repair-disabled")
+      rejection.reasons.includes("runtime-adjudication-disabled")
     )
   );
 });
@@ -660,12 +660,12 @@ test("stale manual and LLM proposals are rejected without invalidating current d
       expectedParentId: "parent-current",
       expectedParentRevision: 7,
     }),
-    llmProposal: proposal("llm-type-repair", {
+    llmProposal: proposal("runtime-adjudication", {
       questionType: "coding",
       revision: 1,
     }),
     policy: {
-      allowLlmTypeRepair: true,
+      allowRuntimeTypeAdjudication: true,
       runtimeMutationAuthorized: true,
       questionComplete: true,
       commitParent: true,
@@ -685,7 +685,7 @@ test("stale manual and LLM proposals are rejected without invalidating current d
   assert.ok(
     decision.rejectedProposals.some(
       (rejection) =>
-        rejection.source === "llm-type-repair" &&
+        rejection.source === "runtime-adjudication" &&
         rejection.reasons.includes(
           "logical-question-revision-mismatch"
         )
@@ -724,7 +724,7 @@ test("authorizes only an exact high-confidence ambient no-answer result", () => 
     manualCorrectionRevision: 0,
     candidate: {
       operationId: "operation-a",
-      proposal: proposal("llm-type-repair", {
+      proposal: proposal("runtime-adjudication", {
         sourceHash: currentQuestion.sourceHash,
         questionType: "unknown",
         relation: "none",
@@ -774,7 +774,7 @@ test("keeps informational context visible while suppressing an answer opportunit
     manualCorrectionRevision: 0,
     candidate: {
       operationId: "operation-info",
-      proposal: proposal("llm-type-repair", {
+      proposal: proposal("runtime-adjudication", {
         sourceHash: currentQuestion.sourceHash,
         questionType: "unknown",
         relation: "none",
@@ -818,7 +818,7 @@ test("fails open when informational speech contains a primary ask", () => {
     sourceKind: "voice",
   });
   const baseCandidate = {
-    proposal: proposal("llm-type-repair", {
+    proposal: proposal("runtime-adjudication", {
       sourceHash: currentQuestion.sourceHash,
       questionType: "unknown",
       relation: "none" as const,
@@ -868,7 +868,7 @@ test("uses a stricter threshold for filler than informational context", () => {
     operationAuthorized: true,
     manualCorrectionRevision: 0,
     candidate: {
-      proposal: proposal("llm-type-repair", {
+      proposal: proposal("runtime-adjudication", {
         sourceHash: currentQuestion.sourceHash,
         questionType: "unknown",
         relation: "none",
@@ -888,7 +888,7 @@ test("uses a stricter threshold for filler than informational context", () => {
     operationAuthorized: true,
     manualCorrectionRevision: 0,
     candidate: {
-      proposal: proposal("llm-type-repair", {
+      proposal: proposal("runtime-adjudication", {
         sourceHash: currentQuestion.sourceHash,
         questionType: "unknown",
         relation: "none",
@@ -919,7 +919,7 @@ test("fails open for stale, low-confidence, or substantive no-answer proposals",
   });
   const candidate = {
     operationId: "operation-a",
-    proposal: proposal("llm-type-repair", {
+    proposal: proposal("runtime-adjudication", {
       sourceHash: currentQuestion.sourceHash,
       questionType: "unknown",
       relation: "none" as const,
@@ -997,7 +997,7 @@ test("keeps a source-owned add-on ask out of terminal no-answer settlement", () 
     operationAuthorized: true,
     manualCorrectionRevision: 0,
     candidate: {
-      proposal: proposal("llm-type-repair", {
+      proposal: proposal("runtime-adjudication", {
         sourceHash: currentQuestion.sourceHash,
         questionType: "unknown",
         relation: "none",
@@ -1022,12 +1022,12 @@ test("keeps a source-owned add-on ask out of terminal no-answer settlement", () 
 
 test("settlement IDs are deterministic and trace metadata carries proposal rejections", () => {
   const first = settle({
-    llmProposal: proposal("llm-type-repair", {
+    llmProposal: proposal("runtime-adjudication", {
       questionType: "coding",
     }),
   });
   const duplicate = settle({
-    llmProposal: proposal("llm-type-repair", {
+    llmProposal: proposal("runtime-adjudication", {
       questionType: "coding",
     }),
   });

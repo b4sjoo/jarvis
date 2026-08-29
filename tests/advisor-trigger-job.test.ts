@@ -569,30 +569,30 @@ test("runtime intent answer can commit output without mutating task state", () =
   );
 });
 
-test("runtime type repair authorizes output only", () => {
+test("runtime type adjudication authorizes output only", () => {
   const shadow = decideAdvisorTurnIntent("Multi-region failover.", {
     hasActiveTask: true,
   });
 
   assert.deepEqual(
     authorizeAdvisorTaskMutation({
-      authority: "runtime-type-repair",
+      authority: "runtime-type-adjudication-output-only",
       turnIntentDecision: shadow,
     }),
     {
       authorized: false,
-      reason: "runtime-type-repair-output-only",
+      reason: "runtime-type-adjudication-output-only",
     }
   );
   assert.deepEqual(
     authorizeAdvisorOutputCommit({
-      authority: "runtime-type-repair",
+      authority: "runtime-type-adjudication-output-only",
       executionAuthorized: true,
       turnIntentDecision: shadow,
     }),
     {
       authorized: true,
-      reason: "runtime-type-repair-output-authority",
+      reason: "runtime-type-adjudication-output-authority",
     }
   );
 });

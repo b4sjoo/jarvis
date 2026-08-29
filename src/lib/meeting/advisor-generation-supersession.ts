@@ -55,7 +55,7 @@ export function decideAdvisorGenerationAdmission(input: {
       protectActiveGeneration: false,
     };
   }
-  if (input.incomingJob.refreshAuthority.kind === "runtime-type-repair") {
+  if (input.incomingJob.refreshAuthority.kind === "runtime-type-adjudication-output-only") {
     return {
       action: "replace-with-settled-authority",
       reason: "settled-runtime-repair",

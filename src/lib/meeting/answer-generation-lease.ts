@@ -21,7 +21,7 @@ export type RefreshAuthorityKind =
   | "automatic-substantive"
   | "shadow-fail-open"
   | "runtime-intent-answer"
-  | "runtime-type-repair"
+  | "runtime-type-adjudication-output-only"
   | "manual-hard-override"
   | "screen-hard-override"
   | "denied";
@@ -37,7 +37,7 @@ export interface RefreshAuthorityDecision {
     | "force-advise"
     | "screen-capture"
     | "runtime-intent-answer"
-    | "runtime-type-repair"
+    | "runtime-type-adjudication-output-only"
     | "response-opportunity-pending"
     | "response-opportunity-output-authorized"
     | "response-opportunity-preserve-stable-answer"
@@ -50,7 +50,7 @@ export interface RefreshAuthorityDecision {
   authorityId?: string;
 }
 
-export interface RuntimeTypeRepairOutputAuthority {
+export interface RuntimeTypeAdjudicationOutputAuthority {
   id: string;
   operationId: string;
   settlementId: string;
@@ -59,13 +59,13 @@ export interface RuntimeTypeRepairOutputAuthority {
   logicalQuestionUnitId: string;
   logicalQuestionRevision: number;
   manualCorrectionRevision: number;
-  typeAuthority: "llm-type-repair";
+  typeAuthority: "runtime-adjudication";
   authorityScope: "type-only" | "type-and-relation";
   authorizedArtifacts: ["answer"];
   createdAt: number;
 }
 
-export interface RuntimeTypeRepairOutputAuthoritySnapshot {
+export interface RuntimeTypeAdjudicationOutputAuthoritySnapshot {
   settlementId?: string;
   sessionId: string;
   runtimeEpoch: number;
@@ -74,7 +74,7 @@ export interface RuntimeTypeRepairOutputAuthoritySnapshot {
   manualCorrectionRevision: number;
 }
 
-export type RuntimeTypeRepairOutputAuthorityReason =
+export type RuntimeTypeAdjudicationOutputAuthorityReason =
   | "authorized"
   | "settlement-mismatch"
   | "session-mismatch"
@@ -83,9 +83,9 @@ export type RuntimeTypeRepairOutputAuthorityReason =
   | "logical-question-revision-mismatch"
   | "manual-correction-revision-mismatch";
 
-export interface RuntimeTypeRepairOutputAuthorization {
+export interface RuntimeTypeAdjudicationOutputAuthorization {
   authorized: boolean;
-  reason: RuntimeTypeRepairOutputAuthorityReason;
+  reason: RuntimeTypeAdjudicationOutputAuthorityReason;
 }
 
 export interface AnswerGenerationLease {
@@ -149,16 +149,16 @@ export interface AnswerGenerationLeaseAuthorization {
 export function decideRefreshAuthority(input: {
   source: AdvisorJobSource | "screen";
   turnIntentDecision?: AdvisorTurnIntentDecision;
-  runtimeTypeRepairOutputAuthority?: RuntimeTypeRepairOutputAuthority;
+  runtimeTypeAdjudicationOutputAuthority?: RuntimeTypeAdjudicationOutputAuthority;
 }): RefreshAuthorityDecision {
-  if (input.runtimeTypeRepairOutputAuthority) {
+  if (input.runtimeTypeAdjudicationOutputAuthority) {
     return {
       authorized: true,
-      kind: "runtime-type-repair",
-      reason: "runtime-type-repair",
+      kind: "runtime-type-adjudication-output-only",
+      reason: "runtime-type-adjudication-output-only",
       hardOverride: false,
       maySupersedeGeneration: true,
-      authorityId: input.runtimeTypeRepairOutputAuthority.id,
+      authorityId: input.runtimeTypeAdjudicationOutputAuthority.id,
     };
   }
   if (input.source === "screen") {
@@ -263,17 +263,17 @@ export function decideRefreshAuthority(input: {
   };
 }
 
-export function createRuntimeTypeRepairOutputAuthority(input: {
+export function createRuntimeTypeAdjudicationOutputAuthority(input: {
   operationId: string;
   settlement: CurrentQuestionSettlementDecision;
   manualCorrectionRevision: number;
   createdAt?: number;
-}): RuntimeTypeRepairOutputAuthority | undefined {
+}): RuntimeTypeAdjudicationOutputAuthority | undefined {
   const typeOnly =
     !input.settlement.relationMutationAuthorized &&
     !input.settlement.parentMutationAuthorized;
   const typeAndRelation =
-    input.settlement.relationAuthoritySource === "llm-type-repair" &&
+    input.settlement.relationAuthoritySource === "runtime-adjudication" &&
     input.settlement.relationMutationAuthorized &&
     ((input.settlement.relation === "new-parent" &&
       input.settlement.parentMutationAuthorized) ||
@@ -282,7 +282,7 @@ export function createRuntimeTypeRepairOutputAuthority(input: {
         input.settlement.relation === "resume-parent") &&
         !input.settlement.parentMutationAuthorized));
   if (
-    input.settlement.typeAuthoritySource !== "llm-type-repair" ||
+    input.settlement.typeAuthoritySource !== "runtime-adjudication" ||
     !input.settlement.typeMutationAuthorized ||
     (!typeOnly && !typeAndRelation) ||
     !input.settlement.responseAuthorized ||
@@ -301,7 +301,7 @@ export function createRuntimeTypeRepairOutputAuthority(input: {
       input.settlement.logicalQuestionUnitId,
     logicalQuestionRevision: input.settlement.revision,
     manualCorrectionRevision: input.manualCorrectionRevision,
-    typeAuthority: "llm-type-repair",
+    typeAuthority: "runtime-adjudication",
     authorityScope: typeAndRelation
       ? "type-and-relation"
       : "type-only",
@@ -310,10 +310,10 @@ export function createRuntimeTypeRepairOutputAuthority(input: {
   };
 }
 
-export function authorizeRuntimeTypeRepairOutputAuthority(
-  authority: RuntimeTypeRepairOutputAuthority,
-  current: RuntimeTypeRepairOutputAuthoritySnapshot
-): RuntimeTypeRepairOutputAuthorization {
+export function authorizeRuntimeTypeAdjudicationOutputAuthority(
+  authority: RuntimeTypeAdjudicationOutputAuthority,
+  current: RuntimeTypeAdjudicationOutputAuthoritySnapshot
+): RuntimeTypeAdjudicationOutputAuthorization {
   if (authority.settlementId !== current.settlementId) {
     return { authorized: false, reason: "settlement-mismatch" };
   }
@@ -350,8 +350,8 @@ export function authorizeRuntimeTypeRepairOutputAuthority(
   return { authorized: true, reason: "authorized" };
 }
 
-export function runtimeTypeRepairLimitsGenerationToAnswer(input: {
-  authority?: RuntimeTypeRepairOutputAuthority;
+export function runtimeTypeAdjudicationLimitsGenerationToAnswer(input: {
+  authority?: RuntimeTypeAdjudicationOutputAuthority;
   taskBoundaryCommitted: boolean;
 }) {
   return Boolean(
@@ -360,29 +360,29 @@ export function runtimeTypeRepairLimitsGenerationToAnswer(input: {
   );
 }
 
-export function formatRuntimeTypeRepairOutputAuthorityForTrace(
-  authority: RuntimeTypeRepairOutputAuthority | undefined,
-  authorization?: RuntimeTypeRepairOutputAuthorization
+export function formatRuntimeTypeAdjudicationOutputAuthorityForTrace(
+  authority: RuntimeTypeAdjudicationOutputAuthority | undefined,
+  authorization?: RuntimeTypeAdjudicationOutputAuthorization
 ) {
   return {
-    runtimeTypeRepairOutputAuthorityId: authority?.id,
-    runtimeTypeRepairOperationId: authority?.operationId,
-    runtimeTypeRepairSettlementId: authority?.settlementId,
-    runtimeTypeRepairSessionId: authority?.sessionId,
-    runtimeTypeRepairRuntimeEpoch: authority?.runtimeEpoch,
-    runtimeTypeRepairLogicalQuestionUnitId:
+    runtimeTypeAdjudicationOutputAuthorityId: authority?.id,
+    runtimeTypeAdjudicationOperationId: authority?.operationId,
+    runtimeTypeAdjudicationSettlementId: authority?.settlementId,
+    runtimeTypeAdjudicationSessionId: authority?.sessionId,
+    runtimeTypeAdjudicationRuntimeEpoch: authority?.runtimeEpoch,
+    runtimeTypeAdjudicationLogicalQuestionUnitId:
       authority?.logicalQuestionUnitId,
-    runtimeTypeRepairLogicalQuestionRevision:
+    runtimeTypeAdjudicationLogicalQuestionRevision:
       authority?.logicalQuestionRevision,
-    runtimeTypeRepairManualCorrectionRevision:
+    runtimeTypeAdjudicationManualCorrectionRevision:
       authority?.manualCorrectionRevision,
-    runtimeTypeRepairTypeAuthority: authority?.typeAuthority,
-    runtimeTypeRepairAuthorityScope: authority?.authorityScope,
-    runtimeTypeRepairAuthorizedArtifacts:
+    runtimeTypeAdjudicationTypeAuthority: authority?.typeAuthority,
+    runtimeTypeAdjudicationAuthorityScope: authority?.authorityScope,
+    runtimeTypeAdjudicationAuthorizedArtifacts:
       authority?.authorizedArtifacts,
-    runtimeTypeRepairOutputAuthorized:
+    runtimeTypeAdjudicationOutputAuthorized:
       authorization?.authorized,
-    runtimeTypeRepairOutputAuthorizationReason:
+    runtimeTypeAdjudicationOutputAuthorizationReason:
       authorization?.reason,
   };
 }

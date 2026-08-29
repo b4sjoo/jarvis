@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   authorizeAnswerGenerationLease,
-  authorizeRuntimeTypeRepairOutputAuthority,
+  authorizeRuntimeTypeAdjudicationOutputAuthority,
   createAnswerGenerationLease,
-  createRuntimeTypeRepairOutputAuthority,
-  runtimeTypeRepairLimitsGenerationToAnswer,
+  createRuntimeTypeAdjudicationOutputAuthority,
+  runtimeTypeAdjudicationLimitsGenerationToAnswer,
   decideRefreshAuthority,
   formatAnswerGenerationLeaseForTrace,
   rebaseAnswerGenerationLeaseAfterOwnedParentMutation,
@@ -83,7 +83,7 @@ test("grants action-only refresh authority to a released runtime intent answer",
   assert.equal(authority.hardOverride, false);
 });
 
-function buildTypeRepairSettlement(
+function buildTypeAdjudicationSettlement(
   overrides: Partial<CurrentQuestionSettlementDecision> = {}
 ): CurrentQuestionSettlementDecision {
   return {
@@ -100,9 +100,9 @@ function buildTypeRepairSettlement(
     relation: "unknown",
     action: "answer",
     evidenceMode: "hypothetical-design",
-    authority: "llm-type-repair",
-    authoritySource: "llm-type-repair",
-    typeAuthoritySource: "llm-type-repair",
+    authority: "runtime-adjudication",
+    authoritySource: "runtime-adjudication",
+    typeAuthoritySource: "runtime-adjudication",
     relationAuthoritySource: "provisional",
     actionAuthoritySource: "provisional",
     typeMutationAuthorized: true,
@@ -117,37 +117,37 @@ function buildTypeRepairSettlement(
   };
 }
 
-test("turns an accepted type repair into one answer-only refresh authority", () => {
-  const authority = createRuntimeTypeRepairOutputAuthority({
+test("turns an accepted type adjudication into one answer-only refresh authority", () => {
+  const authority = createRuntimeTypeAdjudicationOutputAuthority({
     operationId: "type-operation-a",
-    settlement: buildTypeRepairSettlement(),
+    settlement: buildTypeAdjudicationSettlement(),
     manualCorrectionRevision: 1,
     createdAt: 100,
   });
 
   assert.ok(authority);
   assert.deepEqual(authority.authorizedArtifacts, ["answer"]);
-  assert.equal(authority.typeAuthority, "llm-type-repair");
+  assert.equal(authority.typeAuthority, "runtime-adjudication");
   assert.equal(authority.authorityScope, "type-only");
   const refresh = decideRefreshAuthority({
     source: "live-turn",
     turnIntentDecision: decideAdvisorTurnIntent("Kubernetes.", {
       hasActiveTask: true,
     }),
-    runtimeTypeRepairOutputAuthority: authority,
+    runtimeTypeAdjudicationOutputAuthority: authority,
   });
   assert.equal(refresh.authorized, true);
-  assert.equal(refresh.kind, "runtime-type-repair");
+  assert.equal(refresh.kind, "runtime-type-adjudication-output-only");
   assert.equal(refresh.authorityId, authority.id);
 });
 
 test("grants answer authority to one converged type-and-relation settlement", () => {
-  const authority = createRuntimeTypeRepairOutputAuthority({
+  const authority = createRuntimeTypeAdjudicationOutputAuthority({
     operationId: "type-relation-operation-a",
-    settlement: buildTypeRepairSettlement({
+    settlement: buildTypeAdjudicationSettlement({
       questionType: "behavioral",
       relation: "new-parent",
-      relationAuthoritySource: "llm-type-repair",
+      relationAuthoritySource: "runtime-adjudication",
       relationMutationAuthorized: true,
       parentMutationAuthorized: true,
     }),
@@ -166,12 +166,12 @@ test("grants answer authority to converged non-parent-mutating relations", () =>
     "child-probe",
     "resume-parent",
   ] as const) {
-    const authority = createRuntimeTypeRepairOutputAuthority({
+    const authority = createRuntimeTypeAdjudicationOutputAuthority({
       operationId: `type-relation-${relation}`,
-      settlement: buildTypeRepairSettlement({
+      settlement: buildTypeAdjudicationSettlement({
         questionType: relation === "child-probe" ? "field-knowledge" : "coding",
         relation,
-        relationAuthoritySource: "llm-type-repair",
+        relationAuthoritySource: "runtime-adjudication",
         relationMutationAuthorized: true,
         parentMutationAuthorized: false,
       }),
@@ -181,7 +181,7 @@ test("grants answer authority to converged non-parent-mutating relations", () =>
     assert.ok(authority, relation);
     assert.equal(authority.authorityScope, "type-and-relation", relation);
     assert.equal(
-      runtimeTypeRepairLimitsGenerationToAnswer({
+      runtimeTypeAdjudicationLimitsGenerationToAnswer({
         authority,
         taskBoundaryCommitted: false,
       }),
@@ -191,15 +191,15 @@ test("grants answer authority to converged non-parent-mutating relations", () =>
   }
 });
 
-test("rejects stale type-repair output authority and broader mutation", () => {
-  const authority = createRuntimeTypeRepairOutputAuthority({
+test("rejects stale type-adjudication output authority and broader mutation", () => {
+  const authority = createRuntimeTypeAdjudicationOutputAuthority({
     operationId: "type-operation-a",
-    settlement: buildTypeRepairSettlement(),
+    settlement: buildTypeAdjudicationSettlement(),
     manualCorrectionRevision: 1,
   });
   assert.ok(authority);
   assert.deepEqual(
-    authorizeRuntimeTypeRepairOutputAuthority(authority, {
+    authorizeRuntimeTypeAdjudicationOutputAuthority(authority, {
       settlementId: "settlement-a",
       sessionId: "session-a",
       runtimeEpoch: 4,
@@ -213,9 +213,9 @@ test("rejects stale type-repair output authority and broader mutation", () => {
     }
   );
   assert.equal(
-    createRuntimeTypeRepairOutputAuthority({
+    createRuntimeTypeAdjudicationOutputAuthority({
       operationId: "type-operation-b",
-      settlement: buildTypeRepairSettlement({
+      settlement: buildTypeAdjudicationSettlement({
         relationMutationAuthorized: true,
       }),
       manualCorrectionRevision: 1,

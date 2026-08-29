@@ -1,7 +1,7 @@
 import type { AdvisorTurnIntentDecision } from "./advisor-turn-intent.js";
 import type {
   RefreshAuthorityDecision,
-  RuntimeTypeRepairOutputAuthority,
+  RuntimeTypeAdjudicationOutputAuthority,
 } from "./answer-generation-lease.js";
 import { createMeetingId } from "./context-manager.js";
 import {
@@ -38,7 +38,7 @@ export type AdvisorTaskMutationAuthority =
   | "preserve-parent"
   | "output-only-current-branch"
   | "runtime-intent-answer"
-  | "runtime-type-repair"
+  | "runtime-type-adjudication-output-only"
   | "manual-correction";
 
 export type AdvisorResponseAuthoritySource =
@@ -75,7 +75,7 @@ export interface AdvisorTriggerJob {
   logicalQuestionUnit?: LogicalQuestionUnit;
   taskMutationAuthority: AdvisorTaskMutationAuthority;
   refreshAuthority: RefreshAuthorityDecision;
-  runtimeTypeRepairOutputAuthority?: RuntimeTypeRepairOutputAuthority;
+  runtimeTypeAdjudicationOutputAuthority?: RuntimeTypeAdjudicationOutputAuthority;
   responseOpportunityGenerationGateOperationId?: string;
   responseAuthoritySource: AdvisorResponseAuthoritySource;
   manualCorrectionRevision: number;
@@ -100,7 +100,7 @@ export interface CreateAdvisorTriggerJobInput {
   logicalQuestionUnit?: LogicalQuestionUnit;
   taskMutationAuthority: AdvisorTaskMutationAuthority;
   refreshAuthority?: RefreshAuthorityDecision;
-  runtimeTypeRepairOutputAuthority?: RuntimeTypeRepairOutputAuthority;
+  runtimeTypeAdjudicationOutputAuthority?: RuntimeTypeAdjudicationOutputAuthority;
   responseOpportunityGenerationGateOperationId?: string;
   manualCorrectionRevision?: number;
   responseActionRevision?: number;
@@ -177,7 +177,7 @@ export interface AdvisorTaskMutationAuthorization {
     | "explicit-action-authority"
     | "manual-output-only"
     | "runtime-intent-action-only"
-    | "runtime-type-repair-output-only"
+    | "runtime-type-adjudication-output-only"
     | "missing-turn-intent-decision"
     | "turn-intent-would-suppress"
     | "turn-intent-not-answer-refresh";
@@ -188,7 +188,7 @@ export interface AdvisorOutputCommitAuthorization {
   reason:
     | "substantive-output-authority"
     | "runtime-intent-answer-output-authority"
-    | "runtime-type-repair-output-authority"
+    | "runtime-type-adjudication-output-authority"
     | "manual-action-output-authority"
     | "execution-not-authorized"
     | "turn-intent-not-answer-refresh";
@@ -268,10 +268,10 @@ export function createAdvisorTriggerJob(
           hardOverride: input.source !== "live-turn",
           maySupersedeGeneration: true,
         },
-    runtimeTypeRepairOutputAuthority:
-      input.runtimeTypeRepairOutputAuthority
+    runtimeTypeAdjudicationOutputAuthority:
+      input.runtimeTypeAdjudicationOutputAuthority
         ? {
-            ...input.runtimeTypeRepairOutputAuthority,
+            ...input.runtimeTypeAdjudicationOutputAuthority,
             authorizedArtifacts: ["answer"],
           }
         : undefined,
@@ -382,10 +382,10 @@ export function authorizeAdvisorTaskMutation(input: {
   if (input.authority === "runtime-intent-answer") {
     return { authorized: false, reason: "runtime-intent-action-only" };
   }
-  if (input.authority === "runtime-type-repair") {
+  if (input.authority === "runtime-type-adjudication-output-only") {
     return {
       authorized: false,
-      reason: "runtime-type-repair-output-only",
+      reason: "runtime-type-adjudication-output-only",
     };
   }
 
@@ -434,10 +434,10 @@ export function authorizeAdvisorOutputCommit(input: {
           reason: "turn-intent-not-answer-refresh",
         };
   }
-  if (input.authority === "runtime-type-repair") {
+  if (input.authority === "runtime-type-adjudication-output-only") {
     return {
       authorized: true,
-      reason: "runtime-type-repair-output-authority",
+      reason: "runtime-type-adjudication-output-authority",
     };
   }
 

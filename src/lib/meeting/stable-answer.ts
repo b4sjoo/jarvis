@@ -3,7 +3,7 @@ import {
   type AnswerArtifactSection,
   type AnswerGenerationLease,
   type RefreshAuthorityDecision,
-  type RuntimeTypeRepairOutputAuthority,
+  type RuntimeTypeAdjudicationOutputAuthority,
 } from "./answer-generation-lease.js";
 import {
   parseMeetingAnswer,
@@ -80,7 +80,7 @@ export interface PendingAnswerRevision {
   latestUsefulAnswerMutationAuthorized: boolean;
   advisorJobId?: string;
   advisorJobSource?: string;
-  runtimeTypeRepairOutputAuthority?: RuntimeTypeRepairOutputAuthority;
+  runtimeTypeAdjudicationOutputAuthority?: RuntimeTypeAdjudicationOutputAuthority;
 }
 
 export interface AnswerDeliveryPresentation {

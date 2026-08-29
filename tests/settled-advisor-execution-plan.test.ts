@@ -682,7 +682,7 @@ test("same-domain current-only repair keeps the response Playbook independent", 
   const repairedSettlement = settlement({
     questionType: "ai-ml-system-design",
     relation: "unknown",
-    typeAuthoritySource: "llm-type-repair",
+    typeAuthoritySource: "runtime-adjudication",
     relationAuthoritySource: "provisional",
     relationMutationAuthorized: false,
     parentMutationAuthorized: false,
@@ -810,7 +810,7 @@ test("a precommitted runtime boundary remains the creating-parent lifecycle fact
   const repairedSettlement = settlement({
     questionType: "coding",
     relation: "unknown",
-    typeAuthoritySource: "llm-type-repair",
+    typeAuthoritySource: "runtime-adjudication",
     relationAuthoritySource: "provisional",
     relationMutationAuthorized: false,
     parentMutationAuthorized: false,

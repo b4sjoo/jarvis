@@ -72,11 +72,11 @@ test("authorizes a correction-owned General SD to AI/ML SD retype", () => {
   assert.equal(decision.relation, "followup-parent");
   assert.equal(
     decision.settlement?.typeAuthoritySource,
-    "llm-type-repair"
+    "runtime-adjudication"
   );
   assert.equal(
     decision.settlement?.relationAuthoritySource,
-    "llm-type-repair"
+    "runtime-adjudication"
   );
 });
 

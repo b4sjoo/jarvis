@@ -311,7 +311,7 @@ test("accepts a full-scope Field Knowledge result from the Voice resolver", () =
       }),
       manualCorrectionRevision: 0,
       policy: {
-        allowLlmTypeRepair: true,
+        allowRuntimeTypeAdjudication: true,
         runtimeMutationAuthorized: true,
         questionComplete: true,
         commitParent: false,
@@ -351,8 +351,8 @@ test("accepts a full-scope Field Knowledge result from the Voice resolver", () =
     }),
     manualCorrectionRevision: 0,
     policy: {
-      allowLlmTypeRepair: true,
-      llmTypeRepairMinConfidence: 0.5,
+      allowRuntimeTypeAdjudication: true,
+      runtimeTypeAdjudicationMinConfidence: 0.5,
       runtimeMutationAuthorized: true,
       questionComplete: true,
       commitParent: false,
@@ -685,7 +685,7 @@ test("Task 144 accepts only the proposed type while relation and parent stay blo
   const shadow = settleCurrentQuestion({
     ...common,
     policy: {
-      allowLlmTypeRepair: false,
+      allowRuntimeTypeAdjudication: false,
       allowLlmRelationRepair: false,
       allowLlmActionRepair: false,
       runtimeMutationAuthorized: false,
@@ -699,7 +699,7 @@ test("Task 144 accepts only the proposed type while relation and parent stay blo
   const enforcementPreview = settleCurrentQuestion({
     ...common,
     policy: {
-      allowLlmTypeRepair: true,
+      allowRuntimeTypeAdjudication: true,
       allowLlmRelationRepair: false,
       allowLlmActionRepair: false,
       runtimeMutationAuthorized: false,
@@ -713,7 +713,7 @@ test("Task 144 accepts only the proposed type while relation and parent stay blo
   );
   assert.equal(
     enforcementPreview.typeAuthoritySource,
-    "llm-type-repair"
+    "runtime-adjudication"
   );
   assert.equal(enforcementPreview.relation, "unknown");
   assert.equal(enforcementPreview.typeMutationAuthorized, true);
@@ -743,8 +743,8 @@ test("authorizes a schema-valid concrete runtime type over the local proposal", 
     }),
     manualCorrectionRevision: 0,
     policy: {
-      allowLlmTypeRepair: true,
-      llmTypeRepairMinConfidence: 0.95,
+      allowRuntimeTypeAdjudication: true,
+      runtimeTypeAdjudicationMinConfidence: 0.95,
       runtimeMutationAuthorized: false,
       questionComplete: true,
       commitParent: false,
@@ -795,8 +795,8 @@ test("keeps type enforcement bounded by authority and timing rather than heurist
     }),
     manualCorrectionRevision: 0,
     policy: {
-      allowLlmTypeRepair: true,
-      llmTypeRepairMinConfidence: 0.95,
+      allowRuntimeTypeAdjudication: true,
+      runtimeTypeAdjudicationMinConfidence: 0.95,
       runtimeMutationAuthorized: false,
       questionComplete: true,
       commitParent: false,

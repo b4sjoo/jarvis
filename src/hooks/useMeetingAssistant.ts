@@ -167,7 +167,7 @@ import {
   GenerationResultLedger,
   MeetingAIResponseCandidate,
   MeetingAIResponseOutcomeError,
-  RuntimeTypeRepairOutputAuthority,
+  RuntimeTypeAdjudicationOutputAuthority,
   AnswerDeliveryProgress,
   AdvisorResponseChallengeCoordinator,
   AdvisorResponseFingerprintCache,
@@ -297,7 +297,7 @@ import {
   base64WavToBlob,
   buildAmazonLeadershipPrincipleMemoryHint,
   authorizeAnswerGenerationLease,
-  authorizeRuntimeTypeRepairOutputAuthority,
+  authorizeRuntimeTypeAdjudicationOutputAuthority,
   buildAnswerSufficiencySemanticText,
   authorizeAdvisorResponseFingerprintLease,
   collectAdvisorIndependentChallengeEvidence,
@@ -323,7 +323,7 @@ import {
   createMeetingId,
   createNeutralPreparationRuntimeContext,
   createAnswerGenerationLease,
-  createRuntimeTypeRepairOutputAuthority,
+  createRuntimeTypeAdjudicationOutputAuthority,
   decideRefreshAuthority,
   decideStableAnswerCommit,
   decideStagedAnswerPartial,
@@ -384,7 +384,7 @@ import {
   formatStableAnswerCommitForTrace,
   formatStagedAnswerDeliveryForTrace,
   formatRefreshAuthorityForTrace,
-  formatRuntimeTypeRepairOutputAuthorityForTrace,
+  formatRuntimeTypeAdjudicationOutputAuthorityForTrace,
   formatResponseOpportunityGenerationGateForTrace,
   RESPONSE_OPPORTUNITY_GENERATION_WAIT_MS,
   responseOpportunityAuthorizesImmediateTaskCommand,
@@ -747,7 +747,7 @@ import {
   projectCrossTypeTaskRelationHint,
   isExplicitResumeParentTranscript,
   formatTaskRelationLexicalHintForTrace,
-  runtimeTypeRepairLimitsGenerationToAnswer,
+  runtimeTypeAdjudicationLimitsGenerationToAnswer,
   toAdvisorGeneratedContinuityEvidence,
   classifyInterviewTransitionTurn,
   reconcileInterviewTransitionTurnWithPrimaryAsk,
@@ -2101,7 +2101,7 @@ interface RunAdvisorOptions {
   manualPhaseTargetOverride?: InterviewPlaybookPhase;
   manualPhaseOperationId?: string;
   currentQuestionSettlementOverride?: CurrentQuestionSettlementDecision;
-  runtimeTypeRepairOutputAuthority?: RuntimeTypeRepairOutputAuthority;
+  runtimeTypeAdjudicationOutputAuthority?: RuntimeTypeAdjudicationOutputAuthority;
   settledExecutionPlanOverride?: SettledAdvisorExecutionPlan;
 }
 
@@ -3299,7 +3299,7 @@ export function useMeetingAssistant() {
     (input: {
       traceId: string;
       taskId?: string;
-      authority?: RuntimeTypeRepairOutputAuthority;
+      authority?: RuntimeTypeAdjudicationOutputAuthority;
       operationId?: string;
       sessionId?: string;
       runtimeEpoch?: number;
@@ -4410,11 +4410,11 @@ export function useMeetingAssistant() {
               : {}),
           }
         );
-        if (pending.runtimeTypeRepairOutputAuthority) {
+        if (pending.runtimeTypeAdjudicationOutputAuthority) {
           recordQuestionTypeAdjudicationOutcome({
             traceId: pending.suggestion.sourceTraceId,
             taskId: pending.taskId ?? undefined,
-            authority: pending.runtimeTypeRepairOutputAuthority,
+            authority: pending.runtimeTypeAdjudicationOutputAuthority,
             advisorJobId: pending.advisorJobId,
             stage: "delivery",
             disposition: "stale-dropped",
@@ -4520,11 +4520,11 @@ export function useMeetingAssistant() {
               : {}),
           }
         );
-        if (pending.runtimeTypeRepairOutputAuthority) {
+        if (pending.runtimeTypeAdjudicationOutputAuthority) {
           recordQuestionTypeAdjudicationOutcome({
             traceId: pending.suggestion.sourceTraceId,
             taskId: pending.taskId ?? undefined,
-            authority: pending.runtimeTypeRepairOutputAuthority,
+            authority: pending.runtimeTypeAdjudicationOutputAuthority,
             advisorJobId: pending.advisorJobId,
             stage: "delivery",
             disposition: "stale-dropped",
@@ -4684,11 +4684,11 @@ export function useMeetingAssistant() {
             : {}),
         }
       );
-      if (pending.runtimeTypeRepairOutputAuthority) {
+      if (pending.runtimeTypeAdjudicationOutputAuthority) {
         recordQuestionTypeAdjudicationOutcome({
           traceId: pending.suggestion.sourceTraceId,
           taskId: pending.taskId ?? undefined,
-          authority: pending.runtimeTypeRepairOutputAuthority,
+          authority: pending.runtimeTypeAdjudicationOutputAuthority,
           advisorJobId: pending.advisorJobId,
           visibleAnswerRevision: stable.revision,
           appliedToResponse: true,
@@ -4744,7 +4744,7 @@ export function useMeetingAssistant() {
       taskRuntimeTransition?: PendingGenerationAnswerRevision["taskRuntimeTransition"];
       advisorJobId?: string;
       advisorJobSource?: AdvisorJobSource;
-      runtimeTypeRepairOutputAuthority?: RuntimeTypeRepairOutputAuthority;
+      runtimeTypeAdjudicationOutputAuthority?: RuntimeTypeAdjudicationOutputAuthority;
     }) => {
       const now = Date.now();
       const currentStableAnswer = stableAnswerRevisionRef.current;
@@ -4838,12 +4838,12 @@ export function useMeetingAssistant() {
                 : {}),
             }
           );
-          if (supersededPending.runtimeTypeRepairOutputAuthority) {
+          if (supersededPending.runtimeTypeAdjudicationOutputAuthority) {
             recordQuestionTypeAdjudicationOutcome({
               traceId: supersededPending.suggestion.sourceTraceId,
               taskId: supersededPending.taskId ?? undefined,
               authority:
-                supersededPending.runtimeTypeRepairOutputAuthority,
+                supersededPending.runtimeTypeAdjudicationOutputAuthority,
               advisorJobId: supersededPending.advisorJobId,
               stage: "delivery",
               disposition: "cancelled-by-new-job",
@@ -4892,8 +4892,8 @@ export function useMeetingAssistant() {
           input.latestUsefulAnswerMutationAuthorized,
         advisorJobId: input.advisorJobId,
         advisorJobSource: input.advisorJobSource,
-        runtimeTypeRepairOutputAuthority:
-          input.runtimeTypeRepairOutputAuthority,
+        runtimeTypeAdjudicationOutputAuthority:
+          input.runtimeTypeAdjudicationOutputAuthority,
         taskRuntimeRevision: input.taskRuntimeRevision,
         taskRuntimeTransition: input.taskRuntimeTransition,
       };
@@ -5904,11 +5904,11 @@ export function useMeetingAssistant() {
         });
         activeAdvisorGenerationLeaseRef.current = undefined;
       }
-      if (job.traceId && job.runtimeTypeRepairOutputAuthority) {
+      if (job.traceId && job.runtimeTypeAdjudicationOutputAuthority) {
         recordQuestionTypeAdjudicationOutcome({
           traceId: job.traceId,
           taskId: job.expectedParentId,
-          authority: job.runtimeTypeRepairOutputAuthority,
+          authority: job.runtimeTypeAdjudicationOutputAuthority,
           advisorJobId: job.id,
           proposedQuestionType:
             normalizeCanonicalQuestionType(
@@ -6028,13 +6028,13 @@ export function useMeetingAssistant() {
     ) => {
       if (
         job.traceId &&
-        job.runtimeTypeRepairOutputAuthority &&
+        job.runtimeTypeAdjudicationOutputAuthority &&
         outcome !== "committed"
       ) {
         recordQuestionTypeAdjudicationOutcome({
           traceId: job.traceId,
           taskId: job.expectedParentId,
-          authority: job.runtimeTypeRepairOutputAuthority,
+          authority: job.runtimeTypeAdjudicationOutputAuthority,
           advisorJobId: job.id,
           stage: "delivery",
           disposition: outcome === "error" ? "error" : "suppressed",
@@ -9692,8 +9692,8 @@ export function useMeetingAssistant() {
       localAuthority: decideRefreshAuthority({
         source,
         turnIntentDecision: options.turnIntentDecision,
-        runtimeTypeRepairOutputAuthority:
-          options.runtimeTypeRepairOutputAuthority,
+        runtimeTypeAdjudicationOutputAuthority:
+          options.runtimeTypeAdjudicationOutputAuthority,
       }),
       operationId: responseOpportunityGenerationGateOperationId,
       snapshot: responseOpportunityGateSnapshot,
@@ -9758,8 +9758,8 @@ export function useMeetingAssistant() {
       logicalQuestionUnit: options.logicalQuestionUnit,
       taskMutationAuthority,
       refreshAuthority,
-      runtimeTypeRepairOutputAuthority:
-        options.runtimeTypeRepairOutputAuthority,
+      runtimeTypeAdjudicationOutputAuthority:
+        options.runtimeTypeAdjudicationOutputAuthority,
       responseOpportunityGenerationGateOperationId:
         responseOpportunityGenerationGateOperationId,
       manualCorrectionRevision: manualCorrectionRevisionRef.current,
@@ -10554,10 +10554,10 @@ export function useMeetingAssistant() {
         options.clarifyingFeedback ||
         options.manualQuestionTypeCorrection
     );
-    const runtimeTypeRepairOutputAuthorization =
-      advisorJob.runtimeTypeRepairOutputAuthority
-        ? authorizeRuntimeTypeRepairOutputAuthority(
-            advisorJob.runtimeTypeRepairOutputAuthority,
+    const runtimeTypeAdjudicationOutputAuthorization =
+      advisorJob.runtimeTypeAdjudicationOutputAuthority
+        ? authorizeRuntimeTypeAdjudicationOutputAuthority(
+            advisorJob.runtimeTypeAdjudicationOutputAuthority,
             {
               settlementId: currentQuestionSettlement?.settlementId,
               sessionId:
@@ -10574,16 +10574,16 @@ export function useMeetingAssistant() {
             }
           )
         : undefined;
-    const runtimeTypeRepairOutputAuthorized =
-      runtimeTypeRepairOutputAuthorization?.authorized === true;
+    const runtimeTypeAdjudicationOutputAuthorized =
+      runtimeTypeAdjudicationOutputAuthorization?.authorized === true;
     const executionAuthorization =
-      advisorJob.runtimeTypeRepairOutputAuthority
+      advisorJob.runtimeTypeAdjudicationOutputAuthority
         ? {
-            authorized: runtimeTypeRepairOutputAuthorized,
-            reason: runtimeTypeRepairOutputAuthorized
-              ? "runtime-type-repair-output-authority"
-              : `runtime-type-repair-denied:${runtimeTypeRepairOutputAuthorization?.reason ?? "missing-authorization"}`,
-            bypassed: runtimeTypeRepairOutputAuthorized,
+            authorized: runtimeTypeAdjudicationOutputAuthorized,
+            reason: runtimeTypeAdjudicationOutputAuthorized
+              ? "runtime-type-adjudication-output-authority"
+              : `runtime-type-adjudication-denied:${runtimeTypeAdjudicationOutputAuthorization?.reason ?? "missing-authorization"}`,
+            bypassed: runtimeTypeAdjudicationOutputAuthorized,
           }
         : authorizeAdvisorExecution({
             force,
@@ -10657,7 +10657,7 @@ export function useMeetingAssistant() {
     }
     const llmTypeOnlySettlement = Boolean(
       currentQuestionSettlement?.typeAuthoritySource ===
-        "llm-type-repair" &&
+        "runtime-adjudication" &&
         currentQuestionSettlement.typeMutationAuthorized &&
         !currentQuestionSettlement.relationMutationAuthorized &&
         currentQuestionSettlement.questionType !== "unknown" &&
@@ -10995,7 +10995,7 @@ export function useMeetingAssistant() {
           manualCorrectionRevision:
             manualCorrectionRevisionRef.current,
           policy: {
-            allowLlmTypeRepair: false,
+            allowRuntimeTypeAdjudication: false,
             allowLlmActionRepair: false,
             runtimeMutationAuthorized:
               taskMutationAuthorization.authorized,
@@ -11303,9 +11303,9 @@ export function useMeetingAssistant() {
         advisorExecutionAuthorized: executionAuthorization.authorized,
         advisorExecutionAuthorizationReason: executionAuthorization.reason,
         advisorExecutionBypassed: executionAuthorization.bypassed,
-        ...formatRuntimeTypeRepairOutputAuthorityForTrace(
-          advisorJob.runtimeTypeRepairOutputAuthority,
-          runtimeTypeRepairOutputAuthorization
+        ...formatRuntimeTypeAdjudicationOutputAuthorityForTrace(
+          advisorJob.runtimeTypeAdjudicationOutputAuthority,
+          runtimeTypeAdjudicationOutputAuthorization
         ),
         ...formatQuestionLineageForTrace(questionLineage),
         ...formatTransientPersonalStatusForTrace(
@@ -11390,7 +11390,7 @@ export function useMeetingAssistant() {
 
     if (
       !force &&
-      !runtimeTypeRepairOutputAuthorized &&
+      !runtimeTypeAdjudicationOutputAuthorized &&
       !advisorEngineRef.current.shouldRequestSuggestion(latestTurn)
     ) {
       recordCurrentQuestionSettlement();
@@ -12178,7 +12178,7 @@ export function useMeetingAssistant() {
                 }
               : undefined,
           responseAuthorityId:
-            advisorJob.runtimeTypeRepairOutputAuthority?.id,
+            advisorJob.runtimeTypeAdjudicationOutputAuthority?.id,
           promptCurrentQuestionSourceHash:
             advisorEvidencePacket.currentQuestion?.sourceHash,
         });
@@ -12447,16 +12447,16 @@ export function useMeetingAssistant() {
         effectiveAdvisorSettlementView.parent?.sourceQuestionRevision ??
         0,
     };
-    const runtimeTypeRepairAnswerOnly =
-      runtimeTypeRepairOutputAuthorized &&
-      runtimeTypeRepairLimitsGenerationToAnswer({
-        authority: advisorJob.runtimeTypeRepairOutputAuthority,
+    const runtimeTypeAdjudicationAnswerOnly =
+      runtimeTypeAdjudicationOutputAuthorized &&
+      runtimeTypeAdjudicationLimitsGenerationToAnswer({
+        authority: advisorJob.runtimeTypeAdjudicationOutputAuthority,
         taskBoundaryCommitted: taskBoundaryCommittedBeforeAdvisor,
       });
     generationAuthorizedArtifacts =
       resolveAdvisorGenerationRequestedArtifacts({
         forceAnswerOnly: advisorJob.source === "force-advise",
-        runtimeTypeRepairAnswerOnly,
+        runtimeTypeAdjudicationAnswerOnly,
         settledPlanArtifacts: settledExecutionPlan
           ? resolveAuthorizedAnswerArtifacts({
               artifactPolicy: settledExecutionPlan.artifactPolicy,
@@ -12671,11 +12671,11 @@ export function useMeetingAssistant() {
       }));
       return;
     }
-    if (traceId && advisorJob.runtimeTypeRepairOutputAuthority) {
+    if (traceId && advisorJob.runtimeTypeAdjudicationOutputAuthority) {
       recordQuestionTypeAdjudicationOutcome({
         traceId,
         taskId: activeMeetingTaskId,
-        authority: advisorJob.runtimeTypeRepairOutputAuthority,
+        authority: advisorJob.runtimeTypeAdjudicationOutputAuthority,
         advisorJobId: advisorJob.id,
         proposedQuestionType:
           normalizeCanonicalQuestionType(advisorQuestionType),
@@ -14004,11 +14004,11 @@ export function useMeetingAssistant() {
             traceId,
             outputSuppressedMetadata
           );
-          if (advisorJob.runtimeTypeRepairOutputAuthority) {
+          if (advisorJob.runtimeTypeAdjudicationOutputAuthority) {
             recordQuestionTypeAdjudicationOutcome({
               traceId,
               taskId: activeMeetingTaskId,
-              authority: advisorJob.runtimeTypeRepairOutputAuthority,
+              authority: advisorJob.runtimeTypeAdjudicationOutputAuthority,
               advisorJobId: advisorJob.id,
               proposedQuestionType:
                 normalizeCanonicalQuestionType(advisorQuestionType),
@@ -14673,8 +14673,8 @@ export function useMeetingAssistant() {
                 advisorGenerationTaskRuntimeTransition,
               advisorJobId: advisorJob.id,
               advisorJobSource: advisorJob.source,
-              runtimeTypeRepairOutputAuthority:
-                advisorJob.runtimeTypeRepairOutputAuthority,
+              runtimeTypeAdjudicationOutputAuthority:
+                advisorJob.runtimeTypeAdjudicationOutputAuthority,
             })
           : null;
       let nextStableAnswer: StableAnswerRevision | null = null;
@@ -15013,11 +15013,11 @@ export function useMeetingAssistant() {
       };
       if (traceId) {
         traceStoreRef.current.updateMetadata(traceId, outputCommitMetadata);
-        if (advisorJob.runtimeTypeRepairOutputAuthority) {
+        if (advisorJob.runtimeTypeAdjudicationOutputAuthority) {
           recordQuestionTypeAdjudicationOutcome({
             traceId,
             taskId: contextState.activeMeetingTask?.parent.id,
-            authority: advisorJob.runtimeTypeRepairOutputAuthority,
+            authority: advisorJob.runtimeTypeAdjudicationOutputAuthority,
             advisorJobId: advisorJob.id,
             visibleAnswerRevision: committedVisibleAnswer
               ? visibleAnswerRevisionAfter
@@ -15357,7 +15357,7 @@ export function useMeetingAssistant() {
     taskMutationAuthority: AdvisorTaskMutationAuthority = "input-evidence",
     currentQuestionSettlementOverride?: CurrentQuestionSettlementDecision,
     debounceMs = ADVISOR_DEBOUNCE_MS,
-    runtimeTypeRepairOutputAuthority?: RuntimeTypeRepairOutputAuthority
+    runtimeTypeAdjudicationOutputAuthority?: RuntimeTypeAdjudicationOutputAuthority
   ) => {
     if (!runtimeActiveRef.current) return;
 
@@ -15375,7 +15375,7 @@ export function useMeetingAssistant() {
           currentQuestionLineageRef.current
         ),
       logicalQuestionUnit,
-      runtimeTypeRepairOutputAuthority,
+      runtimeTypeAdjudicationOutputAuthority,
     });
     const admission = decideAdvisorGenerationAdmission({
       activeJob: activeAdvisorJobRef.current,
@@ -15405,7 +15405,7 @@ export function useMeetingAssistant() {
           advisorJob,
           logicalQuestionUnit,
           currentQuestionSettlementOverride,
-          runtimeTypeRepairOutputAuthority,
+          runtimeTypeAdjudicationOutputAuthority,
         });
       }, remainingDebounceMs);
     };
@@ -18027,11 +18027,11 @@ export function useMeetingAssistant() {
                 manualCorrectionRevision:
                   manualCorrectionRevisionRef.current,
                 policy: {
-                  allowLlmTypeRepair:
+                  allowRuntimeTypeAdjudication:
                     effectiveQuestionTypeMode === "enforcement",
                   allowLlmRelationRepair: false,
                   allowLlmActionRepair: false,
-                  llmTypeRepairMinConfidence:
+                  runtimeTypeAdjudicationMinConfidence:
                     request.reviewScope === "field-vs-coding"
                       ? 0.5
                       : 0,
@@ -19484,7 +19484,7 @@ export function useMeetingAssistant() {
                 manualCorrectionRevision:
                   manualCorrectionRevisionRef.current,
                 policy: {
-                  allowLlmTypeRepair: false,
+                  allowRuntimeTypeAdjudication: false,
                   allowLlmRelationRepair: true,
                   allowLlmActionRepair: false,
                   runtimeMutationAuthorized: false,
@@ -19612,7 +19612,7 @@ export function useMeetingAssistant() {
               settlementPreview?.relationAuthoritySource,
             taskRelationAdjudicationRelationEvidenceAccepted:
               settlementPreview?.relationAuthoritySource ===
-              "llm-type-repair",
+              "runtime-adjudication",
             taskRelationAdjudicationRelationMutationAuthorized:
               settlementPreview?.relationMutationAuthorized ??
               false,
@@ -20415,7 +20415,7 @@ export function useMeetingAssistant() {
                 candidate: {
                   operationId: settlement.job.lease.operationId,
                   proposal: {
-                    source: "llm-type-repair",
+                    source: "runtime-adjudication",
                     sessionId: settlement.job.lease.sessionId,
                     runtimeEpoch: settlement.job.lease.runtimeEpoch,
                     logicalQuestionUnitId:
@@ -21218,7 +21218,7 @@ export function useMeetingAssistant() {
           | CurrentQuestionSettlementProposal
           | undefined = authoritativeTypeSettlement
           ? {
-              source: "llm-type-repair",
+              source: "runtime-adjudication",
               sessionId: currentQuestion.sessionId,
               runtimeEpoch: currentQuestion.runtimeEpoch,
               logicalQuestionUnitId:
@@ -21250,7 +21250,7 @@ export function useMeetingAssistant() {
               actionEvidenceAuthorized: true,
               expectedParentId: latestParent?.id,
               expectedParentRevision: latestParent?.revisions,
-              reasons: ["ordered-relation-type-repair-input"],
+              reasons: ["ordered-relation-runtime-adjudication-input"],
             }
           : undefined;
         const deterministicOrderedRelationProposal =
@@ -21282,10 +21282,10 @@ export function useMeetingAssistant() {
           manualCorrectionRevision:
             manualCorrectionRevisionRef.current,
           policy: {
-            allowLlmTypeRepair: Boolean(authoritativeTypeSettlement),
+            allowRuntimeTypeAdjudication: Boolean(authoritativeTypeSettlement),
             allowLlmRelationRepair: Boolean(relationProposal),
             allowLlmActionRepair: Boolean(authoritativeTypeSettlement),
-            llmTypeRepairMinConfidence: 0,
+            runtimeTypeAdjudicationMinConfidence: 0,
             llmRelationRepairMinConfidence: 0.95,
             runtimeMutationAuthorized: true,
             questionComplete: true,
@@ -21301,9 +21301,9 @@ export function useMeetingAssistant() {
             leaseAuthorization.authorized &&
             settlement
         );
-        const runtimeTypeRepairOutputAuthority =
+        const runtimeTypeAdjudicationOutputAuthority =
           releaseEligible && settlement && settlementOperationId
-            ? createRuntimeTypeRepairOutputAuthority({
+            ? createRuntimeTypeAdjudicationOutputAuthority({
                 operationId: settlementOperationId,
                 settlement,
                 manualCorrectionRevision:
@@ -21311,7 +21311,7 @@ export function useMeetingAssistant() {
               })
             : undefined;
         const releaseAuthorized = Boolean(
-          releaseEligible && runtimeTypeRepairOutputAuthority
+          releaseEligible && runtimeTypeAdjudicationOutputAuthority
         );
         const settlementReleased = Boolean(releaseEligible && settlement);
         const metadata = {
@@ -21337,8 +21337,8 @@ export function useMeetingAssistant() {
             leaseAuthorization.authorized,
           questionTypeAdjudicationReleaseLeaseReason:
             leaseAuthorization.reason,
-          ...formatRuntimeTypeRepairOutputAuthorityForTrace(
-            runtimeTypeRepairOutputAuthority
+          ...formatRuntimeTypeAdjudicationOutputAuthorityForTrace(
+            runtimeTypeAdjudicationOutputAuthority
           ),
           ...formatQuestionTypeEnforcementForTrace(
             outcome?.enforcement
@@ -21365,7 +21365,7 @@ export function useMeetingAssistant() {
             convergedSettlement
               ? "input-evidence"
               : releaseAuthorized
-                ? "runtime-type-repair"
+                ? "runtime-type-adjudication-output-only"
                 : "input-evidence",
           runtimeSettlementAppliedToRuntime: settlementReleased,
         };
@@ -21395,7 +21395,7 @@ export function useMeetingAssistant() {
           recordQuestionTypeAdjudicationOutcome({
             traceId: input.traceId,
             taskId: releaseTaskId,
-            authority: runtimeTypeRepairOutputAuthority,
+            authority: runtimeTypeAdjudicationOutputAuthority,
             operationId:
               outcome?.operationId ?? questionTypeHandle?.operationId,
             sessionId: logicalQuestionLease.sessionId,
@@ -21422,7 +21422,7 @@ export function useMeetingAssistant() {
             reason: releaseAuthorized
               ? convergedSettlement
                 ? "runtime-type-relation-settlement-authority-issued"
-                : "runtime-type-repair-authority-issued"
+                : "runtime-type-adjudication-authority-issued"
               : settlementReleased
                 ? orderedType.reason
                 : leaseAuthorization.authorized
@@ -21470,11 +21470,11 @@ export function useMeetingAssistant() {
           convergedSettlement
             ? "input-evidence"
             : releaseAuthorized
-              ? "runtime-type-repair"
+              ? "runtime-type-adjudication-output-only"
               : "input-evidence",
           settlementReleased ? settlement : undefined,
           0,
-          runtimeTypeRepairOutputAuthority
+          runtimeTypeAdjudicationOutputAuthority
         );
       };
 
@@ -25519,7 +25519,7 @@ export function useMeetingAssistant() {
           reason: input.reason,
         });
       };
-      const didScreenTypeRepairApplyToParent = () =>
+      const didScreenTypeAdjudicationApplyToParent = () =>
         Boolean(
           screenQuestionTypeOutcomeReceipt?.settlementApplied &&
             screenSourceOwnedTransitionResult?.mutationApplied &&
@@ -27226,7 +27226,7 @@ export function useMeetingAssistant() {
             manualCorrectionRevision:
               manualCorrectionRevisionRef.current,
             policy: {
-              allowLlmTypeRepair: false,
+              allowRuntimeTypeAdjudication: false,
               allowLlmRelationRepair: false,
               allowLlmActionRepair: false,
               runtimeMutationAuthorized: Boolean(
@@ -27351,7 +27351,7 @@ export function useMeetingAssistant() {
               manualCorrectionRevision:
                 manualCorrectionRevisionRef.current,
               policy: {
-                allowLlmTypeRepair: false,
+                allowRuntimeTypeAdjudication: false,
                 allowLlmRelationRepair: Boolean(llmRelationProposal),
                 allowLlmActionRepair: false,
                 llmRelationRepairMinConfidence: 0.95,
@@ -27452,7 +27452,7 @@ export function useMeetingAssistant() {
             manualCorrectionRevision:
               manualCorrectionRevisionRef.current,
             policy: {
-              allowLlmTypeRepair: false,
+              allowRuntimeTypeAdjudication: false,
               allowLlmRelationRepair: false,
               allowLlmActionRepair: false,
               runtimeMutationAuthorized: Boolean(
@@ -27821,7 +27821,7 @@ export function useMeetingAssistant() {
               currentQuestionSettlementAppliedToParent: true,
               taskRelationAdjudicationAppliedToParent:
                 committedScreenQuestionSettlement?.relationAuthoritySource ===
-                "llm-type-repair",
+                "runtime-adjudication",
               ...getActiveMeetingTaskTraceMetadata(
                 committedScreenContext.activeMeetingTask
               ),
@@ -27859,11 +27859,11 @@ export function useMeetingAssistant() {
             taskRelationAdjudicationAppliedToResponse: true,
             taskRelationAdjudicationAppliedToSettlement:
               screenCurrentQuestionSettlement.relationAuthoritySource ===
-              "llm-type-repair",
+              "runtime-adjudication",
             taskRelationAdjudicationAppliedToParent:
               screenSourceTransitionCommittedBeforeModel &&
               screenCurrentQuestionSettlement.relationAuthoritySource ===
-                "llm-type-repair",
+                "runtime-adjudication",
           });
           sessionRecordingManagerRef.current?.recordCurrentQuestionSettlement({
             traceId: trace.id,
@@ -28767,7 +28767,7 @@ export function useMeetingAssistant() {
           disposition: "model-completed",
           settlement: screenCurrentQuestionSettlement,
           modelCompleted: true,
-          appliedToParent: didScreenTypeRepairApplyToParent(),
+          appliedToParent: didScreenTypeAdjudicationApplyToParent(),
           reason: "screen-model-completed",
         });
 
@@ -29198,14 +29198,14 @@ export function useMeetingAssistant() {
             relation: provisionalScreenTaskRelation,
             reason:
               screenCurrentQuestionSettlement?.relationAuthoritySource ===
-              "llm-type-repair"
+              "runtime-adjudication"
                 ? "runtime-relation-settlement"
                 : screenSectionHintConsumption.disposition === "applied"
                 ? "explicit-section-hint"
                 : screenTaskRelationDecision.reason,
             confidence:
               screenCurrentQuestionSettlement?.relationAuthoritySource ===
-              "llm-type-repair"
+              "runtime-adjudication"
                 ? screenCurrentQuestionSettlement.confidence
                 : screenSectionHintConsumption.disposition === "applied"
                 ? 1
@@ -30034,7 +30034,7 @@ export function useMeetingAssistant() {
             modelCompleted: true,
             visibleCommitted: true,
             visibleAnswerRevision: visibleAnswerRevisionAfter,
-            appliedToParent: didScreenTypeRepairApplyToParent(),
+            appliedToParent: didScreenTypeAdjudicationApplyToParent(),
             reason: "screen-stable-answer-visible-commit",
           });
         } else {
