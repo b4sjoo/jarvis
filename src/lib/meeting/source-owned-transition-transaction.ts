@@ -51,6 +51,7 @@ export interface SourceOwnedTransitionCandidate {
   subtaskIntent: InterviewSubtaskIntent;
   expectedParentId?: string;
   expectedParentRevision?: number;
+  preserveChildId?: string;
   questionInstanceId?: string;
   playbook?: SelectedInterviewPlaybook;
   phaseDecision?: PlaybookPhaseDecision;
@@ -71,6 +72,7 @@ export interface CreateSourceOwnedTransitionCandidateInput {
   logicalQuestionUnitId?: string;
   logicalQuestionRevision?: number;
   existingTask?: ActiveInterviewParent;
+  preserveChildId?: string;
   relation: InterviewTaskRelation;
   authoritySource: string;
   mutationAuthorized: boolean;
@@ -163,6 +165,7 @@ export function createSourceOwnedTransitionCandidate(
     subtaskIntent: input.subtaskIntent ?? "unknown",
     expectedParentId: input.existingTask?.id,
     expectedParentRevision: input.existingTask?.revisions,
+    preserveChildId: input.preserveChildId,
     questionInstanceId: input.questionInstanceId,
     playbook: input.playbook ? { ...input.playbook } : undefined,
     phaseDecision: input.phaseDecision
@@ -232,6 +235,9 @@ export function commitSourceOwnedTransition(
 
   const now = input.now ?? Date.now();
   const transition = applyTransition(candidate, currentTask, now);
+  if (transition.reason === "child-owner-mismatch") {
+    return rejected(transition.reason);
+  }
   const after = snapshotTask(transition.task);
 
   return {
@@ -558,6 +564,37 @@ function applyTransition(
   }
 
   if (candidate.kind === "child-probe") {
+    if (candidate.preserveChildId) {
+      if (currentTask.child?.id !== candidate.preserveChildId) {
+        return {
+          task: currentTask,
+          mutationApplied: false,
+          reason: "child-owner-mismatch",
+        };
+      }
+      return {
+        task: {
+          ...currentTask,
+          child: {
+            ...currentTask.child,
+            updatedAt: now,
+            questionType: candidate.questionType,
+            relation: "child-probe",
+            intent: candidate.subtaskIntent,
+            question: candidate.question,
+            basedOnTurnIds: [...candidate.sourceTurnIds],
+            basedOnObservationIds: [
+              ...candidate.sourceObservationIds,
+            ],
+          },
+          updatedAt: now,
+          expiresAt: candidate.expiresAt,
+          revisions: currentTask.revisions + 1,
+        },
+        mutationApplied: true,
+        reason: "child-probe-preserved",
+      };
+    }
     const alreadyApplied =
       currentTask.child?.question === candidate.question &&
       sameStrings(

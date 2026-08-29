@@ -60,6 +60,122 @@ test("commits a child before output and preserves parent artifacts", () => {
   );
 });
 
+test("preserves active child identity for a settled same-branch follow-up", () => {
+  const parent = makeParent({
+    child: {
+      id: "child-hnsw",
+      createdAt: 50,
+      updatedAt: 50,
+      questionType: "field-knowledge",
+      relation: "child-probe",
+      intent: "concept-probe",
+      question: "What is HNSW?",
+      basedOnTurnIds: ["turn-child-root"],
+      basedOnObservationIds: [],
+      returnCapsule: {
+        parentId: "parent-a",
+        parentRevisionAtAttach: 2,
+        parentPhase: "design_framing",
+        projectBindingRevision: 0,
+        topicCapsule: "Design a RAG system",
+        allowedFactAnchorIds: [],
+        artifactCompatibility: {
+          policy: "preserve-parent-artifacts",
+          whiteboardArtifactId: "whiteboard-a",
+        },
+        createdAt: 50,
+      },
+    },
+  });
+  const candidate = createSourceOwnedTransitionCandidate({
+    sessionId: "session-a",
+    runtimeEpoch: 3,
+    source: "voice",
+    sourceTurnIds: ["turn-child-followup"],
+    logicalQuestionUnitId: "lqu-child-followup",
+    logicalQuestionRevision: 1,
+    existingTask: parent,
+    preserveChildId: "child-hnsw",
+    relation: "child-probe",
+    authoritySource: "committed-settlement",
+    mutationAuthorized: true,
+    questionType: "field-knowledge",
+    question: "How does efSearch affect recall?",
+    subtaskIntent: "concept-probe",
+    now: 100,
+  });
+  assert.ok(candidate);
+
+  const result = commitSourceOwnedTransition({
+    candidate,
+    currentTask: parent,
+    currentSessionId: "session-a",
+    currentRuntimeEpoch: 3,
+    now: 110,
+  });
+
+  assert.equal(result.mutationApplied, true);
+  assert.equal(result.reason, "child-probe-preserved");
+  assert.equal(result.task?.child?.id, "child-hnsw");
+  assert.equal(result.task?.child?.createdAt, 50);
+  assert.equal(
+    result.task?.child?.question,
+    "How does efSearch affect recall?"
+  );
+  assert.deepEqual(result.task?.child?.basedOnTurnIds, [
+    "turn-child-followup",
+  ]);
+  assert.equal(
+    result.task?.child?.returnCapsule,
+    parent.child?.returnCapsule
+  );
+  assert.equal(result.task?.whiteboardArtifact, parent.whiteboardArtifact);
+});
+
+test("rejects child preservation after the effective owner changes", () => {
+  const parent = makeParent({
+    child: {
+      id: "child-new",
+      createdAt: 50,
+      updatedAt: 50,
+      questionType: "field-knowledge",
+      relation: "child-probe",
+      intent: "concept-probe",
+      question: "What is HNSW?",
+      basedOnTurnIds: ["turn-child-root"],
+      basedOnObservationIds: [],
+    },
+  });
+  const candidate = createSourceOwnedTransitionCandidate({
+    sessionId: "session-a",
+    runtimeEpoch: 3,
+    source: "voice",
+    sourceTurnIds: ["turn-child-followup"],
+    existingTask: parent,
+    preserveChildId: "child-old",
+    relation: "child-probe",
+    authoritySource: "committed-settlement",
+    mutationAuthorized: true,
+    questionType: "field-knowledge",
+    question: "How does efSearch affect recall?",
+    now: 100,
+  });
+  assert.ok(candidate);
+
+  const result = commitSourceOwnedTransition({
+    candidate,
+    currentTask: parent,
+    currentSessionId: "session-a",
+    currentRuntimeEpoch: 3,
+    now: 110,
+  });
+
+  assert.equal(result.candidate.state, "rejected");
+  assert.equal(result.mutationApplied, false);
+  assert.equal(result.reason, "child-owner-mismatch");
+  assert.equal(result.task?.child?.id, "child-new");
+});
+
 test("resumes a parent without restarting its phase", () => {
   const parent = makeParent({
     child: {

@@ -12092,6 +12092,9 @@ export function useMeetingAssistant() {
           logicalQuestionRevision:
             advisorJob.logicalQuestionUnit.revision,
           existingTask: transitionParentBefore,
+          preserveChildId:
+            effectiveAdvisorSettlementView.effectiveSettlement
+              ?.effectiveChildId,
           relation:
             effectiveAdvisorSettlementView.relation as InterviewTaskRelation,
           authoritySource: taskBoundaryAuthoritySource,
@@ -28033,6 +28036,9 @@ export function useMeetingAssistant() {
             source: "screen",
             sourceObservationIds: [observation.id],
             existingTask: screenTransitionParentBefore,
+            preserveChildId:
+              effectiveScreenSettlementView.effectiveSettlement
+                ?.effectiveChildId,
             relation: provisionalScreenTaskRelation,
             authoritySource:
               screenSectionHintConsumption.disposition === "applied"
