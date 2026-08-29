@@ -297,6 +297,8 @@ test("does not fall back to an older revision after the winning child owner reti
     ...unit("lqu-rebound", "turn-current", "Continue the explanation.", 100),
     revision: 3,
   };
+  activeTask.parent.sourceQuestionUnitId = revised.id;
+  activeTask.parent.sourceQuestionRevision = 1;
   const parentRevision: EffectiveQuestionSourceRecord = record({
     recordId: "record-parent-revision-1",
     logicalQuestionUnitId: revised.id,

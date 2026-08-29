@@ -212,19 +212,6 @@ export function resolveRevisionStableTopologyBinding(input: {
 }): RevisionStableTopologyBinding | undefined {
   const { logicalQuestionUnit, activeMeetingTask } = input;
   const parent = activeMeetingTask?.parent;
-  if (
-    parent?.sourceQuestionUnitId === logicalQuestionUnit.id &&
-    (parent.sourceQuestionRevision === undefined ||
-      logicalQuestionUnit.revision >= parent.sourceQuestionRevision)
-  ) {
-    return {
-      relation: "new-parent",
-      owner: { kind: "parent-mainline", parentId: parent.id },
-      source: "active-parent-origin",
-      boundRevision: parent.sourceQuestionRevision ?? 1,
-    };
-  }
-
   const latestBoundRecord = input.records
     .filter(
       (record) =>
@@ -245,6 +232,19 @@ export function resolveRevisionStableTopologyBinding(input: {
       owner: { ...latestBoundRecord.owner },
       source: "effective-question-source-ledger",
       boundRevision: latestBoundRecord.logicalQuestionRevision,
+    };
+  }
+
+  if (
+    parent?.sourceQuestionUnitId === logicalQuestionUnit.id &&
+    (parent.sourceQuestionRevision === undefined ||
+      logicalQuestionUnit.revision >= parent.sourceQuestionRevision)
+  ) {
+    return {
+      relation: "new-parent",
+      owner: { kind: "parent-mainline", parentId: parent.id },
+      source: "active-parent-origin",
+      boundRevision: parent.sourceQuestionRevision ?? 1,
     };
   }
 
