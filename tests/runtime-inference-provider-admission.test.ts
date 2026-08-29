@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { RuntimeInferenceProviderAdmissionCoordinator } from "../src/lib/meeting/runtime-inference-provider-admission.js";
+import {
+  RuntimeInferenceProviderAdmissionCoordinator,
+  type RuntimeInferenceAdmissionClock,
+} from "../src/lib/meeting/runtime-inference-provider-admission.js";
 import { RuntimeInferenceOperationRuntime } from "../src/lib/meeting/runtime-inference-runtime.js";
 
 test("prioritizes critical then evaluation work across one provider", async () => {
@@ -28,6 +31,52 @@ test("prioritizes critical then evaluation work across one provider", async () =
   await critical;
   await waitFor(() => started.length === 2);
   assert.deepEqual(started, ["critical", "evaluation"]);
+  releases.get("evaluation")?.();
+  await evaluation;
+  await waitFor(() => started.length === 3);
+  assert.deepEqual(started, ["critical", "evaluation", "background"]);
+  releases.get("background")?.();
+  await background;
+});
+
+test("shares one non-critical admission epoch across a provider group", async () => {
+  const clock = new ControlledAdmissionClock(100);
+  const coordinator = new RuntimeInferenceProviderAdmissionCoordinator(
+    1,
+    15,
+    clock
+  );
+  const started: string[] = [];
+  const releases = new Map<string, () => void>();
+  const run = (
+    operationId: string,
+    lane: "critical" | "evaluation" | "background"
+  ) =>
+    coordinator.run({
+      operationId,
+      lane,
+      signal: new AbortController().signal,
+      execute: () =>
+        new Promise<string>((resolve) => {
+          started.push(operationId);
+          releases.set(operationId, () => resolve(operationId));
+        }),
+    });
+
+  const background = run("background", "background");
+  clock.advanceBy(1);
+  const evaluation = run("evaluation", "evaluation");
+  clock.advanceBy(1);
+  const critical = run("critical", "critical");
+  await waitFor(() => started.length === 1);
+  assert.deepEqual(started, ["critical"]);
+
+  releases.get("critical")?.();
+  await critical;
+  clock.advanceTo(115);
+  await waitFor(() => started.length === 2);
+  assert.deepEqual(started, ["critical", "evaluation"]);
+
   releases.get("evaluation")?.();
   await evaluation;
   await waitFor(() => started.length === 3);
@@ -241,6 +290,54 @@ interface TestJob {
   budgetKey: string;
   budgetSlot: string;
   budgetReason: string;
+}
+
+class ControlledAdmissionClock implements RuntimeInferenceAdmissionClock {
+  private sequence = 0;
+  private readonly timers = new Map<
+    number,
+    { at: number; callback: () => void }
+  >();
+
+  constructor(private currentTime: number) {}
+
+  now() {
+    return this.currentTime;
+  }
+
+  schedule(callback: () => void, delayMs: number) {
+    const id = this.sequence++;
+    this.timers.set(id, {
+      at: this.currentTime + Math.max(0, delayMs),
+      callback,
+    });
+    return id;
+  }
+
+  cancel(handle: unknown) {
+    if (typeof handle === "number") this.timers.delete(handle);
+  }
+
+  advanceBy(durationMs: number) {
+    this.advanceTo(this.currentTime + durationMs);
+  }
+
+  advanceTo(targetTime: number) {
+    while (true) {
+      const next = [...this.timers.entries()]
+        .filter(([, timer]) => timer.at <= targetTime)
+        .sort(
+          ([leftId, left], [rightId, right]) =>
+            left.at - right.at || leftId - rightId
+        )[0];
+      if (!next) break;
+      const [id, timer] = next;
+      this.timers.delete(id);
+      this.currentTime = timer.at;
+      timer.callback();
+    }
+    this.currentTime = targetTime;
+  }
 }
 
 async function waitFor(predicate: () => boolean, timeoutMs = 500) {

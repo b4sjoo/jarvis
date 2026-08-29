@@ -9,12 +9,19 @@ export interface RuntimeInferenceSharedAdmissionReceipt {
   providerTier: RuntimeInferenceProviderTier;
   providerGroupKey: string;
   queuedAt: number;
+  eligibleAt: number;
   admittedAt: number;
   waitMs: number;
   queueDepthAtEnqueue: number;
   queueDepthAtAdmission: number;
   activeCountAtAdmission: number;
   maxConcurrent: number;
+}
+
+export interface RuntimeInferenceAdmissionClock {
+  now(): number;
+  schedule(callback: () => void, delayMs: number): unknown;
+  cancel(handle: unknown): void;
 }
 
 interface PendingAdmission<T> {
@@ -43,14 +50,16 @@ const LANE_PRIORITY: Record<RuntimeInferenceLane, number> = {
 export class RuntimeInferenceProviderAdmissionCoordinator {
   private readonly queue: PendingAdmission<unknown>[] = [];
   private readonly activeCountByGroup = new Map<string, number>();
+  private readonly nonCriticalEligibleAtByGroup = new Map<string, number>();
   private sequence = 0;
-  private timer?: ReturnType<typeof setTimeout>;
+  private timer?: unknown;
   private fastFingerprint = "default";
   private intelligentFingerprint = "default";
 
   constructor(
     private readonly maxConcurrent = 3,
-    private readonly nonCriticalGraceMs = 450
+    private readonly nonCriticalGraceMs = 450,
+    private readonly clock: RuntimeInferenceAdmissionClock = SYSTEM_ADMISSION_CLOCK
   ) {}
 
   configureProviderGroups(input: {
@@ -72,9 +81,14 @@ export class RuntimeInferenceProviderAdmissionCoordinator {
     if (input.signal.aborted) {
       return Promise.reject(createAbortError());
     }
-    const queuedAt = Date.now();
+    const queuedAt = this.clock.now();
     const providerTier = input.providerTier ?? "fast";
     const providerGroupKey = this.resolveProviderGroupKey(providerTier);
+    const eligibleAt = this.resolveEligibleAt({
+      providerGroupKey,
+      lane: input.lane,
+      queuedAt,
+    });
     return new Promise<T>((resolve, reject) => {
       const pending: PendingAdmission<T> = {
         sequence: this.sequence++,
@@ -83,9 +97,7 @@ export class RuntimeInferenceProviderAdmissionCoordinator {
         providerTier,
         providerGroupKey,
         queuedAt,
-        eligibleAt:
-          queuedAt +
-          (input.lane === "critical" ? 0 : this.nonCriticalGraceMs),
+        eligibleAt,
         queueDepthAtEnqueue: this.queue.filter(
           (candidate) => candidate.providerGroupKey === providerGroupKey
         ).length,
@@ -100,6 +112,7 @@ export class RuntimeInferenceProviderAdmissionCoordinator {
           );
           if (index < 0) return;
           this.queue.splice(index, 1);
+          this.clearNonCriticalEpochWhenIdle(providerGroupKey);
           reject(createAbortError());
           this.drain();
         },
@@ -124,11 +137,11 @@ export class RuntimeInferenceProviderAdmissionCoordinator {
   }
 
   private drain() {
-    if (this.timer) clearTimeout(this.timer);
+    if (this.timer !== undefined) this.clock.cancel(this.timer);
     this.timer = undefined;
 
     while (this.queue.length) {
-      const now = Date.now();
+      const now = this.clock.now();
       const eligible = this.queue
         .filter(
           (candidate) =>
@@ -151,7 +164,7 @@ export class RuntimeInferenceProviderAdmissionCoordinator {
             0,
             Math.min(...futureEligibleAt) - now
           );
-          this.timer = setTimeout(() => this.drain(), delayMs);
+          this.timer = this.clock.schedule(() => this.drain(), delayMs);
         }
         return;
       }
@@ -159,19 +172,21 @@ export class RuntimeInferenceProviderAdmissionCoordinator {
       const index = this.queue.indexOf(next);
       if (index < 0) continue;
       this.queue.splice(index, 1);
+      this.clearNonCriticalEpochWhenIdle(next.providerGroupKey);
       next.signal.removeEventListener("abort", next.abortListener);
       if (next.signal.aborted) {
         next.reject(createAbortError());
         continue;
       }
 
-      const admittedAt = Date.now();
+      const admittedAt = this.clock.now();
       const receipt: RuntimeInferenceSharedAdmissionReceipt = {
         operationId: next.operationId,
         lane: next.lane,
         providerTier: next.providerTier,
         providerGroupKey: next.providerGroupKey,
         queuedAt: next.queuedAt,
+        eligibleAt: next.eligibleAt,
         admittedAt,
         waitMs: Math.max(0, admittedAt - next.queuedAt),
         queueDepthAtEnqueue: next.queueDepthAtEnqueue,
@@ -203,6 +218,42 @@ export class RuntimeInferenceProviderAdmissionCoordinator {
     return `provider:${fingerprint}`;
   }
 
+  private resolveEligibleAt(input: {
+    providerGroupKey: string;
+    lane: RuntimeInferenceLane;
+    queuedAt: number;
+  }) {
+    if (input.lane === "critical") return input.queuedAt;
+    const existingEpoch = this.nonCriticalEligibleAtByGroup.get(
+      input.providerGroupKey
+    );
+    const hasQueuedNonCritical = this.queue.some(
+      (candidate) =>
+        candidate.providerGroupKey === input.providerGroupKey &&
+        candidate.lane !== "critical"
+    );
+    if (existingEpoch !== undefined && hasQueuedNonCritical) {
+      return existingEpoch;
+    }
+    const eligibleAt = input.queuedAt + this.nonCriticalGraceMs;
+    this.nonCriticalEligibleAtByGroup.set(
+      input.providerGroupKey,
+      eligibleAt
+    );
+    return eligibleAt;
+  }
+
+  private clearNonCriticalEpochWhenIdle(providerGroupKey: string) {
+    const hasQueuedNonCritical = this.queue.some(
+      (candidate) =>
+        candidate.providerGroupKey === providerGroupKey &&
+        candidate.lane !== "critical"
+    );
+    if (!hasQueuedNonCritical) {
+      this.nonCriticalEligibleAtByGroup.delete(providerGroupKey);
+    }
+  }
+
   private readActiveCount(groupKey: string) {
     return this.activeCountByGroup.get(groupKey) ?? 0;
   }
@@ -229,6 +280,7 @@ export function formatRuntimeInferenceSharedAdmissionForTrace(
 ) {
   return {
     runtimeInferenceSharedAdmissionWaitMs: receipt?.waitMs,
+    runtimeInferenceSharedEligibleAt: receipt?.eligibleAt,
     runtimeInferenceSharedQueueDepthAtEnqueue:
       receipt?.queueDepthAtEnqueue,
     runtimeInferenceSharedQueueDepthAtAdmission:
@@ -242,6 +294,12 @@ export function formatRuntimeInferenceSharedAdmissionForTrace(
       receipt?.providerGroupKey,
   };
 }
+
+const SYSTEM_ADMISSION_CLOCK: RuntimeInferenceAdmissionClock = {
+  now: () => Date.now(),
+  schedule: (callback, delayMs) => setTimeout(callback, delayMs),
+  cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+};
 
 function createAbortError() {
   const error = new Error("Runtime inference provider admission aborted.");
