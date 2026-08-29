@@ -553,7 +553,10 @@ function MeetingFocusControlsWindow({
                   <Badge
                     key={item.id}
                     variant="outline"
-                    className="flex min-w-0 items-center gap-1 overflow-hidden rounded-sm px-1.5 py-0 text-[10px]"
+                    className={cn(
+                      "flex min-w-0 items-center gap-1 overflow-hidden rounded-sm px-1.5 py-0 text-[10px]",
+                      item.deactivatedAt && "opacity-55"
+                    )}
                     title={
                       item.activeQuestion?.error
                         ? `${item.input}: ${item.activeQuestion.error}`
@@ -574,7 +577,26 @@ function MeetingFocusControlsWindow({
                             item.activeQuestion.regenerationStatus
                           )}`
                         : ""}
+                      {item.deactivatedAt ? " · stopped" : ""}
                     </span>
+                    {!item.deactivatedAt ? (
+                      <Button
+                        type="button"
+                        size="icon"
+                        variant="ghost"
+                        className="h-4 w-4 shrink-0 p-0"
+                        title="Stop future replacement"
+                        aria-label={`Stop correction ${item.from ?? item.term ?? item.to ?? item.id}`}
+                        onClick={() =>
+                          sendFocusAction({
+                            type: "deactivate-correction",
+                            correctionId: item.id,
+                          })
+                        }
+                      >
+                        <XIcon className="h-2.5 w-2.5" />
+                      </Button>
+                    ) : null}
                   </Badge>
                 ))}
               </div>

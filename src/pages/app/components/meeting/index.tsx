@@ -1021,6 +1021,7 @@ export const MeetingAssistant = ({
         to: item.to,
         term: item.term,
         appliedCount: item.appliedCount,
+        deactivatedAt: item.deactivatedAt,
         activeQuestion: item.activeQuestion,
       })),
     }),
@@ -1582,6 +1583,9 @@ export const MeetingAssistant = ({
         break;
       case "submit-correction":
         void meeting.submitSpeechCorrection(action.correction);
+        break;
+      case "deactivate-correction":
+        void meeting.deactivateSpeechCorrection(action.correctionId);
         break;
       case "correct-question-type":
         void meeting.correctActiveQuestionType(
@@ -6597,26 +6601,28 @@ const TraceHumanEvaluationPanel = ({
           </div>
           {currentQuestionSettlementDisposition === "response-only" ||
           typeof trace.metadata?.responseOnlyTaskScopeId === "string" ? (
-            <CriticalMomentButtonGroup
-              label="Response-only handling"
-              options={[
-                ["correct", "Correct"],
-                ["incorrect", "Wrong"],
-              ]}
-              value={
-                questionEvaluation?.taxonomyAdjudication
-                  ?.responseOnlyCorrect === undefined
-                  ? undefined
-                  : questionEvaluation.taxonomyAdjudication.responseOnlyCorrect
-                    ? "correct"
-                    : "incorrect"
-              }
-              onSelect={(value) =>
-                updateTaxonomyAdjudicationEvaluation({
-                  responseOnlyCorrect: value === "correct",
-                })
-              }
-            />
+            <div className="mt-3 border-t border-border/50 pt-2">
+              <CriticalMomentButtonGroup
+                label="Response-only handling"
+                options={[
+                  ["correct", "Correct"],
+                  ["incorrect", "Wrong"],
+                ]}
+                value={
+                  questionEvaluation?.taxonomyAdjudication
+                    ?.responseOnlyCorrect === undefined
+                    ? undefined
+                    : questionEvaluation.taxonomyAdjudication.responseOnlyCorrect
+                      ? "correct"
+                      : "incorrect"
+                }
+                onSelect={(value) =>
+                  updateTaxonomyAdjudicationEvaluation({
+                    responseOnlyCorrect: value === "correct",
+                  })
+                }
+              />
+            </div>
           ) : null}
           {activeSettlementFact?.kind ===
           "expected-task-settlement" ? (

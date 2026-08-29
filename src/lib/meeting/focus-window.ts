@@ -137,6 +137,7 @@ export type MeetingFocusSpeechCorrectionSnapshot = Pick<
   | "to"
   | "term"
   | "appliedCount"
+  | "deactivatedAt"
   | "activeQuestion"
 >;
 
@@ -192,6 +193,7 @@ export type MeetingFocusAction =
   | { type: "force-advise" }
   | { type: "capture-screen" }
   | { type: "submit-correction"; correction: string }
+  | { type: "deactivate-correction"; correctionId: string }
   | {
       type: "correct-question-type";
       correctedType: CanonicalQuestionType;
