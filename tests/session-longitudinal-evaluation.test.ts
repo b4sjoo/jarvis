@@ -42,6 +42,44 @@ test("renders N/A for a missing human-label denominator", () => {
   assert.match(markdown, /False activation: N\/A/);
 });
 
+test("scores a same-parent cross-type replacement as retype", () => {
+  const report = buildSessionLongitudinalEvaluationReport([
+    {
+      directory: "/recordings/session-retype",
+      manifest: { sessionId: "session-retype" },
+      transcriptTurns: [],
+      traceSummaries: [
+        {
+          traceId: "trace-retype",
+          logicalQuestionUnitId: "question-retype",
+          taskRelation: "new-parent",
+          taskMutationAuthorized: true,
+          taskMutationCommand: "replace-parent",
+          taskLifecycleParentBeforeId: "parent-design",
+          taskLifecycleParentAfterId: "parent-design",
+          taskLifecycleParentBeforeType: "general-system-design",
+          taskLifecycleParentAfterType: "ai-ml-system-design",
+        },
+      ],
+      questionEvaluations: [
+        {
+          id: "evaluation-retype",
+          questionId: "question-retype",
+          traceIds: ["trace-retype"],
+          expectedRelation: "new-parent",
+          expectedParentAction: "retype",
+        },
+      ],
+    },
+  ]);
+
+  assert.deepEqual(report.continuityFunnel.parentActionAgreement, {
+    numerator: 1,
+    denominator: 1,
+    rate: 1,
+  });
+});
+
 test("separates metadata proposal quality from effective company safety", () => {
   const subject = {
     questionId: "company-opening",

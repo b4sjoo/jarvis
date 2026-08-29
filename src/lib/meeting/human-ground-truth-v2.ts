@@ -20,6 +20,7 @@ import type {
 } from "./types.js";
 import type { AdvisorContextReadScope } from "./advisor-context-read-scope.js";
 import type { SettledAdvisorArtifactIntent } from "./settled-advisor-execution-plan.js";
+import { projectObservedParentAction } from "./task-settlement-tuple.js";
 import {
   projectQuestionTypeObservation,
   type DurableQuestionOwnerMissingReason,
@@ -38,11 +39,14 @@ import {
 import { projectObservedAdvisorAttempt } from "./observed-advisor-outcome.js";
 import { resolveCurrentQuestionSourceKind } from "./current-question-source.js";
 
+export { evaluateTaskSettlementTupleCompatibilityV2 } from "./task-settlement-tuple.js";
+export type { TaskSettlementTupleCompatibilityV2 } from "./task-settlement-tuple.js";
+
 export type ObservedQuestionSourceKind = "voice" | "screen" | "mixed";
 
 export const HUMAN_GROUND_TRUTH_SCHEMA_VERSION = 2 as const;
 export const HUMAN_EVALUATION_DERIVATION_VERSION =
-  "human-evaluation-v2.10";
+  "human-evaluation-v2.11";
 
 export type HumanGroundTruthConfirmation = "confirmed" | "suggested";
 
@@ -91,14 +95,6 @@ export interface ExpectedTaskSettlementFactV2 {
   expectedParentId?: string;
   expectedBranchId?: string;
   expectedContextOwnerId?: string;
-}
-
-export interface TaskSettlementTupleCompatibilityV2 {
-  compatible: boolean;
-  relation: HumanEvaluationTaskRelation;
-  parentAction: HumanExpectedParentAction;
-  recommendedParentAction: HumanExpectedParentAction;
-  reason?: string;
 }
 
 export interface ExpectedQuestionTypeFactV2 {
@@ -334,26 +330,6 @@ export function createHumanGroundTruthEventV2(input: {
     },
     confirmation: input.confirmation ?? "confirmed",
     supersedesEventId: cleanOptional(input.supersedesEventId),
-  };
-}
-
-export function evaluateTaskSettlementTupleCompatibilityV2(input: {
-  relation: HumanEvaluationTaskRelation;
-  parentAction: HumanExpectedParentAction;
-}): TaskSettlementTupleCompatibilityV2 {
-  const recommendedParentAction =
-    recommendedParentActionForRelation(input.relation);
-  const compatible =
-    input.parentAction === recommendedParentAction ||
-    (input.relation === "child-probe" && input.parentAction === "preserve");
-  return {
-    compatible,
-    relation: input.relation,
-    parentAction: input.parentAction,
-    recommendedParentAction,
-    reason: compatible
-      ? undefined
-      : `${input.relation} normally requires ${recommendedParentAction}, not ${input.parentAction}.`,
   };
 }
 
@@ -699,15 +675,43 @@ export function buildHumanEvaluationObservedSnapshotV2(
           metadata.taskRelation ??
           metadata.relationToActiveTask
       );
-  const parentAction = resolveObservedParentAction(
+  const parentAction = projectObservedParentAction({
     relation,
-    readBoolean(
+    mutationAuthorized: readBoolean(
       metadata.effectiveCurrentQuestionSettlementParentMutationAuthorized ??
         metadata.currentQuestionSettlementParentMutationAuthorized
     ),
-    readString(metadata.settledExecutionPlanTaskMutationCommand),
-    currentOnly
-  );
+    lifecycleCommand: readString(
+      metadata.settledExecutionPlanTaskMutationCommand
+    ),
+    currentOnly,
+    parentBeforeId: readString(
+      metadata.taskLifecycleParentBeforeId ??
+        metadata.correctionOwnedParentBeforeId ??
+        metadata.currentQuestionSettlementParentBeforeId ??
+        metadata.parentBeforeId ??
+        metadata.previousParentId
+    ),
+    parentAfterId: readString(
+      metadata.taskLifecycleParentAfterId ??
+        metadata.correctionOwnedParentAfterId ??
+        metadata.currentQuestionSettlementParentAfterId ??
+        metadata.parentAfterId ??
+        metadata.nextParentId
+    ),
+    parentBeforeType: normalizeCanonicalQuestionType(
+      metadata.taskLifecycleParentBeforeType ??
+        metadata.correctionOwnedParentBeforeType ??
+        metadata.currentQuestionSettlementParentBeforeType ??
+        metadata.parentBeforeType
+    ),
+    parentAfterType: normalizeCanonicalQuestionType(
+      metadata.taskLifecycleParentAfterType ??
+        metadata.correctionOwnedParentAfterType ??
+        metadata.currentQuestionSettlementParentAfterType ??
+        metadata.parentAfterType
+    ),
+  });
   const advisorAttempt = projectObservedAdvisorAttempt(metadata);
   const runtimeAction = advisorAttempt.runtimeAction;
   const runtimeOperationId = readString(
@@ -1276,49 +1280,6 @@ function didArtifactRevisionChange(
   return previousRevision !== nextRevision;
 }
 
-function resolveObservedParentAction(
-  relation: HumanEvaluationTaskRelation | undefined,
-  mutationAuthorized: boolean | undefined,
-  lifecycleCommand: string | undefined,
-  currentOnly: boolean
-): HumanExpectedParentAction | undefined {
-  if (
-    lifecycleCommand === "create-parent" ||
-    lifecycleCommand === "replace-parent"
-  ) {
-    return "create";
-  }
-  if (lifecycleCommand === "attach-child") return "attach-child";
-  if (lifecycleCommand === "resume-parent") return "resume";
-  if (
-    lifecycleCommand === "preserve" ||
-    lifecycleCommand === "update-parent-context" ||
-    lifecycleCommand === "advance-phase" ||
-    currentOnly
-  ) {
-    return "preserve";
-  }
-  if (!relation) return undefined;
-  if (relation === "new-parent") {
-    return mutationAuthorized === false ? "none" : "create";
-  }
-  if (relation === "child-probe") {
-    return mutationAuthorized === false ? "preserve" : "attach-child";
-  }
-  if (relation === "resume-parent") {
-    return mutationAuthorized === false ? "preserve" : "resume";
-  }
-  if (relation === "none") return "preserve";
-  if (
-    relation === "followup-parent" ||
-    relation === "correction" ||
-    relation === "logistics"
-  ) {
-    return "preserve";
-  }
-  return mutationAuthorized === false ? "none" : undefined;
-}
-
 function normalizeRelation(
   value: unknown
 ): HumanEvaluationTaskRelation | undefined {
@@ -1845,32 +1806,12 @@ function normalizeParentAction(
 ): HumanExpectedParentAction | undefined {
   return value === "create" ||
     value === "preserve" ||
+    value === "retype" ||
     value === "resume" ||
     value === "attach-child" ||
     value === "none"
     ? value
     : undefined;
-}
-
-function recommendedParentActionForRelation(
-  relation: HumanEvaluationTaskRelation
-): HumanExpectedParentAction {
-  switch (relation) {
-    case "new-parent":
-      return "create";
-    case "child-probe":
-      return "attach-child";
-    case "resume-parent":
-      return "resume";
-    case "followup-parent":
-    case "logistics":
-    case "correction":
-      return "preserve";
-    case "unknown":
-      return "none";
-    case "none":
-      return "preserve";
-  }
 }
 
 function normalizeContextReadScope(

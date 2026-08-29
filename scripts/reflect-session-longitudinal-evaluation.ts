@@ -274,6 +274,33 @@ function mergeRuntimeTraceEvidence(
     taskMutationAuthorized:
       readBoolean(metadata.taskMutationAuthorized) ??
       compact?.taskMutationAuthorized,
+    taskMutationCommand:
+      readString(metadata.settledExecutionPlanTaskMutationCommand) ??
+      compact?.taskMutationCommand,
+    taskLifecycleParentBeforeId:
+      readString(
+        metadata.taskLifecycleParentBeforeId ??
+          metadata.correctionOwnedParentBeforeId ??
+          metadata.parentBeforeId
+      ) ?? compact?.taskLifecycleParentBeforeId,
+    taskLifecycleParentAfterId:
+      readString(
+        metadata.taskLifecycleParentAfterId ??
+          metadata.correctionOwnedParentAfterId ??
+          metadata.parentAfterId
+      ) ?? compact?.taskLifecycleParentAfterId,
+    taskLifecycleParentBeforeType:
+      readString(
+        metadata.taskLifecycleParentBeforeType ??
+          metadata.correctionOwnedParentBeforeType ??
+          metadata.parentBeforeType
+      ) ?? compact?.taskLifecycleParentBeforeType,
+    taskLifecycleParentAfterType:
+      readString(
+        metadata.taskLifecycleParentAfterType ??
+          metadata.correctionOwnedParentAfterType ??
+          metadata.parentAfterType
+      ) ?? compact?.taskLifecycleParentAfterType,
     advisorOutputDisposition:
       readString(metadata.advisorOutputDisposition) ??
       compact?.advisorOutputDisposition,

@@ -5414,11 +5414,17 @@ const CriticalMomentEvaluationPanel = ({
                 const relation = normalizeEvaluationTaskRelation(value);
                 setExpectedRelation(relation);
                 if (relation) {
-                  setExpectedParentAction(
+                  setExpectedParentAction((current) =>
+                    current &&
                     evaluateTaskSettlementTupleCompatibilityV2({
                       relation,
-                      parentAction: "none",
-                    }).recommendedParentAction
+                      parentAction: current,
+                    }).compatible
+                      ? current
+                      : evaluateTaskSettlementTupleCompatibilityV2({
+                          relation,
+                          parentAction: "none",
+                        }).recommendedParentAction
                   );
                 }
               }}
@@ -5658,6 +5664,7 @@ const evaluationTaskRelations: HumanEvaluationTaskRelation[] = [
 const evaluationParentActions: HumanExpectedParentAction[] = [
   "create",
   "preserve",
+  "retype",
   "resume",
   "attach-child",
   "none",
@@ -6692,11 +6699,17 @@ const TraceHumanEvaluationPanel = ({
                     normalizeEvaluationTaskRelation(value);
                   setExpectedRelation(relation);
                   if (relation) {
-                    setExpectedParentAction(
+                    setExpectedParentAction((current) =>
+                      current &&
                       evaluateTaskSettlementTupleCompatibilityV2({
                         relation,
-                        parentAction: "none",
-                      }).recommendedParentAction
+                        parentAction: current,
+                      }).compatible
+                        ? current
+                        : evaluateTaskSettlementTupleCompatibilityV2({
+                            relation,
+                            parentAction: "none",
+                          }).recommendedParentAction
                     );
                   }
                 }}

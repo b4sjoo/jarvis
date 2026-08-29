@@ -521,6 +521,22 @@ test("validates relation and parent-action tuples before ground truth is saved",
       reason: undefined,
     }
   );
+
+  for (const parentAction of ["preserve", "retype"] as const) {
+    assert.deepEqual(
+      evaluateTaskSettlementTupleCompatibilityV2({
+        relation: "new-parent",
+        parentAction,
+      }),
+      {
+        compatible: true,
+        relation: "new-parent",
+        parentAction,
+        recommendedParentAction: "create",
+        reason: undefined,
+      }
+    );
+  }
 });
 
 test("derives action and task verdicts from minimal expected facts", () => {
@@ -967,6 +983,35 @@ test("projects the observed runtime tuple from trace metadata", () => {
   assert.equal(observed.contextReadScope, "active-parent-read");
   assert.equal(observed.artifactIntent, "revise-whiteboard");
   assert.match(observed.traceHash, /^\d+:[0-9a-f]+$/);
+});
+
+test("projects only a same-parent cross-type replacement as retype", () => {
+  const trace = buildSettledAttemptTrace({
+    id: "trace_parent_retype",
+    status: "success",
+    questionType: "ai-ml-system-design",
+  });
+  trace.metadata = {
+    ...trace.metadata,
+    effectiveCurrentQuestionSettlementRelation: "new-parent",
+    effectiveCurrentQuestionSettlementParentMutationAuthorized: true,
+    settledExecutionPlanTaskMutationCommand: "replace-parent",
+    taskLifecycleParentBeforeId: "parent-system-design",
+    taskLifecycleParentAfterId: "parent-system-design",
+    taskLifecycleParentBeforeType: "general-system-design",
+    taskLifecycleParentAfterType: "ai-ml-system-design",
+  };
+
+  assert.equal(
+    buildHumanEvaluationObservedSnapshotV2(trace).parentAction,
+    "retype"
+  );
+
+  trace.metadata.taskLifecycleParentAfterId = "parent-new-question";
+  assert.equal(
+    buildHumanEvaluationObservedSnapshotV2(trace).parentAction,
+    "create"
+  );
 });
 
 test("uses the effective settlement while retaining raw abstention diagnostics", () => {

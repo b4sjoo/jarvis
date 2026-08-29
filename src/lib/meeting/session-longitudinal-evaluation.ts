@@ -10,6 +10,8 @@ import {
 import type { HumanEvaluationProjectionV2 } from "./human-ground-truth-v2.js";
 import type { TaskRelationAdjudicationReflectionReport } from "./task-relation-adjudication-reflection.js";
 import type { TaskRelationAuthorityConvergenceReportV1 } from "./task-relation-authority-convergence.js";
+import { projectObservedParentAction } from "./task-settlement-tuple.js";
+import type { HumanEvaluationTaskRelation } from "./types.js";
 
 export interface LongitudinalSessionManifest {
   sessionId?: string;
@@ -49,6 +51,11 @@ export interface LongitudinalTraceSummary {
   advisorWouldSuppress?: boolean;
   advisorExecutionAuthorized?: boolean;
   taskMutationAuthorized?: boolean;
+  taskMutationCommand?: string;
+  taskLifecycleParentBeforeId?: string;
+  taskLifecycleParentAfterId?: string;
+  taskLifecycleParentBeforeType?: string;
+  taskLifecycleParentAfterType?: string;
   advisorOutputDisposition?: string;
   advisorOutputCommittedToUi?: boolean;
   visibleAnswerChanged?: boolean;
@@ -1952,19 +1959,42 @@ function hasIntentEvidence({ trace }: JoinedTrace) {
 }
 
 function actualParentAction(trace: LongitudinalTraceSummary) {
-  if (trace.taskRelation === "new-parent") return "create";
-  if (trace.taskRelation === "followup-parent") return "preserve";
-  if (trace.taskRelation === "resume-parent") return "resume";
-  if (trace.taskRelation === "child-probe") return "attach-child";
-  if (
-    trace.taskRelation === "logistics" ||
-    trace.taskRelation === "correction" ||
-    trace.taskRelation === "unknown"
-  ) {
-    return "none";
-  }
-  return trace.taskBoundary?.mutationDisposition === "commit-before-advisor"
-    ? "create"
+  const projected = projectObservedParentAction({
+    relation: normalizeObservedRelation(trace.taskRelation),
+    mutationAuthorized: trace.taskMutationAuthorized,
+    lifecycleCommand: trace.taskMutationCommand,
+    currentOnly: trace.taskRelation === "none",
+    parentBeforeId:
+      trace.taskLifecycleParentBeforeId ??
+      trace.taskBoundary?.parentBeforeId,
+    parentAfterId:
+      trace.taskLifecycleParentAfterId ??
+      trace.taskBoundary?.parentAfterId,
+    parentBeforeType: normalizeCanonicalQuestionType(
+      trace.taskLifecycleParentBeforeType
+    ),
+    parentAfterType: normalizeCanonicalQuestionType(
+      trace.taskLifecycleParentAfterType
+    ),
+  });
+  return projected ??
+    (trace.taskBoundary?.mutationDisposition === "commit-before-advisor"
+      ? "create"
+      : undefined);
+}
+
+function normalizeObservedRelation(
+  value: string | undefined
+): HumanEvaluationTaskRelation | undefined {
+  return value === "new-parent" ||
+    value === "followup-parent" ||
+    value === "child-probe" ||
+    value === "resume-parent" ||
+    value === "logistics" ||
+    value === "correction" ||
+    value === "unknown" ||
+    value === "none"
+    ? value
     : undefined;
 }
 

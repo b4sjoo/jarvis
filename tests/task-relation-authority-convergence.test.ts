@@ -134,7 +134,7 @@ test("excludes an incompatible human relation and parent-action tuple", () => {
         id: "evaluation-child",
         traceId: "trace-child",
         expectedRelation: "child-probe",
-        expectedParentAction: "preserve",
+        expectedParentAction: "create",
       }),
     ],
   });
@@ -150,6 +150,37 @@ test("excludes an incompatible human relation and parent-action tuple", () => {
   assert.equal(report.metrics.counterfactual.accuracy.denominator, 0);
   assert.equal(report.humanExpectedBranches.length, 0);
   assert.equal(report.graduation.status, "blocked");
+});
+
+test("keeps revision-stable new-parent retype labels in the denominator", () => {
+  const relationReport = buildTaskRelationAdjudicationReflectionReport({
+    decisions: [
+      decision({
+        traceId: "trace-retype",
+        operationId: "operation-retype",
+        recordedAt: 100,
+        parentId: "parent-design",
+        deterministicRelation: "new-parent",
+        candidateRelation: "new-parent",
+      }),
+    ],
+    evaluations: [
+      evaluation({
+        id: "evaluation-retype",
+        traceId: "trace-retype",
+        expectedRelation: "new-parent",
+        expectedParentAction: "retype",
+      }),
+    ],
+  });
+
+  const report = buildTaskRelationAuthorityConvergenceReportV1({
+    relationReport,
+  });
+
+  assert.equal(report.metrics.compatibleHumanLabels, 1);
+  assert.equal(report.metrics.incompatibleHumanLabels, 0);
+  assert.equal(report.metrics.counterfactual.accuracy.denominator, 1);
 });
 
 test("keeps invalid structured output out of relation accuracy", () => {

@@ -1498,6 +1498,7 @@ function normalizeExpectedParentAction(
 ): QuestionHumanEvaluation["expectedParentAction"] {
   return value === "create" ||
     value === "preserve" ||
+    value === "retype" ||
     value === "resume" ||
     value === "attach-child" ||
     value === "none"

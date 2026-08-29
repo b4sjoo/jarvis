@@ -505,6 +505,23 @@ test("persists transient personal-status labels and canonical expected settlemen
   assert.deepEqual(updated[0].expectedContextTurnIds, ["turn_2"]);
 });
 
+test("persists an explicit parent retype action", () => {
+  const evaluations = upsertQuestionHumanEvaluation(
+    [],
+    {
+      traceId: "trace_retype",
+      traceKind: "voice",
+      questionId: "question_retype",
+    },
+    {
+      expectedRelation: "new-parent",
+      expectedParentAction: "retype",
+    }
+  );
+
+  assert.equal(evaluations[0]?.expectedParentAction, "retype");
+});
+
 test("drops correction-scope strings instead of treating them as task relations", () => {
   const evaluations = upsertQuestionHumanEvaluation(
     [],

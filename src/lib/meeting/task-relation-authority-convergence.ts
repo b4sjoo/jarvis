@@ -11,6 +11,7 @@ import type {
 } from "./task-relation-adjudication-reflection.js";
 import type { RuntimeTaskRelation } from "./task-relation-adjudication.js";
 import type { HumanExpectedParentAction } from "./types.js";
+import { evaluateTaskSettlementTupleCompatibilityV2 } from "./task-settlement-tuple.js";
 
 export const TASK_RELATION_CONVERGENCE_REPORT_VERSION = 1 as const;
 
@@ -796,16 +797,11 @@ function isCompatibleHumanTuple(
 ) {
   const expected = toScorableRelation(row.expectedRelation);
   if (!expected) return undefined;
-  return expectedParentAction(expected) === row.expectedParentAction;
-}
-
-function expectedParentAction(
-  relation: ScorableRelation
-): HumanExpectedParentAction {
-  if (relation === "new-parent") return "create";
-  if (relation === "child-probe") return "attach-child";
-  if (relation === "resume-parent") return "resume";
-  return "preserve";
+  if (!row.expectedParentAction) return undefined;
+  return evaluateTaskSettlementTupleCompatibilityV2({
+    relation: expected,
+    parentAction: row.expectedParentAction,
+  }).compatible;
 }
 
 function toRuntimeRelation(

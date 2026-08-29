@@ -659,6 +659,7 @@ export type HumanEvaluationTaskRelation =
 export type HumanExpectedParentAction =
   | "create"
   | "preserve"
+  | "retype"
   | "resume"
   | "attach-child"
   | "none";
