@@ -22,7 +22,7 @@ import type { MeetingQuestionTypeAdjudicationMode } from "./types.js";
 
 export const QUESTION_TYPE_ADJUDICATION_SCHEMA_VERSION = 1;
 export const QUESTION_TYPE_ADJUDICATION_PROMPT_VERSION =
-  "question-type-adjudication-v4";
+  "question-type-adjudication-v5";
 export const QUESTION_TYPE_ADJUDICATION_MAX_OUTPUT_CHARS = 2_048;
 export const QUESTION_TYPE_ENFORCEMENT_WAIT_BUDGET_MS = 2_000;
 export const SCREEN_FIELD_KNOWLEDGE_REVIEW_WAIT_BUDGET_MS = 5_500;
@@ -39,6 +39,7 @@ export interface QuestionTypeAdjudicationRequest {
 }
 
 export interface QuestionTypeStructuredHints {
+  currentBranchType?: CanonicalQuestionType;
   sectionHintType?: CanonicalQuestionType;
   sectionHintSource?: string;
   openingRouteKind?: string;
@@ -601,8 +602,9 @@ export function buildQuestionTypeAdjudicationPrompts(
       "Classify only the question type of one bounded interviewer question for Jarvis.",
       "Return one minified JSON object on one line with no markdown fence. Do not answer the interview question.",
       "Do not decide task relation, parent or child status, response action, playbook phase, evidence mode, or meeting metadata.",
-      "Use only question.sourceTexts. Ignore quoted examples and classify the current primary or terminal ask.",
-      "nonAuthoritativeHints may contain bounded prior hypotheses. Treat them only as hints and override them whenever question.sourceTexts supports a different type.",
+      "Use question.sourceTexts as the primary evidence. Ignore quoted examples and classify the current primary or terminal ask.",
+      "nonAuthoritativeHints may contain bounded prior hypotheses. Treat them only as hints and override them whenever question.sourceTexts contains a self-contained request that clearly identifies a different type.",
+      "When question.sourceTexts is elliptical or context-dependent and does not independently identify a type, use nonAuthoritativeHints.currentBranchType as a bounded prior when present; otherwise return unknown. Do not force an elliptical continuation to field-knowledge merely because it could be answered conceptually.",
       "Allowed questionType values: behavioral, coding, general-system-design, ai-ml-system-design, project-deep-dive, field-knowledge, unknown.",
       "behavioral asks for a past personal situation or action.",
       "coding asks to implement, write, debug, or analyze code or an algorithm.",
@@ -1024,6 +1026,9 @@ function normalizeStructuredHints(
 ): QuestionTypeStructuredHints | undefined {
   if (!hints) return undefined;
   const normalized: QuestionTypeStructuredHints = {
+    currentBranchType: normalizeConcreteQuestionType(
+      hints.currentBranchType
+    ),
     sectionHintType: normalizeConcreteQuestionType(hints.sectionHintType),
     sectionHintSource: normalizeHintLabel(hints.sectionHintSource),
     openingRouteKind: normalizeHintLabel(hints.openingRouteKind),

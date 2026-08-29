@@ -128,6 +128,17 @@ test("settles Voice question type before Relation and passes one tuple to Adviso
   );
 });
 
+test("passes the active branch type as a bounded Question Type prior", () => {
+  assert.match(
+    source,
+    /const currentBranchType = normalizeCanonicalQuestionType\([\s\S]{0,180}activeMeetingTask\?\.child\?\.questionType[\s\S]{0,120}activeParent\?\.questionType/
+  );
+  assert.match(
+    source,
+    /buildVoiceQuestionTypeStructuredHints\(\{[\s\S]{0,180}currentBranchType/
+  );
+});
+
 test("settles first-parent admission in the shared coordinator", () => {
   const consumer = sourceSlice(
     "  const scheduleAdvisorAfterQuestionTypeWindow = useCallback(",

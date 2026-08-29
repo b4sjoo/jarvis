@@ -20780,6 +20780,10 @@ export function useMeetingAssistant() {
       const activeParent = contextState.activeMeetingTask?.parent;
       const activeParentId = activeParent?.id;
       const activeParentRevision = activeParent?.revisions;
+      const currentBranchType = normalizeCanonicalQuestionType(
+        contextState.activeMeetingTask?.child?.questionType ??
+          activeParent?.questionType
+      );
       const relationText = buildSemanticInterviewerIntentRelationText({
         currentText: classifierText,
         parent: activeParent,
@@ -20791,6 +20795,7 @@ export function useMeetingAssistant() {
         lexical,
         logicalQuestionUnit,
         classifierText,
+        currentBranchType,
       });
       const eligibility = decideSemanticTaxonomyShadowEligibility({
         speaker: turn.speaker,
@@ -35771,6 +35776,7 @@ function buildVoiceQuestionTypeStructuredHints(input: {
   lexical: QuestionTypeInferenceDecision;
   logicalQuestionUnit?: LogicalQuestionUnit;
   classifierText: string;
+  currentBranchType?: CanonicalQuestionType;
 }): QuestionTypeStructuredHints | undefined {
   const openingRoute = detectOpeningTaskRoute(input.classifierText);
   const lexicalPattern = VOICE_QUESTION_TYPE_PROMPT_HINT_RULES.has(
@@ -35782,6 +35788,7 @@ function buildVoiceQuestionTypeStructuredHints(input: {
     ? normalizeCanonicalQuestionType(input.lexical.type)
     : undefined;
   const hints: QuestionTypeStructuredHints = {
+    currentBranchType: input.currentBranchType,
     sectionHintType: input.logicalQuestionUnit?.sectionHint?.questionType,
     sectionHintSource: input.logicalQuestionUnit?.sectionHint?.source,
     openingRouteKind: openingRoute?.kind,

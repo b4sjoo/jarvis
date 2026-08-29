@@ -87,6 +87,33 @@ test("builds a bounded type-only request without local classifier evidence", () 
   );
 });
 
+test("passes current branch type only as a bounded prior for elliptical asks", () => {
+  const request = buildQuestionTypeAdjudicationRequest({
+    logicalQuestionUnit: unit("What would you monitor in production?"),
+    structuredHints: {
+      currentBranchType: "ai-ml-system-design",
+      lexicalCandidateType: "project-deep-dive",
+      lexicalPattern: "exact-project-deep-dive",
+    },
+  });
+  const prompts = buildQuestionTypeAdjudicationPrompts(request);
+
+  assert.deepEqual(request.structuredHints, {
+    currentBranchType: "ai-ml-system-design",
+    sectionHintType: undefined,
+    sectionHintSource: undefined,
+    openingRouteKind: undefined,
+    openingRouteType: undefined,
+    lexicalPattern: "exact-project-deep-dive",
+    lexicalCandidateType: "project-deep-dive",
+    preparationPriorType: undefined,
+  });
+  assert.match(prompts.systemPrompt, /elliptical or context-dependent/i);
+  assert.match(prompts.systemPrompt, /currentBranchType/);
+  assert.match(prompts.userMessage, /"currentBranchType":"ai-ml-system-design"/);
+  assert.doesNotMatch(prompts.userMessage, /RAG|parent topic|previous answer/i);
+});
+
 test("passes bounded source hints without granting them prompt authority", () => {
   const request = buildQuestionTypeAdjudicationRequest({
     logicalQuestionUnit: unit("Please design a URL shortener."),
@@ -102,6 +129,7 @@ test("passes bounded source hints without granting them prompt authority", () =>
   const prompts = buildQuestionTypeAdjudicationPrompts(request);
 
   assert.deepEqual(request.structuredHints, {
+    currentBranchType: undefined,
     sectionHintType: "general-system-design",
     sectionHintSource: "immediate-transition",
     openingRouteKind: "project-intro",
