@@ -39,6 +39,12 @@ export interface MeetingContextManagerOptions {
   interviewSessionBrief?: InterviewSessionBrief;
 }
 
+export interface PreparedMeetingTaskRuntimeTransition {
+  expectedRevision: number;
+  previousState: MeetingTaskRuntimeState;
+  result: ReturnType<typeof reduceMeetingTaskRuntimeMutation>;
+}
+
 type StoredMeetingContextState = Omit<
   MeetingContextState,
   "taskRuntime" | "activeMeetingTask"
@@ -206,10 +212,61 @@ export class MeetingContextManager {
     screenAttachment?: ActiveScreenTask | null;
     appliedAt?: number;
   }) {
-    return this.applyTaskRuntimeMutation({
-      ...input,
-      kind: "commit-transition",
+    const prepared = this.prepareTaskRuntimeTransition(input);
+    return this.commitPreparedTaskRuntimeTransition(prepared);
+  }
+
+  prepareTaskRuntimeTransition(input: {
+    id: string;
+    transition: MeetingTaskRuntimeTransitionKind;
+    reason: string;
+    expectedRevision?: number;
+    parent?: ActiveInterviewParent | null;
+    screenAttachment?: ActiveScreenTask | null;
+    appliedAt?: number;
+  }): PreparedMeetingTaskRuntimeTransition {
+    const previousState = cloneMeetingTaskRuntimeState(this.taskRuntimeState);
+    const result = reduceMeetingTaskRuntimeMutation({
+      state: previousState,
+      mutation: {
+        ...input,
+        kind: "commit-transition",
+      },
     });
+    return {
+      expectedRevision: previousState.revision,
+      previousState,
+      result,
+    };
+  }
+
+  commitPreparedTaskRuntimeTransition(
+    prepared: PreparedMeetingTaskRuntimeTransition
+  ) {
+    if (this.taskRuntimeState.revision !== prepared.expectedRevision) {
+      return {
+        state: cloneMeetingTaskRuntimeState(this.taskRuntimeState),
+        authorized: false,
+        mutationApplied: false,
+        reason: "revision-mismatch" as const,
+      };
+    }
+    if (!prepared.result.authorized) return prepared.result;
+    this.taskRuntimeState = prepared.result.state;
+    return prepared.result;
+  }
+
+  rollbackPreparedTaskRuntimeTransition(
+    prepared: PreparedMeetingTaskRuntimeTransition
+  ) {
+    if (!prepared.result.authorized) return true;
+    if (
+      this.taskRuntimeState.revision !== prepared.result.state.revision
+    ) {
+      return false;
+    }
+    this.taskRuntimeState = prepared.previousState;
+    return true;
   }
 
   clearTaskRuntime(input: {

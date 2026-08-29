@@ -100,6 +100,8 @@ export interface GenerationResultLedgerEntry {
   updatedAt: number;
   committedAt?: number;
   commitDurationMs?: number;
+  prepareDurationMs?: number;
+  installDurationMs?: number;
   applyFailure?: GenerationDerivedApplyFailure;
 }
 
@@ -115,11 +117,19 @@ export interface GenerationDerivedApplyFailure {
   currentTaskRuntimeRevision: number;
   errorClass?: string;
   safeErrorSummary?: string;
+  rollbackAttempted?: boolean;
+  rollbackSucceeded?: boolean;
 }
 
 export interface GenerationDerivedTaskTransitionResult {
   authorized: boolean;
   reason: string;
+}
+
+export interface GenerationDerivedPreparedTransition<T> {
+  authorized: boolean;
+  reason: string;
+  value: T;
 }
 
 export interface GenerationResultProjection {
@@ -161,6 +171,8 @@ interface RecordCommitDispositionInput {
   reason: string;
   visibleAnswerRevision?: number;
   commitDurationMs?: number;
+  prepareDurationMs?: number;
+  installDurationMs?: number;
   applyFailure?: GenerationDerivedApplyFailure;
   now?: number;
 }
@@ -269,6 +281,8 @@ export class GenerationResultLedger {
     entry.commitReason = input.reason;
     entry.visibleAnswerRevision = input.visibleAnswerRevision;
     entry.commitDurationMs = input.commitDurationMs;
+    entry.prepareDurationMs = input.prepareDurationMs;
+    entry.installDurationMs = input.installDurationMs;
     entry.applyFailure = input.applyFailure
       ? { ...input.applyFailure }
       : entry.applyFailure;
@@ -495,7 +509,7 @@ export class GenerationDerivedCommitCoordinator {
     }
   }
 
-  commitStaged<T>(input: {
+  commitStaged<TTransition, TPublication, T>(input: {
     lease: GenerationResultLease;
     leaseAuthorization: GenerationLeaseAuthorization;
     expectedTaskRuntimeRevision: number;
@@ -504,9 +518,15 @@ export class GenerationDerivedCommitCoordinator {
     visibleAnswerRevision: number;
     transition?: {
       kind: string;
-      apply: () => GenerationDerivedTaskTransitionResult;
+      prepare: () => GenerationDerivedPreparedTransition<TTransition>;
+      install: (prepared: TTransition) => GenerationDerivedTaskTransitionResult;
+      rollback: (prepared: TTransition) => boolean;
     };
-    publish: () => T;
+    publication: {
+      prepare: () => TPublication;
+      install: (prepared: TPublication) => T;
+      rollback: (prepared: TPublication) => boolean;
+    };
     now?: number;
   }): GenerationDerivedCommitResult<T> {
     const authorization = authorizeGenerationDerivedCommit(input);
@@ -538,24 +558,101 @@ export class GenerationDerivedCommitCoordinator {
     }
 
     const startedAt = monotonicNow();
+    const prepareStartedAt = monotonicNow();
+    let preparedTransition:
+      | GenerationDerivedPreparedTransition<TTransition>
+      | undefined;
     if (input.transition) {
-      let transitionResult: GenerationDerivedTaskTransitionResult;
       try {
-        transitionResult = input.transition.apply();
+        preparedTransition = input.transition.prepare();
       } catch (error) {
         return this.recordStagedApplyFailure({
           input,
           startedAt,
+          prepareDurationMs: Math.max(
+            0,
+            monotonicNow() - prepareStartedAt
+          ),
           stage: "task-transition",
-          reason: "task-transition-exception",
+          reason: "task-transition-prepare-exception",
           transitionKind: input.transition.kind,
           error,
+        });
+      }
+      if (!preparedTransition.authorized) {
+        return this.recordStagedApplyFailure({
+          input,
+          startedAt,
+          prepareDurationMs: Math.max(
+            0,
+            monotonicNow() - prepareStartedAt
+          ),
+          stage: "task-transition",
+          reason: `task-transition-rejected:${preparedTransition.reason}`,
+          transitionKind: input.transition.kind,
+          disposition: "rejected",
+        });
+      }
+    }
+
+    let preparedPublication: TPublication;
+    try {
+      preparedPublication = input.publication.prepare();
+    } catch (error) {
+      return this.recordStagedApplyFailure({
+        input,
+        startedAt,
+        prepareDurationMs: Math.max(
+          0,
+          monotonicNow() - prepareStartedAt
+        ),
+        stage: "stable-answer-publication",
+        reason: "stable-answer-publication-prepare-exception",
+        error,
+      });
+    }
+    const prepareDurationMs = Math.max(
+      0,
+      monotonicNow() - prepareStartedAt
+    );
+    const installStartedAt = monotonicNow();
+    let transitionInstalled = false;
+    if (input.transition && preparedTransition) {
+      let transitionResult: GenerationDerivedTaskTransitionResult;
+      try {
+        transitionResult = input.transition.install(
+          preparedTransition.value
+        );
+        transitionInstalled = transitionResult.authorized;
+      } catch (error) {
+        const rollbackSucceeded = attemptRollback(() =>
+          input.transition!.rollback(preparedTransition!.value)
+        );
+        return this.recordStagedApplyFailure({
+          input,
+          startedAt,
+          prepareDurationMs,
+          installDurationMs: Math.max(
+            0,
+            monotonicNow() - installStartedAt
+          ),
+          stage: "task-transition",
+          reason: "task-transition-install-exception",
+          transitionKind: input.transition.kind,
+          error,
+          rollbackAttempted: true,
+          rollbackSucceeded,
         });
       }
       if (!transitionResult.authorized) {
         return this.recordStagedApplyFailure({
           input,
           startedAt,
+          prepareDurationMs,
+          installDurationMs: Math.max(
+            0,
+            monotonicNow() - installStartedAt
+          ),
           stage: "task-transition",
           reason: `task-transition-rejected:${transitionResult.reason}`,
           transitionKind: input.transition.kind,
@@ -565,13 +662,19 @@ export class GenerationDerivedCommitCoordinator {
     }
 
     try {
-      const value = input.publish();
+      const value = input.publication.install(preparedPublication);
+      const installDurationMs = Math.max(
+        0,
+        monotonicNow() - installStartedAt
+      );
       const entry = this.ledger.recordCommitDisposition({
         lease: input.lease,
         disposition: "committed",
         reason: "authorized",
         visibleAnswerRevision: input.visibleAnswerRevision,
         commitDurationMs: Math.max(0, monotonicNow() - startedAt),
+        prepareDurationMs,
+        installDurationMs,
         now: input.now,
       });
       return {
@@ -582,12 +685,29 @@ export class GenerationDerivedCommitCoordinator {
         entry,
       };
     } catch (error) {
+      const publicationRollbackSucceeded = attemptRollback(() =>
+        input.publication.rollback(preparedPublication)
+      );
+      const transitionRollbackSucceeded =
+        !transitionInstalled || !input.transition || !preparedTransition
+          ? true
+          : attemptRollback(() =>
+              input.transition!.rollback(preparedTransition!.value)
+            );
       return this.recordStagedApplyFailure({
         input,
         startedAt,
+        prepareDurationMs,
+        installDurationMs: Math.max(
+          0,
+          monotonicNow() - installStartedAt
+        ),
         stage: "stable-answer-publication",
-        reason: "stable-answer-publication-exception",
+        reason: "stable-answer-publication-install-exception",
         error,
+        rollbackAttempted: true,
+        rollbackSucceeded:
+          publicationRollbackSucceeded && transitionRollbackSucceeded,
       });
     }
   }
@@ -606,6 +726,10 @@ export class GenerationDerivedCommitCoordinator {
     transitionKind?: string;
     error?: unknown;
     disposition?: "rejected" | "failed";
+    prepareDurationMs?: number;
+    installDurationMs?: number;
+    rollbackAttempted?: boolean;
+    rollbackSucceeded?: boolean;
   }): GenerationDerivedCommitResult<T> {
     const applyFailure: GenerationDerivedApplyFailure = {
       stage: input.stage,
@@ -615,6 +739,12 @@ export class GenerationDerivedCommitCoordinator {
         input.input.expectedTaskRuntimeRevision,
       currentTaskRuntimeRevision:
         input.input.currentTaskRuntimeRevision,
+      ...(input.rollbackAttempted !== undefined
+        ? { rollbackAttempted: input.rollbackAttempted }
+        : {}),
+      ...(input.rollbackSucceeded !== undefined
+        ? { rollbackSucceeded: input.rollbackSucceeded }
+        : {}),
       ...safeApplyError(input.error),
     };
     const entry = this.ledger.recordCommitDisposition({
@@ -622,6 +752,8 @@ export class GenerationDerivedCommitCoordinator {
       disposition: input.disposition ?? "failed",
       reason: input.reason,
       commitDurationMs: Math.max(0, monotonicNow() - input.startedAt),
+      prepareDurationMs: input.prepareDurationMs,
+      installDurationMs: input.installDurationMs,
       applyFailure,
       now: input.input.now,
     });
@@ -699,6 +831,8 @@ export function formatGenerationResultLedgerForTrace(
     generationResultVisibleAnswerRevision:
       entry?.visibleAnswerRevision,
     generationResultCommitDurationMs: entry?.commitDurationMs,
+    generationResultPrepareDurationMs: entry?.prepareDurationMs,
+    generationResultInstallDurationMs: entry?.installDurationMs,
     generationResultApplyFailureStage: entry?.applyFailure?.stage,
     generationResultApplyFailureReason: entry?.applyFailure?.reason,
     generationResultApplyFailureTransitionKind:
@@ -711,6 +845,10 @@ export function formatGenerationResultLedgerForTrace(
       entry?.applyFailure?.errorClass,
     generationResultApplyFailureSafeErrorSummary:
       entry?.applyFailure?.safeErrorSummary,
+    generationResultRollbackAttempted:
+      entry?.applyFailure?.rollbackAttempted,
+    generationResultRollbackSucceeded:
+      entry?.applyFailure?.rollbackSucceeded,
     generationResultProjectionDisposition:
       projection?.disposition,
   };
@@ -837,6 +975,14 @@ function safeApplyError(error: unknown) {
     errorClass: errorClass.slice(0, 80),
     safeErrorSummary: message.replace(/\s+/gu, " ").trim().slice(0, 240),
   };
+}
+
+function attemptRollback(rollback: () => boolean) {
+  try {
+    return rollback();
+  } catch {
+    return false;
+  }
 }
 
 export function isTerminalGenerationDisposition(

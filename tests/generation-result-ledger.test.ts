@@ -246,13 +246,21 @@ test("records a typed task-transition rejection without publishing", () => {
     visibleAnswerRevision: 7,
     transition: {
       kind: "update-parent-context",
-      apply: () => ({
+      prepare: () => ({
         authorized: false,
         reason: "revision-mismatch",
+        value: "unused",
       }),
+      install: () => ({ authorized: true, reason: "committed" }),
+      rollback: () => true,
     },
-    publish: () => {
-      published = true;
+    publication: {
+      prepare: () => {
+        published = true;
+        return "prepared";
+      },
+      install: () => undefined,
+      rollback: () => true,
     },
   });
 
@@ -271,11 +279,12 @@ test("records a typed task-transition rejection without publishing", () => {
   });
 });
 
-test("records a bounded publication exception after an authorized transition", () => {
+test("rejects a publication preparation exception before task mutation", () => {
   const ledger = new GenerationResultLedger();
   const coordinator = new GenerationDerivedCommitCoordinator(ledger);
   const currentLease = lease({ id: "lease-publication-exception" });
   ledger.begin({ lease: currentLease });
+  let taskMutated = false;
 
   const result = coordinator.commitStaged({
     lease: currentLease,
@@ -287,19 +296,103 @@ test("records a bounded publication exception after an authorized transition", (
     currentTaskRuntimeRevision: 12,
     candidateAccepted: true,
     visibleAnswerRevision: 7,
-    publish: () => {
-      throw new TypeError("publication state unavailable\nprivate detail omitted");
+    transition: {
+      kind: "update-parent-context",
+      prepare: () => ({
+        authorized: true,
+        reason: "prepared",
+        value: "prepared-transition",
+      }),
+      install: () => {
+        taskMutated = true;
+        return { authorized: true, reason: "committed" };
+      },
+      rollback: () => {
+        taskMutated = false;
+        return true;
+      },
+    },
+    publication: {
+      prepare: () => {
+        throw new TypeError(
+          "publication state unavailable\nprivate detail omitted"
+        );
+      },
+      install: () => undefined,
+      rollback: () => true,
     },
   });
 
   assert.equal(result.committed, false);
-  assert.equal(result.reason, "stable-answer-publication-exception");
+  assert.equal(
+    result.reason,
+    "stable-answer-publication-prepare-exception"
+  );
+  assert.equal(taskMutated, false);
   assert.equal(result.entry.applyFailure?.stage, "stable-answer-publication");
   assert.equal(result.entry.applyFailure?.errorClass, "TypeError");
   assert.equal(
     result.entry.applyFailure?.safeErrorSummary,
     "publication state unavailable private detail omitted"
   );
+});
+
+test("rolls back prepared task and publication state after an install exception", () => {
+  const ledger = new GenerationResultLedger();
+  const coordinator = new GenerationDerivedCommitCoordinator(ledger);
+  const currentLease = lease({ id: "lease-install-exception" });
+  ledger.begin({ lease: currentLease });
+  let taskState = "before";
+  let publicationState = "before";
+
+  const result = coordinator.commitStaged({
+    lease: currentLease,
+    leaseAuthorization: authorizeAnswerGenerationLease(
+      currentLease,
+      snapshot()
+    ),
+    expectedTaskRuntimeRevision: 12,
+    currentTaskRuntimeRevision: 12,
+    candidateAccepted: true,
+    visibleAnswerRevision: 7,
+    transition: {
+      kind: "update-parent-context",
+      prepare: () => ({
+        authorized: true,
+        reason: "prepared",
+        value: "after",
+      }),
+      install: (prepared) => {
+        taskState = prepared;
+        return { authorized: true, reason: "committed" };
+      },
+      rollback: () => {
+        taskState = "before";
+        return true;
+      },
+    },
+    publication: {
+      prepare: () => "after",
+      install: (prepared) => {
+        publicationState = prepared;
+        throw new Error("visible state install failed");
+      },
+      rollback: () => {
+        publicationState = "before";
+        return true;
+      },
+    },
+  });
+
+  assert.equal(result.committed, false);
+  assert.equal(
+    result.reason,
+    "stable-answer-publication-install-exception"
+  );
+  assert.equal(taskState, "before");
+  assert.equal(publicationState, "before");
+  assert.equal(result.entry.applyFailure?.rollbackAttempted, true);
+  assert.equal(result.entry.applyFailure?.rollbackSucceeded, true);
 });
 
 test("projects pending and historical entries without deleting origin results", () => {

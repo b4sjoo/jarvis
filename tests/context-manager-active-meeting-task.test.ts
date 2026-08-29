@@ -66,6 +66,46 @@ test("context manager clears the canonical task runtime", () => {
   assert.equal(manager.getState().activeMeetingTask, undefined);
 });
 
+test("prepares task runtime transitions with reducer parity and bounded rollback", () => {
+  const direct = new MeetingContextManager();
+  const prepared = new MeetingContextManager();
+  const parent = makeInterviewTask();
+  setTestTaskRuntime(direct, { parent });
+  setTestTaskRuntime(prepared, { parent });
+  const before = prepared.getTaskRuntimeState();
+  const input = {
+    id: "generation-transition",
+    transition: "update-parent-context" as const,
+    reason: "generation-result-atomic-commit",
+    expectedRevision: before.revision,
+    parent: {
+      ...parent,
+      latestUsefulAnswer: "Use the committed answer.",
+      revisions: parent.revisions + 1,
+    },
+    appliedAt: now + 20,
+  };
+
+  const directResult = direct.commitTaskRuntimeTransition(input);
+  const preparedTransition = prepared.prepareTaskRuntimeTransition(input);
+  assert.deepEqual(prepared.getTaskRuntimeState(), before);
+  assert.deepEqual(preparedTransition.result, directResult);
+
+  const preparedResult =
+    prepared.commitPreparedTaskRuntimeTransition(preparedTransition);
+  assert.deepEqual(preparedResult, directResult);
+  assert.deepEqual(
+    prepared.getTaskRuntimeState(),
+    direct.getTaskRuntimeState()
+  );
+
+  assert.equal(
+    prepared.rollbackPreparedTaskRuntimeTransition(preparedTransition),
+    true
+  );
+  assert.deepEqual(prepared.getTaskRuntimeState(), before);
+});
+
 test("scopes advisor transcript to a re-rooted parent boundary", () => {
   const manager = new MeetingContextManager();
   manager.addTranscriptTurn(makeTurn("turn_old", "Estimate ride share GPS QPS"));
