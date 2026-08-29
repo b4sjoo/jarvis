@@ -8,6 +8,7 @@ import {
   formatCodingPlaybookPhaseContract,
   formatPlaybookPhaseDecisionForPrompt,
   formatPlaybookPhaseDecisionForTrace,
+  resolvePlaybookState,
 } from "../src/lib/meeting/playbook-phase.js";
 
 test("authorizes a source-owned assumption signal only at a design requirement boundary", () => {
@@ -484,6 +485,7 @@ test("starts a coding parent with a novice-facing answer-only baseline", () => {
     latestTurnText:
       "Given an array of integers, return the maximum sum of a contiguous subarray.",
     relation: "new-parent",
+    freshParentCreated: true,
   });
 
   assert.equal(decision.phase, "baseline_reasoning");
@@ -504,6 +506,7 @@ test("generic implement wording cannot skip a new coding parent baseline", () =>
     currentQuestion: "Implement Dasher Payout Calculation.",
     relation: "new-parent",
     subtaskIntent: "implementation-probe",
+    freshParentCreated: true,
   });
 
   assert.equal(decision.phase, "baseline_reasoning");
@@ -512,6 +515,92 @@ test("generic implement wording cannot skip a new coding parent baseline", () =>
   assert.ok(!decision.flags.includes("implementation"));
   assert.deepEqual(decision.requiredArtifacts, ["answer"]);
   assert.match(decision.reason, /initial-coding-parent-baseline-authority/);
+});
+
+test("retains an implementation phase for a revision-stable coding origin", () => {
+  const state = resolvePlaybookState({
+    questionType: "coding",
+    playbookId: "coding_algorithm",
+    phase: "implementation_validation",
+  });
+  const decision = decidePlaybookPhaseProgression({
+    questionType: "coding",
+    playbookId: "coding_algorithm",
+    currentPhase: state.phase,
+    phaseProgress: {
+      baseline_reasoning: true,
+      optimized_pseudocode: true,
+      implementation_validation: true,
+    },
+    latestTurnText: "Use OrderedDict instead of OrderDict in the implementation.",
+    currentQuestion: "Use OrderedDict instead of OrderDict in the implementation.",
+    relation: "new-parent",
+    subtaskIntent: "implementation-probe",
+    freshParentCreated: false,
+  });
+
+  assert.equal(state.initializedFromStart, false);
+  assert.equal(state.phaseCompatible, true);
+  assert.equal(decision.phase, "implementation_validation");
+  assert.ok(decision.flags.includes("implementation"));
+  assert.ok(!decision.flags.includes("baseline_solution"));
+  assert.equal(
+    formatPlaybookPhaseDecisionForTrace(decision)
+      .playbookFreshParentCreated,
+    false
+  );
+});
+
+test("initializes a playbook from the catalog only when phase is absent", () => {
+  const initialized = resolvePlaybookState({
+    questionType: "coding",
+    playbookId: "coding_algorithm",
+  });
+  const retained = resolvePlaybookState({
+    questionType: "project-deep-dive",
+    playbookId: "project_deep_dive",
+    phase: "validation_reliability",
+  });
+
+  assert.deepEqual(initialized, {
+    phase: "baseline_reasoning",
+    initializedFromStart: true,
+    phaseCompatible: true,
+  });
+  assert.deepEqual(retained, {
+    phase: "validation_reliability",
+    initializedFromStart: false,
+    phaseCompatible: true,
+  });
+});
+
+test("fails closed when a committed phase belongs to another playbook", () => {
+  const state = resolvePlaybookState({
+    questionType: "coding",
+    playbookId: "coding_algorithm",
+    phase: "design_framing",
+  });
+  const decision = decidePlaybookPhaseProgression({
+    questionType: "coding",
+    playbookId: "coding_algorithm",
+    currentPhase: state.phase,
+    latestTurnText: "Continue with the implementation.",
+    relation: "followup-parent",
+  });
+
+  assert.equal(state.phaseCompatible, false);
+  assert.equal(decision.phase, "design_framing");
+  assert.equal(decision.action, "stay");
+  assert.deepEqual(decision.flags, []);
+  assert.equal(
+    decision.phaseAdvanceBlockedReason,
+    "incompatible-committed-phase"
+  );
+  assert.equal(
+    formatPlaybookPhaseDecisionForTrace(decision)
+      .playbookPhaseStateCompatible,
+    false
+  );
 });
 
 test("coding baseline clarifies callable contracts without adding a question subtype", () => {

@@ -11624,6 +11624,7 @@ export function useMeetingAssistant() {
         advisorJob.source === "live-turn" &&
           promptContext.activeMeetingTask?.parent
       ),
+      freshParentCreated: startsNewParentForPhase,
     });
     const defaultManualPhaseDecision =
       decideManualNextPhaseTransition(
@@ -27783,6 +27784,9 @@ export function useMeetingAssistant() {
           relation: provisionalScreenTaskRelation,
           subtaskIntent: screenSubtaskIntent,
           askFrame: screenPreflight?.askFrame ?? screenMemoryAskFrame,
+          freshParentCreated:
+            screenCurrentQuestionSettlement?.parentMutationAuthorized ===
+            true,
         });
         const screenRuntimePlaybook =
           provisionalScreenTaskRelation === "child-probe"

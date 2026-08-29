@@ -130,6 +130,8 @@ export interface PlaybookPhaseDecision {
   whiteboardOpenConstraintCategories?: PlaybookRequirementEvidenceCategory[];
   whiteboardRevisionReason?: string;
   phaseControl?: PlaybookPhaseControlEvidence;
+  freshParentCreated?: boolean;
+  phaseStateCompatible?: boolean;
 }
 
 export interface PlaybookPhaseDecisionInput {
@@ -145,6 +147,13 @@ export interface PlaybookPhaseDecisionInput {
   askFrame?: TaskAskFrame;
   phaseControl?: PlaybookPhaseControlEvidence;
   phaseControlSettled?: boolean;
+  freshParentCreated?: boolean;
+}
+
+export interface ResolvedPlaybookState {
+  phase: InterviewPlaybookPhase;
+  initializedFromStart: boolean;
+  phaseCompatible: boolean;
 }
 
 const REQUIREMENT_PATTERNS = [
@@ -521,8 +530,32 @@ export function decidePlaybookPhaseProgression(
   input: PlaybookPhaseDecisionInput
 ): PlaybookPhaseDecision {
   const questionType = normalizeCanonicalQuestionType(input.questionType);
-  const currentPhase =
-    input.currentPhase ?? initialPhaseFor(questionType, input.playbookId);
+  const playbookState = resolvePlaybookState({
+    questionType,
+    playbookId: input.playbookId,
+    phase: input.currentPhase,
+  });
+  const currentPhase = playbookState.phase;
+  if (!playbookState.phaseCompatible) {
+    return {
+      phase: currentPhase,
+      flags: [],
+      requiredArtifacts: resolvePlaybookRequiredArtifacts({
+        questionType,
+        playbookId: input.playbookId,
+        phase: currentPhase,
+        subtaskIntent: input.subtaskIntent,
+      }),
+      action: "stay",
+      reason: `committed phase ${currentPhase} is incompatible with question type ${questionType ?? "unknown"}`,
+      source: "automatic",
+      guardStatus: "automatic",
+      phaseFrom: currentPhase,
+      phaseAdvanceBlockedReason: "incompatible-committed-phase",
+      freshParentCreated: input.freshParentCreated,
+      phaseStateCompatible: false,
+    };
+  }
   // Generated answers are deliberately excluded: model output cannot establish
   // interviewer-supplied requirements or complete a playbook phase.
   const text = normalizePhaseText([
@@ -542,6 +575,8 @@ export function decidePlaybookPhaseProgression(
       }),
       action: "child-probe",
       reason: "latest turn is classified as a child probe; preserve parent phase",
+      freshParentCreated: input.freshParentCreated,
+      phaseStateCompatible: true,
     };
   }
 
@@ -556,7 +591,7 @@ export function decidePlaybookPhaseProgression(
   ]);
   const initialCodingParent =
     questionType === "coding" &&
-    (input.relation === "new-parent" ||
+    (input.freshParentCreated === true ||
       (!input.currentPhase && !input.phaseProgress));
   // A title such as "Implement X" identifies a Coding task, but cannot prove
   // that baseline reasoning and contract clarification have already happened.
@@ -660,6 +695,24 @@ export function decidePlaybookPhaseProgression(
     phaseControl: input.phaseControl
       ? clonePhaseControlEvidence(input.phaseControl)
       : undefined,
+    freshParentCreated: input.freshParentCreated,
+    phaseStateCompatible: true,
+  };
+}
+
+export function resolvePlaybookState(input: {
+  questionType?: CanonicalQuestionType;
+  playbookId?: InterviewPlaybookId;
+  phase?: InterviewPlaybookPhase;
+}): ResolvedPlaybookState {
+  const phase =
+    input.phase ?? initialPhaseFor(input.questionType, input.playbookId);
+  return {
+    phase,
+    initializedFromStart: input.phase === undefined,
+    phaseCompatible:
+      input.phase === undefined ||
+      isPlaybookPhaseCompatible(input.questionType, phase),
   };
 }
 
@@ -984,7 +1037,46 @@ export function formatPlaybookPhaseDecisionForTrace(
     phaseSignal: decision.phaseControl?.signal,
     phaseSignalSource: decision.phaseControl?.source,
     phaseSignalSourceTurnId: decision.phaseControl?.sourceTurnId,
+    playbookFreshParentCreated: decision.freshParentCreated,
+    playbookPhaseStateCompatible: decision.phaseStateCompatible,
   };
+}
+
+function isPlaybookPhaseCompatible(
+  questionType: CanonicalQuestionType | undefined,
+  phase: InterviewPlaybookPhase
+) {
+  if (!questionType || questionType === "unknown") return true;
+  if (phase === "follow_up") return true;
+  if (questionType === "behavioral") return phase === "story_selection";
+  if (questionType === "coding") {
+    return (
+      phase === "baseline_reasoning" ||
+      phase === "optimized_pseudocode" ||
+      phase === "implementation_validation" ||
+      phase === "solution_planning"
+    );
+  }
+  if (
+    questionType === "general-system-design" ||
+    questionType === "ai-ml-system-design"
+  ) {
+    return (
+      phase === "requirement_clarification" ||
+      phase === "design_framing"
+    );
+  }
+  if (questionType === "project-deep-dive") {
+    return (
+      phase === "project_narrative" ||
+      phase === "architecture_decision" ||
+      phase === "validation_reliability" ||
+      phase === "impact_lessons"
+    );
+  }
+  return (
+    questionType === "field-knowledge" && phase === "concept_explanation"
+  );
 }
 
 function chooseManualNextPhase(
