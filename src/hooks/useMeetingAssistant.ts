@@ -1069,10 +1069,12 @@ function mapSourceOwnedExecutionPlanCommand(
     return { kind: "resume-parent" };
   }
   if (candidate.kind === "phase-progress" && result.task) {
-    return {
-      kind: "advance-phase",
-      phase: result.task.playbookPhase,
-    };
+    return result.phaseBefore !== result.phaseAfter
+      ? {
+          kind: "advance-phase",
+          phase: result.task.playbookPhase,
+        }
+      : { kind: "update-parent-context" };
   }
   return undefined;
 }

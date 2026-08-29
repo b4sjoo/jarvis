@@ -143,6 +143,10 @@ test("builds Advisor plans from explicit pre and post mutation task snapshots", 
   assert.match(source, /mapSourceOwnedExecutionPlanCommand/);
   assert.match(
     source,
+    /candidate\.kind === "phase-progress"[\s\S]{0,220}result\.phaseBefore !== result\.phaseAfter[\s\S]{0,220}update-parent-context/
+  );
+  assert.match(
+    source,
     /expectedActiveMeetingTask:[\s\S]{0,160}originalPromptContext\.activeMeetingTask/
   );
   assert.match(
