@@ -165,6 +165,27 @@ export interface TaskTaxonomyAuthorityDecision {
 export const QUESTION_TYPE_INFERENCE_MIN_CONFIDENCE = 0.65;
 export const QUESTION_TYPE_INFERENCE_MIN_MARGIN = 0.2;
 
+export function resolveScreenPreflightQuestionTypeAuthority(input: {
+  rawQuestionType?: unknown;
+  fallbackQuestionType?: unknown;
+}) {
+  const rawQuestionType = normalizeCanonicalQuestionType(
+    input.rawQuestionType
+  );
+  const fallbackQuestionType = normalizeCanonicalQuestionType(
+    input.fallbackQuestionType
+  );
+  return {
+    questionType: rawQuestionType ?? ("unknown" as const),
+    fallbackQuestionType: rawQuestionType
+      ? undefined
+      : fallbackQuestionType,
+    authorityAuthorized: Boolean(
+      rawQuestionType && rawQuestionType !== "unknown"
+    ),
+  };
+}
+
 export function resolveTaskTaxonomyAuthority({
   candidates,
   existingQuestionType,

@@ -40,8 +40,7 @@ import {
 import type { ActiveMeetingTask } from "./active-meeting-task";
 import { parseMeetingAnswer } from "./meeting-answer";
 import {
-  normalizeCanonicalQuestionType,
-  normalizeQuestionTypeAlias,
+  resolveScreenPreflightQuestionTypeAuthority,
   type CanonicalQuestionType,
 } from "./task-taxonomy";
 import {
@@ -130,6 +129,7 @@ export interface ScreenPreflightResult extends TaskClassifierMetadata {
   focusedEvidenceSummary?: string;
   programmingLanguage?: string;
   rawQuestionType?: string;
+  fallbackQuestionType?: ScreenQuestionType;
   canonicalQuestionType?: CanonicalQuestionType;
   isBehavioralInterview?: boolean;
   amazonLeadershipPrinciple?: string;
@@ -810,14 +810,17 @@ function parseScreenPreflightOutput(output: string): ScreenPreflightResult {
     )?.slice(0, 800);
     const fallbackClassifier = inferTaskClassifierFromText(question ?? output);
     const rawQuestionType = readOptionalString(parsed.questionType);
-    const questionType =
-      readScreenTaskKind(rawQuestionType) ?? fallbackClassifier.questionType;
+    const typeAuthority = resolveScreenPreflightQuestionTypeAuthority({
+      rawQuestionType,
+      fallbackQuestionType: fallbackClassifier.questionType,
+    });
     return {
       question,
       focusedEvidenceSummary,
       rawQuestionType,
-      questionType,
-      canonicalQuestionType: normalizeCanonicalQuestionType(questionType),
+      questionType: typeAuthority.questionType,
+      fallbackQuestionType: typeAuthority.fallbackQuestionType,
+      canonicalQuestionType: typeAuthority.questionType,
       askFrame:
         readTaskAskFrame(parsed.askFrame) ?? fallbackClassifier.askFrame,
       topicDomain:
@@ -843,22 +846,24 @@ function parseScreenPreflightOutput(output: string): ScreenPreflightResult {
     };
   } catch {
     const fallbackClassifier = inferTaskClassifierFromText(output);
+    const typeAuthority = resolveScreenPreflightQuestionTypeAuthority({
+      fallbackQuestionType: fallbackClassifier.questionType,
+    });
     return {
       question: output.slice(0, 500),
-      ...fallbackClassifier,
-      canonicalQuestionType: normalizeCanonicalQuestionType(
-        fallbackClassifier.questionType
-      ),
+      askFrame: fallbackClassifier.askFrame,
+      topicDomain: fallbackClassifier.topicDomain,
+      projectAnchor: fallbackClassifier.projectAnchor,
+      confidence: fallbackClassifier.confidence,
+      questionType: typeAuthority.questionType,
+      fallbackQuestionType: typeAuthority.fallbackQuestionType,
+      canonicalQuestionType: typeAuthority.questionType,
     };
   }
 }
 
 function readOptionalString(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function readScreenTaskKind(value: unknown): ScreenQuestionType | undefined {
-  return normalizeQuestionTypeAlias(value);
 }
 
 function readTaskAskFrame(value: unknown): TaskAskFrame | undefined {

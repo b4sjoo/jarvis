@@ -26323,6 +26323,8 @@ export function useMeetingAssistant() {
               screenPreflight.questionType,
               screenPreflight.rawQuestionType
             ),
+            screenPreflightFallbackQuestionType:
+              screenPreflight.fallbackQuestionType,
             askFrame: screenPreflight.askFrame,
             topicDomain: screenPreflight.topicDomain,
             projectAnchor: screenPreflight.projectAnchor,
@@ -26614,6 +26616,8 @@ export function useMeetingAssistant() {
                   screenPreflight.questionType,
                   screenPreflight.rawQuestionType
                 ),
+                screenPreflightFallbackQuestionType:
+                  screenPreflight.fallbackQuestionType,
                 askFrame: screenPreflight.askFrame,
                 topicDomain: screenPreflight.topicDomain,
                 projectAnchor: screenPreflight.projectAnchor,
@@ -26628,6 +26632,8 @@ export function useMeetingAssistant() {
                 screenPreflight.questionType,
                 screenPreflight.rawQuestionType
               ),
+              screenPreflightFallbackQuestionType:
+                screenPreflight.fallbackQuestionType,
               askFrame: screenPreflight.askFrame,
               topicDomain: screenPreflight.topicDomain,
               projectAnchor: screenPreflight.projectAnchor,
