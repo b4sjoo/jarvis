@@ -181,6 +181,56 @@ test("hides an old project parent behind a committed new-parent settlement", () 
   );
 });
 
+test("reads an existing parent for a revision-stable origin without recreating it", () => {
+  const current = activeTask("ai-ml-system-design", {
+    sourceQuestionUnitId: "question-a",
+    sourceQuestionRevision: 2,
+    revisions: 5,
+  });
+  const revisedSettlement = settlement({
+    revision: 3,
+    questionType: "ai-ml-system-design",
+    relation: "new-parent",
+    parentMutationAuthorized: false,
+    activeParentId: current.parent.id,
+    activeParentRevision: current.parent.revisions,
+  });
+  const view = buildEffectiveAdvisorSettlementView({
+    settlement: revisedSettlement,
+    activeMeetingTask: current,
+    taskRuntimeRevision: 6,
+    fallback: {
+      questionType: "ai-ml-system-design",
+      relation: "followup-parent",
+    },
+  });
+
+  assert.equal(view.relation, "new-parent");
+  assert.equal(view.startsNewParent, false);
+  assert.equal(view.parent?.id, current.parent.id);
+  assert.equal(view.contextReadScope, "active-parent-read");
+
+  const plan = buildSettledAdvisorExecutionPlan({
+    settlement: revisedSettlement,
+    activeMeetingTask: current,
+    preBoundaryQuestionType: "ai-ml-system-design",
+    taskBoundaryCommitted: false,
+    childOwnsResponse: false,
+    providerSnapshot: providers,
+    memoryUseCase: "system_design_interview",
+    askFrame: "direct-answer",
+    topicDomain: "ai-ml-infra",
+    sourceQuestion: "Design a RAG system for trip planning",
+  });
+
+  assert.equal(plan.taskRelation, "new-parent");
+  assert.deepEqual(plan.taskMutationPolicy, {
+    kind: "update-parent-context",
+  });
+  assert.equal(plan.taskMutationCommittedBeforeAdvisor, false);
+  assert.equal(plan.contextReadScope, "active-parent-read");
+});
+
 test("authorizes an owned child attachment against its post-mutation parent revision", () => {
   const before = activeTask("ai-ml-system-design", {
     topic: "Design a RAG system for trip planning",
@@ -290,6 +340,52 @@ test("authorizes an owned child attachment against its post-mutation parent revi
   assert.deepEqual(stale.rejectionReasons, [
     "post-mutation-parent-revision-mismatch",
   ]);
+});
+
+test("keeps a revision-stable parent relation separate from a committed retype", () => {
+  const before = activeTask("general-system-design", {
+    topic: "Design a ride-sharing system for trip planning",
+    revisions: 4,
+  });
+  const after = activeTask("ai-ml-system-design", {
+    topic: "Design a RAG system for trip planning",
+    revisions: 5,
+  });
+  const correctedSettlement = settlement({
+    questionType: "ai-ml-system-design",
+    relation: "new-parent",
+    activeParentId: before.parent.id,
+    activeParentRevision: before.parent.revisions,
+  });
+  const plan = buildSettledAdvisorExecutionPlan({
+    settlement: correctedSettlement,
+    expectedActiveMeetingTask: before,
+    activeMeetingTask: after,
+    preBoundaryQuestionType: "general-system-design",
+    taskBoundaryCommitted: true,
+    childOwnsResponse: false,
+    providerSnapshot: providers,
+    memoryUseCase: "system_design_interview",
+    askFrame: "direct-answer",
+    topicDomain: "ai-ml-infra",
+    sourceQuestion: "Design a RAG system for trip planning",
+    contextReadScopeOverride: "active-parent-read",
+    explicitTaskMutationCommand: {
+      kind: "replace-parent",
+      type: "ai-ml-system-design",
+      topic: "Design a RAG system for trip planning",
+    },
+    taskMutationCommittedBeforeAdvisor: true,
+  });
+
+  assert.equal(plan.taskRelation, "new-parent");
+  assert.equal(plan.taskMutationPolicy.kind, "replace-parent");
+  assert.equal(plan.taskMutationCommittedBeforeAdvisor, true);
+  assert.equal(plan.expectedParentId, before.parent.id);
+  assert.equal(plan.expectedParentRevision, 4);
+  assert.equal(plan.postMutationParentId, after.parent.id);
+  assert.equal(plan.postMutationParentRevision, 5);
+  assert.equal(plan.contextReadScope, "active-parent-read");
 });
 
 test("keeps the committed project parent visible for a project follow-up", () => {

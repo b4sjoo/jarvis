@@ -136,6 +136,7 @@ export interface SettledAdvisorExecutionPlan {
   artifactIntent: SettledAdvisorArtifactIntent;
   whiteboardFormatPreference: WhiteboardFormatPreference;
   taskMutationPolicy: TaskLifecycleCommand;
+  taskMutationCommittedBeforeAdvisor: boolean;
   taskSnapshot?: ActiveMeetingTask;
   expectedParentId?: string;
   expectedParentRevision?: number;
@@ -247,6 +248,18 @@ export function buildEffectiveAdvisorSettlementView(input: {
       ? toInterviewTaskRelation(settlement.relation)
     : input.fallback.relation;
   const activeTask = input.activeMeetingTask;
+  const activeParent = activeTask?.parent;
+  const revisionStableParentOrigin = Boolean(
+    settlement &&
+      settlement.relation === "new-parent" &&
+      !settlement.parentMutationAuthorized &&
+      settlement.responseAuthorized &&
+      settlement.action === "answer" &&
+      activeParent?.sourceQuestionUnitId ===
+        settlement.logicalQuestionUnitId &&
+      (activeParent.sourceQuestionRevision === undefined ||
+        settlement.revision >= activeParent.sourceQuestionRevision)
+  );
   const preserveCurrentBranch =
     input.preserveCurrentBranchOnAbstention !== false;
   const activeParentType = normalizeCanonicalQuestionType(
@@ -269,7 +282,8 @@ export function buildEffectiveAdvisorSettlementView(input: {
     !alreadyEffective &&
     settlement &&
     relation === "new-parent" &&
-    !settlement.parentMutationAuthorized
+    !settlement.parentMutationAuthorized &&
+    !revisionStableParentOrigin
   ) {
     relation = "unknown";
     nullHypothesisReason = activeTask?.parent
@@ -317,13 +331,13 @@ export function buildEffectiveAdvisorSettlementView(input: {
   const relationReadsParent =
     relation === "followup-parent" ||
     relation === "resume-parent" ||
-    relation === "child-probe";
+    relation === "child-probe" ||
+    (relation === "new-parent" && revisionStableParentOrigin);
   const startsNewParent = Boolean(
     settlement
       ? relation === "new-parent" && settlement.parentMutationAuthorized
       : relation === "new-parent"
   );
-  const activeParent = input.activeMeetingTask?.parent;
   const committedNewParentMatches = Boolean(
     settlement &&
       startsNewParent &&
@@ -406,6 +420,10 @@ export function buildEffectiveAdvisorSettlementView(input: {
       : (relation === "followup-parent" || relation === "resume-parent") &&
           parent
         ? "active-parent-read"
+        : relation === "new-parent" &&
+            revisionStableParentOrigin &&
+            parent
+          ? "active-parent-read"
         : "current-only";
   const projectAnchor =
     parent?.projectBinding?.projectName ??
@@ -573,6 +591,7 @@ export function buildSettledAdvisorExecutionPlan(input: {
   sourceQuestion?: string;
   subtaskIntent?: InterviewSubtaskIntent;
   explicitTaskMutationCommand?: TaskLifecycleCommand;
+  taskMutationCommittedBeforeAdvisor?: boolean;
   expectedActiveMeetingTask?: ActiveMeetingTask;
   responseAuthorityId?: string;
   promptCurrentQuestionSourceHash?: string;
@@ -587,6 +606,15 @@ export function buildSettledAdvisorExecutionPlan(input: {
     input.activeMeetingTask
     ? cloneActiveMeetingTask(input.activeMeetingTask)
     : undefined;
+  const revisionStableParentOrigin = Boolean(
+    relation === "new-parent" &&
+      !input.taskBoundaryCommitted &&
+      !input.settlement.parentMutationAuthorized &&
+      input.settlement.responseAuthorized &&
+      input.settlement.action === "answer" &&
+      taskSnapshot?.parent.sourceQuestionUnitId ===
+        input.settlement.logicalQuestionUnitId
+  );
   const transientPersonalStatusDecision =
     input.transientPersonalStatusDecision
       ? cloneTransientPersonalStatusDecision(
@@ -708,6 +736,7 @@ export function buildSettledAdvisorExecutionPlan(input: {
       transientPersonalStatusDecision,
       taskSnapshot,
       relation,
+      revisionStableParentOrigin,
     });
   const taskMutationPolicy = resolveTaskMutationPolicy({
     settlement: input.settlement,
@@ -717,7 +746,11 @@ export function buildSettledAdvisorExecutionPlan(input: {
     sourceQuestion: input.sourceQuestion,
     explicitCommand: input.explicitTaskMutationCommand,
     activeChildId: taskSnapshot?.child?.id,
+    revisionStableParentOrigin,
   });
+  const taskMutationCommittedBeforeAdvisor =
+    input.taskMutationCommittedBeforeAdvisor ??
+    input.taskBoundaryCommitted;
   const currentOnlyPreservesTask =
     contextReadScope === "current-only" &&
     taskMutationPolicy.kind === "preserve";
@@ -783,6 +816,7 @@ export function buildSettledAdvisorExecutionPlan(input: {
     artifactIntent,
     whiteboardFormatPreference,
     taskMutationKind: taskMutationPolicy.kind,
+    taskMutationCommittedBeforeAdvisor,
     transientPersonalStatusDecisionId:
       transientPersonalStatusDecision?.id,
   });
@@ -847,6 +881,7 @@ export function buildSettledAdvisorExecutionPlan(input: {
     artifactIntent,
     whiteboardFormatPreference,
     taskMutationPolicy,
+    taskMutationCommittedBeforeAdvisor,
     taskSnapshot,
     expectedParentId,
     expectedParentRevision,
@@ -956,6 +991,8 @@ export function rebaseSettledAdvisorExecutionPlanAfterOwnedParentMutation(
       artifactIntent: rebased.artifactIntent,
       whiteboardFormatPreference: rebased.whiteboardFormatPreference,
       taskMutationKind: rebased.taskMutationPolicy.kind,
+      taskMutationCommittedBeforeAdvisor:
+        rebased.taskMutationCommittedBeforeAdvisor,
       transientPersonalStatusDecisionId:
         rebased.transientPersonalStatusDecision?.id,
     }),
@@ -1104,6 +1141,8 @@ export function formatSettledAdvisorExecutionPlanForTrace(
       plan.whiteboardFormatPreference,
     settledExecutionPlanTaskMutationCommand:
       plan.taskMutationPolicy.kind,
+    settledExecutionPlanTaskMutationCommittedBeforeAdvisor:
+      plan.taskMutationCommittedBeforeAdvisor,
     settledExecutionPlanExpectedParentId: plan.expectedParentId,
     settledExecutionPlanExpectedParentRevision:
       plan.expectedParentRevision,
@@ -1202,6 +1241,7 @@ function resolveContextReadScope(input: {
   transientPersonalStatusDecision?: TransientPersonalStatusDecision;
   taskSnapshot?: ActiveMeetingTask;
   relation: EffectiveInterviewTaskRelation;
+  revisionStableParentOrigin?: boolean;
 }): AdvisorContextReadScope {
   if (input.transientPersonalStatusDecision) return "current-only";
   if (
@@ -1213,7 +1253,9 @@ function resolveContextReadScope(input: {
   if (
     input.taskSnapshot &&
     (input.relation === "followup-parent" ||
-      input.relation === "resume-parent")
+      input.relation === "resume-parent" ||
+      (input.relation === "new-parent" &&
+        input.revisionStableParentOrigin))
   ) {
     return "active-parent-read";
   }
@@ -1247,6 +1289,7 @@ function resolveTaskMutationPolicy(input: {
   sourceQuestion?: string;
   explicitCommand?: TaskLifecycleCommand;
   activeChildId?: string;
+  revisionStableParentOrigin?: boolean;
 }): TaskLifecycleCommand {
   if (input.transientPersonalStatusDecision) {
     return { kind: "preserve" };
@@ -1258,6 +1301,9 @@ function resolveTaskMutationPolicy(input: {
       type: input.settlement.questionType,
       topic: input.sourceQuestion?.trim() || "Unknown interview task",
     };
+  }
+  if (input.revisionStableParentOrigin) {
+    return { kind: "update-parent-context" };
   }
   if (
     input.relation === "child-probe" &&
@@ -1383,6 +1429,7 @@ function createExecutionPlanId(input: {
   artifactIntent: SettledAdvisorArtifactIntent;
   whiteboardFormatPreference: WhiteboardFormatPreference;
   taskMutationKind: TaskLifecycleCommand["kind"];
+  taskMutationCommittedBeforeAdvisor: boolean;
   transientPersonalStatusDecisionId?: string;
 }) {
   return `advisor_plan_${hashStableText(
@@ -1409,6 +1456,7 @@ function createExecutionPlanId(input: {
       input.artifactIntent,
       input.whiteboardFormatPreference,
       input.taskMutationKind,
+      input.taskMutationCommittedBeforeAdvisor,
       input.transientPersonalStatusDecisionId ?? "",
     ].join("|")
   )}`;

@@ -100,14 +100,14 @@ test("authorizes the same parent retype from the compact Question Type result", 
     manualCorrectionRevision: 4,
     sourceKind: "screen",
     sourceObservationIds: ["screen-a"],
-    orderedRelation: "followup-parent",
-    orderedRelationReason: "parent-origin-same-question",
+    orderedRelation: "new-parent",
+    orderedRelationReason: "active-parent-origin",
   });
 
   assert.equal(decision.disposition, "same-question-retype");
   assert.equal(decision.parentMutationAuthorized, true);
   assert.equal(decision.correctedType, "ai-ml-system-design");
-  assert.equal(decision.relation, "followup-parent");
+  assert.equal(decision.relation, "new-parent");
   assert.equal(decision.settlement?.typeMutationAuthorized, true);
   assert.equal(decision.settlement?.relationMutationAuthorized, true);
   assert.equal(decision.settlement?.sourceKind, "mixed");

@@ -116,7 +116,8 @@ test("deterministically creates or reseeds a parent only from exact source ident
     activeParentId: "parent-wrong-type",
     activeParentRevision: 1,
     manualCorrectionRevision: 5,
-    forceNewParentFromSourceIdentity: true,
+    revisionStableRelation: "new-parent",
+    revisionStableRelationReason: "active-parent-origin",
   });
 
   assert.equal(result.settlement.questionType, "general-system-design");
@@ -144,7 +145,8 @@ test("preserves an exact active child while applying the corrected current type"
     activeParentId: "parent-aiml",
     activeParentRevision: 7,
     manualCorrectionRevision: 6,
-    preserveActiveChildFromSourceIdentity: true,
+    revisionStableRelation: "child-probe",
+    revisionStableRelationReason: "active-child-origin",
   });
 
   assert.equal(result.settlement.questionType, "field-knowledge");
@@ -154,6 +156,35 @@ test("preserves an exact active child while applying the corrected current type"
     "deterministic-fast-path"
   );
   assert.equal(result.settlement.relationMutationAuthorized, true);
+  assert.equal(result.settlement.parentMutationAuthorized, false);
+});
+
+test("keeps a corrected follow-up on its revision-stable parent relation", () => {
+  const unit = makeLogicalQuestion(
+    "question-followup",
+    "turn-followup",
+    "What would you monitor in production?"
+  );
+  const result = settleManualQuestionTypeCorrection({
+    operationId: "correction-followup",
+    currentQuestion: createProvisionalCurrentQuestion({
+      logicalQuestionUnit: unit,
+      sourceKind: "voice",
+    }),
+    correctedType: "ai-ml-system-design",
+    activeParentId: "parent-rag",
+    activeParentRevision: 8,
+    manualCorrectionRevision: 7,
+    revisionStableRelation: "followup-parent",
+    revisionStableRelationReason:
+      "effective-question-source-ledger",
+  });
+
+  assert.equal(result.settlement.relation, "followup-parent");
+  assert.equal(
+    result.settlement.relationAuthoritySource,
+    "deterministic-fast-path"
+  );
   assert.equal(result.settlement.parentMutationAuthorized, false);
 });
 

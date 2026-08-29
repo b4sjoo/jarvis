@@ -41,8 +41,11 @@ export function settleManualQuestionTypeCorrection(input: {
   manualCorrectionRevision: number;
   relationCandidate?: LlmTaskRelationAdjudication;
   relationOperationLeaseAuthorized?: boolean;
-  forceNewParentFromSourceIdentity?: boolean;
-  preserveActiveChildFromSourceIdentity?: boolean;
+  revisionStableRelation?: Extract<
+    CurrentQuestionSettlementDecision["relation"],
+    "new-parent" | "followup-parent" | "child-probe" | "resume-parent"
+  >;
+  revisionStableRelationReason?: string;
 }): ManualQuestionTypeCorrectionSettlementResult {
   const manualProposal: CurrentQuestionSettlementProposal = {
     source: "manual-correction",
@@ -66,13 +69,12 @@ export function settleManualQuestionTypeCorrection(input: {
     ],
   };
   const deterministicRelation =
-    input.forceNewParentFromSourceIdentity &&
-    isParentCanonicalQuestionType(input.correctedType)
-      ? "new-parent"
-      : input.preserveActiveChildFromSourceIdentity &&
-          input.correctedType !== "unknown"
-        ? "child-probe"
-        : undefined;
+    input.revisionStableRelation === "new-parent" &&
+    !isParentCanonicalQuestionType(input.correctedType)
+      ? undefined
+      : input.correctedType === "unknown"
+        ? undefined
+        : input.revisionStableRelation;
   const deterministicRelationProposal = deterministicRelation
     ? ({
         source: "deterministic-fast-path",
@@ -91,11 +93,8 @@ export function settleManualQuestionTypeCorrection(input: {
         expectedParentId: input.activeParentId,
         expectedParentRevision: input.activeParentRevision,
         reasons: [
-          deterministicRelation === "child-probe"
-            ? "manual-correction-preserves-source-owned-child"
-            : input.activeParentId
-              ? "manual-correction-reseeds-parent-origin"
-              : "manual-correction-creates-first-parent",
+          input.revisionStableRelationReason ??
+            "manual-correction-preserves-revision-stable-relation",
         ],
       } satisfies CurrentQuestionSettlementProposal)
     : undefined;

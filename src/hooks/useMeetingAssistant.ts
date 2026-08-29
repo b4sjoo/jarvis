@@ -105,6 +105,7 @@ import {
 import {
   createEffectiveQuestionSourceRecord,
   EffectiveQuestionSourceLedger,
+  resolveRevisionStableTopologyBinding,
   selectOwnerScopedRelationEvidence,
 } from "@/lib/meeting/effective-question-source-ledger";
 import {
@@ -10990,6 +10991,15 @@ export function useMeetingAssistant() {
       const currentParent =
         originalPromptContext.activeMeetingTask?.parent ??
         promptContext.activeMeetingTask?.parent;
+      const revisionStableTopologyBinding =
+        resolveRevisionStableTopologyBinding({
+          records:
+            effectiveQuestionSourceLedgerRef.current.listHistory(),
+          logicalQuestionUnit: advisorJob.logicalQuestionUnit,
+          activeMeetingTask:
+            originalPromptContext.activeMeetingTask ??
+            promptContext.activeMeetingTask,
+        });
       if (!currentQuestionSettlement) {
         const proposal = {
           source: options.manualQuestionTypeCorrection
@@ -11002,7 +11012,9 @@ export function useMeetingAssistant() {
           revision: provisionalCurrentQuestion.revision,
           sourceHash: provisionalCurrentQuestion.sourceHash,
           questionType: advisorTaskSignals.questionType,
-          relation: advisorTaskSignals.taskRelation,
+          relation:
+            revisionStableTopologyBinding?.relation ??
+            advisorTaskSignals.taskRelation,
           action: executionAuthorization.authorized
             ? ("answer" as const)
             : ("ignore" as const),
@@ -11014,8 +11026,9 @@ export function useMeetingAssistant() {
           typeEvidenceAuthorized:
             advisorTaskSignals.questionType !== "unknown",
           relationEvidenceAuthorized:
-            advisorTaskSignals.relationEvidenceAuthorized ??
-            (advisorTaskSignals.taskRelation !== "unknown"),
+            Boolean(revisionStableTopologyBinding) ||
+            (advisorTaskSignals.relationEvidenceAuthorized ??
+              advisorTaskSignals.taskRelation !== "unknown"),
           actionEvidenceAuthorized: true,
           manualCorrectionRevision:
             options.manualQuestionTypeCorrection
@@ -11026,6 +11039,11 @@ export function useMeetingAssistant() {
           reasons: [
             `advisor-signal-source:${advisorTaskSignals.source}`,
             `boundary-authority-source:${taskBoundaryAuthoritySource}`,
+            ...(revisionStableTopologyBinding
+              ? [
+                  `revision-stable-relation:${revisionStableTopologyBinding.source}`,
+                ]
+              : []),
           ],
         };
         const settlementStartedAt = performance.now();
@@ -11047,7 +11065,8 @@ export function useMeetingAssistant() {
             runtimeMutationAuthorized:
               taskMutationAuthorization.authorized,
             questionComplete,
-            commitParent,
+            commitParent:
+              commitParent && !revisionStableTopologyBinding,
           },
         });
         currentQuestionSettlementDurationMs = Math.max(
@@ -11056,6 +11075,24 @@ export function useMeetingAssistant() {
         );
       } else {
         currentQuestionSettlementDurationMs = 0;
+      }
+      if (traceId && revisionStableTopologyBinding) {
+        traceStoreRef.current.updateMetadata(traceId, {
+          revisionStableRelationApplied: true,
+          revisionStableRelation:
+            revisionStableTopologyBinding.relation,
+          revisionStableRelationSource:
+            revisionStableTopologyBinding.source,
+          revisionStableRelationOwnerKind:
+            revisionStableTopologyBinding.owner.kind,
+          revisionStableRelationOwnerId:
+            revisionStableTopologyBinding.owner.kind ===
+            "active-child"
+              ? revisionStableTopologyBinding.owner.childId
+              : revisionStableTopologyBinding.owner.parentId,
+          revisionStableRelationBoundRevision:
+            revisionStableTopologyBinding.boundRevision,
+        });
       }
       if (!responseMutationSuppressed) {
         currentQuestionSettlementRef.current =
@@ -11554,6 +11591,9 @@ export function useMeetingAssistant() {
     );
     const startsNewParentForPhase =
       effectiveAdvisorSettlementView.startsNewParent &&
+      (!settledExecutionPlan ||
+        settledExecutionPlan.taskMutationPolicy.kind ===
+          "create-parent") &&
       advisorTaskMutationDecision.commitParent &&
       taskMutationAuthorization.authorized;
     const preservedPlaybookPhase = startsNewParentForPhase
@@ -12242,6 +12282,8 @@ export function useMeetingAssistant() {
                   phase: playbookPhaseDecision.phase,
                 }
               : sourceOwnedExecutionPlanCommand,
+          taskMutationCommittedBeforeAdvisor:
+            operationCommittedTaskMutationBeforePlan,
           responseAuthorityId:
             advisorJob.runtimeTypeAdjudicationOutputAuthority?.id,
           promptCurrentQuestionSourceHash:
@@ -12325,6 +12367,28 @@ export function useMeetingAssistant() {
       }
       if (rejectStaleCommit("post-plan")) return;
     }
+    const revisionStableParentContinuation = Boolean(
+      settledExecutionPlan?.taskRelation === "new-parent" &&
+        settledExecutionPlan.taskMutationPolicy.kind ===
+          "update-parent-context" &&
+        settledExecutionPlan.taskSnapshot?.parent
+          .sourceQuestionUnitId ===
+          settledExecutionPlan.logicalQuestionUnitId
+    );
+    const advisorContinuityRelation =
+      revisionStableParentContinuation
+        ? "followup-parent"
+        : (settledExecutionPlan?.taskRelation ??
+          effectiveAdvisorSettlementView.relation);
+    if (traceId && revisionStableParentContinuation) {
+      traceStoreRef.current.updateMetadata(traceId, {
+        revisionStableParentContinuation: true,
+        revisionStableParentContinuityRelation:
+          advisorContinuityRelation,
+        revisionStableParentTopologyRelation:
+          settledExecutionPlan?.taskRelation,
+      });
+    }
     const responseOwner =
       settledExecutionPlan?.responseOwner ??
       resolveMeetingResponseOwner({
@@ -12379,8 +12443,7 @@ export function useMeetingAssistant() {
                 (!settledExecutionPlan &&
                   !effectiveAdvisorSettlementView.relationApplicable)
                   ? undefined
-                  : ((settledExecutionPlan?.taskRelation ??
-                      effectiveAdvisorSettlementView.relation) as InterviewTaskRelation),
+                  : (advisorContinuityRelation as InterviewTaskRelation),
               playbookId:
                 settledExecutionPlan?.playbookId ??
                 advisorRuntimePlaybook?.id,
@@ -12833,8 +12896,7 @@ export function useMeetingAssistant() {
           ? undefined
           : effectiveAdvisorSettlementView.parent?.topic,
       relation:
-        settledExecutionPlan?.taskRelation ??
-        effectiveAdvisorSettlementView.relation,
+        advisorContinuityRelation,
     });
     const advisorRequiresProjectBinding =
       advisorTaskSignals.openingRoute?.commitParent !== false &&
@@ -12891,8 +12953,7 @@ export function useMeetingAssistant() {
         effectiveAdvisorSettlementView.parent?.projectBinding &&
           (settledExecutionPlan?.questionType ??
             advisorQuestionType) !== "project-deep-dive" &&
-          (settledExecutionPlan?.taskRelation ??
-            effectiveAdvisorSettlementView.relation) !== "new-parent" &&
+          advisorContinuityRelation !== "new-parent" &&
           (settledExecutionPlan?.relationApplicable ??
             effectiveAdvisorSettlementView.relationApplicable)
       ),
@@ -12912,8 +12973,7 @@ export function useMeetingAssistant() {
         settledExecutionPlan?.questionType ??
         advisorQuestionType,
       relation:
-        settledExecutionPlan?.taskRelation ??
-        effectiveAdvisorSettlementView.relation,
+        advisorContinuityRelation,
       requiresProjectBinding: advisorRequiresProjectBinding,
       projectAnchor:
         settledExecutionPlan?.memoryPolicy.projectAnchor ??
@@ -14144,8 +14204,7 @@ export function useMeetingAssistant() {
               (!settledExecutionPlan &&
                 !effectiveAdvisorSettlementView.relationApplicable)
                 ? undefined
-                : ((settledExecutionPlan?.taskRelation ??
-                    effectiveAdvisorSettlementView.relation) as InterviewTaskRelation),
+                : (advisorContinuityRelation as InterviewTaskRelation),
             meetingContext: sufficiencyMeetingContext,
             basePromptContext: promptContext,
             originalModelPromptText: advisorModelPromptText,
@@ -14301,6 +14360,14 @@ export function useMeetingAssistant() {
         triggerSource: advisorJob.source,
         hasActiveScreenTask: Boolean(promptContext.taskRuntime.screenAttachment),
       });
+      const parentMutationCommittedBeforeAdvisor = Boolean(
+        taskBoundaryCommittedBeforeAdvisor ||
+          (settledExecutionPlan?.taskMutationCommittedBeforeAdvisor &&
+            (settledExecutionPlan.taskMutationPolicy.kind ===
+              "create-parent" ||
+              settledExecutionPlan.taskMutationPolicy.kind ===
+                "replace-parent"))
+      );
       const shouldCommitAdvisorParent =
         !transientPersonalStatusDecision &&
         !responseMutationSuppressed &&
@@ -14313,7 +14380,8 @@ export function useMeetingAssistant() {
         effectiveAdvisorSettlementView.relationApplicable &&
         advisorTaskSignals.openingRoute?.commitParent !== false &&
         (effectiveAdvisorSettlementView.relation !== "new-parent" ||
-          taskBoundaryCommittedBeforeAdvisor ||
+          parentMutationCommittedBeforeAdvisor ||
+          revisionStableParentContinuation ||
           Boolean(
             responseOpportunityGenerationGateOperationId &&
               responseOpportunityGenerationAuthorized()
@@ -14321,12 +14389,13 @@ export function useMeetingAssistant() {
         (!sourceOwnedTransitionResult ||
           sourceOwnedTransitionCommittedBeforeAdvisor);
       const continuityRelation =
-        taskBoundaryCommittedBeforeAdvisor
+        parentMutationCommittedBeforeAdvisor
           ? "followup-parent"
-          : effectiveAdvisorSettlementView.relation;
+          : advisorContinuityRelation;
       const outputPhaseDecision =
         taskBoundaryCommittedBeforeAdvisor ||
         sourceOwnedTransitionCommittedBeforeAdvisor ||
+        settledExecutionPlan?.taskMutationCommittedBeforeAdvisor ||
         manualPhaseAdvanceCommitted
           ? undefined
           : playbookPhaseDecision;
@@ -31080,6 +31149,17 @@ export function useMeetingAssistant() {
                 )
               ))
         );
+        const revisionStableTopologyBinding =
+          resolveRevisionStableTopologyBinding({
+            records:
+              effectiveQuestionSourceLedgerRef.current.listHistory(),
+            logicalQuestionUnit: correctionLogicalQuestionUnit,
+            activeMeetingTask: activeTask,
+          });
+        const correctionRevisionStableRelation = !activeTask &&
+          isParentCanonicalQuestionType(correctedType)
+          ? "new-parent"
+          : revisionStableTopologyBinding?.relation;
         let orderedCorrectionRelation:
           | OrderedTaskRelationResolutionDecision
           | undefined;
@@ -31189,10 +31269,10 @@ export function useMeetingAssistant() {
             relationCandidate: orderedCorrectionRelationCandidate,
             relationOperationLeaseAuthorized:
               Boolean(orderedCorrectionRelationCandidate),
-            forceNewParentFromSourceIdentity:
-              !activeTask || correctionTargetOwnsActiveParent,
-            preserveActiveChildFromSourceIdentity:
-              correctionTargetOwnsActiveChild,
+            revisionStableRelation: correctionRevisionStableRelation,
+            revisionStableRelationReason:
+              revisionStableTopologyBinding?.source ??
+              (!activeTask ? "first-parent-source-identity" : undefined),
           });
         correctionCurrentQuestionSettlement =
           correctionSettlementResult.settlement;
@@ -31258,6 +31338,12 @@ export function useMeetingAssistant() {
             !activeTask || correctionTargetOwnsActiveParent,
           manualCorrectionSourceIdentityPreservedChild:
             correctionTargetOwnsActiveChild,
+          manualCorrectionRevisionStableRelation:
+            correctionRevisionStableRelation,
+          manualCorrectionRevisionStableRelationSource:
+            revisionStableTopologyBinding?.source,
+          manualCorrectionRevisionStableOwnerKind:
+            revisionStableTopologyBinding?.owner.kind,
         });
         const activeScreenTask = contextState.taskRuntime.screenAttachment;
         const currentOnlyCorrection =
@@ -33433,6 +33519,13 @@ export function useMeetingAssistant() {
           logicalQuestionUnit: application.logicalQuestionUnit,
           parent: contextState.taskRuntime.parent,
         });
+      const revisionStableTopologyBinding =
+        resolveRevisionStableTopologyBinding({
+          records:
+            effectiveQuestionSourceLedgerRef.current.listHistory(),
+          logicalQuestionUnit: application.logicalQuestionUnit,
+          activeMeetingTask: contextState.activeMeetingTask,
+        });
       const correctionCurrentQuestion = createProvisionalCurrentQuestion({
         logicalQuestionUnit: application.logicalQuestionUnit,
         sourceKind: correctionSourceKind,
@@ -33440,7 +33533,7 @@ export function useMeetingAssistant() {
       });
       const correctionRelationHandle =
         correctionOwnedTrigger.shouldAdjudicate &&
-        !correctionTargetOwnsActiveParent
+        contextState.activeMeetingTask
           ? scheduleTaskRelationAdjudication({
               turn: {
                 speaker: "them",
@@ -33526,6 +33619,7 @@ export function useMeetingAssistant() {
               | OrderedTaskRelationResolutionDecision
               | undefined;
             if (
+              !revisionStableTopologyBinding &&
               correctionRelationHandle?.releaseWindowRequested &&
               correctionRelationHandle
             ) {
@@ -33573,10 +33667,16 @@ export function useMeetingAssistant() {
               correctionRelationParallelWithType: Boolean(
                 correctionRelationHandle
               ),
+              correctionRevisionStableRelation:
+                revisionStableTopologyBinding?.relation,
+              correctionRevisionStableRelationSource:
+                revisionStableTopologyBinding?.source,
+              correctionRevisionStableOwnerKind:
+                revisionStableTopologyBinding?.owner.kind,
             });
-            const effectiveOrderedRelation = correctionTargetOwnsActiveParent
-              ? "followup-parent"
-              : correctionCoordinatorDecision.relation.relation;
+            const effectiveOrderedRelation =
+              revisionStableTopologyBinding?.relation ??
+              correctionCoordinatorDecision.relation.relation;
             correctionOwnedResettlement =
               resolveCorrectionOwnedTypeResettlement({
                 logicalQuestionUnit: application.logicalQuestionUnit,
@@ -33597,9 +33697,11 @@ export function useMeetingAssistant() {
                 manualCorrectionRevision:
                   manualCorrectionRevisionRef.current,
                 orderedRelation: effectiveOrderedRelation,
-                orderedRelationReason: correctionTargetOwnsActiveParent
-                  ? "parent-origin-same-question"
-                  : correctionCoordinatorDecision.reason,
+                orderedRelationReason:
+                  revisionStableTopologyBinding?.source ??
+                  (correctionTargetOwnsActiveParent
+                    ? "parent-origin-same-question"
+                    : correctionCoordinatorDecision.reason),
               });
           } catch (error) {
             timedOut =
@@ -33901,11 +34003,13 @@ export function useMeetingAssistant() {
                   sourceQuestion: correctedSemanticEvidenceText,
                   promptCurrentQuestionSourceHash:
                     settledCorrection.sourceHash,
+                  contextReadScopeOverride: "active-parent-read",
                   explicitTaskMutationCommand: {
                     kind: "replace-parent",
                     type: correctedType,
                     topic: correctedSemanticEvidenceText,
                   },
+                  taskMutationCommittedBeforeAdvisor: true,
                 });
               const preMutationPlanAuthorization =
                 authorizeSettledAdvisorExecutionPlan({

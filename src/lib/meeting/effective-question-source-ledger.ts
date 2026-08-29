@@ -63,6 +63,21 @@ export interface OwnerScopedRelationEvidenceSelection {
   };
 }
 
+export type RevisionStableTopologyRelation = Extract<
+  EffectiveCurrentQuestionSettlement["relation"],
+  "new-parent" | "followup-parent" | "child-probe" | "resume-parent"
+>;
+
+export interface RevisionStableTopologyBinding {
+  relation: RevisionStableTopologyRelation;
+  owner: EffectiveQuestionSourceOwner;
+  source:
+    | "active-parent-origin"
+    | "active-child-origin"
+    | "effective-question-source-ledger";
+  boundRevision: number;
+}
+
 export class EffectiveQuestionSourceLedger {
   private readonly records: EffectiveQuestionSourceRecord[] = [];
 
@@ -122,6 +137,71 @@ export class EffectiveQuestionSourceLedger {
   clear() {
     this.records.length = 0;
   }
+}
+
+export function resolveRevisionStableTopologyBinding(input: {
+  records: EffectiveQuestionSourceRecord[];
+  logicalQuestionUnit: LogicalQuestionUnit;
+  activeMeetingTask?: ActiveMeetingTask;
+}): RevisionStableTopologyBinding | undefined {
+  const { logicalQuestionUnit, activeMeetingTask } = input;
+  const parent = activeMeetingTask?.parent;
+  if (
+    parent?.sourceQuestionUnitId === logicalQuestionUnit.id &&
+    (parent.sourceQuestionRevision === undefined ||
+      logicalQuestionUnit.revision >= parent.sourceQuestionRevision)
+  ) {
+    return {
+      relation: "new-parent",
+      owner: { kind: "parent-mainline", parentId: parent.id },
+      source: "active-parent-origin",
+      boundRevision: parent.sourceQuestionRevision ?? 1,
+    };
+  }
+
+  const latestBoundRecord = input.records
+    .filter(
+      (record) =>
+        record.sessionId === logicalQuestionUnit.sessionId &&
+        record.runtimeEpoch === logicalQuestionUnit.runtimeEpoch &&
+        record.logicalQuestionUnitId === logicalQuestionUnit.id &&
+        record.logicalQuestionRevision <= logicalQuestionUnit.revision &&
+        isRevisionStableTopologyRelation(record.relation) &&
+        ownerMatchesActiveTask(record.owner, activeMeetingTask)
+    )
+    .sort(compareEffectiveQuestionSourceRecords)
+    .at(-1);
+  if (latestBoundRecord) {
+    return {
+      relation: latestBoundRecord.relation as RevisionStableTopologyRelation,
+      owner: { ...latestBoundRecord.owner },
+      source: "effective-question-source-ledger",
+      boundRevision: latestBoundRecord.logicalQuestionRevision,
+    };
+  }
+
+  const child = activeMeetingTask?.child;
+  const sourceTurnIds = new Set(
+    logicalQuestionUnit.sources.map((source) => source.turnId)
+  );
+  if (
+    parent &&
+    child?.basedOnTurnIds.length &&
+    child.basedOnTurnIds.every((turnId) => sourceTurnIds.has(turnId))
+  ) {
+    return {
+      relation: "child-probe",
+      owner: {
+        kind: "active-child",
+        parentId: parent.id,
+        childId: child.id,
+      },
+      source: "active-child-origin",
+      boundRevision: 1,
+    };
+  }
+
+  return undefined;
 }
 
 export function createEffectiveQuestionSourceRecord(input: {
@@ -441,4 +521,25 @@ function compareEffectiveQuestionSourceRecords(
     left.updatedAt - right.updatedAt ||
     left.recordId.localeCompare(right.recordId)
   );
+}
+
+function isRevisionStableTopologyRelation(
+  relation: EffectiveCurrentQuestionSettlement["relation"]
+): relation is RevisionStableTopologyRelation {
+  return (
+    relation === "new-parent" ||
+    relation === "followup-parent" ||
+    relation === "child-probe" ||
+    relation === "resume-parent"
+  );
+}
+
+function ownerMatchesActiveTask(
+  owner: EffectiveQuestionSourceOwner,
+  task: ActiveMeetingTask | undefined
+) {
+  if (!task || owner.parentId !== task.parent.id) return false;
+  return owner.kind === "parent-mainline"
+    ? true
+    : owner.childId === task.child?.id;
 }

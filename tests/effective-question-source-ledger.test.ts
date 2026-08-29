@@ -5,6 +5,7 @@ import type { EffectiveCurrentQuestionSettlement } from "../src/lib/meeting/curr
 import {
   createEffectiveQuestionSourceRecord,
   EffectiveQuestionSourceLedger,
+  resolveRevisionStableTopologyBinding,
   selectLatestEffectiveQuestionSourceRecords,
   selectOwnerScopedRelationEvidence,
   type EffectiveQuestionSourceRecord,
@@ -120,6 +121,108 @@ function turn(id: string, text: string, at: number): TranscriptTurn {
     source: "system-audio",
   };
 }
+
+test("keeps a parent-origin relation stable across LQU revisions", () => {
+  const activeTask = task();
+  activeTask.parent.sourceQuestionUnitId = "lqu-parent";
+  activeTask.parent.sourceQuestionRevision = 1;
+  const revised = {
+    ...unit("lqu-parent", "turn-parent-root", "Design a RAG system.", 100),
+    revision: 4,
+  };
+
+  assert.deepEqual(
+    resolveRevisionStableTopologyBinding({
+      records: [],
+      logicalQuestionUnit: revised,
+      activeMeetingTask: activeTask,
+    }),
+    {
+      relation: "new-parent",
+      owner: { kind: "parent-mainline", parentId: "parent-rag" },
+      source: "active-parent-origin",
+      boundRevision: 1,
+    }
+  );
+});
+
+test("reuses the prior owner relation without treating revision as a boundary", () => {
+  const activeTask = task();
+  const revised = {
+    ...unit("lqu-followup", "turn-followup", "What would you monitor?", 100),
+    revision: 2,
+  };
+  const prior = record({
+    recordId: "record-followup-revision-1",
+    logicalQuestionUnitId: revised.id,
+    logicalQuestionRevision: 1,
+    relation: "followup-parent",
+    owner: { kind: "parent-mainline", parentId: "parent-rag" },
+  });
+
+  assert.equal(
+    resolveRevisionStableTopologyBinding({
+      records: [prior],
+      logicalQuestionUnit: revised,
+      activeMeetingTask: activeTask,
+    })?.relation,
+    "followup-parent"
+  );
+});
+
+test("keeps a child-origin revision on the same active child", () => {
+  const activeTask = task();
+  const revised = {
+    ...unit("lqu-child", "turn-child-root", "Explain HNSW.", 100),
+    revision: 3,
+  };
+
+  assert.deepEqual(
+    resolveRevisionStableTopologyBinding({
+      records: [],
+      logicalQuestionUnit: revised,
+      activeMeetingTask: activeTask,
+    }),
+    {
+      relation: "child-probe",
+      owner: {
+        kind: "active-child",
+        parentId: "parent-rag",
+        childId: "child-hnsw",
+      },
+      source: "active-child-origin",
+      boundRevision: 1,
+    }
+  );
+});
+
+test("does not revive a binding whose durable owner is no longer active", () => {
+  const activeTask = task();
+  const revised = {
+    ...unit("lqu-old-child", "turn-new", "Explain the latest code.", 100),
+    revision: 2,
+  };
+  const prior = record({
+    recordId: "record-old-child",
+    logicalQuestionUnitId: revised.id,
+    logicalQuestionRevision: 1,
+    relation: "child-probe",
+    owner: {
+      kind: "active-child",
+      parentId: "parent-rag",
+      childId: "child-replaced",
+    },
+  });
+
+  assert.equal(
+    resolveRevisionStableTopologyBinding({
+      records: [prior],
+      logicalQuestionUnit: revised,
+      activeMeetingTask: activeTask,
+    }),
+    undefined
+  );
+});
 
 test("records only source-owned effective LQU projections", () => {
   const ledger = new EffectiveQuestionSourceLedger(2);
