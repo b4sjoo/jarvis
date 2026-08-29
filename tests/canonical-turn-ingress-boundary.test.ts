@@ -139,6 +139,18 @@ test("passes the active branch type as a bounded Question Type prior", () => {
   );
 });
 
+test("builds Advisor plans from explicit pre and post mutation task snapshots", () => {
+  assert.match(source, /mapSourceOwnedExecutionPlanCommand/);
+  assert.match(
+    source,
+    /expectedActiveMeetingTask:[\s\S]{0,160}originalPromptContext\.activeMeetingTask/
+  );
+  assert.match(
+    source,
+    /activeMeetingTask:[\s\S]{0,180}operationCommittedTaskMutationBeforePlan[\s\S]{0,120}postMutationActiveMeetingTask/
+  );
+});
+
 test("settles first-parent admission in the shared coordinator", () => {
   const consumer = sourceSlice(
     "  const scheduleAdvisorAfterQuestionTypeWindow = useCallback(",

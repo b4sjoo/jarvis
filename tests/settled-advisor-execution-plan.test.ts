@@ -181,6 +181,117 @@ test("hides an old project parent behind a committed new-parent settlement", () 
   );
 });
 
+test("authorizes an owned child attachment against its post-mutation parent revision", () => {
+  const before = activeTask("ai-ml-system-design", {
+    topic: "Design a RAG system for trip planning",
+    revisions: 6,
+  });
+  const afterParent = activeTask("ai-ml-system-design", {
+    topic: "Design a RAG system for trip planning",
+    revisions: 7,
+  });
+  const after: ActiveMeetingTask = {
+    ...afterParent,
+    child: {
+      id: "child-monitoring",
+      createdAt: 30,
+      updatedAt: 30,
+      questionType: "field-knowledge",
+      relation: "child-probe",
+      intent: "concept-probe",
+      question: "What would you monitor in production?",
+      basedOnTurnIds: ["turn-monitoring"],
+      basedOnObservationIds: [],
+    },
+  };
+  const childSettlement = settlement({
+    settlementId: "question-settlement-monitoring",
+    logicalQuestionUnitId: "question-monitoring",
+    revision: 1,
+    sourceHash: "source-monitoring",
+    sourceTurnIds: ["turn-monitoring"],
+    questionType: "field-knowledge",
+    relation: "child-probe",
+    evidenceMode: "factual-explanation",
+    parentMutationAuthorized: false,
+    activeParentId: before.parent.id,
+    activeParentRevision: before.parent.revisions,
+  });
+  const plan = buildSettledAdvisorExecutionPlan({
+    settlement: childSettlement,
+    expectedActiveMeetingTask: before,
+    activeMeetingTask: after,
+    preBoundaryQuestionType: "ai-ml-system-design",
+    taskBoundaryCommitted: false,
+    childOwnsResponse: true,
+    providerSnapshot: providers,
+    memoryUseCase: "meeting_assistant",
+    askFrame: "direct-answer",
+    topicDomain: "ai-ml-infra",
+    sourceQuestion: "What would you monitor in production?",
+    explicitTaskMutationCommand: {
+      kind: "attach-child",
+      type: "field-knowledge",
+      question: "What would you monitor in production?",
+    },
+  });
+
+  assert.equal(plan.expectedParentRevision, 6);
+  assert.equal(plan.postMutationParentRevision, 7);
+  assert.equal(plan.taskMutationPolicy.kind, "attach-child");
+  assert.equal(
+    authorizeSettledAdvisorExecutionPlan({
+      plan,
+      currentSettlement: childSettlement,
+      currentSessionId: "session-a",
+      currentRuntimeEpoch: 4,
+      currentLogicalQuestionUnitId: "question-monitoring",
+      currentLogicalQuestionRevision: 1,
+      currentSourceHash: "source-monitoring",
+      currentActiveMeetingTask: before,
+      stage: "pre-task-mutation",
+    }).authorized,
+    true
+  );
+  assert.equal(
+    authorizeSettledAdvisorExecutionPlan({
+      plan,
+      currentSettlement: childSettlement,
+      currentSessionId: "session-a",
+      currentRuntimeEpoch: 4,
+      currentLogicalQuestionUnitId: "question-monitoring",
+      currentLogicalQuestionRevision: 1,
+      currentSourceHash: "source-monitoring",
+      currentActiveMeetingTask: after,
+      stage: "model-commit",
+    }).authorized,
+    true
+  );
+  const unrelatedLaterParent = activeTask("ai-ml-system-design", {
+    topic: "Design a RAG system for trip planning",
+    revisions: 8,
+  });
+  const unrelatedLaterMutation: ActiveMeetingTask = {
+    ...unrelatedLaterParent,
+    child: after.child,
+  };
+  const stale = authorizeSettledAdvisorExecutionPlan({
+    plan,
+    currentSettlement: childSettlement,
+    currentSessionId: "session-a",
+    currentRuntimeEpoch: 4,
+    currentLogicalQuestionUnitId: "question-monitoring",
+    currentLogicalQuestionRevision: 1,
+    currentSourceHash: "source-monitoring",
+    currentActiveMeetingTask: unrelatedLaterMutation,
+    stage: "model-commit",
+  });
+  assert.equal(stale.authorized, false);
+  assert.deepEqual(stale.rejectionReasons, [
+    "post-mutation-parent-revision-mismatch",
+  ]);
+});
+
 test("keeps the committed project parent visible for a project follow-up", () => {
   const project = activeTask("project-deep-dive", {
     id: "parent-oasis",

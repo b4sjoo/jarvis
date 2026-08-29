@@ -670,6 +670,7 @@ import {
   type TaskTaxonomyAuthorityDecision,
   type SourceOwnedTransitionCommitResult,
   type SourceOwnedTransitionKind,
+  type TaskLifecycleCommand,
   TaxonomyAdjudicationRuntime,
   type TaxonomyAdjudicationRequestResult,
   TAXONOMY_ADJUDICATION_MAX_OUTPUT_CHARS,
@@ -1030,6 +1031,50 @@ function mapSourceOwnedRuntimeTransition(input: {
   if (input.kind === "resume-parent") return "resume-parent";
   if (input.kind === "phase-progress") return "advance-phase";
   return input.before ? "replace-parent" : "create-parent";
+}
+
+function mapSourceOwnedExecutionPlanCommand(
+  result: SourceOwnedTransitionCommitResult | undefined
+): TaskLifecycleCommand | undefined {
+  if (
+    result?.candidate.state !== "committed" ||
+    !result.mutationApplied
+  ) {
+    return undefined;
+  }
+
+  const candidate = result.candidate;
+  if (candidate.kind === "new-parent") {
+    return {
+      kind: "create-parent",
+      type: candidate.questionType,
+      topic: candidate.question || "Unknown interview task",
+    };
+  }
+  if (candidate.kind === "reseed-parent") {
+    return {
+      kind: "replace-parent",
+      type: candidate.questionType,
+      topic: candidate.question || "Unknown interview task",
+    };
+  }
+  if (candidate.kind === "child-probe") {
+    return {
+      kind: "attach-child",
+      type: candidate.questionType,
+      question: candidate.question || "Unknown child question",
+    };
+  }
+  if (candidate.kind === "resume-parent") {
+    return { kind: "resume-parent" };
+  }
+  if (candidate.kind === "phase-progress" && result.task) {
+    return {
+      kind: "advance-phase",
+      phase: result.task.playbookPhase,
+    };
+  }
+  return undefined;
 }
 
 function classifyCommittedTaskRuntimeTransition(input: {
@@ -12136,13 +12181,31 @@ export function useMeetingAssistant() {
 
     if (currentQuestionSettlement) {
       if (!settledExecutionPlan) {
+        const sourceOwnedExecutionPlanCommand =
+          mapSourceOwnedExecutionPlanCommand(
+            sourceOwnedTransitionResult
+          );
+        const operationCommittedTaskMutationBeforePlan = Boolean(
+          taskBoundaryCommittedBeforeAdvisor ||
+            manualPhaseAdvanceCommitted ||
+            sourceOwnedExecutionPlanCommand
+        );
+        const postMutationActiveMeetingTask =
+          contextManagerRef.current.getState().activeMeetingTask ??
+          effectiveAdvisorActiveMeetingTask;
         settledExecutionPlan = buildSettledAdvisorExecutionPlan({
           settlement:
             effectiveAdvisorSettlementView.effectiveSettlement ??
             currentQuestionSettlement,
           activeMeetingTask:
-            originalPromptContext.activeMeetingTask ??
-            effectiveAdvisorActiveMeetingTask,
+            operationCommittedTaskMutationBeforePlan
+              ? postMutationActiveMeetingTask
+              : originalPromptContext.activeMeetingTask ??
+                effectiveAdvisorActiveMeetingTask,
+          expectedActiveMeetingTask:
+            operationCommittedTaskMutationBeforePlan
+              ? originalPromptContext.activeMeetingTask
+              : undefined,
           preBoundaryQuestionType: preBoundaryResponseOwnerType,
           taskBoundaryCommitted:
             taskBoundaryCommittedBeforeAdvisor,
@@ -12176,7 +12239,7 @@ export function useMeetingAssistant() {
                   kind: "advance-phase",
                   phase: playbookPhaseDecision.phase,
                 }
-              : undefined,
+              : sourceOwnedExecutionPlanCommand,
           responseAuthorityId:
             advisorJob.runtimeTypeAdjudicationOutputAuthority?.id,
           promptCurrentQuestionSourceHash:
