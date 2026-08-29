@@ -1114,22 +1114,15 @@ function selectQuestionType(input: {
   rejectedProposals: CurrentQuestionSettlementProposalRejection[];
 }) {
   for (const proposal of [input.manual, input.deterministic]) {
-    const questionType =
-      normalizeCanonicalQuestionType(proposal?.questionType) ?? "unknown";
     if (!proposal) continue;
+    if (proposal.typeEvidenceAuthorized === false) continue;
+    const questionType =
+      normalizeCanonicalQuestionType(proposal.questionType) ?? "unknown";
     if (questionType === "unknown") {
       addProposalRejection(
         input.rejectedProposals,
         proposal.source,
         "question-type-unresolved"
-      );
-      continue;
-    }
-    if (proposal.typeEvidenceAuthorized === false) {
-      addProposalRejection(
-        input.rejectedProposals,
-        proposal.source,
-        "type-evidence-not-authorized"
       );
       continue;
     }

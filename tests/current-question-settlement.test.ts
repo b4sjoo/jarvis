@@ -268,6 +268,49 @@ test("authorizes active-parent scope only for a bound settled follow-up", () => 
   );
 });
 
+test("combines an LLM type with a deterministic first-parent relation", () => {
+  const currentQuestion = createProvisionalCurrentQuestion({
+    logicalQuestionUnit: logicalQuestion(),
+    sourceKind: "voice",
+  });
+  const settlement = settleCurrentQuestion({
+    currentQuestion,
+    deterministicProposal: proposal("deterministic-fast-path", {
+      sourceHash: currentQuestion.sourceHash,
+      questionType: undefined,
+      typeEvidenceAuthorized: false,
+      relation: "new-parent",
+      relationEvidenceAuthorized: true,
+    }),
+    llmProposal: proposal("llm-type-repair", {
+      sourceHash: currentQuestion.sourceHash,
+      questionType: "general-system-design",
+      typeEvidenceAuthorized: true,
+      relation: "unknown",
+      relationEvidenceAuthorized: false,
+    }),
+    manualCorrectionRevision: 0,
+    policy: {
+      allowLlmTypeRepair: true,
+      llmTypeRepairMinConfidence: 0,
+      runtimeMutationAuthorized: true,
+      questionComplete: true,
+      commitParent: true,
+    },
+  });
+
+  assert.equal(settlement.questionType, "general-system-design");
+  assert.equal(settlement.typeAuthoritySource, "llm-type-repair");
+  assert.equal(settlement.relation, "new-parent");
+  assert.equal(
+    settlement.relationAuthoritySource,
+    "deterministic-fast-path"
+  );
+  assert.equal(settlement.relationMutationAuthorized, true);
+  assert.equal(settlement.parentMutationAuthorized, true);
+  assert.deepEqual(settlement.rejectedProposals, []);
+});
+
 test("settles current-question identity from semantic evidence, not only the terminal ask", () => {
   const text =
     "Now try to add a surge pricing and explain which components need to change.";

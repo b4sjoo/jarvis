@@ -21170,6 +21170,10 @@ export function useMeetingAssistant() {
             ? outcome?.settlement
             : undefined;
         const resolvedQuestionType = orderedType.questionType;
+        const resolvedOrderedRelation =
+          orderedRelation?.status === "resolved"
+            ? orderedRelation.relation
+            : undefined;
         const localProposal: CurrentQuestionSettlementProposal = {
           ...(taskRelationHandle?.deterministicProposal ?? {
             source: "deterministic-fast-path" as const,
@@ -21183,13 +21187,13 @@ export function useMeetingAssistant() {
             actionEvidenceAuthorized: true,
           }),
           questionType: resolvedQuestionType,
-          relation: orderedRelation?.relation ?? "unknown",
+          relation: resolvedOrderedRelation ?? "unknown",
           confidence: Math.max(
             orderedType.confidence,
             taskRelationHandle?.deterministicProposal?.confidence ?? 0.95
           ),
           typeEvidenceAuthorized: orderedType.typeEvidenceAuthorized,
-          relationEvidenceAuthorized: Boolean(orderedRelation?.relation),
+          relationEvidenceAuthorized: Boolean(resolvedOrderedRelation),
           expectedParentId: latestParent?.id,
           expectedParentRevision: latestParent?.revisions,
           reasons: [
@@ -21249,6 +21253,16 @@ export function useMeetingAssistant() {
               reasons: ["ordered-relation-type-repair-input"],
             }
           : undefined;
+        const deterministicOrderedRelationProposal =
+          authoritativeTypeSettlement &&
+          !relationCandidate &&
+          resolvedOrderedRelation
+            ? {
+                ...localProposal,
+                questionType: undefined,
+                typeEvidenceAuthorized: false,
+              }
+            : undefined;
         const settlementOperationId =
           relationProposal
             ? taskRelationHandle?.operationId
@@ -21259,7 +21273,7 @@ export function useMeetingAssistant() {
           operationId: settlementOperationId,
           currentQuestion,
           deterministicProposal: authoritativeTypeSettlement
-            ? undefined
+            ? deterministicOrderedRelationProposal
             : localProposal,
           llmProposal:
             authoritativeTypeRelationProposal ?? relationProposal,
@@ -21275,7 +21289,7 @@ export function useMeetingAssistant() {
             llmRelationRepairMinConfidence: 0.95,
             runtimeMutationAuthorized: true,
             questionComplete: true,
-            commitParent: Boolean(orderedRelation?.relation),
+            commitParent: Boolean(resolvedOrderedRelation),
           },
         });
         const convergedSettlement = Boolean(
@@ -21347,6 +21361,12 @@ export function useMeetingAssistant() {
             taskRelationHandle?.operationId,
           runtimeSettlementRelationCandidate:
             orderedRelation?.relation,
+          runtimeSettlementTaskMutationAuthority:
+            convergedSettlement
+              ? "input-evidence"
+              : releaseAuthorized
+                ? "runtime-type-repair"
+                : "input-evidence",
           runtimeSettlementAppliedToRuntime: settlementReleased,
         };
         const releaseTaskId =
@@ -21447,9 +21467,11 @@ export function useMeetingAssistant() {
           input.triggerTurnId,
           input.questionLineage,
           input.logicalQuestionUnit,
-          releaseAuthorized
-            ? "runtime-type-repair"
-            : "input-evidence",
+          convergedSettlement
+            ? "input-evidence"
+            : releaseAuthorized
+              ? "runtime-type-repair"
+              : "input-evidence",
           settlementReleased ? settlement : undefined,
           0,
           runtimeTypeRepairOutputAuthority

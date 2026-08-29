@@ -129,9 +129,22 @@ test("settles Voice question type before Relation and passes one tuple to Adviso
 });
 
 test("settles first-parent admission in the shared coordinator", () => {
+  const consumer = sourceSlice(
+    "  const scheduleAdvisorAfterQuestionTypeWindow = useCallback(",
+    "  const buildLogicalQuestionForTurn = useCallback("
+  );
+
   assert.match(
-    source,
+    consumer,
     /coordinateOrderedSettlement\(\{/
+  );
+  assert.match(
+    consumer,
+    /const deterministicOrderedRelationProposal =[\s\S]*!relationCandidate[\s\S]*resolvedOrderedRelation/
+  );
+  assert.match(
+    consumer,
+    /convergedSettlement\s*\? "input-evidence"\s*:\s*releaseAuthorized\s*\? "runtime-type-repair"/
   );
   assert.doesNotMatch(
     source,
