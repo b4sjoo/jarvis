@@ -18,6 +18,13 @@ export interface LongitudinalSessionManifest {
   folderName?: string;
   startedAt?: number;
   endedAt?: number;
+  status?: string;
+  scriptedValidation?: boolean;
+  scriptedValidationForced?: boolean;
+  scriptedValidationSource?: string;
+  recordingIntegrity?: {
+    status?: string;
+  };
   build?: {
     appVersion?: string;
     gitCommit?: string;
@@ -249,6 +256,34 @@ export interface LongitudinalSessionInput {
   humanEvaluationProjectionsV2?: HumanEvaluationProjectionV2[];
   taskRelationAdjudicationReport?: TaskRelationAdjudicationReflectionReport;
   taskRelationConvergenceReport?: TaskRelationAuthorityConvergenceReportV1;
+  evidenceScope?: LongitudinalSessionEvidenceScope;
+}
+
+export interface LongitudinalSessionEvidenceScope {
+  releaseEligible: boolean;
+  failures: string[];
+}
+
+export function evaluateLongitudinalSessionEvidenceScope(input: {
+  manifestPresent: boolean;
+  transcriptPresent: boolean;
+  traceEvidencePresent: boolean;
+  manifest?: LongitudinalSessionManifest;
+}): LongitudinalSessionEvidenceScope {
+  const failures: string[] = [];
+  if (!input.manifestPresent) failures.push("manifest-missing");
+  if (!input.transcriptPresent) failures.push("transcript-missing");
+  if (!input.traceEvidencePresent) failures.push("trace-evidence-missing");
+  if (
+    input.manifestPresent &&
+    input.manifest?.recordingIntegrity?.status !== "complete"
+  ) {
+    failures.push("recording-integrity-incomplete");
+  }
+  return {
+    releaseEligible: failures.length === 0,
+    failures,
+  };
 }
 
 export interface RateMetric {
@@ -276,8 +311,22 @@ export interface SessionLongitudinalEvaluationReport {
     productionTraceCount: number;
     labeledTraceCount: number;
   }>;
+  excludedSessions: Array<{
+    sessionId: string;
+    directory: string;
+    reason: "scripted-validation";
+    traceCount: number;
+  }>;
+  evidenceScope: {
+    releaseEligible: boolean;
+    incompleteSessionCount: number;
+    failures: Array<{ directory: string; reasons: string[] }>;
+  };
   cohort: {
+    inputSessionCount: number;
     sessionCount: number;
+    excludedScriptedSessionCount: number;
+    excludedScriptedTraceCount: number;
     productionTraceCount: number;
     syntheticTraceCount: number;
     interviewerTurnCount: number;
@@ -486,16 +535,32 @@ interface JoinedCriticalMoment {
   traces: LongitudinalTraceSummary[];
 }
 
+function isScriptedSession(input: LongitudinalSessionInput) {
+  return Boolean(
+    input.manifest.scriptedValidation ||
+      input.manifest.scriptedValidationForced ||
+      input.manifest.scriptedValidationSource === "scenario-runner"
+  );
+}
+
 export function buildSessionLongitudinalEvaluationReport(
   inputs: LongitudinalSessionInput[]
 ): SessionLongitudinalEvaluationReport {
+  const excludedScriptedInputs = inputs.filter(isScriptedSession);
+  const productInputs = inputs.filter((input) => !isScriptedSession(input));
+  const evidenceFailures = inputs
+    .filter((input) => input.evidenceScope?.releaseEligible === false)
+    .map((input) => ({
+      directory: input.directory,
+      reasons: [...(input.evidenceScope?.failures ?? [])],
+    }));
   const production: JoinedTrace[] = [];
   const criticalMomentRows: JoinedCriticalMoment[] = [];
   let syntheticTraceCount = 0;
   let interviewerTurnCount = 0;
   let labelsWithoutMatchingTrace = 0;
   let evaluationsWithoutCandidate = 0;
-  const sessionRows = inputs.map((session) => {
+  const sessionRows = productInputs.map((session) => {
     const evaluationsByTrace = indexLatestEvaluations(session.questionEvaluations);
     const traceIds = new Set(session.traceSummaries.map((trace) => trace.traceId));
     labelsWithoutMatchingTrace += session.questionEvaluations.filter(
@@ -731,7 +796,7 @@ export function buildSessionLongitudinalEvaluationReport(
   const whiteboardFormatAsciiFallbacks = mermaidEligibleWhiteboards.filter(
     ({ trace }) => trace.whiteboard?.asciiFallback === true
   );
-  const relationReports = inputs
+  const relationReports = productInputs
     .map((input) => input.taskRelationAdjudicationReport)
     .filter(
       (
@@ -739,7 +804,7 @@ export function buildSessionLongitudinalEvaluationReport(
       ): report is TaskRelationAdjudicationReflectionReport =>
         Boolean(report)
     );
-  const relationConvergenceReports = inputs
+  const relationConvergenceReports = productInputs
     .map((input) => input.taskRelationConvergenceReport)
     .filter(
       (
@@ -750,7 +815,7 @@ export function buildSessionLongitudinalEvaluationReport(
   const projectTrajectoryTraces = production.filter(({ trace }) =>
     Boolean(trace.projectTrajectory)
   );
-  const projectTrajectoryProjections = inputs.flatMap((input) =>
+  const projectTrajectoryProjections = productInputs.flatMap((input) =>
     (input.humanEvaluationProjectionsV2 ?? []).filter(
       (projection) =>
         projection.activeFacts["expected-project-trajectory"]?.fact.kind ===
@@ -766,7 +831,7 @@ export function buildSessionLongitudinalEvaluationReport(
   );
   const meetingMetadataProjections = Array.from(
     new Map(
-      inputs
+      productInputs
         .flatMap((input) => input.humanEvaluationProjectionsV2 ?? [])
         .filter(
           (projection) =>
@@ -845,8 +910,28 @@ export function buildSessionLongitudinalEvaluationReport(
     version: 2,
     generatedAt: Date.now(),
     sessions: sessionRows,
+    excludedSessions: excludedScriptedInputs.map((session) => ({
+      sessionId:
+        session.manifest.sessionId ??
+        session.manifest.folderName ??
+        session.directory,
+      directory: session.directory,
+      reason: "scripted-validation",
+      traceCount: session.traceSummaries.length,
+    })),
+    evidenceScope: {
+      releaseEligible: evidenceFailures.length === 0,
+      incompleteSessionCount: evidenceFailures.length,
+      failures: evidenceFailures,
+    },
     cohort: {
+      inputSessionCount: inputs.length,
       sessionCount: sessionRows.length,
+      excludedScriptedSessionCount: excludedScriptedInputs.length,
+      excludedScriptedTraceCount: excludedScriptedInputs.reduce(
+        (total, session) => total + session.traceSummaries.length,
+        0
+      ),
       productionTraceCount: production.length,
       syntheticTraceCount,
       interviewerTurnCount,
@@ -1691,7 +1776,10 @@ export function renderSessionLongitudinalEvaluationMarkdown(
     "# Jarvis Longitudinal Evaluation",
     "",
     `Generated: ${new Date(report.generatedAt).toISOString()}`,
-    `Sessions: ${report.cohort.sessionCount}`,
+    `Evidence scope: ${report.evidenceScope.releaseEligible ? "release-eligible" : "non-release"}`,
+    `Sessions: ${report.cohort.sessionCount} included / ${report.cohort.inputSessionCount} input`,
+    `Excluded scripted sessions / traces: ${report.cohort.excludedScriptedSessionCount} / ${report.cohort.excludedScriptedTraceCount}`,
+    `Incomplete evidence sessions: ${report.evidenceScope.incompleteSessionCount}`,
     `Production traces: ${report.cohort.productionTraceCount}`,
     `Human-labeled trace coverage: ${formatRate(report.cohort.labeledTraceCoverage)}`,
     "",

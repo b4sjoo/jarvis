@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildSessionLongitudinalEvaluationReport,
+  evaluateLongitudinalSessionEvidenceScope,
   renderSessionLongitudinalEvaluationMarkdown,
   type LongitudinalSessionInput,
 } from "../src/lib/meeting/session-longitudinal-evaluation.js";
@@ -27,6 +28,61 @@ test("builds type, intent, and continuity funnels without inventing denominators
   assert.equal(report.continuityFunnel.relationAgreement.numerator, 1);
   assert.equal(report.continuityFunnel.expectedContextCoverage.rate, 1);
   assert.equal(report.evidenceGaps.labelsWithoutMatchingTrace, 1);
+});
+
+test("excludes scripted sessions from organic product denominators", () => {
+  const scripted = {
+    ...SESSION,
+    directory: "/recordings/session-scripted",
+    manifest: {
+      ...SESSION.manifest,
+      sessionId: "session-scripted",
+      scriptedValidation: true,
+      scriptedValidationForced: true,
+      scriptedValidationSource: "scenario-runner",
+    },
+  };
+  const report = buildSessionLongitudinalEvaluationReport([
+    SESSION,
+    scripted,
+  ]);
+
+  assert.equal(report.cohort.inputSessionCount, 2);
+  assert.equal(report.cohort.sessionCount, 1);
+  assert.equal(report.cohort.excludedScriptedSessionCount, 1);
+  assert.equal(
+    report.cohort.excludedScriptedTraceCount,
+    scripted.traceSummaries.length
+  );
+  assert.equal(report.cohort.productionTraceCount, 3);
+  assert.deepEqual(report.excludedSessions, [
+    {
+      sessionId: "session-scripted",
+      directory: "/recordings/session-scripted",
+      reason: "scripted-validation",
+      traceCount: scripted.traceSummaries.length,
+    },
+  ]);
+});
+
+test("marks incomplete recording evidence as non-release", () => {
+  const scope = evaluateLongitudinalSessionEvidenceScope({
+    manifestPresent: true,
+    transcriptPresent: false,
+    traceEvidencePresent: false,
+    manifest: {
+      sessionId: "session-incomplete",
+      status: "stopped",
+      recordingIntegrity: { status: "incomplete" },
+    },
+  });
+
+  assert.equal(scope.releaseEligible, false);
+  assert.deepEqual(scope.failures, [
+    "transcript-missing",
+    "trace-evidence-missing",
+    "recording-integrity-incomplete",
+  ]);
 });
 
 test("renders N/A for a missing human-label denominator", () => {

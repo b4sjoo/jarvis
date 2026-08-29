@@ -1,8 +1,9 @@
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import {
   buildSessionLongitudinalEvaluationReport,
+  evaluateLongitudinalSessionEvidenceScope,
   renderSessionLongitudinalEvaluationMarkdown,
   type LongitudinalCriticalMomentCandidate,
   type LongitudinalCriticalMomentEvaluation,
@@ -27,12 +28,15 @@ import {
 interface CliOptions {
   sessionDirectories: string[];
   outputDirectory?: string;
+  allowIncomplete: boolean;
 }
 
 async function main() {
   const options = parseOptions(process.argv.slice(2));
   const sessions = await Promise.all(
-    options.sessionDirectories.map(readSession)
+    options.sessionDirectories.map((directory) =>
+      readSession(directory, options.allowIncomplete)
+    )
   );
   const report = buildSessionLongitudinalEvaluationReport(sessions);
   const outputDirectory =
@@ -70,6 +74,11 @@ async function main() {
         criticalMoments: report.productOutcomes.criticalMomentCount,
         criticalMomentSuccessRate: report.productOutcomes.cmsr,
         labeledCoverage: report.cohort.labeledTraceCoverage,
+        releaseEvidenceEligible: report.evidenceScope.releaseEligible,
+        excludedScriptedSessions:
+          report.cohort.excludedScriptedSessionCount,
+        excludedScriptedTraces:
+          report.cohort.excludedScriptedTraceCount,
         jsonPath,
         markdownPath,
       },
@@ -79,9 +88,33 @@ async function main() {
   );
 }
 
-async function readSession(directory: string): Promise<LongitudinalSessionInput> {
-  const [
+async function readSession(
+  directory: string,
+  allowIncomplete: boolean
+): Promise<LongitudinalSessionInput> {
+  const manifestPath = path.join(directory, "manifest.json");
+  const transcriptPath = path.join(
+    directory,
+    "transcripts",
+    "turns.jsonl"
+  );
+  const manifestPresent = await fileExists(manifestPath);
+  const manifest = await readOptionalJson<LongitudinalSessionManifest>(
+    manifestPath,
+    {}
+  );
+  const evidenceScope = evaluateLongitudinalSessionEvidenceScope({
+    manifestPresent,
+    transcriptPresent: await fileExists(transcriptPath),
+    traceEvidencePresent: await hasTraceEvidence(directory),
     manifest,
+  });
+  if (!evidenceScope.releaseEligible && !allowIncomplete) {
+    throw new Error(
+      `Session evidence is incomplete for release evaluation: ${directory} (${evidenceScope.failures.join(", ")}). Re-run with --allow-incomplete only for exploratory non-release output.`
+    );
+  }
+  const [
     transcriptTurns,
     tracePayload,
     criticalMomentCandidatesPayload,
@@ -89,12 +122,8 @@ async function readSession(directory: string): Promise<LongitudinalSessionInput>
     runtimeTraces,
   ] =
     await Promise.all([
-      readOptionalJson<LongitudinalSessionManifest>(
-        path.join(directory, "manifest.json"),
-        {}
-      ),
       readJsonLines<LongitudinalTranscriptTurn>(
-        path.join(directory, "transcripts", "turns.jsonl")
+        transcriptPath
       ),
       readOptionalJson<{ traces?: LongitudinalTraceSummary[] }>(
         path.join(directory, "metrics", "trace-summaries.latest.json"),
@@ -172,6 +201,7 @@ async function readSession(directory: string): Promise<LongitudinalSessionInput>
     humanEvaluationProjectionsV2: evaluationView.projections,
     taskRelationAdjudicationReport,
     taskRelationConvergenceReport,
+    evidenceScope,
   };
 }
 
@@ -487,6 +517,7 @@ function readStringArray(value: unknown) {
 function parseOptions(args: string[]): CliOptions {
   const sessionDirectories: string[] = [];
   let outputDirectory: string | undefined;
+  let allowIncomplete = false;
   for (let index = 0; index < args.length; index += 1) {
     if (args[index] === "--session" && args[index + 1]) {
       sessionDirectories.push(path.resolve(args[index + 1]));
@@ -496,14 +527,45 @@ function parseOptions(args: string[]): CliOptions {
     if (args[index] === "--output" && args[index + 1]) {
       outputDirectory = path.resolve(args[index + 1]);
       index += 1;
+      continue;
+    }
+    if (args[index] === "--allow-incomplete") {
+      allowIncomplete = true;
     }
   }
   if (!sessionDirectories.length) {
     throw new Error(
-      "Usage: npm run session:longitudinal:reflect -- --session <recording-folder> [--session <folder>] [--output <folder>]"
+      "Usage: npm run session:longitudinal:reflect -- --session <recording-folder> [--session <folder>] [--output <folder>] [--allow-incomplete]"
     );
   }
-  return { sessionDirectories, outputDirectory };
+  return { sessionDirectories, outputDirectory, allowIncomplete };
+}
+
+async function hasTraceEvidence(directory: string) {
+  if (
+    await fileExists(
+      path.join(directory, "metrics", "trace-summaries.latest.json")
+    )
+  ) {
+    return true;
+  }
+  try {
+    const filenames = await readdir(path.join(directory, "traces"));
+    return filenames.some((filename) => filename.endsWith(".json"));
+  } catch (error) {
+    if (isMissingFile(error)) return false;
+    throw error;
+  }
+}
+
+async function fileExists(filePath: string) {
+  try {
+    await access(filePath);
+    return true;
+  } catch (error) {
+    if (isMissingFile(error)) return false;
+    throw error;
+  }
 }
 
 async function readJsonLines<T>(filePath: string) {
