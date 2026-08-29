@@ -103,6 +103,7 @@ import {
   type SourceOwnedSetupCandidate,
 } from "@/lib/meeting/source-owned-semantic-context";
 import {
+  consumeRevisionStableTopologyBinding,
   createEffectiveQuestionSourceRecord,
   EffectiveQuestionSourceLedger,
   resolveRevisionStableTopologyBinding,
@@ -11117,6 +11118,18 @@ export function useMeetingAssistant() {
             originalPromptContext.activeMeetingTask ??
             promptContext.activeMeetingTask,
         });
+      const revisionStableRelationConsumption =
+        currentQuestionSettlement && revisionStableTopologyBinding
+          ? consumeRevisionStableTopologyBinding({
+              settlement: currentQuestionSettlement,
+              binding: revisionStableTopologyBinding,
+              logicalQuestionUnit: advisorJob.logicalQuestionUnit,
+            })
+          : undefined;
+      if (revisionStableRelationConsumption?.consumed) {
+        currentQuestionSettlement =
+          revisionStableRelationConsumption.settlement;
+      }
       if (!currentQuestionSettlement) {
         const proposal = {
           source: options.manualQuestionTypeCorrection
@@ -11194,10 +11207,27 @@ export function useMeetingAssistant() {
         currentQuestionSettlementDurationMs = 0;
       }
       if (traceId && revisionStableTopologyBinding) {
+        const revisionStableRelationConsumed = Boolean(
+          currentQuestionSettlement?.relation ===
+            revisionStableTopologyBinding.relation &&
+            (revisionStableRelationConsumption?.consumed ||
+              currentQuestionSettlement?.reasons.includes(
+                `revision-stable-relation:${revisionStableTopologyBinding.source}`
+              ))
+        );
         traceStoreRef.current.updateMetadata(traceId, {
-          revisionStableRelationApplied: true,
+          revisionStableRelationAvailable: true,
+          revisionStableRelationConsumed,
+          revisionStableRelationApplied: revisionStableRelationConsumed,
           revisionStableRelation:
             revisionStableTopologyBinding.relation,
+          revisionStableRelationPreviousRelation:
+            revisionStableRelationConsumption?.previousRelation,
+          revisionStableRelationConsumptionReason:
+            revisionStableRelationConsumption?.reason ??
+            (revisionStableRelationConsumed
+              ? "revision-stable-relation-consumed-during-settlement"
+              : "revision-stable-relation-not-consumed"),
           revisionStableRelationSource:
             revisionStableTopologyBinding.source,
           revisionStableRelationOwnerKind:

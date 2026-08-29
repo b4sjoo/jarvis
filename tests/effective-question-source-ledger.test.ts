@@ -3,6 +3,7 @@ import test from "node:test";
 import type { ActiveMeetingTask } from "../src/lib/meeting/active-meeting-task.js";
 import type { EffectiveCurrentQuestionSettlement } from "../src/lib/meeting/current-question-settlement.js";
 import {
+  consumeRevisionStableTopologyBinding,
   createEffectiveQuestionSourceRecord,
   EffectiveQuestionSourceLedger,
   resolveRevisionStableTopologyBinding,
@@ -144,6 +145,71 @@ test("keeps a parent-origin relation stable across LQU revisions", () => {
       boundRevision: 1,
     }
   );
+});
+
+test("consumes a stable parent-origin relation on an existing settlement", () => {
+  const revised = {
+    ...unit("lqu-parent", "turn-parent-root", "Design a RAG system.", 100),
+    revision: 4,
+  };
+  const settlement = {
+    ...effective("followup-parent"),
+    logicalQuestionUnitId: revised.id,
+    revision: revised.revision,
+    rawRelation: "followup-parent" as const,
+    relationAuthoritySource: "runtime-adjudication" as const,
+    relationMutationAuthorized: true,
+    parentMutationAuthorized: true,
+  };
+  const result = consumeRevisionStableTopologyBinding({
+    settlement,
+    binding: {
+      relation: "new-parent",
+      owner: { kind: "parent-mainline", parentId: "parent-rag" },
+      source: "active-parent-origin",
+      boundRevision: 1,
+    },
+    logicalQuestionUnit: revised,
+  });
+
+  assert.equal(result.consumed, true);
+  assert.equal(result.previousRelation, "followup-parent");
+  assert.equal(result.settlement.relation, "new-parent");
+  assert.equal(result.settlement.rawRelation, "followup-parent");
+  assert.equal(
+    result.settlement.relationAuthoritySource,
+    "deterministic-fast-path"
+  );
+  assert.equal(result.settlement.parentMutationAuthorized, false);
+  assert.equal(result.settlement.questionType, settlement.questionType);
+  assert.equal(result.settlement.action, settlement.action);
+  assert.equal(result.settlement.settlementId, settlement.settlementId);
+});
+
+test("does not consume a stable relation across settlement identity", () => {
+  const revised = {
+    ...unit("lqu-parent", "turn-parent-root", "Design a RAG system.", 100),
+    revision: 4,
+  };
+  const settlement = {
+    ...effective("followup-parent"),
+    logicalQuestionUnitId: revised.id,
+    revision: 3,
+  };
+  const result = consumeRevisionStableTopologyBinding({
+    settlement,
+    binding: {
+      relation: "new-parent",
+      owner: { kind: "parent-mainline", parentId: "parent-rag" },
+      source: "effective-question-source-ledger",
+      boundRevision: 1,
+    },
+    logicalQuestionUnit: revised,
+  });
+
+  assert.equal(result.consumed, false);
+  assert.equal(result.reason, "settlement-identity-mismatch");
+  assert.equal(result.settlement, settlement);
 });
 
 test("reuses the prior owner relation without treating revision as a boundary", () => {

@@ -1,6 +1,9 @@
 import type { ActiveMeetingTask } from "./active-meeting-task.js";
 import { isExplicitMeetingLogisticsTranscript } from "./meeting-logistics.js";
-import type { EffectiveCurrentQuestionSettlement } from "./current-question-settlement.js";
+import type {
+  CurrentQuestionSettlementDecision,
+  EffectiveCurrentQuestionSettlement,
+} from "./current-question-settlement.js";
 import {
   getLogicalQuestionSemanticEvidenceText,
   type LogicalQuestionUnit,
@@ -76,6 +79,69 @@ export interface RevisionStableTopologyBinding {
     | "active-child-origin"
     | "effective-question-source-ledger";
   boundRevision: number;
+}
+
+export function consumeRevisionStableTopologyBinding<
+  TSettlement extends CurrentQuestionSettlementDecision,
+>(input: {
+  settlement: TSettlement;
+  binding: RevisionStableTopologyBinding;
+  logicalQuestionUnit: LogicalQuestionUnit;
+}) {
+  const { settlement, binding, logicalQuestionUnit } = input;
+  if (
+    settlement.sessionId !== logicalQuestionUnit.sessionId ||
+    settlement.runtimeEpoch !== logicalQuestionUnit.runtimeEpoch ||
+    settlement.logicalQuestionUnitId !== logicalQuestionUnit.id ||
+    settlement.revision !== logicalQuestionUnit.revision
+  ) {
+    return {
+      settlement,
+      consumed: false,
+      reason: "settlement-identity-mismatch" as const,
+      previousRelation: settlement.relation,
+    };
+  }
+  const previousRelation = settlement.relation;
+  const projected = {
+    ...settlement,
+    relation: binding.relation,
+    relationAuthoritySource: "deterministic-fast-path" as const,
+    relationMutationAuthorized: true,
+    parentMutationAuthorized: false,
+    reasons: Array.from(
+      new Set([
+        ...settlement.reasons,
+        `revision-stable-relation:${binding.source}`,
+      ])
+    ),
+    ...(isEffectiveSettlement(settlement)
+      ? {
+          rawRelation: settlement.rawRelation,
+          effectiveParentId: binding.owner.parentId,
+          effectiveChildId:
+            binding.owner.kind === "active-child"
+              ? binding.owner.childId
+              : undefined,
+        }
+      : {}),
+  } satisfies CurrentQuestionSettlementDecision;
+  return {
+    settlement: Object.freeze(projected) as TSettlement,
+    consumed: true,
+    reason: "revision-stable-relation-consumed" as const,
+    previousRelation,
+  };
+}
+
+function isEffectiveSettlement(
+  settlement: CurrentQuestionSettlementDecision
+): settlement is EffectiveCurrentQuestionSettlement {
+  return (
+    "effective" in settlement &&
+    settlement.effective === true &&
+    "rawRelation" in settlement
+  );
 }
 
 export class EffectiveQuestionSourceLedger {
