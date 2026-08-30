@@ -735,6 +735,39 @@ export function composeScreenPlaybookPhaseInput(input: {
   };
 }
 
+export function composeScreenPlaybookPhaseAfterLifecycle(input: {
+  catalogPhase?: InterviewPlaybookPhase;
+  committedPhase?: InterviewPlaybookPhase;
+  committedProgress?: Record<string, boolean>;
+  transitionSeedPhase?: InterviewPlaybookPhase;
+  transitionSeedProgress?: Record<string, boolean>;
+  freshParentCreated: boolean;
+  currentOnly: boolean;
+  taskRuntimeTransitionCommitted: boolean;
+}) {
+  const currentState = composeScreenPlaybookPhaseInput({
+    catalogPhase: input.catalogPhase,
+    committedPhase: input.committedPhase,
+    committedProgress: input.committedProgress,
+    freshParentCreated: input.freshParentCreated,
+    currentOnly: input.currentOnly,
+  });
+  if (input.currentOnly || !input.taskRuntimeTransitionCommitted) {
+    return {
+      ...currentState,
+      reuseTransitionSeedDecision: false,
+    };
+  }
+  return {
+    currentPhase:
+      input.committedPhase ?? input.transitionSeedPhase ?? input.catalogPhase,
+    phaseProgress:
+      input.committedProgress ?? input.transitionSeedProgress,
+    freshParentCreated: input.freshParentCreated,
+    reuseTransitionSeedDecision: true,
+  };
+}
+
 export function decideInterviewerAssumptionAuthorization(input: {
   text: string;
   speaker: "me" | "them" | "unknown";

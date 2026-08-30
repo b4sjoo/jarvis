@@ -419,6 +419,7 @@ import {
   createInitialPlaybookPhaseProgress,
   decideManualNextPhaseTransition,
   decidePlaybookPhaseProgression,
+  composeScreenPlaybookPhaseAfterLifecycle,
   composeScreenPlaybookPhaseInput,
   decideInterviewerAssumptionAuthorization,
   formatInterviewerAssumptionAuthorizationForTrace,
@@ -567,6 +568,7 @@ import {
   buildSettledAdvisorExecutionPlan,
   commitTaskBoundaryCandidate,
   commitSourceOwnedTransition,
+  didSourceOwnedTransitionCommitFreshParent,
   createCurrentQuestionSourceSettlementId,
   createTaskBoundaryCandidate,
   createProvisionalCurrentQuestion,
@@ -27937,12 +27939,18 @@ export function useMeetingAssistant() {
               screenSourcePacket.sourceOperationAuthority
                 .boundVoicePrimaryAsk,
           });
-        const screenFreshParentCreated = Boolean(
+        const committedScreenQuestionSettlement =
+          screenCurrentQuestionSettlement;
+        const screenTransitionMutationAuthorized =
+          settlementAuthorizesTaskTransition(
+            committedScreenQuestionSettlement
+          );
+        const screenFreshParentMutationRequested = Boolean(
           provisionalScreenTaskRelation === "new-parent" &&
             screenCurrentQuestionSettlement?.parentMutationAuthorized ===
               true
         );
-        const screenPhaseInput = composeScreenPlaybookPhaseInput({
+        const screenTransitionSeedPhaseInput = composeScreenPlaybookPhaseInput({
           catalogPhase: screenPlaybook?.phase,
           committedPhase:
             preflightContextState.activeMeetingTask?.parent.playbookPhase ??
@@ -27950,88 +27958,35 @@ export function useMeetingAssistant() {
           committedProgress:
             preflightContextState.activeMeetingTask?.parent.phaseProgress ??
             preflightContextState.taskRuntime.parent?.phaseProgress,
-          freshParentCreated: screenFreshParentCreated,
+          freshParentCreated: screenFreshParentMutationRequested,
           currentOnly: screenCurrentOnly,
         });
-        const screenPhaseDecision = decidePlaybookPhaseProgression({
-          questionType: normalizeQuestionTypeAlias(
-            settledScreenQuestionType
-          ),
-          playbookId: screenPlaybook?.id,
-          currentPhase: screenPhaseInput.currentPhase,
-          phaseProgress: screenPhaseInput.phaseProgress,
-          latestTurnText: screenQuestionOwnedByVoice
-            ? screenPrimaryAskEvidenceText
-            : "",
-          currentQuestion: screenPrimaryAskEvidenceText,
-          relation: provisionalScreenTaskRelation,
-          subtaskIntent: screenSubtaskIntent,
-          askFrame: screenPreflight?.askFrame ?? screenMemoryAskFrame,
-          freshParentCreated: screenPhaseInput.freshParentCreated,
-        });
-        const screenRuntimePlaybook =
+        const screenTransitionSeedPhaseDecision =
+          decidePlaybookPhaseProgression({
+            questionType: normalizeQuestionTypeAlias(
+              settledScreenQuestionType
+            ),
+            playbookId: screenPlaybook?.id,
+            currentPhase: screenTransitionSeedPhaseInput.currentPhase,
+            phaseProgress: screenTransitionSeedPhaseInput.phaseProgress,
+            latestTurnText: screenQuestionOwnedByVoice
+              ? screenPrimaryAskEvidenceText
+              : "",
+            currentQuestion: screenPrimaryAskEvidenceText,
+            relation: provisionalScreenTaskRelation,
+            subtaskIntent: screenSubtaskIntent,
+            askFrame: screenPreflight?.askFrame ?? screenMemoryAskFrame,
+            freshParentCreated:
+              screenTransitionSeedPhaseInput.freshParentCreated,
+          });
+        const screenTransitionSeedPlaybook =
           provisionalScreenTaskRelation === "child-probe"
             ? screenPlaybook
             : withInterviewPlaybookPhase(
                 screenPlaybook,
-                screenPhaseDecision.phase
+                screenTransitionSeedPhaseDecision.phase
               );
-        screenPersonalizedGuidance =
-          resolvePreparationPersonalizedGuidance(
-            preparationRuntimeContextRef.current,
-            {
-              questionType: settledScreenQuestionType,
-              taskRelation: provisionalScreenTaskRelation,
-              playbookId: screenRuntimePlaybook?.id,
-              playbookPhase: screenPhaseDecision.phase,
-              projectAnchor: screenPreflight?.projectAnchor,
-              query: screenPrimaryAskEvidenceText,
-            }
-          );
-        const screenPlaybookMetadata =
-          formatInterviewPlaybookForTrace(screenRuntimePlaybook);
-        traceStoreRef.current.updateMetadata(trace.id, {
-          downstreamQuestionTypeAuthority: "committed-settlement",
-          responsePlaybookId: screenRuntimePlaybook?.id,
-          responsePlaybookQuestionType:
-            screenRuntimePlaybook?.questionType,
-          responsePlaybookPhase: screenRuntimePlaybook?.phase,
-          parentTrajectoryPlaybookId:
-            provisionalScreenTaskRelation === "child-probe"
-              ? preflightContextState.activeMeetingTask?.parent.playbook?.id
-              : undefined,
-          parentTrajectoryPlaybookPhase:
-            provisionalScreenTaskRelation === "child-probe"
-              ? preflightContextState.activeMeetingTask?.parent.playbookPhase
-              : undefined,
-          ...screenPlaybookMetadata,
-          ...formatPlaybookPhaseDecisionForTrace(screenPhaseDecision),
-        });
-        if (screenRuntimePlaybook) {
-          const playbookStepId = traceStoreRef.current.startStep(
-            trace.id,
-            "Interview playbook selected",
-            {
-              ...screenPlaybookMetadata,
-              ...formatPlaybookPhaseDecisionForTrace(screenPhaseDecision),
-            }
-          );
-          traceStoreRef.current.finishStep(trace.id, playbookStepId, "success");
-        }
-        sessionRecordingManagerRef.current?.recordPlaybookSelection(
-          trace.id,
-          {
-            ...screenPlaybookMetadata,
-            ...formatPlaybookPhaseDecisionForTrace(screenPhaseDecision),
-          }
-        );
-
-        const committedScreenQuestionSettlement =
-          screenCurrentQuestionSettlement;
-        const screenTransitionMutationAuthorized =
-          settlementAuthorizesTaskTransition(
-            committedScreenQuestionSettlement
-          );
+        let screenTaskRuntimeTransitionCommitted = false;
         const screenTransitionCandidate =
           screenCurrentOnly ||
           !screenTransitionMutationAuthorized
@@ -28059,8 +28014,8 @@ export function useMeetingAssistant() {
               screenPrimaryAskEvidenceText,
             subtaskIntent: screenSubtaskIntent,
             questionInstanceId: observation.id,
-            playbook: screenRuntimePlaybook,
-            phaseDecision: screenPhaseDecision,
+            playbook: screenTransitionSeedPlaybook,
+            phaseDecision: screenTransitionSeedPhaseDecision,
             expiresAt: getActiveScreenTaskExpiresAt(state.settings),
           });
         if (screenTransitionCandidate) {
@@ -28105,62 +28060,186 @@ export function useMeetingAssistant() {
             screenTransitionCommitted &&
             screenSourceOwnedTransitionResult.mutationApplied
           ) {
-            submitTaskRuntimeTransition(contextManagerRef.current, {
-              operationId:
-                committedScreenQuestionSettlement?.operationId,
-              transition: mapSourceOwnedRuntimeTransition({
-                kind: screenTransitionCandidate.kind,
-                before: screenTransitionParentBefore,
-              }),
-              reason: "screen-source-transition-committed",
-              screenAttachment:
-                screenTransitionCandidate.kind === "new-parent" ||
-                screenTransitionCandidate.kind === "reseed-parent"
-                  ? null
-                  : preflightContextState.taskRuntime.screenAttachment,
-              parent: screenSourceOwnedTransitionResult.task ?? null,
-            });
-            recordCommittedPlaybookPhaseTransition({
-              operationId:
-                committedScreenQuestionSettlement?.operationId ??
-                screenSourceOwnedTransitionResult.candidate.id,
-              source: "automatic",
-              before: screenTransitionParentBefore,
-              after: screenSourceOwnedTransitionResult.task,
-              traceId: trace.id,
-            });
-            screenRuntimeToken = rebaseRuntimeCommitToken({
-              token: screenRuntimeToken,
-              snapshot: readRuntimeCommitSnapshot(),
-            });
-            const committedScreenContext =
-              contextManagerRef.current.getState();
-            setState((previous) => ({
-              ...previous,
-              taskRuntime: committedScreenContext.taskRuntime,
-              activeMeetingTask:
-                committedScreenContext.activeMeetingTask,
-            }));
+            const screenTaskRuntimeTransitionResult =
+              submitTaskRuntimeTransition(contextManagerRef.current, {
+                operationId:
+                  committedScreenQuestionSettlement?.operationId,
+                transition: mapSourceOwnedRuntimeTransition({
+                  kind: screenTransitionCandidate.kind,
+                  before: screenTransitionParentBefore,
+                }),
+                reason: "screen-source-transition-committed",
+                screenAttachment:
+                  screenTransitionCandidate.kind === "new-parent" ||
+                  screenTransitionCandidate.kind === "reseed-parent"
+                    ? null
+                    : preflightContextState.taskRuntime.screenAttachment,
+                parent: screenSourceOwnedTransitionResult.task ?? null,
+              });
+            screenTaskRuntimeTransitionCommitted = Boolean(
+              screenTaskRuntimeTransitionResult.authorized &&
+                screenTaskRuntimeTransitionResult.mutationApplied
+            );
             traceStoreRef.current.updateMetadata(trace.id, {
-              runtimeCommitTokenRebased: true,
-              runtimeCommitTokenRebaseReason:
-                "source-owned-screen-transition-committed-before-model",
-              currentQuestionSettlementAppliedToParent: true,
-              taskRelationAdjudicationAppliedToParent:
-                committedScreenQuestionSettlement?.relationAuthoritySource ===
-                "runtime-adjudication",
-              ...getActiveMeetingTaskTraceMetadata(
-                committedScreenContext.activeMeetingTask
-              ),
+              screenTaskRuntimeTransitionCommitted,
+              screenTaskRuntimeTransitionReason:
+                screenTaskRuntimeTransitionResult.reason,
             });
-            if (committedScreenContext.activeMeetingTask) {
-              sessionRecordingManagerRef.current?.recordActiveMeetingTaskSnapshot(
-                committedScreenContext.activeMeetingTask,
-                trace.id
-              );
+            if (screenTaskRuntimeTransitionCommitted) {
+              recordCommittedPlaybookPhaseTransition({
+                operationId:
+                  committedScreenQuestionSettlement?.operationId ??
+                  screenSourceOwnedTransitionResult.candidate.id,
+                source: "automatic",
+                before: screenTransitionParentBefore,
+                after: screenSourceOwnedTransitionResult.task,
+                traceId: trace.id,
+              });
+              screenRuntimeToken = rebaseRuntimeCommitToken({
+                token: screenRuntimeToken,
+                snapshot: readRuntimeCommitSnapshot(),
+              });
+              const committedScreenContext =
+                contextManagerRef.current.getState();
+              setState((previous) => ({
+                ...previous,
+                taskRuntime: committedScreenContext.taskRuntime,
+                activeMeetingTask:
+                  committedScreenContext.activeMeetingTask,
+              }));
+              traceStoreRef.current.updateMetadata(trace.id, {
+                runtimeCommitTokenRebased: true,
+                runtimeCommitTokenRebaseReason:
+                  "source-owned-screen-transition-committed-before-model",
+                currentQuestionSettlementAppliedToParent: true,
+                taskRelationAdjudicationAppliedToParent:
+                  committedScreenQuestionSettlement?.relationAuthoritySource ===
+                  "runtime-adjudication",
+                ...getActiveMeetingTaskTraceMetadata(
+                  committedScreenContext.activeMeetingTask
+                ),
+              });
+              if (committedScreenContext.activeMeetingTask) {
+                sessionRecordingManagerRef.current?.recordActiveMeetingTaskSnapshot(
+                  committedScreenContext.activeMeetingTask,
+                  trace.id
+                );
+              }
             }
           }
         }
+        const screenPostTransitionContextState =
+          contextManagerRef.current.getState();
+        const screenFreshParentCreated =
+          didSourceOwnedTransitionCommitFreshParent({
+            sourceTransitionResult: screenSourceOwnedTransitionResult,
+            taskRuntimeMutationCommitted:
+              screenTaskRuntimeTransitionCommitted,
+          });
+        const screenCommittedParentPhase =
+          screenPostTransitionContextState.activeMeetingTask?.parent
+            .playbookPhase ??
+          screenPostTransitionContextState.taskRuntime.parent?.playbookPhase;
+        const screenCommittedParentProgress =
+          screenPostTransitionContextState.activeMeetingTask?.parent
+            .phaseProgress ??
+          screenPostTransitionContextState.taskRuntime.parent?.phaseProgress;
+        const screenPhaseInput = composeScreenPlaybookPhaseAfterLifecycle({
+          catalogPhase: screenPlaybook?.phase,
+          committedPhase: screenCommittedParentPhase,
+          committedProgress: screenCommittedParentProgress,
+          transitionSeedPhase:
+            screenTransitionSeedPhaseInput.currentPhase,
+          transitionSeedProgress:
+            screenTransitionSeedPhaseInput.phaseProgress,
+          freshParentCreated: screenFreshParentCreated,
+          currentOnly: screenCurrentOnly,
+          taskRuntimeTransitionCommitted:
+            screenTaskRuntimeTransitionCommitted,
+        });
+        const screenPhaseDecision =
+          screenPhaseInput.reuseTransitionSeedDecision
+            ? {
+                ...screenTransitionSeedPhaseDecision,
+                phase:
+                  screenPhaseInput.currentPhase ??
+                  screenTransitionSeedPhaseDecision.phase,
+                freshParentCreated: screenFreshParentCreated,
+              }
+            : decidePlaybookPhaseProgression({
+                questionType: normalizeQuestionTypeAlias(
+                  settledScreenQuestionType
+                ),
+                playbookId: screenPlaybook?.id,
+                currentPhase: screenPhaseInput.currentPhase,
+                phaseProgress: screenPhaseInput.phaseProgress,
+                latestTurnText: screenQuestionOwnedByVoice
+                  ? screenPrimaryAskEvidenceText
+                  : "",
+                currentQuestion: screenPrimaryAskEvidenceText,
+                relation: provisionalScreenTaskRelation,
+                subtaskIntent: screenSubtaskIntent,
+                askFrame: screenPreflight?.askFrame ?? screenMemoryAskFrame,
+                freshParentCreated: screenPhaseInput.freshParentCreated,
+              });
+        const screenRuntimePlaybook =
+          provisionalScreenTaskRelation === "child-probe"
+            ? screenPlaybook
+            : withInterviewPlaybookPhase(
+                screenPlaybook,
+                screenPhaseDecision.phase
+              );
+        screenPersonalizedGuidance =
+          resolvePreparationPersonalizedGuidance(
+            preparationRuntimeContextRef.current,
+            {
+              questionType: settledScreenQuestionType,
+              taskRelation: provisionalScreenTaskRelation,
+              playbookId: screenRuntimePlaybook?.id,
+              playbookPhase: screenPhaseDecision.phase,
+              projectAnchor: screenPreflight?.projectAnchor,
+              query: screenPrimaryAskEvidenceText,
+            }
+          );
+        const screenPlaybookMetadata =
+          formatInterviewPlaybookForTrace(screenRuntimePlaybook);
+        traceStoreRef.current.updateMetadata(trace.id, {
+          downstreamQuestionTypeAuthority: "committed-settlement",
+          responsePlaybookId: screenRuntimePlaybook?.id,
+          responsePlaybookQuestionType:
+            screenRuntimePlaybook?.questionType,
+          responsePlaybookPhase: screenRuntimePlaybook?.phase,
+          parentTrajectoryPlaybookId:
+            provisionalScreenTaskRelation === "child-probe"
+              ? screenPostTransitionContextState.activeMeetingTask?.parent
+                  .playbook?.id
+              : undefined,
+          parentTrajectoryPlaybookPhase:
+            provisionalScreenTaskRelation === "child-probe"
+              ? screenPostTransitionContextState.activeMeetingTask?.parent
+                  .playbookPhase
+              : undefined,
+          ...screenPlaybookMetadata,
+          ...formatPlaybookPhaseDecisionForTrace(screenPhaseDecision),
+        });
+        if (screenRuntimePlaybook) {
+          const playbookStepId = traceStoreRef.current.startStep(
+            trace.id,
+            "Interview playbook selected",
+            {
+              ...screenPlaybookMetadata,
+              ...formatPlaybookPhaseDecisionForTrace(screenPhaseDecision),
+            }
+          );
+          traceStoreRef.current.finishStep(trace.id, playbookStepId, "success");
+        }
+        sessionRecordingManagerRef.current?.recordPlaybookSelection(
+          trace.id,
+          {
+            ...screenPlaybookMetadata,
+            ...formatPlaybookPhaseDecisionForTrace(screenPhaseDecision),
+          }
+        );
         const screenSourceTransitionCommittedBeforeModel =
           screenSourceOwnedTransitionResult?.candidate.state ===
           "committed";

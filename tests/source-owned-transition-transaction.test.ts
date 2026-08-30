@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { MeetingContextManager } from "../src/lib/meeting/context-manager.js";
 import {
   commitSourceOwnedTransition,
   createSourceOwnedTransitionCandidate,
+  didSourceOwnedTransitionCommitFreshParent,
   sourceOwnedTransitionSurvivesModelOutcome,
 } from "../src/lib/meeting/source-owned-transition-transaction.js";
 import {
+  composeScreenPlaybookPhaseAfterLifecycle,
   decideInterviewerAssumptionAuthorization,
   decidePlaybookPhaseProgression,
 } from "../src/lib/meeting/playbook-phase.js";
@@ -597,6 +600,74 @@ test("creates a screen parent before its model produces an answer", () => {
   assert.equal(result.task?.latestUsefulAnswer, undefined);
   assert.equal(result.task?.admission?.durability, "durable");
   assert.equal(result.task?.admission?.action, "create-parent");
+  const committedRuntime = new MeetingContextManager();
+  const committedRuntimeResult = committedRuntime.commitTaskRuntimeTransition({
+    id: "screen-parent-create",
+    transition: "create-parent",
+    reason: "screen-source-transition-committed",
+    expectedRevision: committedRuntime.getTaskRuntimeState().revision,
+    parent: result.task,
+  });
+  const committedReceipt = didSourceOwnedTransitionCommitFreshParent({
+    sourceTransitionResult: result,
+    taskRuntimeMutationCommitted: Boolean(
+      committedRuntimeResult.authorized &&
+        committedRuntimeResult.mutationApplied
+    ),
+  });
+  assert.equal(committedReceipt, true);
+  assert.deepEqual(
+    composeScreenPlaybookPhaseAfterLifecycle({
+      catalogPhase: "requirement_clarification",
+      committedPhase: result.task?.playbookPhase,
+      committedProgress: result.task?.phaseProgress,
+      transitionSeedPhase: "requirement_clarification",
+      freshParentCreated: committedReceipt,
+      currentOnly: false,
+      taskRuntimeTransitionCommitted: true,
+    }),
+    {
+      currentPhase: "requirement_clarification",
+      phaseProgress: result.task?.phaseProgress,
+      freshParentCreated: true,
+      reuseTransitionSeedDecision: true,
+    }
+  );
+  const rejectedRuntime = new MeetingContextManager();
+  const rejectedRuntimeResult = rejectedRuntime.commitTaskRuntimeTransition({
+    id: "screen-parent-create-stale",
+    transition: "create-parent",
+    reason: "screen-source-transition-committed",
+    expectedRevision: rejectedRuntime.getTaskRuntimeState().revision + 1,
+    parent: result.task,
+  });
+  assert.equal(rejectedRuntimeResult.authorized, false);
+  const rejectedDurableReceipt =
+    didSourceOwnedTransitionCommitFreshParent({
+      sourceTransitionResult: result,
+      taskRuntimeMutationCommitted: Boolean(
+        rejectedRuntimeResult.authorized &&
+          rejectedRuntimeResult.mutationApplied
+      ),
+    });
+  assert.equal(rejectedDurableReceipt, false);
+  assert.deepEqual(
+    composeScreenPlaybookPhaseAfterLifecycle({
+      catalogPhase: "requirement_clarification",
+      committedPhase: "implementation_validation",
+      committedProgress: { implementation_validation: true },
+      transitionSeedPhase: "requirement_clarification",
+      freshParentCreated: rejectedDurableReceipt,
+      currentOnly: false,
+      taskRuntimeTransitionCommitted: false,
+    }),
+    {
+      currentPhase: "implementation_validation",
+      phaseProgress: { implementation_validation: true },
+      freshParentCreated: false,
+      reuseTransitionSeedDecision: false,
+    }
+  );
   assert.equal(
     sourceOwnedTransitionSurvivesModelOutcome(result, "empty-output"),
     true
@@ -678,6 +749,13 @@ test("reseeds a provisional parent and invalidates stale project state atomicall
   assert.equal(result.task?.playbookPhase, "project_narrative");
   assert.equal(result.task?.admission?.action, "reseed-parent");
   assert.equal(result.task?.revisions, parent.revisions + 1);
+  assert.equal(
+    didSourceOwnedTransitionCommitFreshParent({
+      sourceTransitionResult: result,
+      taskRuntimeMutationCommitted: true,
+    }),
+    true
+  );
 });
 
 test("keeps a screen child committed when the model is cancelled", () => {
@@ -836,6 +914,13 @@ test("does not recreate a screen parent for the same observation", () => {
   assert.equal(repeated.mutationApplied, false);
   assert.equal(repeated.reason, "already-applied");
   assert.equal(repeated.task?.id, first.task.id);
+  assert.equal(
+    didSourceOwnedTransitionCommitFreshParent({
+      sourceTransitionResult: repeated,
+      taskRuntimeMutationCommitted: true,
+    }),
+    false
+  );
 });
 
 test("rejects an unknown screen new parent", () => {

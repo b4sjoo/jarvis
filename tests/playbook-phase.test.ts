@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   applyPlaybookPhaseDecisionToProgress,
+  composeScreenPlaybookPhaseAfterLifecycle,
   composeScreenPlaybookPhaseInput,
   decideInterviewerAssumptionAuthorization,
   decideManualNextPhaseTransition,
@@ -583,6 +584,60 @@ test("composes Screen phase from lifecycle authority instead of topology relatio
     currentPhase: "baseline_reasoning",
     phaseProgress: undefined,
     freshParentCreated: true,
+  });
+
+  const currentOnly = composeScreenPlaybookPhaseInput({
+    catalogPhase: "requirement_clarification",
+    committedPhase: "implementation_validation",
+    committedProgress: { implementation_validation: true },
+    freshParentCreated: false,
+    currentOnly: true,
+  });
+  assert.deepEqual(currentOnly, {
+    currentPhase: "requirement_clarification",
+    phaseProgress: undefined,
+    freshParentCreated: false,
+  });
+});
+
+test("reuses a committed Screen transition decision without advancing twice", () => {
+  const committed = composeScreenPlaybookPhaseAfterLifecycle({
+    catalogPhase: "requirement_clarification",
+    committedPhase: "design_framing",
+    committedProgress: {
+      requirement_clarification: true,
+      requirements: true,
+    },
+    transitionSeedPhase: "requirement_clarification",
+    transitionSeedProgress: { requirement_clarification: true },
+    freshParentCreated: false,
+    currentOnly: false,
+    taskRuntimeTransitionCommitted: true,
+  });
+  assert.deepEqual(committed, {
+    currentPhase: "design_framing",
+    phaseProgress: {
+      requirement_clarification: true,
+      requirements: true,
+    },
+    freshParentCreated: false,
+    reuseTransitionSeedDecision: true,
+  });
+
+  const currentOnly = composeScreenPlaybookPhaseAfterLifecycle({
+    catalogPhase: "requirement_clarification",
+    committedPhase: "implementation_validation",
+    committedProgress: { implementation_validation: true },
+    transitionSeedPhase: "implementation_validation",
+    freshParentCreated: false,
+    currentOnly: true,
+    taskRuntimeTransitionCommitted: false,
+  });
+  assert.deepEqual(currentOnly, {
+    currentPhase: "requirement_clarification",
+    phaseProgress: undefined,
+    freshParentCreated: false,
+    reuseTransitionSeedDecision: false,
   });
 });
 

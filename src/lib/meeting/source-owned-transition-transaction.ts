@@ -113,6 +113,22 @@ export interface SourceOwnedTransitionCommitResult {
   progressAfter: Record<string, boolean>;
 }
 
+export function didSourceOwnedTransitionCommitFreshParent(
+  input: {
+    sourceTransitionResult: SourceOwnedTransitionCommitResult | undefined;
+    taskRuntimeMutationCommitted: boolean;
+  }
+) {
+  const result = input.sourceTransitionResult;
+  return Boolean(
+    input.taskRuntimeMutationCommitted &&
+    result?.candidate.state === "committed" &&
+      result.mutationApplied &&
+      (result.candidate.kind === "new-parent" ||
+        result.candidate.kind === "reseed-parent")
+  );
+}
+
 export function createSourceOwnedTransitionCandidate(
   input: CreateSourceOwnedTransitionCandidateInput
 ): SourceOwnedTransitionCandidate | undefined {
