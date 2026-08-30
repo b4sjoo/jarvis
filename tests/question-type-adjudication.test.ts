@@ -4,6 +4,7 @@ import type { LogicalQuestionUnit } from "../src/lib/meeting/logical-question-un
 import {
   QUESTION_TYPE_ENFORCEMENT_WAIT_BUDGET_MS,
   SCREEN_FIELD_KNOWLEDGE_REVIEW_WAIT_BUDGET_MS,
+  VOICE_FIRST_PARENT_QUESTION_TYPE_WAIT_BUDGET_MS,
   QuestionTypeAdjudicationCandidateCache,
   buildQuestionTypeAdjudicationCacheKey,
   buildQuestionTypeAdjudicationPrompts,
@@ -14,6 +15,7 @@ import {
   decideQuestionTypeEnforcement,
   normalizeQuestionTypeAdjudicationMode,
   parseQuestionTypeAdjudicationOutput,
+  resolveVoiceQuestionTypeForegroundBudget,
 } from "../src/lib/meeting/question-type-adjudication.js";
 import {
   createProvisionalCurrentQuestion,
@@ -467,6 +469,42 @@ test("requires automatic Screen Field Knowledge review even when broad adjudicat
   });
   assert.equal(manual.executionMode, "shadow-observation");
   assert.equal(manual.reason, "manual-correction-shadow-observation");
+});
+
+test("gives only the first Voice parent a four-second type foreground window", () => {
+  assert.deepEqual(
+    resolveVoiceQuestionTypeForegroundBudget({
+      enforcementWindowRequested: true,
+      scheduledWaitBudgetMs: QUESTION_TYPE_ENFORCEMENT_WAIT_BUDGET_MS,
+      hasActiveParent: false,
+    }),
+    {
+      waitBudgetMs: VOICE_FIRST_PARENT_QUESTION_TYPE_WAIT_BUDGET_MS,
+      firstParentBudgetApplied: true,
+    }
+  );
+  assert.deepEqual(
+    resolveVoiceQuestionTypeForegroundBudget({
+      enforcementWindowRequested: true,
+      scheduledWaitBudgetMs: QUESTION_TYPE_ENFORCEMENT_WAIT_BUDGET_MS,
+      hasActiveParent: true,
+    }),
+    {
+      waitBudgetMs: QUESTION_TYPE_ENFORCEMENT_WAIT_BUDGET_MS,
+      firstParentBudgetApplied: false,
+    }
+  );
+  assert.deepEqual(
+    resolveVoiceQuestionTypeForegroundBudget({
+      enforcementWindowRequested: false,
+      scheduledWaitBudgetMs: QUESTION_TYPE_ENFORCEMENT_WAIT_BUDGET_MS,
+      hasActiveParent: false,
+    }),
+    {
+      waitBudgetMs: 0,
+      firstParentBudgetApplied: false,
+    }
+  );
 });
 
 test("strictly parses grounded type output and rejects broader authority", () => {

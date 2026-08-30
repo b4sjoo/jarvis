@@ -25,8 +25,42 @@ export const QUESTION_TYPE_ADJUDICATION_PROMPT_VERSION =
   "question-type-adjudication-v5";
 export const QUESTION_TYPE_ADJUDICATION_MAX_OUTPUT_CHARS = 2_048;
 export const QUESTION_TYPE_ENFORCEMENT_WAIT_BUDGET_MS = 2_000;
+export const VOICE_FIRST_PARENT_QUESTION_TYPE_WAIT_BUDGET_MS = 4_000;
 export const SCREEN_FIELD_KNOWLEDGE_REVIEW_WAIT_BUDGET_MS = 5_500;
 export const SCREEN_FIELD_KNOWLEDGE_REVIEW_PROVIDER_TIMEOUT_MS = 6_000;
+
+export interface VoiceQuestionTypeForegroundBudgetDecision {
+  waitBudgetMs: number;
+  firstParentBudgetApplied: boolean;
+}
+
+export function resolveVoiceQuestionTypeForegroundBudget(input: {
+  enforcementWindowRequested: boolean;
+  scheduledWaitBudgetMs: number;
+  hasActiveParent: boolean;
+}): VoiceQuestionTypeForegroundBudgetDecision {
+  if (!input.enforcementWindowRequested) {
+    return {
+      waitBudgetMs: 0,
+      firstParentBudgetApplied: false,
+    };
+  }
+
+  if (input.hasActiveParent) {
+    return {
+      waitBudgetMs: input.scheduledWaitBudgetMs,
+      firstParentBudgetApplied: false,
+    };
+  }
+
+  return {
+    waitBudgetMs: Math.max(
+      input.scheduledWaitBudgetMs,
+      VOICE_FIRST_PARENT_QUESTION_TYPE_WAIT_BUDGET_MS
+    ),
+    firstParentBudgetApplied: true,
+  };
+}
 
 export interface QuestionTypeAdjudicationRequest {
   schemaVersion: 1;

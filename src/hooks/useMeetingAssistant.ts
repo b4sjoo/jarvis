@@ -526,6 +526,7 @@ import {
   QUESTION_TYPE_ENFORCEMENT_WAIT_BUDGET_MS,
   SCREEN_FIELD_KNOWLEDGE_REVIEW_PROVIDER_TIMEOUT_MS,
   SCREEN_FIELD_KNOWLEDGE_REVIEW_WAIT_BUDGET_MS,
+  resolveVoiceQuestionTypeForegroundBudget,
   buildQuestionTypeAdjudicationPrompts,
   buildQuestionTypeAdjudicationRequest,
   buildQuestionTypeAdjudicationCacheKey,
@@ -21529,9 +21530,14 @@ export function useMeetingAssistant() {
       const relationWindowRequested = Boolean(
         taskRelationHandle?.releaseWindowRequested
       );
-      const questionTypeWaitBudgetMs = questionTypeWindowRequested
-        ? questionTypeHandle?.waitBudgetMs ?? 0
-        : 0;
+      const questionTypeBudget = resolveVoiceQuestionTypeForegroundBudget({
+        enforcementWindowRequested: questionTypeWindowRequested,
+        scheduledWaitBudgetMs: questionTypeHandle?.waitBudgetMs ?? 0,
+        hasActiveParent: Boolean(
+          contextManagerRef.current.getState().activeMeetingTask?.parent
+        ),
+      });
+      const questionTypeWaitBudgetMs = questionTypeBudget.waitBudgetMs;
       const foregroundWaitBudgetMs = Math.max(
         questionTypeWaitBudgetMs,
         relationWindowRequested
@@ -21917,6 +21923,8 @@ export function useMeetingAssistant() {
         questionTypeAdjudicationWaitStartedAt: waitStartedAt,
         questionTypeAdjudicationWaitBudgetMs:
           questionTypeWaitBudgetMs,
+        questionTypeAdjudicationFirstParentBudgetApplied:
+          questionTypeBudget.firstParentBudgetApplied,
         questionTypeAdjudicationWaitDisposition: "pending",
       });
       let settledTypeOutcome:
