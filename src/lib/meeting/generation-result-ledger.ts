@@ -142,6 +142,19 @@ export interface GenerationResultProjection {
   updatedAt?: number;
 }
 
+export function authorizePostModelTaskRuntimeTransition(
+  transition: string | undefined
+) {
+  const authorized =
+    transition === undefined || transition === "update-parent-context";
+  return {
+    authorized,
+    reason: authorized
+      ? "same-owner-context-only"
+      : `post-model-topology-mutation:${transition}`,
+  };
+}
+
 export type GenerationDerivedCommitReason = string;
 
 export interface GenerationDerivedCommitResult<T> {

@@ -7,6 +7,7 @@ import type {
 } from "../src/lib/meeting/answer-generation-lease.js";
 import { authorizeAnswerGenerationLease } from "../src/lib/meeting/answer-generation-lease.js";
 import {
+  authorizePostModelTaskRuntimeTransition,
   buildGenerationAuthorizationRejection,
   GenerationDerivedCommitCoordinator,
   GenerationResultLedger,
@@ -87,6 +88,33 @@ function outcome(
     ...overrides,
   };
 }
+
+test("allows only same-owner context updates after model execution", () => {
+  assert.deepEqual(authorizePostModelTaskRuntimeTransition(undefined), {
+    authorized: true,
+    reason: "same-owner-context-only",
+  });
+  assert.deepEqual(
+    authorizePostModelTaskRuntimeTransition("update-parent-context"),
+    {
+      authorized: true,
+      reason: "same-owner-context-only",
+    }
+  );
+  for (const transition of [
+    "create-parent",
+    "replace-parent",
+    "attach-child",
+    "resume-parent",
+    "advance-phase",
+    "update-source-attachment",
+  ] as const) {
+    assert.deepEqual(authorizePostModelTaskRuntimeTransition(transition), {
+      authorized: false,
+      reason: `post-model-topology-mutation:${transition}`,
+    });
+  }
+});
 
 test("stores bounded safe generation attempts without model text", () => {
   const ledger = new GenerationResultLedger(2);

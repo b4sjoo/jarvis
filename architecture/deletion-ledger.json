@@ -87,7 +87,13 @@
       ],
       "deletionGate": "All Voice and Screen product consumers read one canonical durable lifecycle receipt; raw Source-owned candidate state is diagnostic only; post-model topology mutation count is zero.",
       "rollbackBoundary": "Characterization, shared durable transaction, consumer migration, and intermediate-authority deletion remain independent commits.",
-      "status": "candidate"
+      "status": "deleted",
+      "forbiddenPatterns": [
+        "commitSourceOwnedTransition(",
+        "screenSourceTransitionCommittedBeforeModel",
+        "screenCandidateStartedNewParent",
+        "phase-screen-"
+      ]
     },
     {
       "id": "direct-native-exit-without-runtime-drain",

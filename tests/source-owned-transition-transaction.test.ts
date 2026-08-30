@@ -1,14 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { MeetingContextManager } from "../src/lib/meeting/context-manager.js";
 import {
-  commitSourceOwnedTransition,
+  prepareSourceOwnedTransition,
   createSourceOwnedTransitionCandidate,
-  didSourceOwnedTransitionCommitFreshParent,
   sourceOwnedTransitionSurvivesModelOutcome,
 } from "../src/lib/meeting/source-owned-transition-transaction.js";
 import {
-  composeScreenPlaybookPhaseAfterLifecycle,
   decideInterviewerAssumptionAuthorization,
   decidePlaybookPhaseProgression,
 } from "../src/lib/meeting/playbook-phase.js";
@@ -39,7 +36,7 @@ test("commits a child before output and preserves parent artifacts", () => {
   });
   assert.ok(candidate);
 
-  const result = commitSourceOwnedTransition({
+  const result = prepareSourceOwnedTransition({
     candidate,
     currentTask: parent,
     currentSessionId: "session-a",
@@ -109,7 +106,7 @@ test("preserves active child identity for a settled same-branch follow-up", () =
   });
   assert.ok(candidate);
 
-  const result = commitSourceOwnedTransition({
+  const result = prepareSourceOwnedTransition({
     candidate,
     currentTask: parent,
     currentSessionId: "session-a",
@@ -165,7 +162,7 @@ test("rejects child preservation after the effective owner changes", () => {
   });
   assert.ok(candidate);
 
-  const result = commitSourceOwnedTransition({
+  const result = prepareSourceOwnedTransition({
     candidate,
     currentTask: parent,
     currentSessionId: "session-a",
@@ -208,7 +205,7 @@ test("resumes a parent without restarting its phase", () => {
   });
   assert.ok(candidate);
 
-  const result = commitSourceOwnedTransition({
+  const result = prepareSourceOwnedTransition({
     candidate,
     currentTask: parent,
     currentSessionId: "session-a",
@@ -246,7 +243,7 @@ test("attaches a Field Knowledge detour to General SD and resumes the same paren
     now: 100,
   });
   assert.ok(childCandidate);
-  const withChild = commitSourceOwnedTransition({
+  const withChild = prepareSourceOwnedTransition({
     candidate: childCandidate,
     currentTask: parent,
     currentSessionId: "session-a",
@@ -274,7 +271,7 @@ test("attaches a Field Knowledge detour to General SD and resumes the same paren
     now: 120,
   });
   assert.ok(resumeCandidate);
-  const resumed = commitSourceOwnedTransition({
+  const resumed = prepareSourceOwnedTransition({
     candidate: resumeCandidate,
     currentTask: withChild.task,
     currentSessionId: "session-a",
@@ -332,7 +329,7 @@ test("resumes a child from its bounded parent capsule", () => {
     now: 100,
   });
   assert.ok(childCandidate);
-  const childResult = commitSourceOwnedTransition({
+  const childResult = prepareSourceOwnedTransition({
     candidate: childCandidate,
     currentTask: parent,
     currentSessionId: "session-a",
@@ -368,7 +365,7 @@ test("resumes a child from its bounded parent capsule", () => {
     now: 120,
   });
   assert.ok(resumeCandidate);
-  const resumed = commitSourceOwnedTransition({
+  const resumed = prepareSourceOwnedTransition({
     candidate: resumeCandidate,
     currentTask: withChildMutation,
     currentSessionId: "session-a",
@@ -416,7 +413,7 @@ test("rejects parent resume after the project binding changes", () => {
     now: 100,
   });
   assert.ok(childCandidate);
-  const childResult = commitSourceOwnedTransition({
+  const childResult = prepareSourceOwnedTransition({
     candidate: childCandidate,
     currentTask: parent,
     currentSessionId: "session-a",
@@ -447,7 +444,7 @@ test("rejects parent resume after the project binding changes", () => {
     now: 120,
   });
   assert.ok(resumeCandidate);
-  const resumed = commitSourceOwnedTransition({
+  const resumed = prepareSourceOwnedTransition({
     candidate: resumeCandidate,
     currentTask: rebound,
     currentSessionId: "session-a",
@@ -496,7 +493,7 @@ test("commits source-supported phase progress before model output", () => {
   });
   assert.ok(candidate);
 
-  const result = commitSourceOwnedTransition({
+  const result = prepareSourceOwnedTransition({
     candidate,
     currentTask: parent,
     currentSessionId: "session-a",
@@ -587,7 +584,7 @@ test("creates a screen parent before its model produces an answer", () => {
   });
   assert.ok(candidate);
 
-  const result = commitSourceOwnedTransition({
+  const result = prepareSourceOwnedTransition({
     candidate,
     currentSessionId: "session-a",
     currentRuntimeEpoch: 3,
@@ -600,74 +597,6 @@ test("creates a screen parent before its model produces an answer", () => {
   assert.equal(result.task?.latestUsefulAnswer, undefined);
   assert.equal(result.task?.admission?.durability, "durable");
   assert.equal(result.task?.admission?.action, "create-parent");
-  const committedRuntime = new MeetingContextManager();
-  const committedRuntimeResult = committedRuntime.commitTaskRuntimeTransition({
-    id: "screen-parent-create",
-    transition: "create-parent",
-    reason: "screen-source-transition-committed",
-    expectedRevision: committedRuntime.getTaskRuntimeState().revision,
-    parent: result.task,
-  });
-  const committedReceipt = didSourceOwnedTransitionCommitFreshParent({
-    sourceTransitionResult: result,
-    taskRuntimeMutationCommitted: Boolean(
-      committedRuntimeResult.authorized &&
-        committedRuntimeResult.mutationApplied
-    ),
-  });
-  assert.equal(committedReceipt, true);
-  assert.deepEqual(
-    composeScreenPlaybookPhaseAfterLifecycle({
-      catalogPhase: "requirement_clarification",
-      committedPhase: result.task?.playbookPhase,
-      committedProgress: result.task?.phaseProgress,
-      transitionSeedPhase: "requirement_clarification",
-      freshParentCreated: committedReceipt,
-      currentOnly: false,
-      taskRuntimeTransitionCommitted: true,
-    }),
-    {
-      currentPhase: "requirement_clarification",
-      phaseProgress: result.task?.phaseProgress,
-      freshParentCreated: true,
-      reuseTransitionSeedDecision: true,
-    }
-  );
-  const rejectedRuntime = new MeetingContextManager();
-  const rejectedRuntimeResult = rejectedRuntime.commitTaskRuntimeTransition({
-    id: "screen-parent-create-stale",
-    transition: "create-parent",
-    reason: "screen-source-transition-committed",
-    expectedRevision: rejectedRuntime.getTaskRuntimeState().revision + 1,
-    parent: result.task,
-  });
-  assert.equal(rejectedRuntimeResult.authorized, false);
-  const rejectedDurableReceipt =
-    didSourceOwnedTransitionCommitFreshParent({
-      sourceTransitionResult: result,
-      taskRuntimeMutationCommitted: Boolean(
-        rejectedRuntimeResult.authorized &&
-          rejectedRuntimeResult.mutationApplied
-      ),
-    });
-  assert.equal(rejectedDurableReceipt, false);
-  assert.deepEqual(
-    composeScreenPlaybookPhaseAfterLifecycle({
-      catalogPhase: "requirement_clarification",
-      committedPhase: "implementation_validation",
-      committedProgress: { implementation_validation: true },
-      transitionSeedPhase: "requirement_clarification",
-      freshParentCreated: rejectedDurableReceipt,
-      currentOnly: false,
-      taskRuntimeTransitionCommitted: false,
-    }),
-    {
-      currentPhase: "implementation_validation",
-      phaseProgress: { implementation_validation: true },
-      freshParentCreated: false,
-      reuseTransitionSeedDecision: false,
-    }
-  );
   assert.equal(
     sourceOwnedTransitionSurvivesModelOutcome(result, "empty-output"),
     true
@@ -732,7 +661,7 @@ test("reseeds a provisional parent and invalidates stale project state atomicall
   assert.ok(candidate);
   assert.equal(candidate.kind, "reseed-parent");
 
-  const result = commitSourceOwnedTransition({
+  const result = prepareSourceOwnedTransition({
     candidate,
     currentTask: parent,
     currentSessionId: "session-a",
@@ -749,13 +678,6 @@ test("reseeds a provisional parent and invalidates stale project state atomicall
   assert.equal(result.task?.playbookPhase, "project_narrative");
   assert.equal(result.task?.admission?.action, "reseed-parent");
   assert.equal(result.task?.revisions, parent.revisions + 1);
-  assert.equal(
-    didSourceOwnedTransitionCommitFreshParent({
-      sourceTransitionResult: result,
-      taskRuntimeMutationCommitted: true,
-    }),
-    true
-  );
 });
 
 test("keeps a screen child committed when the model is cancelled", () => {
@@ -776,7 +698,7 @@ test("keeps a screen child committed when the model is cancelled", () => {
   });
   assert.ok(candidate);
 
-  const result = commitSourceOwnedTransition({
+  const result = prepareSourceOwnedTransition({
     candidate,
     currentTask: parent,
     currentSessionId: "session-a",
@@ -845,7 +767,7 @@ test("commits one source-owned assumption phase transition before advisor output
   });
   assert.ok(candidate);
 
-  const result = commitSourceOwnedTransition({
+  const result = prepareSourceOwnedTransition({
     candidate,
     currentTask: parent,
     currentSessionId: "session-a",
@@ -881,7 +803,7 @@ test("does not recreate a screen parent for the same observation", () => {
     now: 100,
   });
   assert.ok(firstCandidate);
-  const first = commitSourceOwnedTransition({
+  const first = prepareSourceOwnedTransition({
     candidate: firstCandidate,
     currentSessionId: "session-a",
     currentRuntimeEpoch: 3,
@@ -903,7 +825,7 @@ test("does not recreate a screen parent for the same observation", () => {
     now: 120,
   });
   assert.ok(repeatedCandidate);
-  const repeated = commitSourceOwnedTransition({
+  const repeated = prepareSourceOwnedTransition({
     candidate: repeatedCandidate,
     currentTask: first.task,
     currentSessionId: "session-a",
@@ -914,13 +836,6 @@ test("does not recreate a screen parent for the same observation", () => {
   assert.equal(repeated.mutationApplied, false);
   assert.equal(repeated.reason, "already-applied");
   assert.equal(repeated.task?.id, first.task.id);
-  assert.equal(
-    didSourceOwnedTransitionCommitFreshParent({
-      sourceTransitionResult: repeated,
-      taskRuntimeMutationCommitted: true,
-    }),
-    false
-  );
 });
 
 test("rejects an unknown screen new parent", () => {
@@ -938,7 +853,7 @@ test("rejects an unknown screen new parent", () => {
   });
   assert.ok(candidate);
 
-  const result = commitSourceOwnedTransition({
+  const result = prepareSourceOwnedTransition({
     candidate,
     currentSessionId: "session-a",
     currentRuntimeEpoch: 3,
@@ -968,7 +883,7 @@ test("rejects stale parent revisions and keeps current state", () => {
   assert.ok(candidate);
   const newerParent = { ...parent, revisions: parent.revisions + 1 };
 
-  const result = commitSourceOwnedTransition({
+  const result = prepareSourceOwnedTransition({
     candidate,
     currentTask: newerParent,
     currentSessionId: "session-a",
@@ -997,7 +912,7 @@ test("repeated source revision is idempotent", () => {
     now: 100,
   });
   assert.ok(candidate);
-  const first = commitSourceOwnedTransition({
+  const first = prepareSourceOwnedTransition({
     candidate,
     currentTask: parent,
     currentSessionId: "session-a",
@@ -1019,7 +934,7 @@ test("repeated source revision is idempotent", () => {
     now: 120,
   });
   assert.ok(repeatedCandidate);
-  const repeated = commitSourceOwnedTransition({
+  const repeated = prepareSourceOwnedTransition({
     candidate: repeatedCandidate,
     currentTask: first.task,
     currentSessionId: "session-a",

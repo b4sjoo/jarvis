@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { authorizeAnswerGenerationLease } from "../src/lib/meeting/answer-generation-lease.js";
+import type { MeetingTaskRuntimeTransitionKind } from "../src/lib/meeting/active-meeting-task.js";
 import { MeetingContextManager } from "../src/lib/meeting/context-manager.js";
 import {
   GenerationDerivedCommitCoordinator,
@@ -9,11 +10,11 @@ import {
 } from "../src/lib/meeting/generation-result-ledger.js";
 import {
   commitSourceOwnedTransitionToRuntime,
-  createSourceOwnedTransitionCandidate,
   sourceOwnedDurableTransitionSurvivesModelOutcome,
   sourceOwnedTransitionDurableMutationApplied,
   sourceOwnedTransitionDurablySatisfied,
-} from "../src/lib/meeting/source-owned-transition-transaction.js";
+} from "../src/lib/meeting/source-owned-transition-runtime.js";
+import { createSourceOwnedTransitionCandidate } from "../src/lib/meeting/source-owned-transition-transaction.js";
 import type {
   ActiveInterviewParent,
 } from "../src/lib/meeting/types.js";
@@ -39,7 +40,7 @@ test("rejects a stale no-parent Screen preparation against the canonical runtime
     now: now + 1,
   });
   assert.ok(candidate);
-  const receipt = commitSourceOwnedTransitionToRuntime({
+  const receipt = commitThroughRuntime({
     manager,
     candidate,
     expectedTaskRuntimeRevision: 0,
@@ -75,7 +76,7 @@ test("rejects stale Parent A instead of replacing the newer live Parent B", () =
     now: now + 1,
   });
   assert.ok(candidate);
-  const receipt = commitSourceOwnedTransitionToRuntime({
+  const receipt = commitThroughRuntime({
     manager,
     candidate,
     expectedTaskRuntimeRevision: manager.getTaskRuntimeState().revision,
@@ -112,7 +113,7 @@ test("characterizes an idempotent Screen observation as a durable preserve", () 
     now: now + 1,
   });
   assert.ok(firstCandidate);
-  const firstReceipt = commitSourceOwnedTransitionToRuntime({
+  const firstReceipt = commitThroughRuntime({
     manager,
     candidate: firstCandidate,
     expectedTaskRuntimeRevision: manager.getTaskRuntimeState().revision,
@@ -138,7 +139,7 @@ test("characterizes an idempotent Screen observation as a durable preserve", () 
     now: now + 3,
   });
   assert.ok(repeatedCandidate);
-  const repeatedReceipt = commitSourceOwnedTransitionToRuntime({
+  const repeatedReceipt = commitThroughRuntime({
     manager,
     candidate: repeatedCandidate,
     expectedTaskRuntimeRevision: manager.getTaskRuntimeState().revision,
@@ -171,7 +172,7 @@ test("keeps a pre-model lifecycle commit after provider failure", () => {
     now: now + 1,
   });
   assert.ok(candidate);
-  const receipt = commitSourceOwnedTransitionToRuntime({
+  const receipt = commitThroughRuntime({
     manager,
     candidate,
     expectedTaskRuntimeRevision: manager.getTaskRuntimeState().revision,
@@ -250,28 +251,26 @@ test("does not roll back a pre-model lifecycle after publication preparation fai
   assert.equal(manager.getTaskRuntimeState().parent?.id, parent.id);
 });
 
-test("tracks the remaining Screen compatibility alias after durable migration", async () => {
+test("prevents intermediate and post-model topology authority recurrence", async () => {
   const hookSource = await readFile(
     `${process.cwd()}/src/hooks/useMeetingAssistant.ts`,
     "utf8"
   );
-  assert.equal(
-    hookSource.match(/screenSourceTransitionCommittedBeforeModel/g)?.length,
-    10
-  );
   assert.match(
     hookSource,
-    /const screenSourceTransitionCommittedBeforeModel =\s+sourceOwnedTransitionDurablySatisfied/
+    /const screenDurableTransitionSatisfiedBeforeModel =\s+sourceOwnedTransitionDurablySatisfied/
   );
   assert.equal(hookSource.includes("commitSourceOwnedTransition({"), false);
-  for (const productConsumer of [
-    "screenSourceTransitionAllowsTaskMutation",
-    "screenStartedNewInterviewParent",
-    "sourceTransitionPrecommitted:\n              screenSourceTransitionCommittedBeforeModel",
-    "screenTaskContextCommitted =\n          screenTaskResultCommitted ||\n          screenSourceTransitionCommittedBeforeModel",
-  ]) {
-    assert.equal(hookSource.includes(productConsumer), true, productConsumer);
-  }
+  assert.equal(
+    hookSource.includes("screenSourceTransitionCommittedBeforeModel"),
+    false
+  );
+  assert.equal(hookSource.includes("screenCandidateStartedNewParent"), false);
+  assert.equal(hookSource.includes("phase-screen-"), false);
+  assert.equal(
+    hookSource.match(/authorizePostModelTaskRuntimeTransition\(/g)?.length,
+    2
+  );
   assert.equal(
     hookSource.includes("sourceOwnedTransitionResult?.candidate.state"),
     false
@@ -281,6 +280,57 @@ test("tracks the remaining Screen compatibility alias after durable migration", 
     false
   );
 });
+
+function commitThroughRuntime(input: {
+  manager: MeetingContextManager;
+  candidate: NonNullable<
+    ReturnType<typeof createSourceOwnedTransitionCandidate>
+  >;
+  expectedTaskRuntimeRevision: number;
+  currentSessionId: string;
+  currentRuntimeEpoch: number;
+  reason: string;
+  now?: number;
+}) {
+  const runtimeBefore = input.manager.getTaskRuntimeState();
+  return commitSourceOwnedTransitionToRuntime({
+    candidate: input.candidate,
+    runtimeBefore,
+    expectedTaskRuntimeRevision: input.expectedTaskRuntimeRevision,
+    currentSessionId: input.currentSessionId,
+    currentRuntimeEpoch: input.currentRuntimeEpoch,
+    now: input.now,
+    commitRuntime: ({
+      sourceResult,
+      runtimeBefore: committedRuntimeBefore,
+      expectedTaskRuntimeRevision,
+    }) => {
+      const runtimeTransition: MeetingTaskRuntimeTransitionKind =
+        sourceResult.candidate.kind === "child-probe"
+          ? "attach-child"
+          : sourceResult.candidate.kind === "resume-parent"
+            ? "resume-parent"
+            : sourceResult.candidate.kind === "phase-progress"
+              ? "advance-phase"
+              : committedRuntimeBefore.parent
+                ? "replace-parent"
+                : "create-parent";
+      const runtimeResult = input.manager.commitTaskRuntimeTransition({
+        id: `characterization-${sourceResult.candidate.id}`,
+        transition: runtimeTransition,
+        reason: input.reason,
+        expectedRevision: expectedTaskRuntimeRevision,
+        screenAttachment:
+          sourceResult.candidate.kind === "new-parent" ||
+          sourceResult.candidate.kind === "reseed-parent"
+            ? null
+            : committedRuntimeBefore.screenAttachment,
+        parent: sourceResult.task ?? null,
+      });
+      return { runtimeResult, runtimeTransition };
+    },
+  });
+}
 
 function makeParent(
   id: string,

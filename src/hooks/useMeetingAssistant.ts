@@ -7,6 +7,15 @@ import { useApp } from "@/contexts";
 import { safeLocalStorage } from "@/lib";
 import { floatArrayToWav } from "@/lib/utils";
 import {
+  commitSourceOwnedTransitionToRuntime,
+  formatSourceOwnedDurableTransitionForTrace,
+  sourceOwnedDurableTransitionSurvivesModelOutcome,
+  sourceOwnedTransitionCommittedFreshParent,
+  sourceOwnedTransitionDurableMutationApplied,
+  sourceOwnedTransitionDurablySatisfied,
+  type SourceOwnedDurableTransitionReceipt,
+} from "@/lib/meeting/source-owned-transition-runtime";
+import {
   buildRuntimeMemoryRoleTelemetry,
   extractRuntimeFactAnchorLabels,
   flushMemoryContextUsage,
@@ -165,6 +174,7 @@ import {
   AdvisorTaskMutationAuthority,
   AnswerArtifactSection,
   AnswerGenerationLease,
+  authorizePostModelTaskRuntimeTransition,
   GenerationDerivedCommitCoordinator,
   GenerationResultLedger,
   MeetingAIResponseCandidate,
@@ -567,7 +577,6 @@ import {
   settledExecutionPlanAuthorizesTaskContinuity,
   buildSettledAdvisorExecutionPlan,
   commitTaskBoundaryCandidate,
-  commitSourceOwnedTransitionToRuntime,
   createCurrentQuestionSourceSettlementId,
   createTaskBoundaryCandidate,
   createProvisionalCurrentQuestion,
@@ -661,11 +670,6 @@ import {
   readInterviewBriefType,
   resolveTaskTaxonomyAuthority,
   supersedeTaskBoundaryCandidate,
-  formatSourceOwnedDurableTransitionForTrace,
-  sourceOwnedDurableTransitionSurvivesModelOutcome,
-  sourceOwnedTransitionCommittedFreshParent,
-  sourceOwnedTransitionDurableMutationApplied,
-  sourceOwnedTransitionDurablySatisfied,
   taskBoundarySurvivesAdvisorOutcome,
   toHumanEvalQuestionType,
   toMemoryUseCaseForQuestionType,
@@ -675,8 +679,6 @@ import {
   type HybridQuestionTypeDecision,
   type LatestTurnTaxonomyBoundaryReason,
   type TaskTaxonomyAuthorityDecision,
-  type SourceOwnedDurableTransitionReceipt,
-  type SourceOwnedTransitionCommitResult,
   type TaskLifecycleCommand,
   TaxonomyAdjudicationRuntime,
   type TaxonomyAdjudicationRequestResult,
@@ -1025,6 +1027,56 @@ function submitTaskRuntimeTransition(
   return result;
 }
 
+function commitSourceOwnedTransitionWithManager(input: {
+  manager: MeetingContextManager;
+  candidate: NonNullable<
+    ReturnType<typeof createSourceOwnedTransitionCandidate>
+  >;
+  expectedTaskRuntimeRevision: number;
+  currentSessionId: string;
+  currentRuntimeEpoch: number;
+  operationId?: string;
+  reason: string;
+}): SourceOwnedDurableTransitionReceipt {
+  const runtimeBefore = input.manager.getTaskRuntimeState();
+  return commitSourceOwnedTransitionToRuntime({
+    candidate: input.candidate,
+    runtimeBefore,
+    expectedTaskRuntimeRevision: input.expectedTaskRuntimeRevision,
+    currentSessionId: input.currentSessionId,
+    currentRuntimeEpoch: input.currentRuntimeEpoch,
+    commitRuntime: ({
+      sourceResult,
+      runtimeBefore: committedRuntimeBefore,
+      expectedTaskRuntimeRevision,
+    }) => {
+      const runtimeTransition: MeetingTaskRuntimeTransitionKind =
+        sourceResult.candidate.kind === "child-probe"
+          ? "attach-child"
+          : sourceResult.candidate.kind === "resume-parent"
+            ? "resume-parent"
+            : sourceResult.candidate.kind === "phase-progress"
+              ? "advance-phase"
+              : committedRuntimeBefore.parent
+                ? "replace-parent"
+                : "create-parent";
+      const runtimeResult = submitTaskRuntimeTransition(input.manager, {
+        operationId: input.operationId ?? sourceResult.candidate.id,
+        transition: runtimeTransition,
+        reason: input.reason,
+        expectedRevision: expectedTaskRuntimeRevision,
+        screenAttachment:
+          sourceResult.candidate.kind === "new-parent" ||
+          sourceResult.candidate.kind === "reseed-parent"
+            ? null
+            : committedRuntimeBefore.screenAttachment,
+        parent: sourceResult.task ?? null,
+      });
+      return { runtimeResult, runtimeTransition };
+    },
+  });
+}
+
 function prepareGenerationDerivedTaskRuntimeCommit(
   manager: MeetingContextManager,
   input: {
@@ -1075,15 +1127,13 @@ function submitTaskRuntimeClear(
 }
 
 function mapSourceOwnedExecutionPlanCommand(
-  result: SourceOwnedTransitionCommitResult | undefined
+  receipt: SourceOwnedDurableTransitionReceipt | undefined
 ): TaskLifecycleCommand | undefined {
-  if (
-    result?.candidate.state !== "committed" ||
-    !result.mutationApplied
-  ) {
+  if (!sourceOwnedTransitionDurableMutationApplied(receipt)) {
     return undefined;
   }
 
+  const result = receipt!.sourceResult;
   const candidate = result.candidate;
   if (candidate.kind === "new-parent") {
     return {
@@ -12051,9 +12101,6 @@ export function useMeetingAssistant() {
     let sourceOwnedTransitionReceipt:
       | SourceOwnedDurableTransitionReceipt
       | undefined;
-    let sourceOwnedTransitionResult:
-      | SourceOwnedTransitionCommitResult
-      | undefined;
     if (
       !manualPhaseAdvance &&
       !transientPersonalStatusDecision &&
@@ -12112,7 +12159,7 @@ export function useMeetingAssistant() {
 
       if (sourceOwnedTransitionCandidate) {
         sourceOwnedTransitionReceipt =
-          commitSourceOwnedTransitionToRuntime({
+          commitSourceOwnedTransitionWithManager({
             manager: contextManagerRef.current,
             candidate: sourceOwnedTransitionCandidate,
             expectedTaskRuntimeRevision:
@@ -12122,8 +12169,6 @@ export function useMeetingAssistant() {
             operationId: currentQuestionSettlement?.operationId,
             reason: "source-owned-transition-committed",
           });
-        sourceOwnedTransitionResult =
-          sourceOwnedTransitionReceipt.sourceResult;
         const sourceTransitionDurablySatisfied =
           sourceOwnedTransitionDurablySatisfied(
             sourceOwnedTransitionReceipt
@@ -12163,10 +12208,10 @@ export function useMeetingAssistant() {
             recordCommittedPlaybookPhaseTransition({
               operationId:
                 currentQuestionSettlement?.operationId ??
-                sourceOwnedTransitionResult.candidate.id,
+                sourceOwnedTransitionReceipt.sourceResult.candidate.id,
               source: "automatic",
               before: transitionParentBefore,
-              after: sourceOwnedTransitionResult.task,
+              after: sourceOwnedTransitionReceipt.sourceResult.task,
               traceId,
             });
           }
@@ -12395,13 +12440,9 @@ export function useMeetingAssistant() {
     if (currentQuestionSettlement) {
       if (!settledExecutionPlan) {
         const sourceOwnedExecutionPlanCommand =
-          sourceOwnedTransitionDurableMutationApplied(
+          mapSourceOwnedExecutionPlanCommand(
             sourceOwnedTransitionReceipt
-          )
-            ? mapSourceOwnedExecutionPlanCommand(
-                sourceOwnedTransitionResult
-              )
-            : undefined;
+          );
         const operationCommittedTaskMutationBeforePlan = Boolean(
           taskBoundaryCommittedBeforeAdvisor ||
             manualPhaseAdvanceCommitted ||
@@ -14721,6 +14762,24 @@ export function useMeetingAssistant() {
               afterScreen: nextActiveScreenTask,
             })
           : undefined;
+      const advisorPostModelTransitionAuthorization =
+        authorizePostModelTaskRuntimeTransition(
+          advisorGenerationRuntimeTransition
+        );
+      if (!advisorPostModelTransitionAuthorization.authorized) {
+        throw new Error(
+          advisorPostModelTransitionAuthorization.reason
+        );
+      }
+      if (traceId) {
+        traceStoreRef.current.updateMetadata(traceId, {
+          postModelTaskTransitionAuthorized: true,
+          postModelTaskTransitionReason:
+            advisorPostModelTransitionAuthorization.reason,
+          postModelTaskTransitionKind:
+            advisorGenerationRuntimeTransition,
+        });
+      }
       const advisorGenerationTaskRuntimeTransition =
         advisorGenerationRuntimeTransition
           ? {
@@ -25772,7 +25831,6 @@ export function useMeetingAssistant() {
       let screenGenerationContinuityTask:
         | ActiveInterviewParent
         | undefined;
-      let screenCandidateStartedNewParent = false;
       let screenGenerationRequestedArtifacts:
         AnswerArtifactSection[] = [];
       let screenPresentationAuthorizedArtifacts:
@@ -25789,9 +25847,6 @@ export function useMeetingAssistant() {
         | undefined;
       let screenSourceOwnedTransitionReceipt:
         | SourceOwnedDurableTransitionReceipt
-        | undefined;
-      let screenSourceOwnedTransitionResult:
-        | SourceOwnedTransitionCommitResult
         | undefined;
       let screenQuestionTypeOutcomeReceipt:
         | {
@@ -28028,7 +28083,7 @@ export function useMeetingAssistant() {
           });
         if (screenTransitionCandidate) {
           screenSourceOwnedTransitionReceipt =
-            commitSourceOwnedTransitionToRuntime({
+            commitSourceOwnedTransitionWithManager({
               manager: contextManagerRef.current,
               candidate: screenTransitionCandidate,
               expectedTaskRuntimeRevision:
@@ -28039,8 +28094,6 @@ export function useMeetingAssistant() {
                 committedScreenQuestionSettlement?.operationId,
               reason: "screen-source-transition-committed",
             });
-          screenSourceOwnedTransitionResult =
-            screenSourceOwnedTransitionReceipt.sourceResult;
           const screenTransitionCommitted =
             sourceOwnedTransitionDurablySatisfied(
               screenSourceOwnedTransitionReceipt
@@ -28105,10 +28158,10 @@ export function useMeetingAssistant() {
             recordCommittedPlaybookPhaseTransition({
               operationId:
                 committedScreenQuestionSettlement?.operationId ??
-                screenSourceOwnedTransitionResult.candidate.id,
+                screenSourceOwnedTransitionReceipt.sourceResult.candidate.id,
               source: "automatic",
               before: screenTransitionParentBefore,
-              after: screenSourceOwnedTransitionResult.task,
+              after: screenSourceOwnedTransitionReceipt.sourceResult.task,
               traceId: trace.id,
             });
             screenRuntimeToken = rebaseRuntimeCommitToken({
@@ -28257,7 +28310,7 @@ export function useMeetingAssistant() {
             ...formatPlaybookPhaseDecisionForTrace(screenPhaseDecision),
           }
         );
-        const screenSourceTransitionCommittedBeforeModel =
+        const screenDurableTransitionSatisfiedBeforeModel =
           sourceOwnedTransitionDurablySatisfied(
             screenSourceOwnedTransitionReceipt
           );
@@ -28269,7 +28322,7 @@ export function useMeetingAssistant() {
             resolveCurrentQuestionSettlementDisposition({
               settlement: screenCurrentQuestionSettlement,
               parentCommitted:
-                screenSourceTransitionCommittedBeforeModel,
+                screenDurableTransitionSatisfiedBeforeModel,
             });
           const parentAfterSettlement =
             contextManagerRef.current.getState().activeMeetingTask?.parent;
@@ -28279,13 +28332,13 @@ export function useMeetingAssistant() {
             currentQuestionSettlementAppliedToResponse: true,
             currentQuestionSettlementAppliedToSettlement: true,
             currentQuestionSettlementAppliedToParent:
-              screenSourceTransitionCommittedBeforeModel,
+              screenDurableTransitionSatisfiedBeforeModel,
             taskRelationAdjudicationAppliedToResponse: true,
             taskRelationAdjudicationAppliedToSettlement:
               screenCurrentQuestionSettlement.relationAuthoritySource ===
               "runtime-adjudication",
             taskRelationAdjudicationAppliedToParent:
-              screenSourceTransitionCommittedBeforeModel &&
+              screenDurableTransitionSatisfiedBeforeModel &&
               screenCurrentQuestionSettlement.relationAuthoritySource ===
                 "runtime-adjudication",
           });
@@ -28308,9 +28361,6 @@ export function useMeetingAssistant() {
             parentAfterType: parentAfterSettlement?.questionType,
           });
         }
-        const screenSourceTransitionAllowsTaskMutation =
-          !screenSourceOwnedTransitionReceipt ||
-          screenSourceTransitionCommittedBeforeModel;
         let screenExecutionContextState =
           contextManagerRef.current.getState();
         screenEvidencePacket = buildScreenEvidencePacket(
@@ -29537,9 +29587,7 @@ export function useMeetingAssistant() {
           }
         );
         const now = Date.now();
-        let screenStartedNewInterviewParent = Boolean(
-          screenFreshParentCreated
-        );
+        const screenStartedNewInterviewParent = screenFreshParentCreated;
         let screenTaskResultCommitted = false;
         const screenResultScopeDecision = decideScreenResultScope({
           questionType: settledScreenTaskKind,
@@ -29565,10 +29613,7 @@ export function useMeetingAssistant() {
           })
         );
 
-        if (
-          screenResultScopeDecision.action === "replace" &&
-          screenSourceTransitionAllowsTaskMutation
-        ) {
+        if (screenResultScopeDecision.action === "replace") {
           const existingInterviewTask = screenCurrentOnly
             ? undefined
             : updatedContextState.taskRuntime.parent;
@@ -29587,27 +29632,6 @@ export function useMeetingAssistant() {
             programmingLanguage: screenLanguage.language,
             programmingLanguageSource: screenLanguage.source,
           });
-          const activeScreenTask: ActiveScreenTask = {
-            id: requestId,
-            observationId: observation.id,
-            createdAt: now,
-            updatedAt: now,
-            expiresAt: getActiveScreenTaskExpiresAt(state.settings, now),
-            question: screenTaskTopic,
-            kind: settledScreenTaskKind,
-            language: screenLanguage.language,
-            classifier: {
-              questionType: settledScreenTaskKind,
-              askFrame: screenPreflight?.askFrame,
-              topicDomain: screenPreflight?.topicDomain,
-              projectAnchor: screenPreflight?.projectAnchor,
-              confidence: screenPreflight?.confidence,
-            },
-            playbook: screenRuntimePlaybook,
-            content: committedScreenTaskContent,
-            basedOnTurnIds,
-            basedOnObservationId: observation.id,
-          };
 
           const screenRelationDecision = {
             relation: provisionalScreenTaskRelation,
@@ -29719,7 +29743,7 @@ export function useMeetingAssistant() {
             childOwnsResponse:
               screenRelationDecision.relation === "child-probe" &&
               (!screenSourceOwnedTransitionReceipt ||
-                screenSourceTransitionCommittedBeforeModel),
+                screenDurableTransitionSatisfiedBeforeModel),
           });
           const screenArtifactAuthorization =
             authorizeResponseArtifactMutation({
@@ -29776,11 +29800,11 @@ export function useMeetingAssistant() {
             whiteboardRenderValidation:
               screenWhiteboardRenderValidation,
             playbook: screenRuntimePlaybook,
-            phaseDecision: screenSourceTransitionCommittedBeforeModel
+            phaseDecision: screenDurableTransitionSatisfiedBeforeModel
               ? undefined
               : screenPhaseDecision,
             sourceTransitionPrecommitted:
-              screenSourceTransitionCommittedBeforeModel,
+              screenDurableTransitionSatisfiedBeforeModel,
             observationId: observation.id,
             traceId: trace.id,
             selectedOverlayIds: extractSelectedOverlayIdsFromMemory(memoryContext),
@@ -29802,8 +29826,6 @@ export function useMeetingAssistant() {
               : "preserve",
           });
           screenGenerationContinuityTask = screenContinuity.task;
-          screenCandidateStartedNewParent =
-            screenContinuity.startedNewParent;
           const previousWhiteboard =
             existingInterviewTask?.whiteboardArtifact;
           const nextWhiteboard = screenContinuity.task?.whiteboardArtifact;
@@ -29863,15 +29885,32 @@ export function useMeetingAssistant() {
                 beforeParent: existingInterviewTask,
                 afterParent: screenContinuity.task,
                 beforeScreen: updatedContextState.taskRuntime.screenAttachment,
-                afterScreen: activeScreenTask,
+                afterScreen: updatedContextState.taskRuntime.screenAttachment,
               });
+            const postModelTransitionAuthorization =
+              authorizePostModelTaskRuntimeTransition(
+                runtimeTransition
+              );
+            traceStoreRef.current.updateMetadata(trace.id, {
+              postModelTaskTransitionAuthorized:
+                postModelTransitionAuthorization.authorized,
+              postModelTaskTransitionReason:
+                postModelTransitionAuthorization.reason,
+              postModelTaskTransitionKind: runtimeTransition,
+            });
+            if (!postModelTransitionAuthorization.authorized) {
+              throw new Error(
+                postModelTransitionAuthorization.reason
+              );
+            }
             if (runtimeTransition) {
               screenGenerationTaskRuntimeTransition = {
                 expectedRevision:
                   updatedContextState.taskRuntime.revision,
                 transition: runtimeTransition,
                 reason: "screen-answer-continuity-committed",
-                screenAttachment: activeScreenTask,
+                screenAttachment:
+                  updatedContextState.taskRuntime.screenAttachment,
                 parent: screenContinuity.task ?? null,
               };
             }
@@ -29880,14 +29919,14 @@ export function useMeetingAssistant() {
             activeInterviewParentId: screenContinuity.task?.id,
             activeInterviewParentKind: screenContinuity.task?.stableKind,
             activeInterviewParentPhase: screenContinuity.task?.playbookPhase,
-            startedNewInterviewParent: screenContinuity.startedNewParent,
+            startedNewInterviewParent: screenStartedNewInterviewParent,
           });
         }
 
         updatedContextState = contextManagerRef.current.getState();
         const screenTaskContextCommitted =
           screenTaskResultCommitted ||
-          screenSourceTransitionCommittedBeforeModel;
+          screenDurableTransitionSatisfiedBeforeModel;
         traceStoreRef.current.updateMetadata(trace.id, {
           ...formatScreenScopeDecisionForTrace(screenResultScopeDecision, {
             stage: "commit",
@@ -30067,15 +30106,11 @@ export function useMeetingAssistant() {
                   screenCurrentQuestionSettlement?.sourceHash,
                 settlementId:
                   screenCurrentQuestionSettlement?.settlementId,
-                resetSections:
-                  screenStartedNewInterviewParent ||
-                  screenCandidateStartedNewParent,
+                resetSections: screenStartedNewInterviewParent,
                 revision: visibleAnswerRevisionBefore + 1,
               })
             : null;
-        const screenResetSections =
-          screenStartedNewInterviewParent ||
-          screenCandidateStartedNewParent;
+        const screenResetSections = screenStartedNewInterviewParent;
         const screenCandidateMutationDelta =
           collectStableAnswerMutationDelta(
             previousStableAnswer,
@@ -30166,9 +30201,7 @@ export function useMeetingAssistant() {
                   screenPublication = prepareStableAnswerPublication(
                     candidateStableAnswer,
                     {
-                      clearPrevious:
-                        screenStartedNewInterviewParent ||
-                        screenCandidateStartedNewParent,
+                      clearPrevious: screenStartedNewInterviewParent,
                       latestUsefulAnswerCommitted:
                         preparedScreenTransition.latestUsefulAnswerCommitted,
                       latestUsefulAnswerChars:
@@ -30182,21 +30215,6 @@ export function useMeetingAssistant() {
               },
             });
           if (generationCommit.committed && screenPublication) {
-            if (
-              !screenCurrentOnly &&
-              !screenSourceTransitionCommittedBeforeModel
-            ) {
-              recordCommittedPlaybookPhaseTransition({
-                operationId: `phase-screen-${trace.id}`,
-                source: "automatic",
-                before: screenScopePreviousState.taskRuntime.parent,
-                after: screenGenerationContinuityTask,
-                traceId: trace.id,
-              });
-            }
-            screenStartedNewInterviewParent =
-              screenStartedNewInterviewParent ||
-              screenCandidateStartedNewParent;
             updatedContextState = contextManagerRef.current.getState();
             currentQuestionLineageRef.current = screenQuestionLineage;
             setState((previous) => ({
