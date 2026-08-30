@@ -216,3 +216,44 @@ body {
   word-wrap: break-word !important;
   white-space: pre-wrap !important;
 }
+
+/* Keep generated Meeting Assistant content inside its fixed-width panel. */
+.meeting-assistant-markdown,
+.meeting-assistant-markdown > *,
+.meeting-assistant-markdown [data-streamdown="code-block"],
+.meeting-assistant-markdown [data-streamdown="table-wrapper"],
+.meeting-assistant-markdown [data-streamdown="mermaid-block"] {
+  box-sizing: border-box;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+}
+
+.meeting-assistant-markdown [data-streamdown="table-wrapper"] {
+  overflow-x: hidden;
+}
+
+.meeting-assistant-markdown [data-streamdown="table-wrapper"] > div:last-child {
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.meeting-assistant-markdown [data-streamdown="table"] {
+  width: max-content;
+  min-width: 100%;
+  max-width: none !important;
+}
+
+.meeting-assistant-markdown [data-streamdown="code-block"] {
+  overflow-x: auto !important;
+}
+
+.meeting-assistant-markdown [data-streamdown="mermaid-block"] {
+  overflow: hidden;
+}
+
+.meeting-assistant-markdown [data-streamdown="mermaid-block"] svg {
+  max-width: 100%;
+}
