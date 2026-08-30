@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import test from "node:test";
 import type { ActiveMeetingTask } from "../src/lib/meeting/active-meeting-task.js";
 import {
@@ -22,6 +24,11 @@ import {
   parseTaskRelationCanonicalShadowOutput,
 } from "../src/lib/meeting/task-relation-split-shadow.js";
 import type { LogicalQuestionUnit } from "../src/lib/meeting/logical-question-unit.js";
+
+const meetingHookSource = await readFile(
+  path.join(process.cwd(), "src/hooks/useMeetingAssistant.ts"),
+  "utf8"
+);
 
 function unit(text: string): LogicalQuestionUnit {
   return {
@@ -596,6 +603,63 @@ test("ordered relation resolution prefers matrix, then canonical, then source nu
   });
   assert.equal(preserved.stage, "source-topology-null-hypothesis");
   assert.equal(preserved.relation, "followup-parent");
+});
+
+test("normalizes unresolved-like provider outcomes to the active-owner null hypothesis", () => {
+  for (const fault of [
+    "timeout",
+    "invalid-output",
+    "cancelled-provider-work",
+    "stale-provider-result",
+    "hook-provider-error",
+  ]) {
+    const decision = decideOrderedTaskRelationResolution({
+      sourceKind: "voice",
+      currentQuestionType: "coding",
+      activeParentQuestionType: "general-system-design",
+      hasActiveChild: false,
+      canonical:
+        fault === "invalid-output"
+          ? {
+              schemaVersion: 3,
+              relation: "unknown",
+              confidence: 0,
+              currentQuestionEvidenceSpans: [],
+              parentEvidenceSpans: [],
+              ambiguityReason: fault,
+            }
+          : undefined,
+      finalizeWithNullHypothesis: true,
+    });
+
+    assert.equal(decision.status, "resolved", fault);
+    assert.equal(decision.stage, "source-topology-null-hypothesis", fault);
+    assert.equal(decision.relation, "followup-parent", fault);
+  }
+});
+
+test("wires provider faults to finalization while stale source ownership fails closed", () => {
+  const resolverStart = meetingHookSource.indexOf(
+    "const resolveOrderedTaskRelationWithinWindow"
+  );
+  const resolverEnd = meetingHookSource.indexOf(
+    "const scheduleTaxonomyAdjudicationShadow",
+    resolverStart
+  );
+  assert.ok(resolverStart >= 0);
+  assert.ok(resolverEnd > resolverStart);
+  const resolver = meetingHookSource.slice(resolverStart, resolverEnd);
+
+  assert.match(resolver, /affinity-deadline-expired/);
+  assert.match(resolver, /canonical-unresolved/);
+  assert.match(resolver, /canonical-deadline-expired/);
+  assert.match(resolver, /finalizeWithNullHypothesis:\s*true/);
+  assert.match(resolver, /cancelForegroundWork\?\.\(\)/);
+  assert.match(meetingHookSource, /ordered-chain-error-unresolved/);
+  assert.match(
+    meetingHookSource,
+    /rejectStaleScreenOperation\("post-relation-settlement"\)/
+  );
 });
 
 test("ordered relation null hypothesis treats authoritative unbound Screen as a milestone", () => {
