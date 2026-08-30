@@ -1,7 +1,7 @@
 {
   "$schema": "./deletion-ledger.schema.json",
   "version": 1,
-  "updatedAt": "2026-08-28",
+  "updatedAt": "2026-08-29",
   "entries": [
     {
       "id": "task-runtime-legacy-active-screen-root",
@@ -70,6 +70,24 @@
         "updateInterviewSessionContextFromTurn(",
         "updateInterviewSessionContextFromScreenText("
       ]
+    },
+    {
+      "id": "source-owned-transition-intermediate-commit-authority",
+      "symbolOrSurface": "SourceOwnedTransitionCommitResult candidate state consumed as durable lifecycle authority",
+      "verdict": "migrate-then-delete",
+      "ownerTaskId": 151,
+      "replacement": "Settlement-revision-bound Context Manager lifecycle receipt shared by Voice and Screen",
+      "persistedDataImpact": "recording",
+      "historicalReader": "versioned Source-owned transition trace decoder",
+      "proofCommands": [
+        "npm run verify:deletion-ledger",
+        "npm run verify:architecture",
+        "npm test",
+        "npm run build"
+      ],
+      "deletionGate": "All Voice and Screen product consumers read one canonical durable lifecycle receipt; raw Source-owned candidate state is diagnostic only; post-model topology mutation count is zero.",
+      "rollbackBoundary": "Characterization, shared durable transaction, consumer migration, and intermediate-authority deletion remain independent commits.",
+      "status": "candidate"
     },
     {
       "id": "direct-native-exit-without-runtime-drain",
