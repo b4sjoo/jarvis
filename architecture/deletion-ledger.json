@@ -1,7 +1,7 @@
 {
   "$schema": "./deletion-ledger.schema.json",
   "version": 1,
-  "updatedAt": "2026-08-29",
+  "updatedAt": "2026-08-30",
   "entries": [
     {
       "id": "task-runtime-legacy-active-screen-root",
@@ -244,6 +244,33 @@
       "forbiddenPatterns": [
         "LLM Type Enforcement",
         "LLM Relation Adjudication"
+      ]
+    },
+    {
+      "id": "response-only-relation-authority",
+      "symbolOrSurface": "Response-only labels used as Relation evidence, ordered settlement output, correction targeting, or default human truth",
+      "verdict": "migrate-then-delete",
+      "ownerTaskId": 168,
+      "replacement": "Effective owner, canonical Relation, Parent Action, and Context Scope after the single consumer-barrier null hypothesis",
+      "persistedDataImpact": "recording",
+      "historicalReader": "Versioned Session Recording and Human Evaluation compatibility decoders",
+      "proofCommands": [
+        "npm run verify:deletion-ledger",
+        "npm run verify:architecture",
+        "npm test",
+        "npm run build"
+      ],
+      "deletionGate": "Live lexical hints remain non-authoritative, ordered Relation exposes no response-only boolean, correction targeting uses effective substantive identity, and default Human Evaluation derives truth from final settlement facts.",
+      "rollbackBoundary": "Consumer-barrier settlement, lexical hint cleanup, correction targeting, and Human Evaluation UI removal remain independently revertible commits.",
+      "status": "deleted",
+      "forbiddenPatterns": [
+        "TaskRelationLexicalHintDisposition",
+        "taskRelationOrderedResolutionResponseOnly",
+        "taskRelationFirstBatchResponseOnly",
+        "orderedSettlementCoordinatorResponseOnly",
+        "response-only-ambiguous-relation",
+        "latest-response-only-substantive",
+        "Response-only handling"
       ]
     }
   ]
