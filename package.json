@@ -33,7 +33,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "test": "node scripts/clean-test-output.mjs && tsc -p tsconfig.test.json && node --test .tmp-tests/tests/**/*.test.js tests/jarvis-dev-port.test.mjs tests/reflect-session-recordings.test.mjs tests/session-evaluation-provenance.test.mjs tests/maintainability-deletion-ledger.test.mjs tests/architecture-guardrails.test.mjs tests/tracked-document-boundary.test.mjs tests/next-major-verification.test.mjs",
+    "test": "node scripts/clean-test-output.mjs && tsc -p tsconfig.test.json && node --test .tmp-tests/tests/**/*.test.js tests/jarvis-dev-port.test.mjs tests/reflect-session-recordings.test.mjs tests/session-evaluation-provenance.test.mjs tests/session-longitudinal-reflection-cli.test.mjs tests/maintainability-deletion-ledger.test.mjs tests/architecture-guardrails.test.mjs tests/tracked-document-boundary.test.mjs tests/next-major-verification.test.mjs",
     "verify:deletion-ledger": "node scripts/verify-maintainability-ledger.mjs",
     "verify:architecture": "node scripts/verify-architecture.mjs --report",
     "verify:next-major": "node scripts/verify-next-major.mjs",
