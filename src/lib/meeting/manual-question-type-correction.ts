@@ -97,7 +97,6 @@ export interface ManualCorrectionTargetSelection<T> {
   target?: T;
   reason:
     | "latest-unresolved-substantive"
-    | "latest-response-only-substantive"
     | "preferred-visible-question"
     | "latest-substantive"
     | "latest-canonical-fallback"
@@ -224,16 +223,6 @@ export function selectManualCorrectionTargetFromHistory<
   const latestSubstantive = ordered.find(
     (candidate) => candidate.targetKind === "substantive"
   );
-  if (
-    input.latestCanonical?.targetKind === "non-substantive" &&
-    latestSubstantive?.settlementDisposition === "response-only"
-  ) {
-    return {
-      target: latestSubstantive,
-      reason: "latest-response-only-substantive",
-    };
-  }
-
   if (latestSubstantive) {
     return { target: latestSubstantive, reason: "latest-substantive" };
   }

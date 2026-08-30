@@ -277,8 +277,8 @@ test("keeps a meta-confirmation from stealing an unresolved substantive correcti
   assert.equal(selection.reason, "latest-unresolved-substantive");
 });
 
-test("keeps a resolved response-only question ahead of a phase-control turn", () => {
-  const responseOnly = {
+test("keeps the latest resolved substantive question ahead of a phase-control turn", () => {
+  const substantive = {
     logicalQuestionUnit: makeLogicalQuestion(
       "question-design",
       "turn-design",
@@ -286,7 +286,7 @@ test("keeps a resolved response-only question ahead of a phase-control turn", ()
     ),
     updatedAt: 10,
     targetKind: "substantive" as const,
-    settlementDisposition: "response-only" as const,
+    settlementDisposition: "domain-resolved-provisional" as const,
     resolvedAt: 15,
   };
   const phaseControl = {
@@ -305,7 +305,7 @@ test("keeps a resolved response-only question ahead of a phase-control turn", ()
     }),
   };
   const history = upsertManualCorrectionTargetHistory(
-    upsertManualCorrectionTargetHistory([], responseOnly),
+    upsertManualCorrectionTargetHistory([], substantive),
     phaseControl
   );
 
@@ -318,7 +318,7 @@ test("keeps a resolved response-only question ahead of a phase-control turn", ()
   });
 
   assert.equal(phaseControl.targetKind, "non-substantive");
-  assert.equal(selection.reason, "latest-response-only-substantive");
+  assert.equal(selection.reason, "latest-substantive");
   assert.equal(selection.target?.logicalQuestionUnit.id, "question-design");
 });
 
