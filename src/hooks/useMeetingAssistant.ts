@@ -25895,6 +25895,18 @@ export function useMeetingAssistant() {
       let pendingLatePreflightRepair:
         | LateScreenPreflightRepairRequest
         | undefined;
+      let pendingLatePreflightCandidate:
+        | {
+            preflight: ScreenPreflightResult & {
+              questionType: CanonicalQuestionType;
+            };
+            sourcePreflightLeaseRevision: number;
+            observedAt: number;
+          }
+        | undefined;
+      let screenCurrentQuestionSettlement:
+        | ReturnType<typeof settleCurrentQuestion>
+        | undefined;
       let screenSourceOwnedTransitionReceipt:
         | SourceOwnedDurableTransitionReceipt
         | undefined;
@@ -26138,6 +26150,86 @@ export function useMeetingAssistant() {
               source,
               previousHash: latestScreenHashRef.current,
             });
+        const schedulePendingLatePreflightRepair = () => {
+          const candidate = pendingLatePreflightCandidate;
+          const settlement = screenCurrentQuestionSettlement;
+          if (!candidate || !settlement || pendingLatePreflightRepair) {
+            return false;
+          }
+
+          pendingLatePreflightCandidate = undefined;
+          const currentContext = contextManagerRef.current.getState();
+          const currentSettlement = currentQuestionSettlementRef.current;
+          const repairLease: LateScreenPreflightRepairLease = {
+            sourceOperationId: screenOperationId,
+            sourcePreflightLeaseRevision:
+              candidate.sourcePreflightLeaseRevision,
+            sourceObservationId: observation.id,
+            sessionId: screenRequestContextState.sessionId,
+            runtimeEpoch: screenRuntimeToken.runtimeEpoch,
+            settlementId: settlement.settlementId,
+            settlementRevision: settlement.revision,
+            baseVisibleAnswerRevision:
+              screenBaseVisibleAnswerRevision,
+            manualCorrectionRevision:
+              screenBaseManualCorrectionRevision,
+            questionType: candidate.preflight.questionType,
+            createdAt: candidate.observedAt,
+          };
+          const repairAuthorization =
+            authorizeLateScreenPreflightRepair({
+              stage: "candidate",
+              lease: repairLease,
+              runtimeActive: runtimeActiveRef.current,
+              activeOperationId:
+                screenOperationCoordinatorRef.current.getActiveOperationId(),
+              currentSessionId: currentContext.sessionId,
+              currentRuntimeEpoch: runtimeEpochRef.current,
+              currentObservationId:
+                currentContext.screenObservations.at(-1)?.id,
+              currentSettlementId: currentSettlement?.settlementId,
+              currentSettlementRevision: currentSettlement?.revision,
+              currentVisibleAnswerRevision:
+                visibleAnswerRevisionRef.current,
+              currentManualCorrectionRevision:
+                manualCorrectionRevisionRef.current,
+            });
+          const repairMetadata =
+            formatLateScreenPreflightRepairForTrace({
+              lease: repairLease,
+              authorization: repairAuthorization,
+              stage: "candidate",
+            });
+          traceStoreRef.current.updateMetadata(trace.id, repairMetadata);
+          sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+            stage: "late-screen-preflight-repair-candidate",
+            traceId: trace.id,
+            ...repairMetadata,
+          });
+          if (!repairAuthorization.authorized) return false;
+
+          pendingLatePreflightRepair = {
+            lease: repairLease,
+            observation,
+            preflight: candidate.preflight,
+            sourceTraceId: trace.id,
+            voiceQuestionCapsule: screenVoiceQuestionCapsule,
+            exactVisualEvidenceRecovery:
+              screenExactVisualEvidenceRecovery,
+          };
+          responseActionRevisionRef.current += 1;
+          traceStoreRef.current.updateMetadata(trace.id, {
+            lateScreenPreflightRepairAwaitingSettlement: false,
+            lateScreenPreflightRepairScheduled: true,
+            lateScreenPreflightRepairScheduledAt: Date.now(),
+            lateScreenPreflightRepairResponseActionRevision:
+              responseActionRevisionRef.current,
+          });
+          analysisController?.abort(
+            "late-valid-screen-preflight-repair"
+          );
+          return true;
+        };
         screenCaptureSucceeded = true;
         const postCaptureAuthorization = readScreenAuthorization();
         const recoverableParentDrift =
@@ -26490,91 +26582,31 @@ export function useMeetingAssistant() {
                   traceId: trace.id,
                   ...metadata,
                 });
-                if (pendingLatePreflightRepair) return;
+                if (
+                  pendingLatePreflightRepair ||
+                  pendingLatePreflightCandidate
+                ) {
+                  return;
+                }
                 const lateQuestionType =
                   normalizeCanonicalQuestionType(
                     lateResult.canonicalQuestionType ??
                       lateResult.result.canonicalQuestionType ??
                       lateResult.result.questionType
                   ) ?? "unknown";
-                const currentContext =
-                  contextManagerRef.current.getState();
-                const currentSettlement =
-                  currentQuestionSettlementRef.current;
-                const repairLease: LateScreenPreflightRepairLease = {
-                  sourceOperationId: screenOperationId,
+                pendingLatePreflightCandidate = {
+                  preflight: {
+                    ...lateResult.result,
+                    questionType: lateQuestionType,
+                  },
                   sourcePreflightLeaseRevision:
                     lateResult.leaseRevision,
-                  sourceObservationId: observation.id,
-                  sessionId: screenRequestContextState.sessionId,
-                  runtimeEpoch: screenRuntimeToken.runtimeEpoch,
-                  settlementId:
-                    currentSettlement?.settlementId ?? "missing",
-                  settlementRevision:
-                    currentSettlement?.revision ?? -1,
-                  baseVisibleAnswerRevision:
-                    screenBaseVisibleAnswerRevision,
-                  manualCorrectionRevision:
-                    screenBaseManualCorrectionRevision,
-                  questionType: lateQuestionType,
-                  createdAt: lateResult.observedAt,
+                  observedAt: lateResult.observedAt,
                 };
-                const repairAuthorization =
-                  authorizeLateScreenPreflightRepair({
-                    stage: "candidate",
-                    lease: repairLease,
-                    runtimeActive: runtimeActiveRef.current,
-                    activeOperationId:
-                      screenOperationCoordinatorRef.current.getActiveOperationId(),
-                    currentSessionId: currentContext.sessionId,
-                    currentRuntimeEpoch: runtimeEpochRef.current,
-                    currentObservationId:
-                      currentContext.screenObservations.at(-1)?.id,
-                    currentSettlementId:
-                      currentSettlement?.settlementId,
-                    currentSettlementRevision:
-                      currentSettlement?.revision,
-                    currentVisibleAnswerRevision:
-                      visibleAnswerRevisionRef.current,
-                    currentManualCorrectionRevision:
-                      manualCorrectionRevisionRef.current,
-                  });
-                const repairMetadata =
-                  formatLateScreenPreflightRepairForTrace({
-                    lease: repairLease,
-                    authorization: repairAuthorization,
-                    stage: "candidate",
-                  });
-                traceStoreRef.current.updateMetadata(
-                  trace.id,
-                  repairMetadata
-                );
-                sessionRecordingManagerRef.current?.recordCaptureLifecycle({
-                  stage: "late-screen-preflight-repair-candidate",
-                  traceId: trace.id,
-                  ...repairMetadata,
-                });
-                if (!repairAuthorization.authorized) return;
-
-                pendingLatePreflightRepair = {
-                  lease: repairLease,
-                  observation,
-                  preflight: lateResult.result,
-                  sourceTraceId: trace.id,
-                  voiceQuestionCapsule: screenVoiceQuestionCapsule,
-                  exactVisualEvidenceRecovery:
-                    screenExactVisualEvidenceRecovery,
-                };
-                responseActionRevisionRef.current += 1;
                 traceStoreRef.current.updateMetadata(trace.id, {
-                  lateScreenPreflightRepairScheduled: true,
-                  lateScreenPreflightRepairScheduledAt: Date.now(),
-                  lateScreenPreflightRepairResponseActionRevision:
-                    responseActionRevisionRef.current,
+                  lateScreenPreflightRepairAwaitingSettlement: true,
                 });
-                analysisController?.abort(
-                  "late-valid-screen-preflight-repair"
-                );
+                schedulePendingLatePreflightRepair();
               },
             });
           const preflightPromise = preflightScreenObservation({
@@ -27570,9 +27602,6 @@ export function useMeetingAssistant() {
         let screenDeterministicSettlementProposal:
           | CurrentQuestionSettlementProposal
           | undefined;
-        let screenCurrentQuestionSettlement:
-          | ReturnType<typeof settleCurrentQuestion>
-          | undefined;
         let taskRelationAdjudicationHandle:
           | TaskRelationAdjudicationScheduleHandle
           | undefined;
@@ -27982,6 +28011,9 @@ export function useMeetingAssistant() {
             currentQuestionSettlementAppliedToSettlement: true,
             currentQuestionSettlementAppliedToParent: false,
           });
+          if (schedulePendingLatePreflightRepair()) {
+            throw new Error("late-valid-screen-preflight-repair");
+          }
         }
         const settledScreenQuestionType =
           screenCurrentQuestionSettlement?.questionType ??

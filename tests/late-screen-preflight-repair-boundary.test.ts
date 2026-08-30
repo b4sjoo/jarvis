@@ -7,7 +7,7 @@ const hookSource = readFileSync(
   "utf8"
 );
 
-test("routes a late valid preflight through the bounded repair lease", () => {
+test("defers a late valid preflight until the current settlement exists", () => {
   const callbackStart = hookSource.indexOf(
     "onLateResult: (lateResult) => {"
   );
@@ -19,14 +19,32 @@ test("routes a late valid preflight through the bounded repair lease", () => {
   assert.ok(callbackEnd > callbackStart);
   const callback = hookSource.slice(callbackStart, callbackEnd);
 
-  assert.match(callback, /authorizeLateScreenPreflightRepair\(\{/);
-  assert.match(callback, /stage: "candidate"/);
-  assert.match(callback, /currentObservationId:/);
-  assert.match(callback, /currentSettlementId:/);
-  assert.match(callback, /currentVisibleAnswerRevision:/);
-  assert.match(callback, /currentManualCorrectionRevision:/);
-  assert.match(callback, /responseActionRevisionRef\.current \+= 1/);
-  assert.match(callback, /late-valid-screen-preflight-repair/);
+  assert.match(callback, /pendingLatePreflightCandidate = \{/);
+  assert.match(callback, /lateScreenPreflightRepairAwaitingSettlement: true/);
+  assert.match(callback, /schedulePendingLatePreflightRepair\(\)/);
+  assert.doesNotMatch(callback, /settlementId:\s+currentSettlement/);
+  assert.doesNotMatch(callback, /responseActionRevisionRef\.current \+= 1/);
+});
+
+test("binds the repair lease to the current Screen settlement", () => {
+  const schedulerStart = hookSource.indexOf(
+    "const schedulePendingLatePreflightRepair = () => {"
+  );
+  const schedulerEnd = hookSource.indexOf(
+    "screenCaptureSucceeded = true",
+    schedulerStart
+  );
+  assert.ok(schedulerStart >= 0);
+  assert.ok(schedulerEnd > schedulerStart);
+  const scheduler = hookSource.slice(schedulerStart, schedulerEnd);
+
+  assert.match(scheduler, /const settlement = screenCurrentQuestionSettlement/);
+  assert.match(scheduler, /settlementId: settlement\.settlementId/);
+  assert.match(scheduler, /settlementRevision: settlement\.revision/);
+  assert.match(scheduler, /authorizeLateScreenPreflightRepair\(\{/);
+  assert.match(scheduler, /stage: "candidate"/);
+  assert.match(scheduler, /responseActionRevisionRef\.current \+= 1/);
+  assert.match(scheduler, /late-valid-screen-preflight-repair/);
 });
 
 test("replays the same observation through the existing Screen pipeline", () => {
