@@ -101,6 +101,12 @@ import {
   formatVisibleAnswerResponseActionTargetForTrace,
   resolveVisibleAnswerResponseActionTarget,
 } from "@/lib/meeting/response-action-target";
+import {
+  createManualRuntimeActionEvent,
+  type ManualRuntimeActionEventStage,
+  type ManualRuntimeActionKind,
+  type ManualRuntimeActionTerminalDisposition,
+} from "@/lib/meeting/manual-runtime-action";
 import { materializeHumanEvaluationAttemptProjectionV2 } from "@/lib/meeting/human-evaluation-attempt-projection";
 import { validateHumanEvaluationAttemptSubjectV2 } from "@/lib/meeting/human-evaluation-attempt";
 import { toHumanEvaluationCollectionProvenance } from "@/lib/meeting/session-evaluation-provenance";
@@ -3320,6 +3326,33 @@ export function useMeetingAssistant() {
   const responseActionRevisionRef = useRef(0);
   const visibleAnswerRevisionRef = useRef(0);
   const stableAnswerRevisionRef = useRef<StableAnswerRevision | null>(null);
+  const recordManualRuntimeAction = useCallback(
+    (input: {
+      actionId: string;
+      action: ManualRuntimeActionKind;
+      stage: ManualRuntimeActionEventStage;
+      traceId?: string;
+      observedLogicalQuestionUnitId?: string;
+      observedLogicalQuestionUnitRevision?: number;
+      observedTaskId?: string;
+      specializedEventId?: string;
+      terminalDisposition?: ManualRuntimeActionTerminalDisposition;
+      reason?: string;
+      occurredAt?: number;
+    }) => {
+      const runtimeState = contextManagerRef.current.getState();
+      return sessionRecordingManagerRef.current?.recordManualRuntimeAction(
+        createManualRuntimeActionEvent({
+          ...input,
+          runtimeSessionId: runtimeState.sessionId,
+          runtimeEpoch: runtimeEpochRef.current,
+          observedVisibleAnswerRevision:
+            visibleAnswerRevisionRef.current,
+        })
+      );
+    },
+    []
+  );
   const codingSolutionManifestCacheRef = useRef(
     new Map<string, CodingSolutionManifest>()
   );
@@ -9638,6 +9671,17 @@ export function useMeetingAssistant() {
   );
 
   const clearActiveTask = useCallback(() => {
+    const actionId = createMeetingId("manual_action");
+    const currentRuntime = contextManagerRef.current.getState();
+    recordManualRuntimeAction({
+      actionId,
+      action: "clear-task",
+      stage: "requested",
+      observedLogicalQuestionUnitId: logicalQuestionUnitRef.current?.id,
+      observedLogicalQuestionUnitRevision:
+        logicalQuestionUnitRef.current?.revision,
+      observedTaskId: currentRuntime.activeMeetingTask?.id,
+    });
     const previousStableAnswer = stableAnswerRevisionRef.current;
     const previousPendingAnswer = pendingAnswerRevisionRef.current;
     advanceRuntimeEpoch("active-task-cleared");
@@ -9676,11 +9720,19 @@ export function useMeetingAssistant() {
         visibleAnswerRevision: visibleAnswerRevisionRef.current,
       }),
     }));
+    recordManualRuntimeAction({
+      actionId,
+      action: "clear-task",
+      stage: "terminal",
+      terminalDisposition: "completed",
+      reason: "active-task-cleared",
+    });
   }, [
     advanceRuntimeEpoch,
     cancelActiveAdvisorJob,
     clearPendingAnswerCommitTimer,
     clearPendingSentenceCompletionForRuntimeReset,
+    recordManualRuntimeAction,
   ]);
 
   const stop = useCallback(async () => {
@@ -32292,18 +32344,66 @@ export function useMeetingAssistant() {
   );
 
   const regenerateSuggestion = useCallback(async () => {
-    flushPendingSentenceCompletion("regenerate");
-    await runAdvisor({
-      force: true,
-      mode: "regenerate",
-      currentSuggestion: currentSuggestionText,
-      advisorJobSource: "regenerate",
-      taskMutationAuthority: "preserve-parent",
-      questionLineage: resolveCurrentSuggestionQuestionLineage(),
+    const actionId = createMeetingId("manual_action");
+    const currentRuntime = contextManagerRef.current.getState();
+    const currentLogicalQuestionUnit = logicalQuestionUnitRef.current;
+    recordManualRuntimeAction({
+      actionId,
+      action: "regenerate",
+      stage: "requested",
+      observedLogicalQuestionUnitId: currentLogicalQuestionUnit?.id,
+      observedLogicalQuestionUnitRevision:
+        currentLogicalQuestionUnit?.revision,
+      observedTaskId: currentRuntime.activeMeetingTask?.id,
     });
+    flushPendingSentenceCompletion("regenerate");
+    recordManualRuntimeAction({
+      actionId,
+      action: "regenerate",
+      stage: "accepted",
+      observedLogicalQuestionUnitId: currentLogicalQuestionUnit?.id,
+      observedLogicalQuestionUnitRevision:
+        currentLogicalQuestionUnit?.revision,
+      observedTaskId: currentRuntime.activeMeetingTask?.id,
+    });
+    try {
+      await runAdvisor({
+        force: true,
+        mode: "regenerate",
+        currentSuggestion: currentSuggestionText,
+        advisorJobSource: "regenerate",
+        taskMutationAuthority: "preserve-parent",
+        questionLineage: resolveCurrentSuggestionQuestionLineage(),
+      });
+      recordManualRuntimeAction({
+        actionId,
+        action: "regenerate",
+        stage: "terminal",
+        terminalDisposition: "completed",
+        observedLogicalQuestionUnitId: currentLogicalQuestionUnit?.id,
+        observedLogicalQuestionUnitRevision:
+          currentLogicalQuestionUnit?.revision,
+        observedTaskId: currentRuntime.activeMeetingTask?.id,
+      });
+    } catch (error) {
+      recordManualRuntimeAction({
+        actionId,
+        action: "regenerate",
+        stage: "terminal",
+        terminalDisposition: "failed",
+        observedLogicalQuestionUnitId: currentLogicalQuestionUnit?.id,
+        observedLogicalQuestionUnitRevision:
+          currentLogicalQuestionUnit?.revision,
+        observedTaskId: currentRuntime.activeMeetingTask?.id,
+        reason:
+          error instanceof Error ? error.message : "regenerate-failed",
+      });
+      throw error;
+    }
   }, [
     currentSuggestionText,
     flushPendingSentenceCompletion,
+    recordManualRuntimeAction,
     resolveCurrentSuggestionQuestionLineage,
     runAdvisor,
   ]);
@@ -32539,9 +32639,27 @@ export function useMeetingAssistant() {
   );
 
   const forceAdviseLatestTurn = useCallback(async () => {
+    const manualActionId = createMeetingId("manual_action");
+    const requestedRuntime = contextManagerRef.current.getState();
+    recordManualRuntimeAction({
+      actionId: manualActionId,
+      action: "force-advise",
+      stage: "requested",
+      observedLogicalQuestionUnitId: logicalQuestionUnitRef.current?.id,
+      observedLogicalQuestionUnitRevision:
+        logicalQuestionUnitRef.current?.revision,
+      observedTaskId: requestedRuntime.activeMeetingTask?.id,
+    });
     flushPendingSentenceCompletion("force-advise");
     const target = latestForceAdviseTargetRef.current;
     if (!target) {
+      recordManualRuntimeAction({
+        actionId: manualActionId,
+        action: "force-advise",
+        stage: "terminal",
+        terminalDisposition: "rejected",
+        reason: "no-recent-interviewer-turn",
+      });
       setState((previous) => ({
         ...previous,
         error: "There is no recent interviewer turn to advise on.",
@@ -32559,6 +32677,17 @@ export function useMeetingAssistant() {
       }
     );
     if (!eligibility.eligible) {
+      recordManualRuntimeAction({
+        actionId: manualActionId,
+        action: "force-advise",
+        stage: "terminal",
+        observedLogicalQuestionUnitId: target.logicalQuestionUnit.id,
+        observedLogicalQuestionUnitRevision:
+          target.logicalQuestionUnit.revision,
+        observedTaskId: requestedRuntime.activeMeetingTask?.id,
+        terminalDisposition: "rejected",
+        reason: eligibility.reason,
+      });
       return;
     }
     const activeContextState = contextManagerRef.current.getState();
@@ -32589,6 +32718,17 @@ export function useMeetingAssistant() {
       }
     );
     if (!ownershipAuthorization.authorized) {
+      recordManualRuntimeAction({
+        actionId: manualActionId,
+        action: "force-advise",
+        stage: "terminal",
+        observedLogicalQuestionUnitId: target.logicalQuestionUnit.id,
+        observedLogicalQuestionUnitRevision:
+          target.logicalQuestionUnit.revision,
+        observedTaskId: activeContextState.activeMeetingTask?.id,
+        terminalDisposition: "stale",
+        reason: ownershipAuthorization.reason,
+      });
       const failedPresentation: ForceAdviseTargetPresentation = {
         ...target.presentation,
         status: "stale",
@@ -32628,6 +32768,19 @@ export function useMeetingAssistant() {
       ),
     });
     const requestedAt = Date.now();
+    const forceAdviseEvaluationActionId = `force-advise:${target.logicalQuestionUnit.id}:${target.logicalQuestionUnit.revision}`;
+    recordManualRuntimeAction({
+      actionId: manualActionId,
+      action: "force-advise",
+      stage: "accepted",
+      traceId: repairTrace.id,
+      observedLogicalQuestionUnitId: target.logicalQuestionUnit.id,
+      observedLogicalQuestionUnitRevision:
+        target.logicalQuestionUnit.revision,
+      observedTaskId: activeContextState.activeMeetingTask?.id,
+      specializedEventId: forceAdviseEvaluationActionId,
+      occurredAt: requestedAt,
+    });
     const forceAdviseEvaluationCollection =
       toHumanEvaluationCollectionProvenance(
         sessionRecordingManagerRef.current?.getState()
@@ -32737,7 +32890,7 @@ export function useMeetingAssistant() {
       {
         source: "manual-force-advise",
         collection: forceAdviseEvaluationCollection,
-        actionId: `force-advise:${target.logicalQuestionUnit.id}:${target.logicalQuestionUnit.revision}`,
+        actionId: forceAdviseEvaluationActionId,
         repairTraceId: repairTrace.id,
         uiSurface: "meeting-response-actions",
         evaluationTarget: {
@@ -32804,6 +32957,21 @@ export function useMeetingAssistant() {
           pendingAnswerOperationId: pendingCandidate.operationId,
           visibleAnswerRevision: visibleAnswerRevisionRef.current,
         });
+        recordManualRuntimeAction({
+          actionId: manualActionId,
+          action: "force-advise",
+          stage: "terminal",
+          traceId: repairTrace.id,
+          observedLogicalQuestionUnitId: target.logicalQuestionUnit.id,
+          observedLogicalQuestionUnitRevision:
+            target.logicalQuestionUnit.revision,
+          observedTaskId:
+            contextManagerRef.current.getState().activeMeetingTask?.id,
+          specializedEventId: forceAdviseEvaluationActionId,
+          terminalDisposition: "completed",
+          reason: "pending-candidate-visible-commit",
+          occurredAt: completedAt,
+        });
         return;
       }
     }
@@ -32846,9 +33014,27 @@ export function useMeetingAssistant() {
         forceAdviseRepairCompletedAt: completedAt,
       },
     });
+    recordManualRuntimeAction({
+      actionId: manualActionId,
+      action: "force-advise",
+      stage: "terminal",
+      traceId: repairTrace.id,
+      observedLogicalQuestionUnitId: target.logicalQuestionUnit.id,
+      observedLogicalQuestionUnitRevision:
+        target.logicalQuestionUnit.revision,
+      observedTaskId:
+        contextManagerRef.current.getState().activeMeetingTask?.id,
+      specializedEventId: forceAdviseEvaluationActionId,
+      terminalDisposition: repaired ? "completed" : "failed",
+      reason: repaired
+        ? "visible-answer-committed"
+        : completedTrace?.error ?? "visible-answer-not-committed",
+      occurredAt: completedAt,
+    });
   }, [
     flushPendingSentenceCompletion,
     recordHumanGroundTruthV2,
+    recordManualRuntimeAction,
     refreshRecordedCompletedTrace,
     runAdvisor,
     transitionForceAdviseTarget,
@@ -32859,10 +33045,52 @@ export function useMeetingAssistant() {
 
   const applyResponseAction = useCallback(
     async (responseAction: MeetingResponseActionMode) => {
+      const manualAction =
+        responseAction === "speakable" ? undefined : responseAction;
+      const manualActionId = manualAction
+        ? createMeetingId("manual_action")
+        : undefined;
+      const requestedRuntime = contextManagerRef.current.getState();
+      const recordResponseAction = (input: {
+        stage: ManualRuntimeActionEventStage;
+        traceId?: string;
+        logicalQuestionUnitId?: string;
+        logicalQuestionUnitRevision?: number;
+        taskId?: string;
+        terminalDisposition?: ManualRuntimeActionTerminalDisposition;
+        reason?: string;
+      }) => {
+        if (!manualAction || !manualActionId) return;
+        recordManualRuntimeAction({
+          actionId: manualActionId,
+          action: manualAction,
+          stage: input.stage,
+          traceId: input.traceId,
+          observedLogicalQuestionUnitId:
+            input.logicalQuestionUnitId,
+          observedLogicalQuestionUnitRevision:
+            input.logicalQuestionUnitRevision,
+          observedTaskId: input.taskId,
+          terminalDisposition: input.terminalDisposition,
+          reason: input.reason,
+        });
+      };
+      recordResponseAction({
+        stage: "requested",
+        logicalQuestionUnitId: logicalQuestionUnitRef.current?.id,
+        logicalQuestionUnitRevision:
+          logicalQuestionUnitRef.current?.revision,
+        taskId: requestedRuntime.activeMeetingTask?.id,
+      });
       flushPendingSentenceCompletion(
         responseAction === "next-phase" ? "manual-next" : "response-action"
       );
       if (!currentSuggestionText.trim()) {
+        recordResponseAction({
+          stage: "terminal",
+          terminalDisposition: "rejected",
+          reason: "no-visible-answer",
+        });
         setState((previous) => ({
           ...previous,
           error: NO_SUGGESTION_MESSAGE,
@@ -32871,6 +33099,11 @@ export function useMeetingAssistant() {
       }
 
       if (responseAction === "next-phase" && !state.activeMeetingTask) {
+        recordResponseAction({
+          stage: "terminal",
+          terminalDisposition: "rejected",
+          reason: "no-active-task",
+        });
         setState((previous) => ({
           ...previous,
           error: NO_ACTIVE_TASK_MESSAGE,
@@ -32891,6 +33124,11 @@ export function useMeetingAssistant() {
               )
             : undefined);
         if (!existingInterviewTask) {
+          recordResponseAction({
+            stage: "terminal",
+            terminalDisposition: "rejected",
+            reason: "no-active-task",
+          });
           setState((previous) => ({
             ...previous,
             error: NO_ACTIVE_TASK_MESSAGE,
@@ -32965,8 +33203,29 @@ export function useMeetingAssistant() {
                   ? "There is no previous committed playbook phase."
                   : `Back was not applied: ${decision.reason}`,
             }));
+            recordResponseAction({
+              stage: "terminal",
+              traceId: trace.id,
+              logicalQuestionUnitId:
+                phaseNavigationLogicalQuestionUnit?.id,
+              logicalQuestionUnitRevision:
+                phaseNavigationLogicalQuestionUnit?.revision,
+              taskId: existingInterviewTask.id,
+              terminalDisposition: "rejected",
+              reason: decision.reason,
+            });
             return;
           }
+
+          recordResponseAction({
+            stage: "accepted",
+            traceId: trace.id,
+            logicalQuestionUnitId:
+              phaseNavigationLogicalQuestionUnit?.id,
+            logicalQuestionUnitRevision:
+              phaseNavigationLogicalQuestionUnit?.revision,
+            taskId: existingInterviewTask.id,
+          });
 
           const updatedInterviewTask: ActiveInterviewParent = {
             ...existingInterviewTask,
@@ -33028,6 +33287,25 @@ export function useMeetingAssistant() {
             logicalQuestionUnit:
               phaseNavigationLogicalQuestionUnit,
           });
+          const completedTrace = traceStoreRef.current
+            .getTraces()
+            .find((candidate) => candidate.id === trace.id);
+          recordResponseAction({
+            stage: "terminal",
+            traceId: trace.id,
+            logicalQuestionUnitId:
+              phaseNavigationLogicalQuestionUnit?.id,
+            logicalQuestionUnitRevision:
+              phaseNavigationLogicalQuestionUnit?.revision,
+            taskId: existingInterviewTask.id,
+            terminalDisposition:
+              completedTrace?.status === "error"
+                ? "failed"
+                : completedTrace?.status === "cancelled"
+                  ? "cancelled"
+                  : "completed",
+            reason: completedTrace?.error,
+          });
           return;
         }
 
@@ -33056,6 +33334,15 @@ export function useMeetingAssistant() {
               ),
             }
           );
+          recordResponseAction({
+            stage: "accepted",
+            traceId: trace.id,
+            logicalQuestionUnitId:
+              phaseNavigationLogicalQuestionUnit?.id,
+            logicalQuestionUnitRevision:
+              phaseNavigationLogicalQuestionUnit?.revision,
+            taskId: existingInterviewTask.id,
+          });
           await runAdvisor({
             force: true,
             mode: "response-action",
@@ -33071,6 +33358,25 @@ export function useMeetingAssistant() {
             manualPhaseTargetOverride:
               forwardDecision.targetPhase,
             manualPhaseOperationId: operationId,
+          });
+          const completedTrace = traceStoreRef.current
+            .getTraces()
+            .find((candidate) => candidate.id === trace.id);
+          recordResponseAction({
+            stage: "terminal",
+            traceId: trace.id,
+            logicalQuestionUnitId:
+              phaseNavigationLogicalQuestionUnit?.id,
+            logicalQuestionUnitRevision:
+              phaseNavigationLogicalQuestionUnit?.revision,
+            taskId: existingInterviewTask.id,
+            terminalDisposition:
+              completedTrace?.status === "error"
+                ? "failed"
+                : completedTrace?.status === "cancelled"
+                  ? "cancelled"
+                  : "completed",
+            reason: completedTrace?.error,
           });
           return;
         }
@@ -33115,6 +33421,16 @@ export function useMeetingAssistant() {
                 ? "Enhance target changed. Use the latest visible answer and try again."
                 : "Narrow target changed. Use the latest visible answer and try again.",
           }));
+          recordResponseAction({
+            stage: "terminal",
+            traceId: responseActionTrace.id,
+            logicalQuestionUnitId: logicalQuestionUnit?.id,
+            logicalQuestionUnitRevision:
+              logicalQuestionUnit?.revision,
+            taskId: meetingContext.activeMeetingTask?.id,
+            terminalDisposition: "stale",
+            reason: targetDecision.reason,
+          });
           return;
         }
 
@@ -33157,6 +33473,16 @@ export function useMeetingAssistant() {
                 ? "Enhance target changed. Use the latest visible answer and try again."
                 : "Narrow target changed. Use the latest visible answer and try again.",
           }));
+          recordResponseAction({
+            stage: "terminal",
+            traceId: responseActionTrace.id,
+            logicalQuestionUnitId: logicalQuestionUnit.id,
+            logicalQuestionUnitRevision:
+              logicalQuestionUnit.revision,
+            taskId: meetingContext.activeMeetingTask?.id,
+            terminalDisposition: "stale",
+            reason: "source-hash-mismatch",
+          });
           return;
         }
         traceStoreRef.current.updateMetadata(responseActionTrace.id, {
@@ -33189,6 +33515,15 @@ export function useMeetingAssistant() {
           },
         };
 
+        recordResponseAction({
+          stage: "accepted",
+          traceId: responseActionTrace.id,
+          logicalQuestionUnitId: logicalQuestionUnit.id,
+          logicalQuestionUnitRevision:
+            logicalQuestionUnit.revision,
+          taskId: meetingContext.activeMeetingTask?.id,
+        });
+
         await runAdvisor({
           force: true,
           mode: "response-action",
@@ -33202,9 +33537,36 @@ export function useMeetingAssistant() {
           promptContextOverride,
           currentQuestionSettlementOverride: committedSettlement,
         });
+        const completedTrace = traceStoreRef.current
+          .getTraces()
+          .find(
+            (candidate) => candidate.id === responseActionTrace.id
+          );
+        recordResponseAction({
+          stage: "terminal",
+          traceId: responseActionTrace.id,
+          logicalQuestionUnitId: logicalQuestionUnit.id,
+          logicalQuestionUnitRevision:
+            logicalQuestionUnit.revision,
+          taskId: meetingContext.activeMeetingTask?.id,
+          terminalDisposition:
+            completedTrace?.status === "error"
+              ? "failed"
+              : completedTrace?.status === "cancelled"
+                ? "cancelled"
+                : "completed",
+          reason: completedTrace?.error,
+        });
         return;
       }
 
+      recordResponseAction({
+        stage: "accepted",
+        logicalQuestionUnitId: logicalQuestionUnitRef.current?.id,
+        logicalQuestionUnitRevision:
+          logicalQuestionUnitRef.current?.revision,
+        taskId: contextManagerRef.current.getState().activeMeetingTask?.id,
+      });
       await runAdvisor({
         force: true,
         mode: "response-action",
@@ -33214,10 +33576,19 @@ export function useMeetingAssistant() {
         taskMutationAuthority: "preserve-parent",
         questionLineage: resolveCurrentSuggestionQuestionLineage(),
       });
+      recordResponseAction({
+        stage: "terminal",
+        logicalQuestionUnitId: logicalQuestionUnitRef.current?.id,
+        logicalQuestionUnitRevision:
+          logicalQuestionUnitRef.current?.revision,
+        taskId: contextManagerRef.current.getState().activeMeetingTask?.id,
+        terminalDisposition: "completed",
+      });
     },
     [
       currentSuggestionText,
       flushPendingSentenceCompletion,
+      recordManualRuntimeAction,
       resolveCurrentSuggestionQuestionLineage,
       runAdvisor,
       state.activeMeetingTask,

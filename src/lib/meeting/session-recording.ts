@@ -84,6 +84,7 @@ import type {
   RuntimeRegressionRunRecordV1,
   RuntimeRegressionStepEventV1,
 } from "./runtime-regression.js";
+import type { ManualRuntimeActionEventV1 } from "./manual-runtime-action.js";
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
 const SESSION_RECORDING_INTEGRITY_SCHEMA_VERSION = 1;
@@ -177,6 +178,7 @@ interface SessionRecordingEvent {
     | "session-evaluation-provenance"
     | "runtime-regression-run"
     | "runtime-regression-step"
+    | "manual-runtime-action"
     | "runtime-reset"
     | "runtime-continued"
     | "error";
@@ -1677,6 +1679,40 @@ export class SessionRecordingManager {
       terminalDisposition: event.terminalDisposition,
       traceId: event.traceId,
     });
+    return true;
+  }
+
+  recordManualRuntimeAction(event: ManualRuntimeActionEventV1) {
+    const session = this.getWritableSession({
+      traceId: event.traceId,
+      startedAt: event.occurredAt,
+    });
+    if (!session) return false;
+    if (event.traceId) session.recordedTraceIds.add(event.traceId);
+    this.enqueue(session, () =>
+      this.appendJsonl(
+        session,
+        "runtime-regression/manual-actions.v1.jsonl",
+        event
+      )
+    );
+    this.recordEvent(
+      "manual-runtime-action",
+      {
+        actionId: event.actionId,
+        action: event.action,
+        stage: event.stage,
+        runtimeSessionId: event.runtimeSessionId,
+        runtimeEpoch: event.runtimeEpoch,
+        uiSurface: event.uiSurface,
+        traceId: event.traceId,
+        terminalDisposition: event.terminalDisposition,
+        reason: event.reason,
+      },
+      undefined,
+      event.traceId,
+      event.observedTaskId
+    );
     return true;
   }
 

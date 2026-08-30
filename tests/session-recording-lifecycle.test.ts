@@ -30,6 +30,7 @@ import {
   createRuntimeRegressionRunRecord,
   createRuntimeRegressionStepEvent,
 } from "../src/lib/meeting/runtime-regression.js";
+import { createManualRuntimeActionEvent } from "../src/lib/meeting/manual-runtime-action.js";
 import { parseMeetingAnswer } from "../src/lib/meeting/meeting-answer.js";
 import type {
   PreparationArtifactEvaluation,
@@ -237,6 +238,54 @@ test("records matching runtime regression run and step artifacts only", async ()
   assert.match(stringArg(runWrite, "payload"), /scenario-run-1/);
   assert.match(stringArg(stepWrite, "payload"), /step-1/);
   assert.doesNotMatch(stringArg(stepWrite, "payload"), /step-2/);
+});
+
+test("records requested and rejected manual actions outside Scenario Runner", async () => {
+  const native = new ControlledRecordingInvoke();
+  const manager = new SessionRecordingManager(undefined, native.invoke);
+  await manager.start(START_OPTIONS);
+  const requestedAt = Date.now();
+
+  assert.equal(
+    manager.recordManualRuntimeAction(
+      createManualRuntimeActionEvent({
+        actionId: "manual-action-1",
+        action: "next-phase",
+        stage: "requested",
+        runtimeSessionId: START_OPTIONS.meetingSessionId,
+        runtimeEpoch: 3,
+        occurredAt: requestedAt,
+      })
+    ),
+    true
+  );
+  assert.equal(
+    manager.recordManualRuntimeAction(
+      createManualRuntimeActionEvent({
+        actionId: "manual-action-1",
+        action: "next-phase",
+        stage: "terminal",
+        runtimeSessionId: START_OPTIONS.meetingSessionId,
+        runtimeEpoch: 3,
+        terminalDisposition: "rejected",
+        reason: "no-active-task",
+        occurredAt: requestedAt + 1,
+      })
+    ),
+    true
+  );
+
+  await manager.stop("test-complete");
+  const ledgerWrites = native.calls.filter(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath") ===
+        "runtime-regression/manual-actions.v1.jsonl"
+  );
+  assert.equal(ledgerWrites.length, 2);
+  assert.match(stringArg(ledgerWrites[0]!, "payload"), /"stage":"requested"/);
+  assert.match(stringArg(ledgerWrites[1]!, "payload"), /"stage":"terminal"/);
+  assert.match(stringArg(ledgerWrites[1]!, "payload"), /"no-active-task"/);
 });
 
 test("allows one recording to own evaluation attempts from a later runtime meeting session", async () => {
