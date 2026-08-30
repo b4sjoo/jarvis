@@ -33,7 +33,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "test": "node scripts/clean-test-output.mjs && tsc -p tsconfig.test.json && node --test .tmp-tests/tests/**/*.test.js tests/jarvis-dev-port.test.mjs tests/reflect-session-recordings.test.mjs tests/session-evaluation-provenance.test.mjs tests/session-longitudinal-reflection-cli.test.mjs tests/maintainability-deletion-ledger.test.mjs tests/architecture-guardrails.test.mjs tests/tracked-document-boundary.test.mjs tests/next-major-verification.test.mjs",
+    "test": "node scripts/clean-test-output.mjs && tsc -p tsconfig.test.json && node --test .tmp-tests/tests/**/*.test.js tests/jarvis-dev-port.test.mjs tests/reflect-session-recordings.test.mjs tests/session-evaluation-provenance.test.mjs tests/session-longitudinal-reflection-cli.test.mjs tests/session-procedure-reflection-cli.test.mjs tests/maintainability-deletion-ledger.test.mjs tests/architecture-guardrails.test.mjs tests/tracked-document-boundary.test.mjs tests/next-major-verification.test.mjs",
     "verify:deletion-ledger": "node scripts/verify-maintainability-ledger.mjs",
     "verify:architecture": "node scripts/verify-architecture.mjs --report",
     "verify:next-major": "node scripts/verify-next-major.mjs",
@@ -52,6 +52,7 @@
     "taxonomy:semantic:reflect": "tsc -p tsconfig.semantic-taxonomy-reflection.json && node .tmp-semantic-taxonomy-reflection/scripts/reflect-semantic-taxonomy-session.js",
     "taxonomy:adjudication:reflect": "tsc -p tsconfig.taxonomy-adjudication-reflection.json && node .tmp-taxonomy-adjudication-reflection/scripts/reflect-taxonomy-adjudication-session.js",
     "session:longitudinal:reflect": "tsc -p tsconfig.session-longitudinal-evaluation.json && node .tmp-session-longitudinal-evaluation/scripts/reflect-session-longitudinal-evaluation.js",
+    "session:procedure:reflect": "tsc -p tsconfig.session-procedure.json && node .tmp-session-procedure/scripts/compile-session-procedure.js",
     "session:reflect": "node scripts/set-session-evaluation-provenance.mjs",
     "session:reflect:all": "bash scripts/reflect-session-recordings.sh",
     "preview": "vite preview",

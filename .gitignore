@@ -26,6 +26,7 @@ public/transformers-wasm/
 .tmp-answer-sufficiency-reflection/
 .tmp-taxonomy-adjudication-reflection/
 .tmp-session-longitudinal-evaluation/
+.tmp-session-procedure/
 .tmp-kmb-interview-family-reflection/
 .tmp-kmb-evidence-audit/
 .tmp-local-intent-corpus-readiness/

@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "outDir": ".tmp-session-procedure",
+    "rootDir": ".",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"]
+    },
+    "types": ["node"]
+  },
+  "include": [
+    "src/vite-env.d.ts",
+    "scripts/compile-session-procedure.ts",
+    "scripts/lib/session-evaluation-provenance.ts",
+    "src/lib/meeting/session-procedure.ts",
+    "src/lib/meeting/manual-runtime-action.ts"
+  ]
+}
