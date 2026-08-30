@@ -250,19 +250,23 @@ test("does not roll back a pre-model lifecycle after publication preparation fai
   assert.equal(manager.getTaskRuntimeState().parent?.id, parent.id);
 });
 
-test("freezes the current intermediate authority consumer inventory", async () => {
+test("tracks the remaining Screen compatibility alias after durable migration", async () => {
   const hookSource = await readFile(
     `${process.cwd()}/src/hooks/useMeetingAssistant.ts`,
     "utf8"
   );
   assert.equal(
     hookSource.match(/screenSourceTransitionCommittedBeforeModel/g)?.length,
-    16
+    10
   );
+  assert.match(
+    hookSource,
+    /const screenSourceTransitionCommittedBeforeModel =\s+sourceOwnedTransitionDurablySatisfied/
+  );
+  assert.equal(hookSource.includes("commitSourceOwnedTransition({"), false);
   for (const productConsumer of [
     "screenSourceTransitionAllowsTaskMutation",
     "screenStartedNewInterviewParent",
-    "taskBoundaryCommitted:\n              screenSourceTransitionCommittedBeforeModel",
     "sourceTransitionPrecommitted:\n              screenSourceTransitionCommittedBeforeModel",
     "screenTaskContextCommitted =\n          screenTaskResultCommitted ||\n          screenSourceTransitionCommittedBeforeModel",
   ]) {
