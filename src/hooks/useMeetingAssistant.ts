@@ -15366,7 +15366,8 @@ export function useMeetingAssistant() {
       const codeMutationWithoutCodeIntent =
         Boolean(nextVisibleCode) &&
         nextVisibleCode !== previousVisibleCode &&
-        settledExecutionPlan?.artifactIntent !== "revise-code";
+        settledExecutionPlan?.artifactIntent !== "revise-code" &&
+        !answerGenerationLease?.requestedArtifacts.includes("code");
       if (
         traceId &&
         whiteboardArtifactIntentAuthorized &&
