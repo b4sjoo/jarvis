@@ -190,6 +190,122 @@ test("does not promote action-derived observations into expected truth", () => {
   ]);
 });
 
+test("fails closed when exact expected evidence conflicts", () => {
+  const procedure = buildSessionProcedureV1({
+    recordingSessionId: "recording-conflict",
+    folderName: "session-conflict",
+    sourceDigest: "digest",
+    scriptedValidation: true,
+    forcedScripted: false,
+    recordingIntegrityStatus: "complete",
+    timelineEvents: [
+      {
+        id: "timeline-ingress",
+        kind: "capture-lifecycle",
+        createdAt: 90,
+        metadata: {
+          stage: "canonical-turn-ingress-admitted",
+          canonicalTurnIngressTurnId: "turn-conflict",
+          traceId: "trace-conflict",
+        },
+      },
+      {
+        id: "timeline-turn",
+        kind: "transcript-turn",
+        createdAt: 100,
+        metadata: { turnId: "turn-conflict" },
+      },
+    ],
+    transcriptTurns: [
+      {
+        id: "turn-conflict",
+        speaker: "them",
+        text: "Design this system.",
+        startedAt: 100,
+        endedAt: 100,
+      },
+    ],
+    manualActions: [],
+    humanEvaluationProjections: [
+      projectionForTurn(
+        "turn-conflict",
+        "trace-conflict",
+        explicitSettlementEvent("turn-conflict", "trace-conflict", "coding")
+      ),
+      projectionForTurn(
+        "turn-conflict",
+        "trace-conflict",
+        explicitSettlementEvent(
+          "turn-conflict",
+          "trace-conflict",
+          "ai-ml-system-design"
+        )
+      ),
+    ],
+    generatedAt: 500,
+  });
+
+  assert.equal(procedure.steps[0]?.expected?.questionType, undefined);
+  assert.equal(procedure.steps[0]?.expected?.relation, "new-parent");
+  assert.deepEqual(procedure.steps[0]?.evidenceGaps, [
+    "conflicting-expected-evidence:questionType",
+  ]);
+  assert.equal(procedure.steps[0]?.reviewStatus, "needs-review");
+});
+
+test("does not guess across multiple source-turn evaluation attempts", () => {
+  const procedure = buildSessionProcedureV1({
+    recordingSessionId: "recording-ambiguous",
+    folderName: "session-ambiguous",
+    sourceDigest: "digest",
+    scriptedValidation: true,
+    forcedScripted: false,
+    recordingIntegrityStatus: "complete",
+    timelineEvents: [
+      {
+        id: "timeline-turn",
+        kind: "transcript-turn",
+        createdAt: 100,
+        metadata: { turnId: "turn-ambiguous" },
+      },
+    ],
+    transcriptTurns: [
+      {
+        id: "turn-ambiguous",
+        speaker: "them",
+        text: "Design this system.",
+        startedAt: 100,
+        endedAt: 100,
+      },
+    ],
+    manualActions: [],
+    humanEvaluationProjections: [
+      projectionForTurn(
+        "turn-ambiguous",
+        "trace-one",
+        explicitSettlementEvent("turn-ambiguous", "trace-one", "coding")
+      ),
+      projectionForTurn(
+        "turn-ambiguous",
+        "trace-two",
+        explicitSettlementEvent(
+          "turn-ambiguous",
+          "trace-two",
+          "ai-ml-system-design"
+        )
+      ),
+    ],
+    generatedAt: 500,
+  });
+
+  assert.equal(procedure.steps[0]?.expected, undefined);
+  assert.deepEqual(procedure.steps[0]?.expectedEvidenceRefs, []);
+  assert.deepEqual(procedure.steps[0]?.evidenceGaps, [
+    "ambiguous-source-turn-evaluation-join",
+  ]);
+  assert.equal(procedure.reviewStatus, "needs-review");
+});
+
 function projectionForTurn(
   turnId: string,
   traceId: string,

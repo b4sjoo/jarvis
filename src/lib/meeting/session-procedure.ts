@@ -499,9 +499,8 @@ function attachExpectedContract(
   step: SessionProcedureStepV1,
   projections: HumanEvaluationProjectionV2[]
 ): SessionProcedureStepV1 {
-  const matched = projections.filter((projection) =>
-    projectionMatchesStep(projection, step)
-  );
+  const match = selectExpectedProjectionMatches(projections, step);
+  const matched = match.projections;
   const events = matched.flatMap((projection) =>
     Object.values(projection.activeFacts).filter(
       (event): event is HumanGroundTruthEventV2 =>
@@ -511,16 +510,23 @@ function attachExpectedContract(
   const uniqueEvents = Array.from(
     new Map(events.map((event) => [event.eventId, event])).values()
   );
-  const expected = buildExpectedContract(uniqueEvents);
+  const expectedResolution = resolveExpectedContract(uniqueEvents);
+  const expected = expectedResolution.expected;
   const evidenceRefs = uniqueEvents.map((event) => ({
     eventId: event.eventId,
     factKind: event.fact.kind,
   }));
+  const evidenceGaps = uniqueStrings([
+    ...step.evidenceGaps,
+    ...match.evidenceGaps,
+    ...expectedResolution.evidenceGaps,
+  ]);
   return {
     ...step,
     expected: Object.keys(expected).length ? expected : undefined,
     expectedEvidenceRefs: evidenceRefs,
-    reviewStatus: step.evidenceGaps.length
+    evidenceGaps,
+    reviewStatus: evidenceGaps.length
       ? "needs-review"
       : evidenceRefs.length
         ? "ready"
@@ -530,7 +536,44 @@ function attachExpectedContract(
   };
 }
 
-function projectionMatchesStep(
+function selectExpectedProjectionMatches(
+  projections: HumanEvaluationProjectionV2[],
+  step: SessionProcedureStepV1
+) {
+  const actionMatches = projections.filter((projection) =>
+    projectionMatchesAction(projection, step)
+  );
+  if (actionMatches.length) {
+    return { projections: actionMatches, evidenceGaps: [] as string[] };
+  }
+  if (step.provenance.traceIds.length) {
+    return {
+      projections: projections.filter((projection) =>
+        projection.subject.traceIds.some((id) =>
+          step.provenance.traceIds.includes(id)
+        )
+      ),
+      evidenceGaps: [] as string[],
+    };
+  }
+  const sourceMatches = projections.filter((projection) =>
+    projection.subject.sourceTurnIds.some((id) =>
+      step.provenance.sourceTurnIds.includes(id)
+    )
+  );
+  const identities = uniqueStrings(
+    sourceMatches.map(expectedProjectionIdentity)
+  );
+  if (identities.length > 1) {
+    return {
+      projections: [] as HumanEvaluationProjectionV2[],
+      evidenceGaps: ["ambiguous-source-turn-evaluation-join"],
+    };
+  }
+  return { projections: sourceMatches, evidenceGaps: [] as string[] };
+}
+
+function projectionMatchesAction(
   projection: HumanEvaluationProjectionV2,
   step: SessionProcedureStepV1
 ) {
@@ -551,14 +594,22 @@ function projectionMatchesStep(
   ) {
     return true;
   }
-  if (step.provenance.traceIds.length) {
-    return projection.subject.traceIds.some((id) =>
-      step.provenance.traceIds.includes(id)
-    );
+  return false;
+}
+
+function expectedProjectionIdentity(
+  projection: HumanEvaluationProjectionV2
+) {
+  if (projection.subject.attemptId) {
+    return `attempt:${projection.subject.attemptId}`;
   }
-  return projection.subject.sourceTurnIds.some((id) =>
-    step.provenance.sourceTurnIds.includes(id)
-  );
+  if (projection.subject.traceIds.length) {
+    return `traces:${[...projection.subject.traceIds].sort().join(",")}`;
+  }
+  if (projection.subject.questionId) {
+    return `question:${projection.subject.questionId}`;
+  }
+  return `projection:${projection.projectionId}`;
 }
 
 function humanExpectedEventIsEligible(event: HumanGroundTruthEventV2) {
@@ -569,38 +620,76 @@ function humanExpectedEventIsEligible(event: HumanGroundTruthEventV2) {
   );
 }
 
-function buildExpectedContract(events: HumanGroundTruthEventV2[]) {
-  const expected: SessionProcedureExpectedContract = {};
+function resolveExpectedContract(events: HumanGroundTruthEventV2[]) {
+  const candidates = new Map<
+    keyof SessionProcedureExpectedContract,
+    Array<{ value: string | boolean; eventId: string }>
+  >();
+  const add = (
+    dimension: keyof SessionProcedureExpectedContract,
+    value: string | boolean | undefined,
+    eventId: string
+  ) => {
+    if (value === undefined) return;
+    const existing = candidates.get(dimension) ?? [];
+    existing.push({ value, eventId });
+    candidates.set(dimension, existing);
+  };
   for (const event of events) {
     const fact = event.fact;
     if (fact.kind === "expected-task-settlement") {
-      expected.questionType = fact.expectedQuestionType;
-      expected.relation = fact.expectedRelation;
-      expected.parentAction = fact.expectedParentAction;
-      expected.expectedParentId = fact.expectedParentId;
-      expected.expectedBranchId = fact.expectedBranchId;
-      expected.expectedContextOwnerId = fact.expectedContextOwnerId;
+      add("questionType", fact.expectedQuestionType, event.eventId);
+      add("relation", fact.expectedRelation, event.eventId);
+      add("parentAction", fact.expectedParentAction, event.eventId);
+      add("expectedParentId", fact.expectedParentId, event.eventId);
+      add("expectedBranchId", fact.expectedBranchId, event.eventId);
+      add(
+        "expectedContextOwnerId",
+        fact.expectedContextOwnerId,
+        event.eventId
+      );
     } else if (fact.kind === "expected-question-type") {
-      expected.questionType ??= fact.expectedQuestionType;
+      add("questionType", fact.expectedQuestionType, event.eventId);
     } else if (fact.kind === "expected-runtime-action") {
-      expected.runtimeAction = fact.expectedAction;
+      add("runtimeAction", fact.expectedAction, event.eventId);
     } else if (fact.kind === "expected-context-read-scope") {
-      expected.contextReadScope = fact.expectedScope;
+      add("contextReadScope", fact.expectedScope, event.eventId);
     } else if (fact.kind === "expected-artifact-intent") {
-      expected.artifactIntent = fact.expectedIntent;
+      add("artifactIntent", fact.expectedIntent, event.eventId);
     } else if (fact.kind === "answer-quality") {
-      expected.answerOutcome = fact.outcome;
+      add("answerOutcome", fact.outcome, event.eventId);
     } else if (fact.kind === "expected-project-trajectory") {
-      expected.expectedProjectId = fact.expectedProjectId;
-      expected.expectedProjectName = fact.expectedProjectName;
-      expected.playbookPhase = fact.expectedPhase;
-      expected.factAnchorState = fact.expectedFactAnchorState;
-      expected.childContinuity = fact.expectedChildContinuity;
-      expected.unsupportedFirstPersonClaim =
-        fact.unsupportedFirstPersonClaim;
+      add("expectedProjectId", fact.expectedProjectId, event.eventId);
+      add("expectedProjectName", fact.expectedProjectName, event.eventId);
+      add("playbookPhase", fact.expectedPhase, event.eventId);
+      add("factAnchorState", fact.expectedFactAnchorState, event.eventId);
+      add("childContinuity", fact.expectedChildContinuity, event.eventId);
+      add(
+        "unsupportedFirstPersonClaim",
+        fact.unsupportedFirstPersonClaim,
+        event.eventId
+      );
     }
   }
-  return removeUndefined(expected);
+  const expected: SessionProcedureExpectedContract = {};
+  const evidenceGaps: string[] = [];
+  for (const [dimension, values] of candidates) {
+    const uniqueValues = Array.from(
+      new Set(values.map((candidate) => JSON.stringify(candidate.value)))
+    );
+    if (uniqueValues.length > 1) {
+      evidenceGaps.push(`conflicting-expected-evidence:${dimension}`);
+      continue;
+    }
+    const value = values[0]?.value;
+    if (value !== undefined) {
+      Object.assign(expected, { [dimension]: value });
+    }
+  }
+  return {
+    expected: removeUndefined(expected),
+    evidenceGaps: evidenceGaps.sort(),
+  };
 }
 
 function collectProcedureEvidenceGaps(
