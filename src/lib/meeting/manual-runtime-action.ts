@@ -32,6 +32,11 @@ export interface ManualRuntimeActionIngressDecision {
   reason?: ManualRuntimeActionIngressRejectionReason;
 }
 
+export interface ManualRuntimeActionAdvisorTerminalDecision {
+  disposition?: ManualRuntimeActionTerminalDisposition;
+  reason: string;
+}
+
 export interface ManualRuntimeActionEventV1 {
   schemaVersion: typeof MANUAL_RUNTIME_ACTION_SCHEMA_VERSION;
   actionId: string;
@@ -97,4 +102,56 @@ export function decideManualRuntimeActionIngress(input: {
     return { authorized: false, reason: "no-active-task" };
   }
   return { authorized: true };
+}
+
+export function projectManualRuntimeActionAdvisorTerminal(input: {
+  traceStatus?: "running" | "success" | "error" | "cancelled";
+  advisorOutcome?:
+    | "suppressed"
+    | "model-completed"
+    | "delivery-pending"
+    | "visible-committed"
+    | "stale-dropped"
+    | "cancelled-by-new-job"
+    | "cancelled-by-runtime-boundary"
+    | "error";
+  traceError?: string;
+}): ManualRuntimeActionAdvisorTerminalDecision {
+  if (input.advisorOutcome === "visible-committed") {
+    return { disposition: "completed", reason: "visible-answer-committed" };
+  }
+  if (input.advisorOutcome === "delivery-pending") {
+    return { reason: "delivery-pending" };
+  }
+  if (input.advisorOutcome === "stale-dropped") {
+    return { disposition: "stale", reason: "stale-commit-rejected" };
+  }
+  if (
+    input.advisorOutcome === "cancelled-by-new-job" ||
+    input.advisorOutcome === "cancelled-by-runtime-boundary" ||
+    input.traceStatus === "cancelled"
+  ) {
+    return {
+      disposition: "cancelled",
+      reason: input.advisorOutcome ?? input.traceError ?? "cancelled",
+    };
+  }
+  if (
+    input.advisorOutcome === "error" ||
+    input.advisorOutcome === "model-completed" ||
+    input.advisorOutcome === "suppressed" ||
+    input.traceStatus === "error"
+  ) {
+    return {
+      disposition: "failed",
+      reason:
+        input.traceError ??
+        input.advisorOutcome ??
+        "visible-answer-not-committed",
+    };
+  }
+  return {
+    disposition: "failed",
+    reason: input.traceError ?? "advisor-terminal-missing",
+  };
 }

@@ -104,10 +104,12 @@ import {
 import {
   createManualRuntimeActionEvent,
   decideManualRuntimeActionIngress,
+  projectManualRuntimeActionAdvisorTerminal,
   type ManualRuntimeActionEventStage,
   type ManualRuntimeActionKind,
   type ManualRuntimeActionTerminalDisposition,
 } from "@/lib/meeting/manual-runtime-action";
+import { projectObservedAdvisorAttempt } from "@/lib/meeting/observed-advisor-outcome";
 import { materializeHumanEvaluationAttemptProjectionV2 } from "@/lib/meeting/human-evaluation-attempt-projection";
 import { validateHumanEvaluationAttemptSubjectV2 } from "@/lib/meeting/human-evaluation-attempt";
 import { toHumanEvaluationCollectionProvenance } from "@/lib/meeting/session-evaluation-provenance";
@@ -32384,10 +32386,19 @@ export function useMeetingAssistant() {
       return;
     }
     flushPendingSentenceCompletion("regenerate");
+    const advisorJob = buildAdvisorJob({
+      force: true,
+      mode: "regenerate",
+      currentSuggestion: currentSuggestionText,
+      advisorJobSource: "regenerate",
+      taskMutationAuthority: "preserve-parent",
+      questionLineage: resolveCurrentSuggestionQuestionLineage(),
+    });
     recordManualRuntimeAction({
       actionId,
       action: "regenerate",
       stage: "accepted",
+      traceId: advisorJob.traceId,
       observedLogicalQuestionUnitId: currentLogicalQuestionUnit?.id,
       observedLogicalQuestionUnitRevision:
         currentLogicalQuestionUnit?.revision,
@@ -32395,28 +32406,39 @@ export function useMeetingAssistant() {
     });
     try {
       await runAdvisor({
-        force: true,
-        mode: "regenerate",
-        currentSuggestion: currentSuggestionText,
-        advisorJobSource: "regenerate",
-        taskMutationAuthority: "preserve-parent",
-        questionLineage: resolveCurrentSuggestionQuestionLineage(),
+        advisorJob,
       });
-      recordManualRuntimeAction({
-        actionId,
-        action: "regenerate",
-        stage: "terminal",
-        terminalDisposition: "completed",
-        observedLogicalQuestionUnitId: currentLogicalQuestionUnit?.id,
-        observedLogicalQuestionUnitRevision:
-          currentLogicalQuestionUnit?.revision,
-        observedTaskId: currentRuntime.activeMeetingTask?.id,
+      const completedTrace = traceStoreRef.current
+        .getTraces()
+        .find((trace) => trace.id === advisorJob.traceId);
+      const observedAttempt = projectObservedAdvisorAttempt(
+        completedTrace?.metadata ?? {}
+      );
+      const terminal = projectManualRuntimeActionAdvisorTerminal({
+        traceStatus: completedTrace?.status,
+        advisorOutcome: observedAttempt.outcome,
+        traceError: completedTrace?.error,
       });
+      if (terminal.disposition) {
+        recordManualRuntimeAction({
+          actionId,
+          action: "regenerate",
+          stage: "terminal",
+          traceId: advisorJob.traceId,
+          terminalDisposition: terminal.disposition,
+          observedLogicalQuestionUnitId: currentLogicalQuestionUnit?.id,
+          observedLogicalQuestionUnitRevision:
+            currentLogicalQuestionUnit?.revision,
+          observedTaskId: currentRuntime.activeMeetingTask?.id,
+          reason: terminal.reason,
+        });
+      }
     } catch (error) {
       recordManualRuntimeAction({
         actionId,
         action: "regenerate",
         stage: "terminal",
+        traceId: advisorJob.traceId,
         terminalDisposition: "failed",
         observedLogicalQuestionUnitId: currentLogicalQuestionUnit?.id,
         observedLogicalQuestionUnitRevision:
@@ -32428,6 +32450,7 @@ export function useMeetingAssistant() {
       throw error;
     }
   }, [
+    buildAdvisorJob,
     currentSuggestionText,
     flushPendingSentenceCompletion,
     recordManualRuntimeAction,

@@ -4,6 +4,7 @@ import {
   createManualRuntimeActionEvent,
   decideManualRuntimeActionIngress,
   manualRuntimeActionEventIsReplayInput,
+  projectManualRuntimeActionAdvisorTerminal,
 } from "../src/lib/meeting/manual-runtime-action.js";
 
 test("creates a requested manual action without an injected target", () => {
@@ -85,5 +86,36 @@ test("keeps presentation availability separate from runtime authorization", () =
       hasActiveTask: false,
     }),
     { authorized: true }
+  );
+});
+
+test("projects Regenerate terminal from visible delivery rather than promise completion", () => {
+  assert.deepEqual(
+    projectManualRuntimeActionAdvisorTerminal({
+      traceStatus: "success",
+      advisorOutcome: "visible-committed",
+    }),
+    { disposition: "completed", reason: "visible-answer-committed" }
+  );
+  assert.deepEqual(
+    projectManualRuntimeActionAdvisorTerminal({
+      traceStatus: "success",
+      advisorOutcome: "model-completed",
+    }),
+    { disposition: "failed", reason: "model-completed" }
+  );
+  assert.deepEqual(
+    projectManualRuntimeActionAdvisorTerminal({
+      traceStatus: "success",
+      advisorOutcome: "delivery-pending",
+    }),
+    { reason: "delivery-pending" }
+  );
+  assert.deepEqual(
+    projectManualRuntimeActionAdvisorTerminal({
+      traceStatus: "cancelled",
+      advisorOutcome: "stale-dropped",
+    }),
+    { disposition: "stale", reason: "stale-commit-rejected" }
   );
 });
