@@ -155,6 +155,45 @@ test("builds Advisor plans from explicit pre and post mutation task snapshots", 
   );
 });
 
+test("maps progress-only Source transitions to parent context updates", () => {
+  const commitStart = source.indexOf(
+    "function commitSourceOwnedTransitionWithManager"
+  );
+  const commitEnd = source.indexOf(
+    "function prepareGenerationDerivedTaskRuntimeCommit",
+    commitStart
+  );
+  assert.ok(commitStart >= 0);
+  assert.ok(commitEnd > commitStart);
+  const commit = source.slice(commitStart, commitEnd);
+
+  assert.match(commit, /resolveSourceOwnedRuntimeTransition\(\{/);
+});
+
+test("treats phase-requested Code as explicit Code intent", () => {
+  assert.match(
+    source,
+    /const codeMutationWithoutCodeIntent =[\s\S]{0,260}artifactIntent !== "revise-code"[\s\S]{0,160}requestedArtifacts\.includes\("code"\)/
+  );
+});
+
+test("surfaces rejected Screen transitions without starting a provider", () => {
+  const rejectionStart = source.indexOf(
+    "if (!screenTransitionCommitted)"
+  );
+  const rejectionEnd = source.indexOf(
+    "if (\n            sourceOwnedTransitionDurableMutationApplied(",
+    rejectionStart
+  );
+  assert.ok(rejectionStart >= 0);
+  assert.ok(rejectionEnd > rejectionStart);
+  const rejection = source.slice(rejectionStart, rejectionEnd);
+
+  assert.match(rejection, /Screen task transition failed:/);
+  assert.match(rejection, /Try again\./);
+  assert.doesNotMatch(rejection, /modelStepId/);
+});
+
 test("settles first-parent admission in the shared coordinator", () => {
   const consumer = sourceSlice(
     "  const scheduleAdvisorAfterQuestionTypeWindow = useCallback(",
