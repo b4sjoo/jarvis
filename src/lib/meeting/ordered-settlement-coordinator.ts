@@ -69,8 +69,6 @@ export function formatOrderedSettlementCoordinatorForTrace(
     orderedSettlementCoordinatorRelation: decision.relation.relation,
     orderedSettlementCoordinatorRelationStage: decision.relation.stage,
     orderedSettlementCoordinatorRelationReason: decision.relation.reason,
-    orderedSettlementCoordinatorResponseOnly:
-      decision.relation.responseOnly,
   };
 }
 

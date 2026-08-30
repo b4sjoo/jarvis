@@ -409,10 +409,10 @@ test("releases only the approved no-parent and parent-without-child matrix", () 
     parentAffinity: parentIndependent,
   });
   assert.equal(blockedLongParent.authorized, false);
-  assert.equal(blockedLongParent.responseOnly, true);
+  assert.equal("responseOnly" in blockedLongParent, false);
   assert.equal(
     blockedLongParent.reason,
-    "bounded-child-parent-independent-response-only"
+    "bounded-child-parent-independent-unresolved"
   );
   for (const activeParentQuestionType of [
     "general-system-design",
@@ -426,7 +426,7 @@ test("releases only the approved no-parent and parent-without-child matrix", () 
       parentAffinity: parentIndependent,
     });
     assert.equal(blocked.authorized, false);
-    assert.equal(blocked.responseOnly, true);
+    assert.equal("responseOnly" in blocked, false);
   }
 });
 
@@ -621,8 +621,8 @@ test("ordered relation null hypothesis treats authoritative unbound Screen as a 
     screenTypeEvidenceAuthorized: true,
     finalizeWithNullHypothesis: true,
   });
-  assert.equal(activeChild.responseOnly, true);
-  assert.equal(activeChild.relation, undefined);
+  assert.equal(activeChild.relation, "child-probe");
+  assert.equal(activeChild.reason, "screen-preserve-active-child");
 });
 
 function affinity(

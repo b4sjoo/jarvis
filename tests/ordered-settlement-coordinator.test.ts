@@ -14,7 +14,7 @@ test("runs the existing matrix without a Relation handle for a first parent", ()
   assert.equal(decision.relationHandleRequired, false);
   assert.equal(decision.relation.stage, "runtime-matrix");
   assert.equal(decision.relation.relation, "new-parent");
-  assert.equal(decision.relation.responseOnly, false);
+  assert.equal("responseOnly" in decision.relation, false);
 });
 
 test("projects a non-parent type to the no-parent null hypothesis", () => {
@@ -25,7 +25,7 @@ test("projects a non-parent type to the no-parent null hypothesis", () => {
 
   assert.equal(decision.stage, "no-parent-matrix");
   assert.equal(decision.relation.relation, undefined);
-  assert.equal(decision.relation.responseOnly, true);
+  assert.equal("responseOnly" in decision.relation, false);
 });
 
 test("keeps an already resolved Ordered Relation authoritative", () => {

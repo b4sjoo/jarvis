@@ -224,7 +224,6 @@ export interface ManualScreenContinuityEvidenceDecision {
   reason: string;
   confidence: number;
   relationEvidenceAuthorized: boolean;
-  responseOnly?: boolean;
 }
 
 /**
@@ -255,7 +254,6 @@ export function decideManualScreenContinuityEvidence(input: {
       reason: "screen-project-anchor-continuity-proposal-nonauthoritative",
       confidence: 0.9,
       relationEvidenceAuthorized: false,
-      responseOnly: true,
     };
   }
   if (input.correctionTermOverlap > 0) {
@@ -265,7 +263,6 @@ export function decideManualScreenContinuityEvidence(input: {
       reason: "screen-correction-term-continuity-proposal-nonauthoritative",
       confidence: 0.86,
       relationEvidenceAuthorized: false,
-      responseOnly: true,
     };
   }
   return undefined;

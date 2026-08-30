@@ -21793,7 +21793,8 @@ export function useMeetingAssistant() {
           runtimeSettlementConvergenceReason:
             convergedSettlement
               ? "ordered-relation-settled"
-              : orderedRelation?.responseOnly
+              : orderedRelation?.status === "resolved" &&
+                  !orderedRelation.relation
                 ? "ordered-relation-current-only"
                 : "ordered-relation-not-settled",
           runtimeSettlementOperationId: settlementOperationId,
@@ -27785,9 +27786,9 @@ export function useMeetingAssistant() {
               Date.now() - waitStartedAt
             );
             screenRelationSettlementWaitDisposition =
-              coordinatedRelation.responseOnly
-                ? "settled-current-only"
-                : "settled-and-released-before-deadline";
+              coordinatedRelation.relation
+                ? "settled-and-released-before-deadline"
+                : "settled-current-only";
             const orderedDeterministicProposal = {
               ...screenDeterministicSettlementProposal,
               relation: coordinatedRelation.relation ?? "unknown",
@@ -29750,7 +29751,6 @@ export function useMeetingAssistant() {
                 : screenTaskRelationDecision
                     .relationEvidenceAuthorized ??
                   provisionalScreenTaskRelation !== "unknown"),
-            responseOnly: screenCurrentOnly,
             proposedRelation:
               screenTaskRelationDecision.proposedRelation,
             evidenceSpans:
@@ -31625,9 +31625,9 @@ export function useMeetingAssistant() {
                 resolution.decision
               );
             relationAdjudicationWaitDisposition =
-              resolution.decision.responseOnly
-                ? "settled-current-only"
-                : "settled-before-deadline";
+              resolution.decision.relation
+                ? "settled-before-deadline"
+                : "settled-current-only";
           } catch (error) {
             relationAdjudicationWaitDisposition =
               "ordered-chain-error";
@@ -37713,7 +37713,6 @@ function decideScreenTaskRelation({
   reason: string;
   confidence: number;
   relationEvidenceAuthorized?: boolean;
-  responseOnly?: boolean;
   proposedRelation?: InterviewTaskRelation;
   evidenceSpans?: string[];
 } {
@@ -37756,7 +37755,6 @@ function decideScreenTaskRelation({
         "screen-nonparent-relation-unresolved",
       confidence: 0,
       relationEvidenceAuthorized: false,
-      responseOnly: true,
       evidenceSpans: crossTypeHint?.evidenceSpans,
     };
   }
@@ -37771,7 +37769,6 @@ function decideScreenTaskRelation({
         "screen-parent-kind-mismatch-nonauthoritative",
       confidence: 0,
       relationEvidenceAuthorized: false,
-      responseOnly: true,
       evidenceSpans: crossTypeHint?.evidenceSpans,
     };
   }
@@ -37799,7 +37796,6 @@ function decideScreenTaskRelation({
       reason: "screen-source-evidence-missing",
       confidence: 0,
       relationEvidenceAuthorized: false,
-      responseOnly: true,
     };
   }
   const overlap = countSignificantTokenOverlap(screenText, parentText);
@@ -37834,7 +37830,6 @@ function decideScreenTaskRelation({
       reason: `screen-parent-semantic-proposal-nonauthoritative:${semanticSimilarity.toFixed(2)}`,
       confidence: semanticSimilarity,
       relationEvidenceAuthorized: false,
-      responseOnly: true,
     };
   }
 
@@ -37845,7 +37840,6 @@ function decideScreenTaskRelation({
       reason: `screen-parent-token-overlap-proposal-nonauthoritative:${overlap}`,
       confidence: Math.min(0.8, overlap * 0.1),
       relationEvidenceAuthorized: false,
-      responseOnly: true,
     };
   }
 
@@ -37856,7 +37850,6 @@ function decideScreenTaskRelation({
       reason: `screen-parent-domain-proposal-nonauthoritative:${semanticSimilarity.toFixed(2)}`,
       confidence: semanticSimilarity,
       relationEvidenceAuthorized: false,
-      responseOnly: true,
     };
   }
 
@@ -37871,7 +37864,6 @@ function decideScreenTaskRelation({
       reason: "screen-aiml-design-overlap-proposal-nonauthoritative",
       confidence: 0.5,
       relationEvidenceAuthorized: false,
-      responseOnly: true,
     };
   }
 
@@ -37882,7 +37874,6 @@ function decideScreenTaskRelation({
       reason: "screen-coding-new-parent-proposal-nonauthoritative",
       confidence: 0,
       relationEvidenceAuthorized: false,
-      responseOnly: true,
     };
   }
 
@@ -37892,7 +37883,6 @@ function decideScreenTaskRelation({
     reason: "screen-compatible-kind-low-overlap-nonauthoritative",
     confidence: 0,
     relationEvidenceAuthorized: false,
-    responseOnly: true,
   };
 }
 

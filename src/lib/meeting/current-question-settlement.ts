@@ -434,7 +434,9 @@ export function decideCurrentQuestionMutationAuthority(input: {
     reasons.push("question-type-not-parent-eligible");
   }
   if (parentMutationAuthorized) reasons.push("parent-mutation-authorized");
-  if (!reasons.length) reasons.push("response-only");
+  if (!reasons.length) {
+    reasons.push("response-authorized-without-parent-mutation");
+  }
 
   return {
     authority,

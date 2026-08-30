@@ -173,12 +173,12 @@ export interface TaskRelationCanonicalShadowAdjudication {
 
 export type FirstBatchRelationReleaseReason =
   | "no-parent-parent-eligible"
-  | "no-parent-response-only"
+  | "no-parent-nonparent-type-unresolved"
   | "same-type-parent-related"
   | "allowed-child-parent-related"
   | "different-parent-type-independent"
-  | "nonparent-type-independent-response-only"
-  | "bounded-child-parent-independent-response-only"
+  | "nonparent-type-independent-unresolved"
+  | "bounded-child-parent-independent-unresolved"
   | "active-child-resume-parent"
   | "affinity-missing"
   | "affinity-unclear"
@@ -191,7 +191,6 @@ export type FirstBatchRelationReleaseReason =
 export interface FirstBatchRelationReleaseDecision {
   authorized: boolean;
   relation?: Exclude<RuntimeTaskRelation, "unknown">;
-  responseOnly: boolean;
   reason: FirstBatchRelationReleaseReason;
   confidence: number;
   minimumConfidence: number;
@@ -225,14 +224,14 @@ export type OrderedTaskRelationResolutionReason =
   | "voice-preserve-active-parent"
   | "voice-current-only"
   | "screen-milestone-new-parent"
-  | "screen-active-child-current-only"
+  | "screen-preserve-active-child"
+  | "screen-preserve-active-parent"
   | "screen-current-only";
 
 export interface OrderedTaskRelationResolutionDecision {
   status: "resolved" | "unresolved";
   stage?: OrderedTaskRelationResolutionStage;
   relation?: Exclude<RuntimeTaskRelation, "unknown">;
-  responseOnly: boolean;
   reason: OrderedTaskRelationResolutionReason;
   confidence: number;
   currentEvidenceSpans: string[];
@@ -274,7 +273,6 @@ export function decideOrderedTaskRelationResolution(input: {
       status: "resolved",
       stage: "runtime-matrix",
       relation: matrix.relation,
-      responseOnly: false,
       reason: matrix.reason,
       confidence: matrix.confidence,
       currentEvidenceSpans: [...matrix.currentEvidenceSpans],
@@ -298,7 +296,6 @@ export function decideOrderedTaskRelationResolution(input: {
         RuntimeTaskRelation,
         "unknown"
       >,
-      responseOnly: false,
       reason: "canonical-authorized",
       confidence: input.canonical.confidence,
       currentEvidenceSpans: [
@@ -321,7 +318,6 @@ export function decideOrderedTaskRelationResolution(input: {
   if (!input.finalizeWithNullHypothesis) {
     return {
       status: "unresolved",
-      responseOnly: false,
       reason: unresolvedReason,
       confidence: input.canonical?.confidence ?? matrix.confidence,
       currentEvidenceSpans:
@@ -349,33 +345,29 @@ export function decideOrderedTaskRelationResolution(input: {
   }
   if (sourceKind === "screen" && input.hasActiveChild) {
     return resolvedNullHypothesis({
-      reason: "screen-active-child-current-only",
+      relation: "child-probe",
+      reason: "screen-preserve-active-child",
       matrix,
     });
   }
-  if (
-    sourceKind === "voice" &&
-    input.hasActiveChild &&
-    activeChildQuestionType &&
-    currentQuestionType === activeChildQuestionType
-  ) {
+  if (sourceKind === "voice" && input.hasActiveChild) {
     return resolvedNullHypothesis({
       relation: "child-probe",
       reason: "voice-preserve-active-child",
       matrix,
     });
   }
-  if (
-    sourceKind === "voice" &&
-    activeParentQuestionType &&
-    areCompatibleParentContinuityTypes(
-      currentQuestionType,
-      activeParentQuestionType
-    )
-  ) {
+  if (sourceKind === "voice" && activeParentQuestionType) {
     return resolvedNullHypothesis({
       relation: "followup-parent",
       reason: "voice-preserve-active-parent",
+      matrix,
+    });
+  }
+  if (sourceKind === "screen" && activeParentQuestionType) {
+    return resolvedNullHypothesis({
+      relation: "followup-parent",
+      reason: "screen-preserve-active-parent",
       matrix,
     });
   }
@@ -417,7 +409,6 @@ export function formatOrderedTaskRelationResolutionForTrace(
     taskRelationOrderedResolutionStatus: decision.status,
     taskRelationOrderedResolutionStage: decision.stage,
     taskRelationOrderedResolutionRelation: decision.relation,
-    taskRelationOrderedResolutionResponseOnly: decision.responseOnly,
     taskRelationOrderedResolutionReason: decision.reason,
     taskRelationOrderedResolutionConfidence: decision.confidence,
   };
@@ -481,15 +472,13 @@ export function decideFirstBatchRelationRelease(input: {
       ? decide({
           authorized: true,
           relation: "new-parent",
-          responseOnly: false,
           reason: "no-parent-parent-eligible",
           confidence: 1,
           possibleRelationError: false,
         })
       : decide({
           authorized: false,
-          responseOnly: true,
-          reason: "no-parent-response-only",
+          reason: "no-parent-nonparent-type-unresolved",
           confidence: 1,
           possibleRelationError: false,
         });
@@ -498,7 +487,6 @@ export function decideFirstBatchRelationRelease(input: {
   if (!parentAffinity) {
     return decide({
       authorized: false,
-      responseOnly: false,
       reason: "affinity-missing",
       confidence: 0,
       possibleRelationError: false,
@@ -516,7 +504,6 @@ export function decideFirstBatchRelationRelease(input: {
   ) {
     return decide({
       authorized: false,
-      responseOnly: false,
       reason: "affinity-unclear",
       confidence,
       possibleRelationError,
@@ -525,7 +512,6 @@ export function decideFirstBatchRelationRelease(input: {
   if (confidence < FIRST_BATCH_RELATION_RELEASE_MIN_CONFIDENCE) {
     return decide({
       authorized: false,
-      responseOnly: false,
       reason: "affinity-below-release-threshold",
       confidence,
       possibleRelationError,
@@ -542,7 +528,6 @@ export function decideFirstBatchRelationRelease(input: {
       return decide({
         authorized: true,
         relation: "child-probe",
-        responseOnly: false,
         reason: "active-child-preserve-child",
         confidence,
         possibleRelationError: false,
@@ -559,7 +544,6 @@ export function decideFirstBatchRelationRelease(input: {
       return decide({
         authorized: true,
         relation: "resume-parent",
-        responseOnly: false,
         reason: "active-child-resume-parent",
         confidence,
         possibleRelationError: false,
@@ -567,7 +551,6 @@ export function decideFirstBatchRelationRelease(input: {
     }
     return decide({
       authorized: false,
-      responseOnly: false,
       reason: "active-child-combination-not-released",
       confidence,
       possibleRelationError: false,
@@ -579,7 +562,6 @@ export function decideFirstBatchRelationRelease(input: {
       return decide({
         authorized: true,
         relation: "followup-parent",
-        responseOnly: false,
         reason: "same-type-parent-related",
         confidence,
         possibleRelationError: false,
@@ -594,7 +576,6 @@ export function decideFirstBatchRelationRelease(input: {
       return decide({
         authorized: true,
         relation: "child-probe",
-        responseOnly: false,
         reason: "allowed-child-parent-related",
         confidence,
         possibleRelationError: false,
@@ -602,7 +583,6 @@ export function decideFirstBatchRelationRelease(input: {
     }
     return decide({
       authorized: false,
-      responseOnly: false,
       reason: "parent-related-type-incompatible",
       confidence,
       possibleRelationError: false,
@@ -613,7 +593,6 @@ export function decideFirstBatchRelationRelease(input: {
     return decide({
       authorized: true,
       relation: "new-parent",
-      responseOnly: false,
       reason: "same-type-independent-new-parent",
       confidence,
       possibleRelationError: false,
@@ -629,8 +608,7 @@ export function decideFirstBatchRelationRelease(input: {
     ) {
       return decide({
         authorized: false,
-        responseOnly: true,
-        reason: "bounded-child-parent-independent-response-only",
+        reason: "bounded-child-parent-independent-unresolved",
         confidence,
         possibleRelationError: false,
       });
@@ -638,7 +616,6 @@ export function decideFirstBatchRelationRelease(input: {
     return decide({
       authorized: true,
       relation: "new-parent",
-      responseOnly: false,
       reason: "different-parent-type-independent",
       confidence,
       possibleRelationError: false,
@@ -646,8 +623,7 @@ export function decideFirstBatchRelationRelease(input: {
   }
   return decide({
     authorized: false,
-    responseOnly: true,
-    reason: "nonparent-type-independent-response-only",
+    reason: "nonparent-type-independent-unresolved",
     confidence,
     possibleRelationError: false,
   });
@@ -682,7 +658,6 @@ export function formatFirstBatchRelationReleaseForTrace(
   return {
     taskRelationFirstBatchReleaseAuthorized: decision.authorized,
     taskRelationFirstBatchReleasedRelation: decision.relation,
-    taskRelationFirstBatchResponseOnly: decision.responseOnly,
     taskRelationFirstBatchReleaseReason: decision.reason,
     taskRelationFirstBatchReleaseConfidence: decision.confidence,
     taskRelationFirstBatchReleaseMinimumConfidence:
@@ -1451,7 +1426,6 @@ function resolvedNullHypothesis(input: {
     status: "resolved",
     stage: "source-topology-null-hypothesis",
     relation: input.relation,
-    responseOnly: !input.relation,
     reason: input.reason,
     confidence: 1,
     currentEvidenceSpans: [],

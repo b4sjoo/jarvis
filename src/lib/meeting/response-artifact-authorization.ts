@@ -137,7 +137,7 @@ export function authorizeResponseArtifactMutation(input: {
     return {
       ...base,
       disposition: "display-only-parent-continuity",
-      reason: "response-only-scope-preserves-read-only-artifact-owner",
+      reason: "current-only-scope-preserves-read-only-artifact-owner",
       allowLatestUsefulAnswer: false,
       allowWhiteboard: false,
       allowCode: false,
