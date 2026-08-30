@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
+import path from "node:path";
 import test from "node:test";
 import { authorizeAnswerGenerationLease } from "../src/lib/meeting/answer-generation-lease.js";
 import type { MeetingTaskRuntimeTransitionKind } from "../src/lib/meeting/active-meeting-task.js";
@@ -281,6 +282,34 @@ test("prevents intermediate and post-model topology authority recurrence", async
   );
 });
 
+test("allows Source-owned preparation only inside its definition and canonical runtime leaf", async () => {
+  const sourceRoot = path.join(process.cwd(), "src");
+  const allowedFiles = new Set([
+    path.join(
+      sourceRoot,
+      "lib",
+      "meeting",
+      "source-owned-transition-transaction.ts"
+    ),
+    path.join(
+      sourceRoot,
+      "lib",
+      "meeting",
+      "source-owned-transition-runtime.ts"
+    ),
+  ]);
+  const productionFiles = await listTypeScriptFiles(sourceRoot);
+  const consumers: string[] = [];
+  for (const filePath of productionFiles) {
+    const source = await readFile(filePath, "utf8");
+    if (/\bprepareSourceOwnedTransition\s*\(/.test(source)) {
+      consumers.push(filePath);
+    }
+  }
+
+  assert.deepEqual(new Set(consumers), allowedFiles);
+});
+
 function commitThroughRuntime(input: {
   manager: MeetingContextManager;
   candidate: NonNullable<
@@ -354,4 +383,16 @@ function makeParent(
     expiresAt: now + 60_000,
     revisions: 1,
   };
+}
+
+async function listTypeScriptFiles(directory: string): Promise<string[]> {
+  const entries = await readdir(directory, { withFileTypes: true });
+  const files = await Promise.all(
+    entries.map(async (entry) => {
+      const entryPath = path.join(directory, entry.name);
+      if (entry.isDirectory()) return listTypeScriptFiles(entryPath);
+      return /\.tsx?$/.test(entry.name) ? [entryPath] : [];
+    })
+  );
+  return files.flat();
 }
