@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   createManualRuntimeActionEvent,
+  decideManualRuntimeActionIngress,
   manualRuntimeActionEventIsReplayInput,
 } from "../src/lib/meeting/manual-runtime-action.js";
 
@@ -42,4 +43,47 @@ test("keeps resolved identity on terminal evidence only", () => {
   assert.equal(event.terminalDisposition, "stale");
   assert.equal(event.observedLogicalQuestionUnitId, "lqu-2");
   assert.equal(manualRuntimeActionEventIsReplayInput(event), false);
+});
+
+test("keeps presentation availability separate from runtime authorization", () => {
+  assert.deepEqual(
+    decideManualRuntimeActionIngress({
+      action: "next-phase",
+      busy: true,
+      hasMeetingContext: true,
+      hasVisibleAnswer: true,
+      hasActiveTask: true,
+    }),
+    { authorized: false, reason: "meeting-busy" }
+  );
+  assert.deepEqual(
+    decideManualRuntimeActionIngress({
+      action: "enhance-context",
+      busy: false,
+      hasMeetingContext: true,
+      hasVisibleAnswer: false,
+      hasActiveTask: true,
+    }),
+    { authorized: false, reason: "no-visible-answer" }
+  );
+  assert.deepEqual(
+    decideManualRuntimeActionIngress({
+      action: "regenerate",
+      busy: false,
+      hasMeetingContext: false,
+      hasVisibleAnswer: false,
+      hasActiveTask: false,
+    }),
+    { authorized: false, reason: "no-meeting-context" }
+  );
+  assert.deepEqual(
+    decideManualRuntimeActionIngress({
+      action: "force-advise",
+      busy: true,
+      hasMeetingContext: false,
+      hasVisibleAnswer: false,
+      hasActiveTask: false,
+    }),
+    { authorized: true }
+  );
 });

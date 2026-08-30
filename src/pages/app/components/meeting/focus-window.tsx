@@ -480,9 +480,13 @@ function MeetingFocusControlsWindow({
               <Button
                 size="sm"
                 variant="outline"
-                className="ml-auto h-7 shrink-0 gap-1 px-2 text-[10px]"
+                className={cn(
+                  "ml-auto h-7 shrink-0 gap-1 px-2 text-[10px]",
+                  !snapshot.forceAdviseAvailable &&
+                    "cursor-not-allowed opacity-50"
+                )}
                 onClick={() => sendFocusAction({ type: "force-advise" })}
-                disabled={!snapshot.forceAdviseAvailable}
+                aria-disabled={!snapshot.forceAdviseAvailable}
                 title={
                   snapshot.forceAdviseAvailable
                     ? "Force one advisor response for this transcript"

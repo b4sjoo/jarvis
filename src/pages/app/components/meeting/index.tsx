@@ -1342,57 +1342,27 @@ export const MeetingAssistant = ({
   ]);
 
   const handleRegenerateShortcut = useCallback(() => {
-    if (
-      isBusy ||
-      !hasMeetingContext ||
-      isJarvisEditableElementFocused()
-    ) {
-      return;
-    }
+    if (isJarvisEditableElementFocused()) return;
 
     setOpen(true);
     void meeting.regenerateSuggestion();
-  }, [hasMeetingContext, isBusy, meeting.regenerateSuggestion]);
+  }, [meeting.regenerateSuggestion]);
 
   const handleNextPhaseShortcut = useCallback(() => {
-    if (
-      isBusy ||
-      !hasSuggestion ||
-      !hasActiveMeetingTask ||
-      isJarvisEditableElementFocused()
-    ) {
-      return;
-    }
+    if (isJarvisEditableElementFocused()) return;
 
     setOpen(true);
     void meeting.applyResponseAction("next-phase");
-  }, [
-    hasActiveMeetingTask,
-    hasSuggestion,
-    isBusy,
-    meeting.applyResponseAction,
-  ]);
+  }, [meeting.applyResponseAction]);
 
   const handleScopedResponseActionShortcut = useCallback(
     (action: "narrow-context" | "enhance-context" | "previous-phase") => {
-      if (
-        isBusy ||
-        !hasSuggestion ||
-        !hasActiveMeetingTask ||
-        isJarvisEditableElementFocused()
-      ) {
-        return;
-      }
+      if (isJarvisEditableElementFocused()) return;
 
       setOpen(true);
       void meeting.applyResponseAction(action);
     },
-    [
-      hasActiveMeetingTask,
-      hasSuggestion,
-      isBusy,
-      meeting.applyResponseAction,
-    ]
+    [meeting.applyResponseAction]
   );
 
   const meetingShortcutCallbacks = useMemo(
@@ -1986,11 +1956,14 @@ export const MeetingAssistant = ({
                   <Button
                     size="sm"
                     variant="outline"
-                    className="ml-auto h-6 gap-1 px-2 text-[10px]"
+                    className={cn(
+                      "ml-auto h-6 gap-1 px-2 text-[10px]",
+                      !forceAdviseAvailable && "cursor-not-allowed opacity-50"
+                    )}
                     onClick={() => {
                       void meeting.forceAdviseLatestTurn();
                     }}
-                    disabled={!forceAdviseAvailable}
+                    aria-disabled={!forceAdviseAvailable}
                     title={
                       forceAdviseAvailable
                         ? "Force one advisor response for this transcript"
@@ -2308,10 +2281,14 @@ export const MeetingAssistant = ({
                   <Button
                     size="sm"
                     variant="outline"
-                    className="h-7 px-2 text-[10px]"
+                    className={cn(
+                      "h-7 px-2 text-[10px]",
+                      (isBusy || !hasMeetingContext) &&
+                        "cursor-not-allowed opacity-50"
+                    )}
                     title="Regenerate with the current Meeting Assistant response settings"
                     onClick={meeting.regenerateSuggestion}
-                    disabled={isBusy || !hasMeetingContext}
+                    aria-disabled={isBusy || !hasMeetingContext}
                   >
                     Regenerate
                   </Button>
@@ -2320,12 +2297,18 @@ export const MeetingAssistant = ({
                       key={action.id}
                       size="sm"
                       variant="outline"
-                      className="h-7 px-2 text-[10px]"
+                      className={cn(
+                        "h-7 px-2 text-[10px]",
+                        (isBusy ||
+                          !hasSuggestion ||
+                          !hasActiveMeetingTask) &&
+                          "cursor-not-allowed opacity-50"
+                      )}
                       title={action.title}
                       onClick={() => {
                         void meeting.applyResponseAction(action.id);
                       }}
-                      disabled={
+                      aria-disabled={
                         isBusy ||
                         !hasSuggestion ||
                         !hasActiveMeetingTask
@@ -3366,9 +3349,12 @@ const FocusModePanel = ({
                 <Button
                   size="sm"
                   variant="outline"
-                  className="ml-auto h-6 shrink-0 gap-1 px-2 text-[10px]"
+                  className={cn(
+                    "ml-auto h-6 shrink-0 gap-1 px-2 text-[10px]",
+                    !forceAdviseAvailable && "cursor-not-allowed opacity-50"
+                  )}
                   onClick={onForceAdvise}
-                  disabled={!forceAdviseAvailable}
+                  aria-disabled={!forceAdviseAvailable}
                   title={
                     forceAdviseAvailable
                       ? "Force one advisor response for this transcript"

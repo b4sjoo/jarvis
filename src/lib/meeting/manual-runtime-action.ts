@@ -21,6 +21,17 @@ export type ManualRuntimeActionTerminalDisposition =
   | "failed"
   | "cancelled";
 
+export type ManualRuntimeActionIngressRejectionReason =
+  | "meeting-busy"
+  | "no-meeting-context"
+  | "no-visible-answer"
+  | "no-active-task";
+
+export interface ManualRuntimeActionIngressDecision {
+  authorized: boolean;
+  reason?: ManualRuntimeActionIngressRejectionReason;
+}
+
 export interface ManualRuntimeActionEventV1 {
   schemaVersion: typeof MANUAL_RUNTIME_ACTION_SCHEMA_VERSION;
   actionId: string;
@@ -61,4 +72,29 @@ export function manualRuntimeActionEventIsReplayInput(
   event: ManualRuntimeActionEventV1
 ) {
   return event.stage === "requested";
+}
+
+export function decideManualRuntimeActionIngress(input: {
+  action: ManualRuntimeActionKind;
+  busy: boolean;
+  hasMeetingContext: boolean;
+  hasVisibleAnswer: boolean;
+  hasActiveTask: boolean;
+}): ManualRuntimeActionIngressDecision {
+  if (input.action === "clear-task" || input.action === "force-advise") {
+    return { authorized: true };
+  }
+  if (input.busy) return { authorized: false, reason: "meeting-busy" };
+  if (input.action === "regenerate") {
+    return input.hasMeetingContext
+      ? { authorized: true }
+      : { authorized: false, reason: "no-meeting-context" };
+  }
+  if (!input.hasVisibleAnswer) {
+    return { authorized: false, reason: "no-visible-answer" };
+  }
+  if (!input.hasActiveTask) {
+    return { authorized: false, reason: "no-active-task" };
+  }
+  return { authorized: true };
 }

@@ -103,6 +103,7 @@ import {
 } from "@/lib/meeting/response-action-target";
 import {
   createManualRuntimeActionEvent,
+  decideManualRuntimeActionIngress,
   type ManualRuntimeActionEventStage,
   type ManualRuntimeActionKind,
   type ManualRuntimeActionTerminalDisposition,
@@ -32356,6 +32357,32 @@ export function useMeetingAssistant() {
         currentLogicalQuestionUnit?.revision,
       observedTaskId: currentRuntime.activeMeetingTask?.id,
     });
+    const ingress = decideManualRuntimeActionIngress({
+      action: "regenerate",
+      busy: isManualRuntimeActionBusy(state.status),
+      hasMeetingContext:
+        currentRuntime.transcriptTurns.length > 0 ||
+        currentRuntime.screenObservations.length > 0,
+      hasVisibleAnswer: Boolean(currentSuggestionText.trim()),
+      hasActiveTask: Boolean(currentRuntime.activeMeetingTask),
+    });
+    if (!ingress.authorized) {
+      recordManualRuntimeAction({
+        actionId,
+        action: "regenerate",
+        stage: "terminal",
+        terminalDisposition: "rejected",
+        reason: ingress.reason,
+      });
+      setState((previous) => ({
+        ...previous,
+        error:
+          ingress.reason === "meeting-busy"
+            ? "Regenerate is unavailable while Jarvis is busy."
+            : "There is no meeting context to regenerate.",
+      }));
+      return;
+    }
     flushPendingSentenceCompletion("regenerate");
     recordManualRuntimeAction({
       actionId,
@@ -32406,6 +32433,7 @@ export function useMeetingAssistant() {
     recordManualRuntimeAction,
     resolveCurrentSuggestionQuestionLineage,
     runAdvisor,
+    state.status,
   ]);
 
   const setPreparationRuntimeCapabilities = useCallback(
@@ -33082,6 +33110,34 @@ export function useMeetingAssistant() {
           logicalQuestionUnitRef.current?.revision,
         taskId: requestedRuntime.activeMeetingTask?.id,
       });
+      if (manualAction) {
+        const ingress = decideManualRuntimeActionIngress({
+          action: manualAction,
+          busy: isManualRuntimeActionBusy(state.status),
+          hasMeetingContext:
+            requestedRuntime.transcriptTurns.length > 0 ||
+            requestedRuntime.screenObservations.length > 0,
+          hasVisibleAnswer: Boolean(currentSuggestionText.trim()),
+          hasActiveTask: Boolean(requestedRuntime.activeMeetingTask),
+        });
+        if (!ingress.authorized) {
+          recordResponseAction({
+            stage: "terminal",
+            terminalDisposition: "rejected",
+            reason: ingress.reason,
+          });
+          setState((previous) => ({
+            ...previous,
+            error:
+              ingress.reason === "meeting-busy"
+                ? "This action is unavailable while Jarvis is busy."
+                : ingress.reason === "no-visible-answer"
+                  ? NO_SUGGESTION_MESSAGE
+                  : NO_ACTIVE_TASK_MESSAGE,
+          }));
+          return;
+        }
+      }
       flushPendingSentenceCompletion(
         responseAction === "next-phase" ? "manual-next" : "response-action"
       );
@@ -33593,6 +33649,7 @@ export function useMeetingAssistant() {
       runAdvisor,
       state.activeMeetingTask,
       state.latestSuggestion,
+      state.status,
       recordCommittedPlaybookPhaseTransition,
     ]
   );
@@ -36231,6 +36288,15 @@ function applySpeechCorrectionRuleCounts(
       ? { ...correction, appliedCount: correction.appliedCount + 1 }
       : correction;
   });
+}
+
+function isManualRuntimeActionBusy(status: MeetingAssistantStatus) {
+  return (
+    status === "starting" ||
+    status === "reconnecting" ||
+    status === "transcribing" ||
+    status === "thinking"
+  );
 }
 
 function toObservedAdvisorAction(
