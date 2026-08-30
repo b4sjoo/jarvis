@@ -281,7 +281,6 @@ export type CurrentQuestionSettlementDisposition =
   | "domain-resolved-provisional"
   | "domain-resolved-unknown"
   | "unresolved-provisional"
-  | "response-only"
   | "committed-parent"
   | "stale-dropped"
   | "manual-authority";

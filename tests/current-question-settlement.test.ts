@@ -14,10 +14,25 @@ import {
   settleCurrentQuestion,
   settleCurrentQuestionTerminalNoAnswer,
   selectCommittedSettlementForLogicalQuestionUnit,
+  type CurrentQuestionSettlementDisposition,
   type CurrentQuestionSettlementProposal,
 } from "../src/lib/meeting/current-question-settlement.js";
 import type { LogicalQuestionUnit } from "../src/lib/meeting/logical-question-unit.js";
 import { projectPrimaryAsk } from "../src/lib/meeting/primary-ask-projection.js";
+
+type ResponseOnlyIsNotLiveDisposition = Extract<
+  CurrentQuestionSettlementDisposition,
+  "response-only"
+> extends never
+  ? true
+  : false;
+
+const RESPONSE_ONLY_IS_NOT_LIVE_DISPOSITION: ResponseOnlyIsNotLiveDisposition =
+  true;
+
+test("keeps response-only outside the live settlement disposition contract", () => {
+  assert.equal(RESPONSE_ONLY_IS_NOT_LIVE_DISPOSITION, true);
+});
 
 function logicalQuestion(
   revision = 2,
