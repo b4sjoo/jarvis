@@ -6318,7 +6318,7 @@ const TraceHumanEvaluationPanel = ({
       {taxonomyAdjudicationDisposition ? (
         <div className="rounded-sm border border-border/60 bg-muted/30 p-2 text-[10px]">
           <div className="font-medium uppercase text-muted-foreground">
-            LLM type adjudication (Shadow)
+            Runtime type adjudication
           </div>
           <div className="mt-1 break-words">
             {taxonomyAdjudicationCandidateType ?? "No valid proposal"}
@@ -7440,7 +7440,7 @@ const TraceHumanEvaluationPanel = ({
         {taxonomyAdjudicationDisposition ? (
           <div className="rounded-sm border border-border/60 p-2">
             <div className="mb-2 text-[10px] font-medium uppercase text-muted-foreground">
-              LLM type adjudication labels
+              Runtime type adjudication labels
             </div>
             <div className="space-y-2">
               <TaxonomyAdjudicationBooleanLabel

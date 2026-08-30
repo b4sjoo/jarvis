@@ -17,7 +17,11 @@ test("keeps final task settlement visible without duplicate relation shadow cont
   assert.doesNotMatch(source, /taskRelationAdjudicationCandidateRelation/);
   assert.doesNotMatch(source, /taskRelationAdjudicationWouldRepair/);
 
-  const typeLabelsStart = source.indexOf("LLM type adjudication labels");
+  assert.doesNotMatch(source, /LLM type adjudication \(Shadow\)/);
+  assert.match(source, /Runtime type adjudication/);
+  const typeLabelsStart = source.indexOf(
+    "Runtime type adjudication labels"
+  );
   const typeLabelsEnd = source.indexOf(
     "{advisorTurnIntent ?",
     typeLabelsStart
