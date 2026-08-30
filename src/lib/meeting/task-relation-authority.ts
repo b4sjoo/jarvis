@@ -6,12 +6,9 @@ import {
 } from "./task-taxonomy.js";
 import type { InterviewTaskRelation } from "./types.js";
 
-export type TaskRelationLexicalHintDisposition = "response-only";
-
 export interface TaskRelationLexicalHintDecision {
   relation: InterviewTaskRelation;
   proposedRelation?: InterviewTaskRelation;
-  disposition: TaskRelationLexicalHintDisposition;
   relationEvidenceAuthorized: boolean;
   reason: string;
   evidenceSpans: string[];
@@ -49,7 +46,6 @@ export function projectCrossTypeTaskRelationHint(input: {
     return {
       relation: "unknown",
       proposedRelation: "new-parent",
-      disposition: "response-only",
       relationEvidenceAuthorized: false,
       reason: "explicit-project-switch-evidence-only",
       evidenceSpans: projectSwitchEvidence,
@@ -60,11 +56,10 @@ export function projectCrossTypeTaskRelationHint(input: {
     return {
       relation: "unknown",
       proposedRelation: "new-parent",
-      disposition: "response-only",
       relationEvidenceAuthorized: false,
       reason: isParentCanonicalQuestionType(candidateQuestionType)
         ? "explicit-task-switch-evidence-only"
-        : "explicit-task-switch-nonparent-response-only",
+        : "explicit-task-switch-nonparent-hint",
       evidenceSpans: findEvidenceSpans(
         input.currentText,
         EXPLICIT_TASK_SWITCH_PATTERNS
@@ -90,7 +85,6 @@ export function projectCrossTypeTaskRelationHint(input: {
     return {
       relation: "unknown",
       proposedRelation: "followup-parent",
-      disposition: "response-only",
       relationEvidenceAuthorized: false,
       reason: "explicit-design-parent-revision-hint",
       evidenceSpans: designRevisionEvidence,
@@ -112,7 +106,6 @@ export function projectCrossTypeTaskRelationHint(input: {
     return {
       relation: "unknown",
       proposedRelation: "child-probe",
-      disposition: "response-only",
       relationEvidenceAuthorized: false,
       reason: "explicit-parent-binding-hint",
       evidenceSpans: bindingEvidence,
@@ -125,7 +118,6 @@ export function projectCrossTypeTaskRelationHint(input: {
     return {
       relation: "unknown",
       proposedRelation: "child-probe",
-      disposition: "response-only",
       relationEvidenceAuthorized: false,
       reason: "cross-type-parent-binding-missing",
       evidenceSpans: [],
@@ -137,7 +129,6 @@ export function projectCrossTypeTaskRelationHint(input: {
     proposedRelation: isParentCanonicalQuestionType(candidateQuestionType)
       ? "new-parent"
       : undefined,
-    disposition: "response-only",
     relationEvidenceAuthorized: false,
     reason: "cross-type-task-relation-unresolved",
     evidenceSpans: [],
@@ -156,7 +147,6 @@ export function projectActiveParentTaskRelationHint(input: {
     return {
       relation: "unknown",
       proposedRelation: "resume-parent",
-      disposition: "response-only",
       relationEvidenceAuthorized: false,
       reason: "explicit-resume-parent-hint",
       evidenceSpans: [],
@@ -169,7 +159,6 @@ export function projectActiveParentTaskRelationHint(input: {
       input.hasActiveChild && input.broadResumeProposal
         ? "resume-parent"
         : "followup-parent",
-    disposition: "response-only",
     relationEvidenceAuthorized: false,
     reason:
       input.hasActiveChild && input.broadResumeProposal
@@ -208,7 +197,6 @@ export function formatTaskRelationLexicalHintForTrace(
 ): Record<string, unknown> {
   if (!decision) return {};
   return {
-    taskRelationAuthorityDisposition: decision.disposition,
     taskRelationEvidenceAuthorized:
       decision.relationEvidenceAuthorized,
     taskRelationAuthorityReason: decision.reason,

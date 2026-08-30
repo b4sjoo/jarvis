@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import test from "node:test";
 import {
   applyResponseOnlyTaskScopeToPromptContext,
@@ -14,7 +16,12 @@ import {
 import type { ActiveMeetingTask } from "../src/lib/meeting/active-meeting-task.js";
 import type { AdvisorPromptContext } from "../src/lib/meeting/types.js";
 
-test("independent coding after system design is response-only without parent binding", () => {
+const meetingHookSource = await readFile(
+  path.join(process.cwd(), "src/hooks/useMeetingAssistant.ts"),
+  "utf8"
+);
+
+test("independent coding after system design remains a non-authoritative hint", () => {
   const decision = projectCrossTypeTaskRelationHint({
     activeQuestionType: "ai-ml-system-design",
     candidateQuestionType: "coding",
@@ -24,8 +31,23 @@ test("independent coding after system design is response-only without parent bin
 
   assert.equal(decision?.relation, "unknown");
   assert.equal(decision?.proposedRelation, "child-probe");
-  assert.equal(decision?.disposition, "response-only");
   assert.equal(decision?.relationEvidenceAuthorized, false);
+  assert.equal("disposition" in (decision ?? {}), false);
+});
+
+test("live advisor signals never convert a lexical hint into response-only", () => {
+  assert.doesNotMatch(
+    meetingHookSource,
+    /taskRelationLexicalHint\?\.disposition/
+  );
+  assert.doesNotMatch(
+    meetingHookSource,
+    /response-only-ambiguous-relation/
+  );
+  assert.doesNotMatch(
+    meetingHookSource,
+    /ordered-chain-error-response-only/
+  );
 });
 
 test("a locally bound coding request remains a child hint", () => {
@@ -38,7 +60,6 @@ test("a locally bound coding request remains a child hint", () => {
 
   assert.equal(decision?.relation, "unknown");
   assert.equal(decision?.proposedRelation, "child-probe");
-  assert.equal(decision?.disposition, "response-only");
   assert.equal(decision?.relationEvidenceAuthorized, false);
   assert.deepEqual(decision?.evidenceSpans, [
     "For this retrieval pipeline",
@@ -55,7 +76,6 @@ test("an explicit architecture revision remains a design-parent hint", () => {
 
   assert.equal(decision?.relation, "unknown");
   assert.equal(decision?.proposedRelation, "followup-parent");
-  assert.equal(decision?.disposition, "response-only");
   assert.equal(decision?.relationEvidenceAuthorized, false);
   assert.equal(decision?.reason, "explicit-design-parent-revision-hint");
   assert.equal(decision?.evidenceSpans.length, 2);
@@ -77,7 +97,6 @@ test("an explicit task switch is evidence only and cannot mutate the parent", ()
 
   assert.equal(decision?.relation, "unknown");
   assert.equal(decision?.proposedRelation, "new-parent");
-  assert.equal(decision?.disposition, "response-only");
   assert.equal(decision?.relationEvidenceAuthorized, false);
 });
 
@@ -91,7 +110,6 @@ test("an explicit same-type task switch still requires semantic settlement", () 
 
   assert.equal(decision?.relation, "unknown");
   assert.equal(decision?.proposedRelation, "new-parent");
-  assert.equal(decision?.disposition, "response-only");
   assert.equal(decision?.relationEvidenceAuthorized, false);
 });
 
@@ -105,7 +123,6 @@ test("an explicit request for another owned project is strong evidence only", ()
 
   assert.equal(decision?.relation, "unknown");
   assert.equal(decision?.proposedRelation, "new-parent");
-  assert.equal(decision?.disposition, "response-only");
   assert.equal(decision?.relationEvidenceAuthorized, false);
   assert.equal(decision?.reason, "explicit-project-switch-evidence-only");
   assert.match(decision?.evidenceSpans[0] ?? "", /another backend system/i);
@@ -122,7 +139,7 @@ test("another component inside the same design does not create a project parent"
   assert.equal(decision, undefined);
 });
 
-test("an explicit switch to a non-parent type uses response-only scope", () => {
+test("an explicit switch to a non-parent type remains hint-only", () => {
   const decision = projectCrossTypeTaskRelationHint({
     activeQuestionType: "general-system-design",
     candidateQuestionType: "field-knowledge",
@@ -132,7 +149,6 @@ test("an explicit switch to a non-parent type uses response-only scope", () => {
 
   assert.equal(decision?.relation, "unknown");
   assert.equal(decision?.proposedRelation, "new-parent");
-  assert.equal(decision?.disposition, "response-only");
   assert.equal(decision?.relationEvidenceAuthorized, false);
 });
 
@@ -145,11 +161,10 @@ test("cross-type parent classification alone cannot create a new parent", () => 
 
   assert.equal(decision?.relation, "unknown");
   assert.equal(decision?.proposedRelation, "new-parent");
-  assert.equal(decision?.disposition, "response-only");
   assert.equal(decision?.relationEvidenceAuthorized, false);
 });
 
-test("ordinary active-parent text remains response-only", () => {
+test("ordinary active-parent text remains a non-authoritative hint", () => {
   const decision = projectActiveParentTaskRelationHint({
     hasLatestUsefulText: true,
     hasActiveChild: false,
@@ -159,7 +174,6 @@ test("ordinary active-parent text remains response-only", () => {
 
   assert.equal(decision?.relation, "unknown");
   assert.equal(decision?.proposedRelation, "followup-parent");
-  assert.equal(decision?.disposition, "response-only");
   assert.equal(decision?.relationEvidenceAuthorized, false);
 });
 
@@ -173,7 +187,6 @@ test("broad similarity cannot resume an active parent from a child", () => {
 
   assert.equal(decision?.relation, "unknown");
   assert.equal(decision?.proposedRelation, "resume-parent");
-  assert.equal(decision?.disposition, "response-only");
   assert.equal(decision?.reason, "broad-resume-proposal-nonauthoritative");
 });
 
@@ -187,7 +200,6 @@ test("an explicit parent resume remains a non-authoritative hint", () => {
 
   assert.equal(resume?.relation, "unknown");
   assert.equal(resume?.proposedRelation, "resume-parent");
-  assert.equal(resume?.disposition, "response-only");
   assert.equal(resume?.relationEvidenceAuthorized, false);
 });
 

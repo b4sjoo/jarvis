@@ -27863,7 +27863,7 @@ export function useMeetingAssistant() {
               Date.now() - waitStartedAt
             );
             screenRelationSettlementWaitDisposition =
-              "ordered-chain-error-response-only";
+              "ordered-chain-error-unresolved";
             traceStoreRef.current.updateMetadata(trace.id, {
               taskRelationScreenReleaseAuthorized: false,
               taskRelationScreenReleaseReason: "release-window-closed",
@@ -36869,34 +36869,6 @@ function resolveAdvisorTaskSignals(
               explicitTaskBoundary,
           });
 
-    if (
-      taskRelationLexicalHint?.disposition === "response-only"
-    ) {
-      return {
-        questionType: latestQuestionType,
-        questionTypeDecision: latestQuestionTypeDecision,
-        askFrame: latestAskFrame,
-        topicDomain: latestTopicDomain,
-        query: latestUsefulText,
-        taskRelation: "unknown",
-        taskRelationLexicalHint,
-        relationEvidenceAuthorized: false,
-        subtaskIntent: inferAdvisorSubtaskIntent(
-          latestUsefulText,
-          latestQuestionType
-        ),
-        projectAnchor: latestProjectAnchor,
-        source: "response-only-ambiguous-relation",
-        reuseActivePlaybook: false,
-        openingRoute,
-        latestTurnAskFrame: latestAskFrame,
-        latestTurnTaxonomyBoundaryReason:
-          "active-parent-continuity",
-        taxonomyFallbackSuppressed: false,
-        unknownTaskMutationBlocked: true,
-      };
-    }
-
     const latestSubtaskIntent = inferAdvisorSubtaskIntent(
       latestUsefulText,
       activeQuestionType
@@ -36915,9 +36887,12 @@ function resolveAdvisorTaskSignals(
             latestSubtaskIntent === "qps-estimation")
       ),
     });
-    const taskRelation = relationDecision?.relation ?? "unknown";
+    const effectiveTaskRelationHint =
+      taskRelationLexicalHint ?? relationDecision;
+    const taskRelation = effectiveTaskRelationHint?.relation ?? "unknown";
     const relationUnresolved =
-      relationDecision?.disposition === "response-only";
+      taskRelation === "unknown" ||
+      effectiveTaskRelationHint?.relationEvidenceAuthorized !== true;
 
     return {
       questionType: activeQuestionType,
@@ -36933,9 +36908,9 @@ function resolveAdvisorTaskSignals(
       projectAnchor: latestProjectAnchor,
       query: buildFocusedAdvisorTaskQuery(context, latestUsefulText),
       taskRelation,
-      taskRelationLexicalHint: relationDecision,
+      taskRelationLexicalHint: effectiveTaskRelationHint,
       relationEvidenceAuthorized:
-        relationDecision?.relationEvidenceAuthorized ?? false,
+        effectiveTaskRelationHint?.relationEvidenceAuthorized ?? false,
       subtaskIntent: latestSubtaskIntent,
       source: relationUnresolved
         ? "active-parent-relation-unresolved"
