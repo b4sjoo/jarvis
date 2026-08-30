@@ -12,6 +12,9 @@ import {
   GenerationResultLedger,
   formatGenerationResultLedgerForTrace,
 } from "../src/lib/meeting/generation-result-ledger.js";
+import { MeetingContextManager } from "../src/lib/meeting/context-manager.js";
+import type { ActiveInterviewParent } from "../src/lib/meeting/types.js";
+import { setTestTaskRuntime } from "./helpers/meeting-task-runtime.js";
 
 function lease(
   overrides: Partial<AnswerGenerationLease> = {}
@@ -395,6 +398,101 @@ test("rolls back prepared task and publication state after an install exception"
   assert.equal(result.entry.applyFailure?.rollbackSucceeded, true);
 });
 
+test("commits each generation consumer shape through the shared prepared coordinator", async (t) => {
+  const consumerCases = [
+    { name: "voice", commitsTask: true },
+    { name: "screen", commitsTask: true },
+    { name: "regenerate", commitsTask: false },
+    { name: "pending-delivery", commitsTask: true },
+  ] as const;
+
+  for (const consumerCase of consumerCases) {
+    await t.test(consumerCase.name, () => {
+      const manager = new MeetingContextManager();
+      const parent = generationConsumerParent(consumerCase.name);
+      setTestTaskRuntime(manager, { parent });
+      const before = manager.getTaskRuntimeState();
+      const ledger = new GenerationResultLedger();
+      const coordinator = new GenerationDerivedCommitCoordinator(ledger);
+      const currentLease = lease({ id: `lease-${consumerCase.name}` });
+      ledger.begin({ lease: currentLease });
+      let visiblePublication = "before";
+      let previousVisiblePublication = visiblePublication;
+
+      const result = coordinator.commitStaged({
+        lease: currentLease,
+        leaseAuthorization: authorizeAnswerGenerationLease(
+          currentLease,
+          snapshot()
+        ),
+        expectedTaskRuntimeRevision: before.revision,
+        currentTaskRuntimeRevision: before.revision,
+        candidateAccepted: true,
+        visibleAnswerRevision: 7,
+        transition: consumerCase.commitsTask
+          ? {
+              kind: "update-parent-context",
+              prepare: () => {
+                const prepared = manager.prepareTaskRuntimeTransition({
+                  id: `transition-${consumerCase.name}`,
+                  transition: "update-parent-context",
+                  reason: `generation-${consumerCase.name}`,
+                  expectedRevision: before.revision,
+                  parent: {
+                    ...parent,
+                    latestUsefulAnswer: `${consumerCase.name}-answer`,
+                    revisions: parent.revisions + 1,
+                  },
+                });
+                return {
+                  authorized: prepared.result.authorized,
+                  reason: prepared.result.reason,
+                  value: prepared,
+                };
+              },
+              install: (prepared) =>
+                manager.commitPreparedTaskRuntimeTransition(prepared),
+              rollback: (prepared) =>
+                manager.rollbackPreparedTaskRuntimeTransition(prepared),
+            }
+          : undefined,
+        publication: {
+          prepare: () => {
+            previousVisiblePublication = visiblePublication;
+            return `${consumerCase.name}-visible`;
+          },
+          install: (prepared) => {
+            visiblePublication = prepared;
+            return prepared;
+          },
+          rollback: () => {
+            visiblePublication = previousVisiblePublication;
+            return true;
+          },
+        },
+      });
+
+      assert.equal(result.committed, true);
+      assert.equal(visiblePublication, `${consumerCase.name}-visible`);
+      if (consumerCase.commitsTask) {
+        assert.equal(
+          manager.getTaskRuntimeState().parent?.latestUsefulAnswer,
+          `${consumerCase.name}-answer`
+        );
+        assert.equal(
+          manager.getTaskRuntimeState().revision,
+          before.revision + 1
+        );
+      } else {
+        assert.deepEqual(manager.getTaskRuntimeState(), before);
+      }
+      assert.equal(result.entry.commitDisposition, "committed");
+      assert.ok((result.entry.prepareDurationMs ?? -1) >= 0);
+      assert.ok((result.entry.installDurationMs ?? -1) >= 0);
+    });
+  }
+});
+
 test("projects pending and historical entries without deleting origin results", () => {
   const ledger = new GenerationResultLedger();
   const first = lease();
@@ -433,6 +531,28 @@ test("projects pending and historical entries without deleting origin results", 
   );
   assert.equal(ledger.listEntries().length, 1);
 });
+
+function generationConsumerParent(
+  consumerName: string
+): ActiveInterviewParent {
+  return {
+    id: "parent-1",
+    source: consumerName === "screen" ? "screen" : "voice",
+    stableKind: "coding",
+    topic: "Implement an LRU cache",
+    playbookPhase: "implementation_validation",
+    phaseProgress: {
+      baseline_reasoning: true,
+      optimized_pseudocode: true,
+      implementation_validation: true,
+    },
+    supportedFactAnchors: [],
+    createdAt: 100,
+    updatedAt: 101,
+    expiresAt: 10_000,
+    revisions: 2,
+  };
+}
 
 test("terminalizes cancelled and superseded generations exactly once", () => {
   const ledger = new GenerationResultLedger();
