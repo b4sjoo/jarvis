@@ -229,6 +229,10 @@ body {
   max-width: 100%;
 }
 
+.meeting-assistant-markdown {
+  overflow-wrap: anywhere;
+}
+
 .meeting-assistant-markdown [data-streamdown="table-wrapper"] {
   overflow-x: hidden;
 }

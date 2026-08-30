@@ -32,4 +32,8 @@ test("scopes generated markdown width containment to Meeting Assistant", () => {
     globalStyles,
     /\.meeting-assistant-markdown \[data-streamdown="mermaid-block"\] svg \{[\s\S]*?max-width: 100%;/
   );
+  assert.match(
+    globalStyles,
+    /\.meeting-assistant-markdown \{\s*overflow-wrap: anywhere;/
+  );
 });
