@@ -8,6 +8,7 @@ import type {
   ActiveInterviewParent,
   ActiveScreenTask,
 } from "./types.js";
+import type { MeetingTaskRuntimeTransitionKind } from "./active-meeting-task.js";
 
 export interface SourceOwnedRuntimeSnapshot {
   revision: number;
@@ -25,8 +26,27 @@ export interface SourceOwnedDurableTransitionReceipt {
   sourceResult: SourceOwnedTransitionPreparationResult;
   runtimeResult?: SourceOwnedRuntimeMutationResult;
   expectedTaskRuntimeRevision: number;
-  runtimeTransition?: string;
+  runtimeTransition?: MeetingTaskRuntimeTransitionKind;
   reason: string;
+}
+
+export function resolveSourceOwnedRuntimeTransition(input: {
+  sourceResult: SourceOwnedTransitionPreparationResult;
+  runtimeBefore: SourceOwnedRuntimeSnapshot;
+}): MeetingTaskRuntimeTransitionKind {
+  const { sourceResult, runtimeBefore } = input;
+  if (sourceResult.candidate.kind === "child-probe") {
+    return "attach-child";
+  }
+  if (sourceResult.candidate.kind === "resume-parent") {
+    return "resume-parent";
+  }
+  if (sourceResult.candidate.kind === "phase-progress") {
+    return sourceResult.phaseBefore !== sourceResult.phaseAfter
+      ? "advance-phase"
+      : "update-parent-context";
+  }
+  return runtimeBefore.parent ? "replace-parent" : "create-parent";
 }
 
 export function commitSourceOwnedTransitionToRuntime(input: {
@@ -41,7 +61,7 @@ export function commitSourceOwnedTransitionToRuntime(input: {
     expectedTaskRuntimeRevision: number;
   }) => {
     runtimeResult: SourceOwnedRuntimeMutationResult;
-    runtimeTransition: string;
+    runtimeTransition: MeetingTaskRuntimeTransitionKind;
   };
   now?: number;
 }): SourceOwnedDurableTransitionReceipt {

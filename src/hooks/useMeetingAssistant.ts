@@ -9,6 +9,7 @@ import { floatArrayToWav } from "@/lib/utils";
 import {
   commitSourceOwnedTransitionToRuntime,
   formatSourceOwnedDurableTransitionForTrace,
+  resolveSourceOwnedRuntimeTransition,
   sourceOwnedDurableTransitionSurvivesModelOutcome,
   sourceOwnedTransitionCommittedFreshParent,
   sourceOwnedTransitionDurableMutationApplied,
@@ -1059,16 +1060,10 @@ function commitSourceOwnedTransitionWithManager(input: {
       runtimeBefore: committedRuntimeBefore,
       expectedTaskRuntimeRevision,
     }) => {
-      const runtimeTransition: MeetingTaskRuntimeTransitionKind =
-        sourceResult.candidate.kind === "child-probe"
-          ? "attach-child"
-          : sourceResult.candidate.kind === "resume-parent"
-            ? "resume-parent"
-            : sourceResult.candidate.kind === "phase-progress"
-              ? "advance-phase"
-              : committedRuntimeBefore.parent
-                ? "replace-parent"
-                : "create-parent";
+      const runtimeTransition = resolveSourceOwnedRuntimeTransition({
+        sourceResult,
+        runtimeBefore: committedRuntimeBefore,
+      });
       const runtimeResult = submitTaskRuntimeTransition(input.manager, {
         operationId: input.operationId ?? sourceResult.candidate.id,
         transition: runtimeTransition,
@@ -28179,15 +28174,18 @@ export function useMeetingAssistant() {
           );
 
           if (!screenTransitionCommitted) {
+            const transitionRejectionReason =
+              screenSourceOwnedTransitionReceipt?.reason ??
+              "missing-durable-transition-receipt";
             recordScreenQuestionTypeOutcome({
               stage: "advisor-start",
               disposition: "cancelled-by-runtime-boundary",
               settlement: screenCurrentQuestionSettlement,
               modelCompleted: false,
-              reason: screenSourceOwnedTransitionReceipt.reason,
+              reason: transitionRejectionReason,
             });
             analysisController?.abort(
-              screenSourceOwnedTransitionReceipt.reason
+              transitionRejectionReason
             );
             if (screenAnalysisAbortRef.current === analysisController) {
               screenAnalysisAbortRef.current = null;
@@ -28195,12 +28193,12 @@ export function useMeetingAssistant() {
             traceStoreRef.current.finishTrace(
               trace.id,
               "cancelled",
-              screenSourceOwnedTransitionReceipt.reason
+              transitionRejectionReason
             );
             setState((previous) => ({
               ...previous,
               partialSuggestion: "",
-              error: null,
+              error: `Screen task transition failed: ${transitionRejectionReason}. Try again.`,
             }));
             return;
           }

@@ -3,7 +3,6 @@ import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { authorizeAnswerGenerationLease } from "../src/lib/meeting/answer-generation-lease.js";
-import type { MeetingTaskRuntimeTransitionKind } from "../src/lib/meeting/active-meeting-task.js";
 import { MeetingContextManager } from "../src/lib/meeting/context-manager.js";
 import {
   GenerationDerivedCommitCoordinator,
@@ -11,6 +10,7 @@ import {
 } from "../src/lib/meeting/generation-result-ledger.js";
 import {
   commitSourceOwnedTransitionToRuntime,
+  resolveSourceOwnedRuntimeTransition,
   sourceOwnedDurableTransitionSurvivesModelOutcome,
   sourceOwnedTransitionDurableMutationApplied,
   sourceOwnedTransitionDurablySatisfied,
@@ -334,16 +334,10 @@ function commitThroughRuntime(input: {
       runtimeBefore: committedRuntimeBefore,
       expectedTaskRuntimeRevision,
     }) => {
-      const runtimeTransition: MeetingTaskRuntimeTransitionKind =
-        sourceResult.candidate.kind === "child-probe"
-          ? "attach-child"
-          : sourceResult.candidate.kind === "resume-parent"
-            ? "resume-parent"
-            : sourceResult.candidate.kind === "phase-progress"
-              ? "advance-phase"
-              : committedRuntimeBefore.parent
-                ? "replace-parent"
-                : "create-parent";
+      const runtimeTransition = resolveSourceOwnedRuntimeTransition({
+        sourceResult,
+        runtimeBefore: committedRuntimeBefore,
+      });
       const runtimeResult = input.manager.commitTaskRuntimeTransition({
         id: `characterization-${sourceResult.candidate.id}`,
         transition: runtimeTransition,
@@ -360,6 +354,61 @@ function commitThroughRuntime(input: {
     },
   });
 }
+
+test("commits progress-only phase evidence as parent context", () => {
+  const manager = new MeetingContextManager();
+  const parent = {
+    ...makeParent("parent-progress", "general-system-design"),
+    playbookPhase: "requirement_clarification" as const,
+    phaseProgress: {},
+  };
+  setTestTaskRuntime(manager, { parent });
+  const sessionId = manager.getState().sessionId;
+  const candidate = createSourceOwnedTransitionCandidate({
+    sessionId,
+    runtimeEpoch: 3,
+    source: "screen",
+    sourceObservationIds: ["screen-progress"],
+    existingTask: parent,
+    relation: "followup-parent",
+    authoritySource: "screen-preflight",
+    mutationAuthorized: true,
+    questionType: "general-system-design",
+    question: "Refine the same design for multi-region failover.",
+    phaseDecision: {
+      phase: "requirement_clarification",
+      phaseFrom: "requirement_clarification",
+      flags: ["requirements"],
+      requiredArtifacts: ["answer", "whiteboard"],
+      completedFlags: ["requirements"],
+      action: "stay",
+      reason: "record the new availability constraint",
+      source: "automatic",
+    },
+    now: now + 1,
+  });
+  assert.ok(candidate);
+
+  const receipt = commitThroughRuntime({
+    manager,
+    candidate,
+    expectedTaskRuntimeRevision: manager.getTaskRuntimeState().revision,
+    currentSessionId: sessionId,
+    currentRuntimeEpoch: 3,
+    reason: "screen-source-transition-committed",
+    now: now + 2,
+  });
+
+  assert.equal(receipt.sourceResult.candidate.kind, "phase-progress");
+  assert.equal(receipt.sourceResult.phaseBefore, "requirement_clarification");
+  assert.equal(receipt.sourceResult.phaseAfter, "requirement_clarification");
+  assert.equal(receipt.runtimeTransition, "update-parent-context");
+  assert.equal(sourceOwnedTransitionDurableMutationApplied(receipt), true);
+  assert.equal(
+    manager.getTaskRuntimeState().parent?.phaseProgress.requirements,
+    true
+  );
+});
 
 function makeParent(
   id: string,
