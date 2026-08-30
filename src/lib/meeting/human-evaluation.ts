@@ -82,6 +82,17 @@ export interface VisibleAnswerEvaluationTarget {
     | "no-evaluation-target";
 }
 
+export function findQuestionHumanEvaluationForTrace(
+  evaluations: QuestionHumanEvaluation[],
+  traceId: string
+): QuestionHumanEvaluation | undefined {
+  return evaluations.find(
+    (evaluation) =>
+      evaluation.traceIds.includes(traceId) ||
+      evaluation.questionId === `trace:${traceId}`
+  );
+}
+
 export function resolveSettledAttemptEvaluationTarget(input: {
   suggestion: AdvisorSuggestion | null | undefined;
   answerInProgress?: boolean;

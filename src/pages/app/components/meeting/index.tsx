@@ -94,6 +94,7 @@ import {
   buildHumanEvaluationObservedSnapshotV2,
   decideForceAdviseEligibility,
   evaluateTaskSettlementTupleCompatibilityV2,
+  findQuestionHumanEvaluationForTrace,
   freezeObservedTaskOwnerIdentityV2,
   guardAsyncUnlisten,
   normalizeCanonicalQuestionType,
@@ -689,10 +690,9 @@ export const MeetingAssistant = ({
       )
     : undefined;
   const answerQuestionEvaluation = evaluationTrace
-    ? meeting.questionEvaluations.find(
-        (evaluation) =>
-          evaluation.traceIds[0] === evaluationTrace.id ||
-          evaluation.questionId === `trace:${evaluationTrace.id}`
+    ? findQuestionHumanEvaluationForTrace(
+        meeting.questionEvaluations,
+        evaluationTrace.id
       )
     : undefined;
   const answerEvaluationProjectionV2 = evaluationTrace

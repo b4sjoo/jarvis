@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   buildAdvisorIntentEvaluationFromTrace,
   buildQuestionEvaluationPatchFromTrace,
+  findQuestionHumanEvaluationForTrace,
   persistQuestionHumanEvaluations,
   readQuestionHumanEvaluations,
   resolveSettledAttemptEvaluationTarget,
@@ -1021,6 +1022,14 @@ test("stores manual runtime type correction as HITL classification feedback", ()
   assert.equal(
     evaluations[0].manualQuestionTypeCorrectionId,
     "correction_1"
+  );
+
+  assert.equal(
+    findQuestionHumanEvaluationForTrace(
+      evaluations,
+      "regeneration_trace_1"
+    )?.questionId,
+    "trace:answer_trace_1"
   );
   assert.equal(
     evaluations[0].manualQuestionTypeCorrectionTraceId,
