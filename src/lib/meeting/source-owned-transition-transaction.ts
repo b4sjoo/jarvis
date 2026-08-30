@@ -1,4 +1,11 @@
-import { createMeetingId } from "./context-manager.js";
+import {
+  createMeetingId,
+  MeetingContextManager,
+} from "./context-manager.js";
+import type {
+  MeetingTaskRuntimeMutationResult,
+  MeetingTaskRuntimeTransitionKind,
+} from "./active-meeting-task.js";
 import {
   createInitialPlaybookPhaseProgress,
   applyPlaybookPhaseDecisionToProgress,
@@ -113,6 +120,143 @@ export interface SourceOwnedTransitionCommitResult {
   progressAfter: Record<string, boolean>;
 }
 
+export interface SourceOwnedDurableTransitionReceipt {
+  sourceResult: SourceOwnedTransitionCommitResult;
+  runtimeResult?: MeetingTaskRuntimeMutationResult;
+  expectedTaskRuntimeRevision: number;
+  runtimeTransition?: MeetingTaskRuntimeTransitionKind;
+  reason: string;
+}
+
+export function commitSourceOwnedTransitionToRuntime(input: {
+  manager: MeetingContextManager;
+  candidate: SourceOwnedTransitionCandidate;
+  expectedTaskRuntimeRevision: number;
+  currentSessionId: string;
+  currentRuntimeEpoch: number;
+  operationId?: string;
+  reason: string;
+  now?: number;
+}): SourceOwnedDurableTransitionReceipt {
+  const runtimeBefore = input.manager.getTaskRuntimeState();
+  const sourceResult = commitSourceOwnedTransition({
+    candidate: input.candidate,
+    currentTask: runtimeBefore.parent,
+    currentSessionId: input.currentSessionId,
+    currentRuntimeEpoch: input.currentRuntimeEpoch,
+    now: input.now,
+  });
+  if (runtimeBefore.revision !== input.expectedTaskRuntimeRevision) {
+    return {
+      sourceResult,
+      expectedTaskRuntimeRevision: input.expectedTaskRuntimeRevision,
+      reason: "task-runtime-revision-mismatch",
+    };
+  }
+  if (
+    sourceResult.candidate.state !== "committed" ||
+    !sourceResult.mutationApplied
+  ) {
+    return {
+      sourceResult,
+      expectedTaskRuntimeRevision: input.expectedTaskRuntimeRevision,
+      reason: sourceResult.reason,
+    };
+  }
+
+  const runtimeTransition = mapSourceOwnedRuntimeTransition({
+    kind: sourceResult.candidate.kind,
+    before: runtimeBefore.parent,
+  });
+  const runtimeResult = input.manager.commitTaskRuntimeTransition({
+    id: input.operationId ?? sourceResult.candidate.id,
+    transition: runtimeTransition,
+    reason: input.reason,
+    expectedRevision: input.expectedTaskRuntimeRevision,
+    screenAttachment:
+      sourceResult.candidate.kind === "new-parent" ||
+      sourceResult.candidate.kind === "reseed-parent"
+        ? null
+        : runtimeBefore.screenAttachment,
+    parent: sourceResult.task ?? null,
+  });
+  return {
+    sourceResult,
+    runtimeResult,
+    expectedTaskRuntimeRevision: input.expectedTaskRuntimeRevision,
+    runtimeTransition,
+    reason: runtimeResult.reason,
+  };
+}
+
+export function sourceOwnedTransitionDurableMutationApplied(
+  receipt: SourceOwnedDurableTransitionReceipt | undefined
+) {
+  return Boolean(
+    receipt?.runtimeResult?.authorized &&
+      receipt.runtimeResult.mutationApplied
+  );
+}
+
+export function sourceOwnedTransitionDurablySatisfied(
+  receipt: SourceOwnedDurableTransitionReceipt | undefined
+) {
+  if (!receipt) return false;
+  if (sourceOwnedTransitionDurableMutationApplied(receipt)) return true;
+  if (
+    receipt.runtimeResult?.authorized &&
+    receipt.runtimeResult.reason === "preserved"
+  ) {
+    return true;
+  }
+  return (
+    !receipt.runtimeResult &&
+    receipt.sourceResult.candidate.state === "committed" &&
+    !receipt.sourceResult.mutationApplied &&
+    receipt.sourceResult.reason === "already-applied"
+  );
+}
+
+export function sourceOwnedDurableTransitionSurvivesModelOutcome(
+  receipt: SourceOwnedDurableTransitionReceipt | undefined,
+  outcome: "cancelled" | "error" | "empty-output" | "stale-result" | "success"
+) {
+  return sourceOwnedTransitionDurablySatisfied(receipt) && outcome !== "success";
+}
+
+export function sourceOwnedTransitionCommittedFreshParent(
+  receipt: SourceOwnedDurableTransitionReceipt | undefined
+) {
+  return Boolean(
+    sourceOwnedTransitionDurableMutationApplied(receipt) &&
+      (receipt?.sourceResult.candidate.kind === "new-parent" ||
+        receipt?.sourceResult.candidate.kind === "reseed-parent")
+  );
+}
+
+export function formatSourceOwnedDurableTransitionForTrace(
+  receipt: SourceOwnedDurableTransitionReceipt | undefined,
+  extra: {
+    modelRequestStartedAt?: number;
+    modelOutcome?: string;
+    survivedModelOutcome?: boolean;
+  } = {}
+) {
+  return {
+    ...formatSourceOwnedTransitionForTrace(receipt?.sourceResult, {
+      committedBeforeModel: sourceOwnedTransitionDurablySatisfied(receipt),
+      ...extra,
+    }),
+    sourceTransitionExpectedTaskRuntimeRevision:
+      receipt?.expectedTaskRuntimeRevision,
+    sourceTransitionRuntimeKind: receipt?.runtimeTransition,
+    sourceTransitionDurableAuthorized: receipt?.runtimeResult?.authorized,
+    sourceTransitionDurableMutationApplied:
+      receipt?.runtimeResult?.mutationApplied,
+    sourceTransitionDurableReason: receipt?.reason,
+  };
+}
+
 export function didSourceOwnedTransitionCommitFreshParent(
   input: {
     sourceTransitionResult: SourceOwnedTransitionCommitResult | undefined;
@@ -127,6 +271,16 @@ export function didSourceOwnedTransitionCommitFreshParent(
       (result.candidate.kind === "new-parent" ||
         result.candidate.kind === "reseed-parent")
   );
+}
+
+function mapSourceOwnedRuntimeTransition(input: {
+  kind: SourceOwnedTransitionKind;
+  before?: ActiveInterviewParent;
+}): MeetingTaskRuntimeTransitionKind {
+  if (input.kind === "child-probe") return "attach-child";
+  if (input.kind === "resume-parent") return "resume-parent";
+  if (input.kind === "phase-progress") return "advance-phase";
+  return input.before ? "replace-parent" : "create-parent";
 }
 
 export function createSourceOwnedTransitionCandidate(

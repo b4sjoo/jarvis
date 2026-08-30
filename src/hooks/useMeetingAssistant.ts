@@ -568,6 +568,7 @@ import {
   buildSettledAdvisorExecutionPlan,
   commitTaskBoundaryCandidate,
   commitSourceOwnedTransition,
+  commitSourceOwnedTransitionToRuntime,
   didSourceOwnedTransitionCommitFreshParent,
   createCurrentQuestionSourceSettlementId,
   createTaskBoundaryCandidate,
@@ -663,6 +664,10 @@ import {
   readInterviewBriefType,
   resolveTaskTaxonomyAuthority,
   supersedeTaskBoundaryCandidate,
+  formatSourceOwnedDurableTransitionForTrace,
+  sourceOwnedDurableTransitionSurvivesModelOutcome,
+  sourceOwnedTransitionDurableMutationApplied,
+  sourceOwnedTransitionDurablySatisfied,
   sourceOwnedTransitionSurvivesModelOutcome,
   taskBoundarySurvivesAdvisorOutcome,
   toHumanEvalQuestionType,
@@ -673,6 +678,7 @@ import {
   type HybridQuestionTypeDecision,
   type LatestTurnTaxonomyBoundaryReason,
   type TaskTaxonomyAuthorityDecision,
+  type SourceOwnedDurableTransitionReceipt,
   type SourceOwnedTransitionCommitResult,
   type SourceOwnedTransitionKind,
   type TaskLifecycleCommand,
@@ -12056,6 +12062,9 @@ export function useMeetingAssistant() {
       }
     }
 
+    let sourceOwnedTransitionReceipt:
+      | SourceOwnedDurableTransitionReceipt
+      | undefined;
     let sourceOwnedTransitionResult:
       | SourceOwnedTransitionCommitResult
       | undefined;
@@ -12116,78 +12125,65 @@ export function useMeetingAssistant() {
         });
 
       if (sourceOwnedTransitionCandidate) {
-        sourceOwnedTransitionResult =
-          commitSourceOwnedTransition({
+        sourceOwnedTransitionReceipt =
+          commitSourceOwnedTransitionToRuntime({
+            manager: contextManagerRef.current,
             candidate: sourceOwnedTransitionCandidate,
-            currentTask: transitionParentBefore,
-            currentSessionId:
-              transitionContextBefore.sessionId,
+            expectedTaskRuntimeRevision:
+              transitionContextBefore.taskRuntime.revision,
+            currentSessionId: transitionContextBefore.sessionId,
             currentRuntimeEpoch: runtimeEpochRef.current,
+            operationId: currentQuestionSettlement?.operationId,
+            reason: "source-owned-transition-committed",
           });
+        sourceOwnedTransitionResult =
+          sourceOwnedTransitionReceipt.sourceResult;
+        const sourceTransitionDurablySatisfied =
+          sourceOwnedTransitionDurablySatisfied(
+            sourceOwnedTransitionReceipt
+          );
+        const sourceTransitionMutationApplied =
+          sourceOwnedTransitionDurableMutationApplied(
+            sourceOwnedTransitionReceipt
+          );
         if (traceId) {
           traceStoreRef.current.updateMetadata(
             traceId,
-            formatSourceOwnedTransitionForTrace(
-              sourceOwnedTransitionResult,
-              {
-                committedBeforeModel:
-                  sourceOwnedTransitionResult.candidate
-                    .state === "committed",
-              }
+            formatSourceOwnedDurableTransitionForTrace(
+              sourceOwnedTransitionReceipt
             )
           );
           const transitionStepId =
             traceStoreRef.current.startStep(
               traceId,
               "Source-owned task transition",
-              formatSourceOwnedTransitionForTrace(
-                sourceOwnedTransitionResult,
-                {
-                  committedBeforeModel:
-                    sourceOwnedTransitionResult.candidate
-                      .state === "committed",
-                }
+              formatSourceOwnedDurableTransitionForTrace(
+                sourceOwnedTransitionReceipt
               )
             );
           traceStoreRef.current.finishStep(
             traceId,
             transitionStepId,
-            sourceOwnedTransitionResult.candidate.state ===
-              "committed"
-              ? "success"
-              : "error",
+            sourceTransitionDurablySatisfied ? "success" : "error",
             undefined,
-            sourceOwnedTransitionResult.candidate
-              .rejectionReason
+            sourceTransitionDurablySatisfied
+              ? undefined
+              : sourceOwnedTransitionReceipt.reason
           );
         }
 
-        if (
-          sourceOwnedTransitionResult.candidate.state ===
-          "committed"
-        ) {
-          if (sourceOwnedTransitionResult.mutationApplied) {
-            submitTaskRuntimeTransition(contextManagerRef.current, {
-              operationId: currentQuestionSettlement?.operationId,
-              transition: mapSourceOwnedRuntimeTransition({
-                kind: sourceOwnedTransitionResult.candidate.kind,
-                before: transitionParentBefore,
-              }),
-              reason: "source-owned-transition-committed",
-              screenAttachment:
-                transitionContextBefore.taskRuntime.screenAttachment,
-              parent: sourceOwnedTransitionResult.task ?? null,
+        if (sourceTransitionDurablySatisfied) {
+          if (sourceTransitionMutationApplied) {
+            recordCommittedPlaybookPhaseTransition({
+              operationId:
+                currentQuestionSettlement?.operationId ??
+                sourceOwnedTransitionResult.candidate.id,
+              source: "automatic",
+              before: transitionParentBefore,
+              after: sourceOwnedTransitionResult.task,
+              traceId,
             });
           }
-          recordCommittedPlaybookPhaseTransition({
-            operationId:
-              currentQuestionSettlement?.operationId ??
-              sourceOwnedTransitionResult.candidate.id,
-            source: "automatic",
-            before: transitionParentBefore,
-            after: sourceOwnedTransitionResult.task,
-            traceId,
-          });
           const transitionContextAfter =
             contextManagerRef.current.buildAdvisorPromptContext();
           promptContext = {
@@ -12200,11 +12196,12 @@ export function useMeetingAssistant() {
           };
           activeMeetingTaskId =
             getAdvisorActiveTaskId(promptContext);
-          effectiveRuntimeCommitToken =
-            rebaseRuntimeCommitToken({
+          if (sourceTransitionMutationApplied) {
+            effectiveRuntimeCommitToken = rebaseRuntimeCommitToken({
               token: effectiveRuntimeCommitToken,
               snapshot: readRuntimeCommitSnapshot(),
             });
+          }
           const committedContext =
             contextManagerRef.current.getState();
           setState((previous) => ({
@@ -12213,7 +12210,11 @@ export function useMeetingAssistant() {
             activeMeetingTask:
               committedContext.activeMeetingTask,
           }));
-          if (traceId && committedContext.activeMeetingTask) {
+          if (
+            traceId &&
+            sourceTransitionMutationApplied &&
+            committedContext.activeMeetingTask
+          ) {
             traceStoreRef.current.updateMetadata(traceId, {
               runtimeCommitTokenRebased: true,
               runtimeCommitTokenRebaseReason:
@@ -12230,9 +12231,39 @@ export function useMeetingAssistant() {
         }
       }
     }
+    if (
+      sourceOwnedTransitionReceipt &&
+      !sourceOwnedTransitionDurablySatisfied(sourceOwnedTransitionReceipt)
+    ) {
+      recordCurrentQuestionSettlement();
+      updateForceAdviseTargetForAdvisorOutcome({
+        advisorJob,
+        status: "failed",
+        outcome: `source-transition-rejected:${sourceOwnedTransitionReceipt.reason}`,
+      });
+      releaseAdvisorJob(advisorJob, "suppressed", {
+        commitAuthorized: false,
+        commitAuthorizationReason:
+          sourceOwnedTransitionReceipt.reason,
+      });
+      if (traceId) {
+        traceStoreRef.current.finishTrace(
+          traceId,
+          "cancelled",
+          sourceOwnedTransitionReceipt.reason
+        );
+      }
+      setState((previous) => ({
+        ...previous,
+        status: runtimeActiveRef.current ? "listening" : previous.status,
+        partialSuggestion: "",
+      }));
+      return;
+    }
     const sourceOwnedTransitionCommittedBeforeAdvisor =
-      sourceOwnedTransitionResult?.candidate.state ===
-      "committed";
+      sourceOwnedTransitionDurablySatisfied(
+        sourceOwnedTransitionReceipt
+      );
     effectiveAdvisorSettlementView =
       buildEffectiveAdvisorSettlementView({
         settlement: currentQuestionSettlement,
@@ -12378,9 +12409,13 @@ export function useMeetingAssistant() {
     if (currentQuestionSettlement) {
       if (!settledExecutionPlan) {
         const sourceOwnedExecutionPlanCommand =
-          mapSourceOwnedExecutionPlanCommand(
-            sourceOwnedTransitionResult
-          );
+          sourceOwnedTransitionDurableMutationApplied(
+            sourceOwnedTransitionReceipt
+          )
+            ? mapSourceOwnedExecutionPlanCommand(
+                sourceOwnedTransitionResult
+              )
+            : undefined;
         const operationCommittedTaskMutationBeforePlan = Boolean(
           taskBoundaryCommittedBeforeAdvisor ||
             manualPhaseAdvanceCommitted ||
@@ -12929,15 +12964,13 @@ export function useMeetingAssistant() {
       if (traceId) {
         traceStoreRef.current.updateMetadata(traceId, {
           ...boundaryErrorMetadata,
-          ...formatSourceOwnedTransitionForTrace(
-            sourceOwnedTransitionResult,
+          ...formatSourceOwnedDurableTransitionForTrace(
+            sourceOwnedTransitionReceipt,
             {
-              committedBeforeModel:
-                sourceOwnedTransitionCommittedBeforeAdvisor,
               modelOutcome: "error",
               survivedModelOutcome:
-                sourceOwnedTransitionSurvivesModelOutcome(
-                  sourceOwnedTransitionResult,
+                sourceOwnedDurableTransitionSurvivesModelOutcome(
+                  sourceOwnedTransitionReceipt,
                   "error"
                 ),
             }
@@ -13843,11 +13876,9 @@ export function useMeetingAssistant() {
                   advisorPromptIncludedLogicalQuestion,
                   advisorPromptLogicalQuestionSourceCount:
                     advisorJob.logicalQuestionUnit?.sources.length,
-                  ...formatSourceOwnedTransitionForTrace(
-                    sourceOwnedTransitionResult,
+                  ...formatSourceOwnedDurableTransitionForTrace(
+                    sourceOwnedTransitionReceipt,
                     {
-                      committedBeforeModel:
-                        sourceOwnedTransitionCommittedBeforeAdvisor,
                       modelRequestStartedAt,
                     }
                   ),
@@ -14540,7 +14571,7 @@ export function useMeetingAssistant() {
             responseOpportunityGenerationGateOperationId &&
               responseOpportunityGenerationAuthorized()
           )) &&
-        (!sourceOwnedTransitionResult ||
+        (!sourceOwnedTransitionReceipt ||
           sourceOwnedTransitionCommittedBeforeAdvisor);
       const continuityRelation =
         parentMutationCommittedBeforeAdvisor
@@ -14782,18 +14813,16 @@ export function useMeetingAssistant() {
                 "empty-output"
               ),
           }),
-          ...formatSourceOwnedTransitionForTrace(
-            sourceOwnedTransitionResult,
+          ...formatSourceOwnedDurableTransitionForTrace(
+            sourceOwnedTransitionReceipt,
             {
-              committedBeforeModel:
-                sourceOwnedTransitionCommittedBeforeAdvisor,
               modelOutcome: finalContent.trim()
                 ? "success"
                 : "empty-output",
               survivedModelOutcome:
                 !finalContent.trim() &&
-                sourceOwnedTransitionSurvivesModelOutcome(
-                  sourceOwnedTransitionResult,
+                sourceOwnedDurableTransitionSurvivesModelOutcome(
+                  sourceOwnedTransitionReceipt,
                   "empty-output"
                 ),
             }
@@ -15455,15 +15484,13 @@ export function useMeetingAssistant() {
               commitAuthorizationReason: commitDecision.reason,
             }),
             ...boundaryErrorMetadata,
-            ...formatSourceOwnedTransitionForTrace(
-              sourceOwnedTransitionResult,
+            ...formatSourceOwnedDurableTransitionForTrace(
+              sourceOwnedTransitionReceipt,
               {
-                committedBeforeModel:
-                  sourceOwnedTransitionCommittedBeforeAdvisor,
                 modelOutcome: "cancelled",
                 survivedModelOutcome:
-                  sourceOwnedTransitionSurvivesModelOutcome(
-                    sourceOwnedTransitionResult,
+                  sourceOwnedDurableTransitionSurvivesModelOutcome(
+                    sourceOwnedTransitionReceipt,
                     "cancelled"
                   ),
               }
@@ -15521,15 +15548,13 @@ export function useMeetingAssistant() {
             commitAuthorizationReason: commitDecision.reason,
           }),
           ...boundaryErrorMetadata,
-          ...formatSourceOwnedTransitionForTrace(
-            sourceOwnedTransitionResult,
+          ...formatSourceOwnedDurableTransitionForTrace(
+            sourceOwnedTransitionReceipt,
             {
-              committedBeforeModel:
-                sourceOwnedTransitionCommittedBeforeAdvisor,
               modelOutcome: "error",
               survivedModelOutcome:
-                sourceOwnedTransitionSurvivesModelOutcome(
-                  sourceOwnedTransitionResult,
+                sourceOwnedDurableTransitionSurvivesModelOutcome(
+                  sourceOwnedTransitionReceipt,
                   "error"
                 ),
             }

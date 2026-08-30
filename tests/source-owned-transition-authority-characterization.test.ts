@@ -2,16 +2,17 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { authorizeAnswerGenerationLease } from "../src/lib/meeting/answer-generation-lease.js";
-import type { MeetingTaskRuntimeTransitionKind } from "../src/lib/meeting/active-meeting-task.js";
 import { MeetingContextManager } from "../src/lib/meeting/context-manager.js";
 import {
   GenerationDerivedCommitCoordinator,
   GenerationResultLedger,
 } from "../src/lib/meeting/generation-result-ledger.js";
 import {
-  commitSourceOwnedTransition,
+  commitSourceOwnedTransitionToRuntime,
   createSourceOwnedTransitionCandidate,
-  sourceOwnedTransitionSurvivesModelOutcome,
+  sourceOwnedDurableTransitionSurvivesModelOutcome,
+  sourceOwnedTransitionDurableMutationApplied,
+  sourceOwnedTransitionDurablySatisfied,
 } from "../src/lib/meeting/source-owned-transition-transaction.js";
 import type {
   ActiveInterviewParent,
@@ -20,7 +21,7 @@ import { setTestTaskRuntime } from "./helpers/meeting-task-runtime.js";
 
 const now = Date.now();
 
-test("characterizes a stale no-parent Screen preparation that the canonical writer rejects", () => {
+test("rejects a stale no-parent Screen preparation against the canonical runtime", () => {
   const manager = new MeetingContextManager();
   const liveParent = makeParent("parent-live", "behavioral");
   setTestTaskRuntime(manager, { parent: liveParent });
@@ -38,26 +39,23 @@ test("characterizes a stale no-parent Screen preparation that the canonical writ
     now: now + 1,
   });
   assert.ok(candidate);
-  const sourceResult = commitSourceOwnedTransition({
+  const receipt = commitSourceOwnedTransitionToRuntime({
+    manager,
     candidate,
+    expectedTaskRuntimeRevision: 0,
     currentSessionId: sessionId,
     currentRuntimeEpoch: 3,
+    reason: "screen-source-transition-committed",
     now: now + 2,
   });
-  const durableResult = commitLikeCurrentHook({
-    manager,
-    transition: "create-parent",
-    parent: sourceResult.task,
-  });
 
-  assert.equal(sourceResult.candidate.state, "committed");
-  assert.equal(sourceResult.mutationApplied, true);
-  assert.equal(durableResult.authorized, false);
-  assert.equal(durableResult.reason, "invalid-transition");
+  assert.equal(receipt.sourceResult.candidate.state, "rejected");
+  assert.equal(receipt.runtimeResult, undefined);
+  assert.equal(receipt.reason, "task-runtime-revision-mismatch");
   assert.equal(manager.getTaskRuntimeState().parent?.id, liveParent.id);
 });
 
-test("characterizes stale Parent A replacing the newer live Parent B", () => {
+test("rejects stale Parent A instead of replacing the newer live Parent B", () => {
   const manager = new MeetingContextManager();
   const staleParent = makeParent("parent-a", "behavioral");
   const liveParent = makeParent("parent-b", "project-deep-dive");
@@ -77,25 +75,25 @@ test("characterizes stale Parent A replacing the newer live Parent B", () => {
     now: now + 1,
   });
   assert.ok(candidate);
-  const sourceResult = commitSourceOwnedTransition({
+  const receipt = commitSourceOwnedTransitionToRuntime({
+    manager,
     candidate,
-    currentTask: staleParent,
+    expectedTaskRuntimeRevision: manager.getTaskRuntimeState().revision,
     currentSessionId: sessionId,
     currentRuntimeEpoch: 3,
+    reason: "screen-source-transition-committed",
     now: now + 2,
-  });
-  const durableResult = commitLikeCurrentHook({
-    manager,
-    transition: "replace-parent",
-    parent: sourceResult.task,
   });
 
   assert.equal(candidate.expectedParentId, staleParent.id);
-  assert.equal(sourceResult.candidate.state, "committed");
-  assert.equal(durableResult.authorized, true);
-  assert.equal(durableResult.mutationApplied, true);
-  assert.notEqual(manager.getTaskRuntimeState().parent?.id, liveParent.id);
-  assert.equal(manager.getTaskRuntimeState().parent?.stableKind, "coding");
+  assert.equal(receipt.sourceResult.candidate.state, "rejected");
+  assert.equal(receipt.sourceResult.reason, "parent-id-mismatch");
+  assert.equal(receipt.runtimeResult, undefined);
+  assert.equal(manager.getTaskRuntimeState().parent?.id, liveParent.id);
+  assert.equal(
+    manager.getTaskRuntimeState().parent?.stableKind,
+    "project-deep-dive"
+  );
 });
 
 test("characterizes an idempotent Screen observation as a durable preserve", () => {
@@ -114,18 +112,16 @@ test("characterizes an idempotent Screen observation as a durable preserve", () 
     now: now + 1,
   });
   assert.ok(firstCandidate);
-  const firstSource = commitSourceOwnedTransition({
+  const firstReceipt = commitSourceOwnedTransitionToRuntime({
+    manager,
     candidate: firstCandidate,
+    expectedTaskRuntimeRevision: manager.getTaskRuntimeState().revision,
     currentSessionId: sessionId,
     currentRuntimeEpoch: 3,
+    reason: "screen-source-transition-committed",
     now: now + 2,
   });
-  const firstDurable = commitLikeCurrentHook({
-    manager,
-    transition: "create-parent",
-    parent: firstSource.task,
-  });
-  assert.equal(firstDurable.mutationApplied, true);
+  assert.equal(sourceOwnedTransitionDurableMutationApplied(firstReceipt), true);
   const revisionAfterFirst = manager.getTaskRuntimeState().revision;
 
   const repeatedCandidate = createSourceOwnedTransitionCandidate({
@@ -142,17 +138,20 @@ test("characterizes an idempotent Screen observation as a durable preserve", () 
     now: now + 3,
   });
   assert.ok(repeatedCandidate);
-  const repeatedSource = commitSourceOwnedTransition({
+  const repeatedReceipt = commitSourceOwnedTransitionToRuntime({
+    manager,
     candidate: repeatedCandidate,
-    currentTask: manager.getTaskRuntimeState().parent,
+    expectedTaskRuntimeRevision: manager.getTaskRuntimeState().revision,
     currentSessionId: sessionId,
     currentRuntimeEpoch: 3,
+    reason: "screen-source-transition-committed",
     now: now + 4,
   });
 
-  assert.equal(repeatedSource.candidate.state, "committed");
-  assert.equal(repeatedSource.mutationApplied, false);
-  assert.equal(repeatedSource.reason, "already-applied");
+  assert.equal(repeatedReceipt.sourceResult.candidate.state, "committed");
+  assert.equal(repeatedReceipt.sourceResult.mutationApplied, false);
+  assert.equal(repeatedReceipt.sourceResult.reason, "already-applied");
+  assert.equal(sourceOwnedTransitionDurablySatisfied(repeatedReceipt), true);
   assert.equal(manager.getTaskRuntimeState().revision, revisionAfterFirst);
 });
 
@@ -172,21 +171,19 @@ test("keeps a pre-model lifecycle commit after provider failure", () => {
     now: now + 1,
   });
   assert.ok(candidate);
-  const sourceResult = commitSourceOwnedTransition({
+  const receipt = commitSourceOwnedTransitionToRuntime({
+    manager,
     candidate,
+    expectedTaskRuntimeRevision: manager.getTaskRuntimeState().revision,
     currentSessionId: sessionId,
     currentRuntimeEpoch: 3,
+    reason: "source-owned-transition-committed",
     now: now + 2,
   });
-  const durableResult = commitLikeCurrentHook({
-    manager,
-    transition: "create-parent",
-    parent: sourceResult.task,
-  });
 
-  assert.equal(durableResult.mutationApplied, true);
+  assert.equal(sourceOwnedTransitionDurableMutationApplied(receipt), true);
   assert.equal(
-    sourceOwnedTransitionSurvivesModelOutcome(sourceResult, "error"),
+    sourceOwnedDurableTransitionSurvivesModelOutcome(receipt, "error"),
     true
   );
   assert.equal(manager.getTaskRuntimeState().parent?.stableKind, "coding");
@@ -271,21 +268,15 @@ test("freezes the current intermediate authority consumer inventory", async () =
   ]) {
     assert.equal(hookSource.includes(productConsumer), true, productConsumer);
   }
+  assert.equal(
+    hookSource.includes("sourceOwnedTransitionResult?.candidate.state"),
+    false
+  );
+  assert.equal(
+    hookSource.includes("sourceOwnedTransitionResult.candidate.state"),
+    false
+  );
 });
-
-function commitLikeCurrentHook(input: {
-  manager: MeetingContextManager;
-  transition: MeetingTaskRuntimeTransitionKind;
-  parent?: ActiveInterviewParent;
-}) {
-  return input.manager.commitTaskRuntimeTransition({
-    id: `characterization-${input.transition}-${Date.now()}`,
-    transition: input.transition,
-    reason: "source-owned-transition-committed",
-    expectedRevision: input.manager.getTaskRuntimeState().revision,
-    parent: input.parent ?? null,
-  });
-}
 
 function makeParent(
   id: string,
