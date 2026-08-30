@@ -6511,31 +6511,6 @@ const TraceHumanEvaluationPanel = ({
               </div>
             ) : null}
           </div>
-          {currentQuestionSettlementDisposition === "response-only" ||
-          typeof trace.metadata?.responseOnlyTaskScopeId === "string" ? (
-            <div className="mt-3 border-t border-border/50 pt-2">
-              <CriticalMomentButtonGroup
-                label="Response-only handling"
-                options={[
-                  ["correct", "Correct"],
-                  ["incorrect", "Wrong"],
-                ]}
-                value={
-                  questionEvaluation?.taxonomyAdjudication
-                    ?.responseOnlyCorrect === undefined
-                    ? undefined
-                    : questionEvaluation.taxonomyAdjudication.responseOnlyCorrect
-                      ? "correct"
-                      : "incorrect"
-                }
-                onSelect={(value) =>
-                  updateTaxonomyAdjudicationEvaluation({
-                    responseOnlyCorrect: value === "correct",
-                  })
-                }
-              />
-            </div>
-          ) : null}
           {activeSettlementFact?.kind ===
           "expected-task-settlement" ? (
             <div className="mt-1 break-words font-mono text-[9px]">

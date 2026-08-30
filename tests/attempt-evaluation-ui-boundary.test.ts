@@ -31,4 +31,9 @@ test("keeps final task settlement visible without duplicate relation shadow cont
   assert.doesNotMatch(typeLabels, /label="Parent decision"/);
   assert.doesNotMatch(typeLabels, /label="Response-only"/);
   assert.doesNotMatch(typeLabels, /label="Context outcome"/);
+  assert.doesNotMatch(source, /Response-only handling/);
+  assert.doesNotMatch(
+    source,
+    /responseOnlyCorrect:\s*value === "correct"/
+  );
 });
