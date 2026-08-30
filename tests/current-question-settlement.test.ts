@@ -479,7 +479,7 @@ test("manual evidence outranks deterministic and LLM proposals on the same revis
   );
 });
 
-test("distinguishes provisional, response-only, committed, and stale dispositions", () => {
+test("distinguishes unresolved, domain-resolved, committed, and stale dispositions", () => {
   const unresolved = settle();
   const responseOnly = settle({
     deterministicProposal: proposal("deterministic-fast-path", {
@@ -508,7 +508,7 @@ test("distinguishes provisional, response-only, committed, and stale disposition
     resolveCurrentQuestionSettlementDisposition({
       settlement: responseOnly,
     }),
-    "response-only"
+    "domain-resolved-provisional"
   );
   assert.equal(
     resolveCurrentQuestionSettlementDisposition({

@@ -306,7 +306,6 @@ export function resolveCurrentQuestionSettlementDisposition(input: {
   if (input.settlement.questionType === "unknown") {
     return "unresolved-provisional";
   }
-  if (input.settlement.responseAuthorized) return "response-only";
   return "domain-resolved-provisional";
 }
 

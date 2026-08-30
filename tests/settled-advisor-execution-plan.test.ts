@@ -448,7 +448,7 @@ test("normalizes a legacy linked extension to parent continuity, not a new paren
   assert.equal(view.parentId, task.parent.id);
 });
 
-test("keeps active-parent abstention current-only without inventing compatibility", () => {
+test("resolves active-parent abstention to the current owner null hypothesis", () => {
   const task = activeTask("general-system-design");
   const view = buildEffectiveAdvisorSettlementView({
     settlement: settlement({
@@ -470,23 +470,26 @@ test("keeps active-parent abstention current-only without inventing compatibilit
 
   assert.equal(view.rawQuestionType, "unknown");
   assert.equal(view.rawRelation, "unknown");
-  assert.equal(view.questionType, "unknown");
-  assert.equal(view.relation, "none");
-  assert.equal(view.relationApplicable, false);
-  assert.equal(view.currentOnly, true);
+  assert.equal(view.questionType, "general-system-design");
+  assert.equal(view.relation, "followup-parent");
+  assert.equal(view.relationApplicable, true);
+  assert.equal(view.currentOnly, false);
   assert.equal(view.nullHypothesisApplied, true);
   assert.equal(view.nullHypothesisReason, "active-parent-preserved");
-  assert.equal(view.effectiveSettlement?.questionType, "unknown");
-  assert.equal(view.effectiveSettlement?.relation, "none");
+  assert.equal(
+    view.effectiveSettlement?.questionType,
+    "general-system-design"
+  );
+  assert.equal(view.effectiveSettlement?.relation, "followup-parent");
   assert.equal(view.effectiveSettlement?.relationMutationAuthorized, false);
   assert.equal(view.effectiveSettlement?.effective, true);
   assert.equal(view.effectiveSettlement?.effectiveRevision, 4);
   assert.equal(view.effectiveSettlement?.rawRelation, "unknown");
-  assert.equal(view.effectiveSettlement?.effectiveParentId, undefined);
-  assert.equal(view.contextReadScope, "current-only");
+  assert.equal(view.effectiveSettlement?.effectiveParentId, task.parent.id);
+  assert.equal(view.contextReadScope, "active-parent-read");
 });
 
-test("keeps active-child abstention current-only without borrowing its type", () => {
+test("resolves active-child abstention to the current owner null hypothesis", () => {
   const task: ActiveMeetingTask = {
     ...activeTask("general-system-design"),
     child: {
@@ -519,17 +522,17 @@ test("keeps active-child abstention current-only without borrowing its type", ()
     },
   });
 
-  assert.equal(view.questionType, "unknown");
-  assert.equal(view.relation, "none");
-  assert.equal(view.relationApplicable, false);
-  assert.equal(view.currentOnly, true);
-  assert.equal(view.nullHypothesisReason, "active-parent-preserved");
+  assert.equal(view.questionType, "field-knowledge");
+  assert.equal(view.relation, "child-probe");
+  assert.equal(view.relationApplicable, true);
+  assert.equal(view.currentOnly, false);
+  assert.equal(view.nullHypothesisReason, "active-child-preserved");
   assert.equal(view.effectiveSettlement?.relationMutationAuthorized, false);
-  assert.equal(view.effectiveSettlement?.effectiveChildId, undefined);
-  assert.equal(view.contextReadScope, "current-only");
+  assert.equal(view.effectiveSettlement?.effectiveChildId, "child-a");
+  assert.equal(view.contextReadScope, "active-child-read");
 });
 
-test("keeps an unresolved Screen relation current-only instead of inventing a parent", () => {
+test("preserves the active owner when Screen relation evidence is unresolved", () => {
   const task = activeTask("coding");
   const raw = settlement({
     questionType: "behavioral",
@@ -549,11 +552,11 @@ test("keeps an unresolved Screen relation current-only instead of inventing a pa
   });
 
   assert.equal(view.rawRelation, "unknown");
-  assert.equal(view.relation, "none");
-  assert.equal(view.relationApplicable, false);
-  assert.equal(view.currentOnly, true);
+  assert.equal(view.relation, "followup-parent");
+  assert.equal(view.relationApplicable, true);
+  assert.equal(view.currentOnly, false);
   assert.equal(view.startsNewParent, false);
-  assert.equal(view.contextReadScope, "current-only");
+  assert.equal(view.contextReadScope, "active-parent-read");
   assert.equal(view.nullHypothesisReason, "active-parent-preserved");
 });
 

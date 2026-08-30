@@ -33,7 +33,6 @@ import {
 } from "./question-type-consumer-observation.js";
 import type { AdvisorContextReadScope } from "./advisor-context-read-scope.js";
 import {
-  areCompatibleParentContinuityTypes,
   normalizeCanonicalQuestionType,
   toMemoryUseCaseForQuestionType,
   type CanonicalQuestionType,
@@ -291,20 +290,14 @@ export function buildEffectiveAdvisorSettlementView(input: {
       : "no-parent-current-question";
   }
 
-  if (
-    !alreadyEffective &&
-    preserveCurrentBranch &&
-    rawRelation === "unknown" &&
-    rawQuestionType !== "unknown"
-  ) {
-    if (activeTask?.child && rawQuestionType === activeChildType) {
+  if (!alreadyEffective && preserveCurrentBranch && rawRelation === "unknown") {
+    if (activeTask?.child && activeChildType) {
       relation = "child-probe";
+      if (rawQuestionType === "unknown") questionType = activeChildType;
       nullHypothesisReason = "active-child-preserved";
-    } else if (
-      activeTask?.parent &&
-      areCompatibleParentContinuityTypes(rawQuestionType, activeParentType)
-    ) {
+    } else if (activeTask?.parent && activeParentType) {
       relation = "followup-parent";
+      if (rawQuestionType === "unknown") questionType = activeParentType;
       nullHypothesisReason = "active-parent-preserved";
     }
   }
