@@ -87,6 +87,16 @@ test("keeps presentation availability separate from runtime authorization", () =
     }),
     { authorized: true }
   );
+  assert.deepEqual(
+    decideManualRuntimeActionIngress({
+      action: "regenerate-artifacts",
+      busy: false,
+      hasMeetingContext: true,
+      hasVisibleAnswer: true,
+      hasActiveTask: true,
+    }),
+    { authorized: true }
+  );
 });
 
 test("projects Regenerate terminal from visible delivery rather than promise completion", () => {

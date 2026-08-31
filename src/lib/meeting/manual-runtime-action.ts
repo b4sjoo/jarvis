@@ -6,6 +6,7 @@ export type ManualRuntimeActionKind =
   | "previous-phase"
   | "narrow-context"
   | "enhance-context"
+  | "regenerate-artifacts"
   | "clear-task"
   | "regenerate";
 

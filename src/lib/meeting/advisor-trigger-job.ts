@@ -29,6 +29,7 @@ export type AdvisorJobSource =
   | "live-turn"
   | "regenerate"
   | "response-action"
+  | "artifact-regeneration"
   | "clarifying-answer"
   | "manual-correction"
   | "force-advise";
@@ -117,6 +118,7 @@ export interface AdvisorLogicalQuestionAuthorizationTarget {
     | "runtime-current"
     | "manual-correction-target"
     | "response-recovery-target"
+    | "artifact-regeneration-target"
     | "supersession-protected";
   logicalQuestionUnit?: LogicalQuestionUnit;
 }
@@ -126,6 +128,7 @@ export function resolveAdvisorLogicalQuestionAuthorizationTarget(input: {
   runtimeCurrent?: LogicalQuestionUnit;
   manualCorrectionTarget?: LogicalQuestionUnit;
   responseRecoveryTarget?: LogicalQuestionUnit;
+  artifactRegenerationTarget?: LogicalQuestionUnit;
   supersessionProtectedTarget?: LogicalQuestionUnit;
 }): AdvisorLogicalQuestionAuthorizationTarget {
   if (input.jobSource === "manual-correction") {
@@ -139,6 +142,13 @@ export function resolveAdvisorLogicalQuestionAuthorizationTarget(input: {
     return {
       source: "response-recovery-target",
       logicalQuestionUnit: input.responseRecoveryTarget,
+    };
+  }
+
+  if (input.jobSource === "artifact-regeneration") {
+    return {
+      source: "artifact-regeneration-target",
+      logicalQuestionUnit: input.artifactRegenerationTarget,
     };
   }
 

@@ -139,6 +139,7 @@ import {
   PauseIcon,
   PlayIcon,
   RadioIcon,
+  RefreshCwIcon,
   RotateCcwIcon,
   SendIcon,
   SettingsIcon,
@@ -1355,6 +1356,13 @@ export const MeetingAssistant = ({
     void meeting.applyResponseAction("next-phase");
   }, [meeting.applyResponseAction]);
 
+  const handleRegenerateArtifactsShortcut = useCallback(() => {
+    if (isJarvisEditableElementFocused()) return;
+
+    setOpen(true);
+    void meeting.applyResponseAction("regenerate-artifacts");
+  }, [meeting.applyResponseAction]);
+
   const handleScopedResponseActionShortcut = useCallback(
     (action: "narrow-context" | "enhance-context" | "previous-phase") => {
       if (isJarvisEditableElementFocused()) return;
@@ -1375,6 +1383,7 @@ export const MeetingAssistant = ({
         void handleFocusListeningShortcut();
       },
       meeting_regenerate: handleRegenerateShortcut,
+      meeting_regenerate_artifacts: handleRegenerateArtifactsShortcut,
       meeting_enhance_context: () => {
         handleScopedResponseActionShortcut("enhance-context");
       },
@@ -1392,6 +1401,7 @@ export const MeetingAssistant = ({
       handleFocusListeningShortcut,
       handleNextPhaseShortcut,
       handleRegenerateShortcut,
+      handleRegenerateArtifactsShortcut,
       handleScopedResponseActionShortcut,
       meeting.toggleMicrophoneContext,
       toggleFocusMode,
@@ -2277,7 +2287,7 @@ export const MeetingAssistant = ({
                     />
                   </div>
                 ) : null}
-                <div className="grid grid-cols-5 gap-1.5">
+                <div className="grid grid-cols-[repeat(5,minmax(0,1fr))_1.75rem] gap-1.5">
                   <Button
                     size="sm"
                     variant="outline"
@@ -2317,6 +2327,31 @@ export const MeetingAssistant = ({
                       {action.label}
                     </Button>
                   ))}
+                  <Button
+                    size="icon"
+                    variant="outline"
+                    className={cn(
+                      "h-7 w-7",
+                      (isBusy ||
+                        !hasSuggestion ||
+                        !hasActiveMeetingTask) &&
+                        "cursor-not-allowed opacity-50"
+                    )}
+                    title="Regenerate artifacts"
+                    onClick={() => {
+                      void meeting.applyResponseAction(
+                        "regenerate-artifacts"
+                      );
+                    }}
+                    aria-disabled={
+                      isBusy ||
+                      !hasSuggestion ||
+                      !hasActiveMeetingTask
+                    }
+                  >
+                    <RefreshCwIcon className="h-3.5 w-3.5" />
+                    <span className="sr-only">Regenerate artifacts</span>
+                  </Button>
                 </div>
               </section>
 

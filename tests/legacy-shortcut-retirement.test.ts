@@ -14,6 +14,8 @@ test("retired Cluely shortcuts are absent from defaults", () => {
     assert.equal(shortcutsSource.includes(`id: \"${retiredId}\"`), false);
     assert.equal(rustSource.includes(`\"${retiredId}\" =>`), false);
   }
+  assert.match(shortcutsSource, /id: "meeting_regenerate_artifacts"/);
+  assert.match(shortcutsSource, /macos: "cmd\+shift\+a"/);
 });
 
 test("stored known bindings are removed without deleting custom key choices", () => {

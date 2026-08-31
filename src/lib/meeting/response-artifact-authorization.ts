@@ -50,6 +50,7 @@ export function decideAdvisorArtifactGenerationAuthority(input: {
   manualPhaseCommitted?: boolean;
   automaticPhaseIdentityTransitionCommitted?: boolean;
   manualCorrection?: boolean;
+  manualArtifactRegeneration?: boolean;
 }): AdvisorArtifactGenerationAuthorityDecision {
   if (input.hardAnswerOnly) {
     return {
@@ -63,6 +64,13 @@ export function decideAdvisorArtifactGenerationAuthority(input: {
       authority: "artifact-authorized",
       answerOnly: false,
       reason: "manual-phase-transition-committed",
+    };
+  }
+  if (input.manualArtifactRegeneration) {
+    return {
+      authority: "artifact-authorized",
+      answerOnly: false,
+      reason: "manual-artifact-regeneration-authority",
     };
   }
   if (input.automaticPhaseIdentityTransitionCommitted) {

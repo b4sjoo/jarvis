@@ -379,6 +379,17 @@ test("manual correction validates against its current target instead of the runt
       logicalQuestionUnit: manualCorrectionTarget,
     }
   );
+  assert.deepEqual(
+    resolveAdvisorLogicalQuestionAuthorizationTarget({
+      jobSource: "artifact-regeneration",
+      runtimeCurrent,
+      artifactRegenerationTarget: manualCorrectionTarget,
+    }),
+    {
+      source: "artifact-regeneration-target",
+      logicalQuestionUnit: manualCorrectionTarget,
+    }
+  );
 });
 
 test("explicit response actions preserve the active parent", () => {

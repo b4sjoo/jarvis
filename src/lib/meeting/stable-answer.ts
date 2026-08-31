@@ -135,6 +135,25 @@ export interface StableArtifactOnlyCommitDecision {
   mutatedArtifacts: ArtifactOnlyAnswerSection[];
 }
 
+export function formatStableArtifactOnlyCommitForTrace(
+  decision: StableArtifactOnlyCommitDecision | undefined
+) {
+  return {
+    artifactOnlyCommitDisposition: decision?.disposition,
+    artifactOnlyCommitReason: decision?.reason,
+    artifactOnlyAuthorizedArtifacts: decision?.authorizedArtifacts,
+    artifactOnlyMutatedArtifacts: decision?.mutatedArtifacts,
+    artifactOnlyAnswerSectionRevision:
+      decision?.stable?.sections.answer.revision,
+    artifactOnlyCodeSectionRevision:
+      decision?.stable?.sections.code.revision,
+    artifactOnlyComplexitySectionRevision:
+      decision?.stable?.sections.complexity.revision,
+    artifactOnlyWhiteboardSectionRevision:
+      decision?.stable?.sections.whiteboard.revision,
+  };
+}
+
 const ANSWER_DELIVERY_MIN_WORD_EQUIVALENT = 18;
 const ANSWER_DELIVERY_MIN_DURATION_MS = 6_000;
 const ANSWER_DELIVERY_MIN_TOKEN_OVERLAP = 8;

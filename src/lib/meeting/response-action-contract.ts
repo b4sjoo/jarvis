@@ -39,6 +39,16 @@ export function buildResponseActionInstructions(
     ];
   }
 
+  if (action === "regenerate-artifacts") {
+    return [
+      "Action goal: replace only the Artifact family authorized in <playbook_phase_state> for the visible Answer owner.",
+      "Do not change the visible Answer, Question, Approach, Clarifying question, task identity, relation, or playbook phase.",
+      "For Design, emit one complete replacement Whiteboard. For Coding, emit complete Code and exact Complexity together.",
+      "Existing Artifacts are continuity for a full replacement, not evidence that changes the interview question.",
+      "Do not describe the Regenerate Artifacts action in the generated sections.",
+    ];
+  }
+
   if (action === "previous-phase") {
     return [
       "Action goal: answer for the deterministically restored previous playbook phase of the same parent task.",

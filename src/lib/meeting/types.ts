@@ -736,6 +736,7 @@ export type WhiteboardDomainTrack =
 export type WhiteboardUpdateSource =
   | "model-output"
   | "manual-next"
+  | "manual-artifact-regeneration"
   | "screen-merge"
   | "correction-regenerate"
   | "task-reset"
@@ -1052,6 +1053,7 @@ export type MeetingResponseActionMode =
   | "speakable"
   | "narrow-context"
   | "enhance-context"
+  | "regenerate-artifacts"
   | "previous-phase"
   | "next-phase";
 

@@ -82,6 +82,16 @@ export const DEFAULT_SHORTCUT_ACTIONS: ShortcutAction[] = [
     },
   },
   {
+    id: "meeting_regenerate_artifacts",
+    name: "Meeting Regenerate Artifacts",
+    description: "Regenerate the current phase-owned meeting artifacts",
+    defaultKey: {
+      macos: "cmd+shift+a",
+      windows: "ctrl+shift+a",
+      linux: "ctrl+shift+a",
+    },
+  },
+  {
     id: "meeting_enhance_context",
     name: "Meeting Enhance Context",
     description:

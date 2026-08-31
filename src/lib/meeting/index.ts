@@ -71,6 +71,7 @@ export * from "./meeting-metadata-evaluation";
 export * from "./meeting-logistics";
 export * from "./model-generation-telemetry";
 export * from "./response-artifact-authorization";
+export * from "./artifact-regeneration";
 export * from "./response-action-contract";
 export * from "./native-speech-event";
 export * from "./rollover-transcript";

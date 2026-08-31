@@ -194,6 +194,7 @@ export function decideRefreshAuthority(input: {
   if (
     input.source === "regenerate" ||
     input.source === "response-action" ||
+    input.source === "artifact-regeneration" ||
     input.source === "clarifying-answer"
   ) {
     return {

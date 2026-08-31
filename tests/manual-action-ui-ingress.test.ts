@@ -51,4 +51,12 @@ test("manual-action shortcuts dispatch before semantic availability checks", () 
   assert.doesNotMatch(shortcutSection, /!hasActiveMeetingTask/);
   assert.match(shortcutSection, /meeting\.regenerateSuggestion\(\)/);
   assert.match(shortcutSection, /meeting\.applyResponseAction\(action\)/);
+  assert.match(
+    shortcutSection,
+    /meeting\.applyResponseAction\("regenerate-artifacts"\)/
+  );
+  assert.match(
+    meetingUiSource,
+    /title="Regenerate artifacts"[\s\S]*aria-disabled=/
+  );
 });
