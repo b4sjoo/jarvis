@@ -1,6 +1,7 @@
 import type { LogicalQuestionUnit } from "./logical-question-unit.js";
 import type { StableAnswerRevision } from "./stable-answer.js";
 import type { MeetingContextState } from "./types.js";
+import type { CurrentQuestionSettlementDecision } from "./current-question-settlement.js";
 
 export type VisibleAnswerResponseActionTargetReason =
   | "current-lqu-matches-visible-answer"
@@ -22,6 +23,7 @@ export interface VisibleAnswerResponseActionTargetDecision {
   resolvedLogicalQuestionRevision?: number;
   sourceHash?: string;
   settlementId?: string;
+  settlementSnapshot?: CurrentQuestionSettlementDecision;
   mismatchFacets: string[];
 }
 
@@ -42,6 +44,7 @@ export function resolveVisibleAnswerResponseActionTarget(input: {
     requestedParentId: stable?.taskId,
     sourceHash: stable?.questionSourceHash,
     settlementId: stable?.settlementId,
+    settlementSnapshot: stable?.settlementSnapshot,
     mismatchFacets,
   });
   if (!stable) return reject("visible-answer-missing", "visible-answer");
@@ -176,6 +179,7 @@ function accepted(
     resolvedLogicalQuestionRevision: logicalQuestionUnit.revision,
     sourceHash: stable.questionSourceHash,
     settlementId: stable.settlementId,
+    settlementSnapshot: stable.settlementSnapshot,
     mismatchFacets: [],
   };
 }

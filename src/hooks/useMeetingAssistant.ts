@@ -621,7 +621,6 @@ import {
   rebaseRuntimeCommitTokenAfterOwnedParentMutation,
   rebaseRuntimeCommitTokenAfterOwnedParentReplacement,
   resolveCurrentQuestionSettlementDisposition,
-  selectCommittedSettlementForLogicalQuestionUnit,
   reduceTaskLifecycleTransaction,
   settleCurrentQuestion,
   settleCurrentQuestionTerminalNoAnswer,
@@ -4700,6 +4699,7 @@ export function useMeetingAssistant() {
       runtimeEpoch: pending.runtimeEpoch,
       questionSourceHash: pending.questionSourceHash,
       settlementId: pending.settlementId,
+      settlementSnapshot: pending.settlementSnapshot,
       resetSections: pending.resetSections,
       revision: pending.baseVisibleAnswerRevision + 1,
       committedAt: now,
@@ -4980,6 +4980,7 @@ export function useMeetingAssistant() {
       runtimeEpoch?: number;
       questionSourceHash?: string;
       settlementId?: string;
+      settlementSnapshot?: CurrentQuestionSettlementDecision;
       resetSections: boolean;
       reason: string;
       latestUsefulAnswerMutationAuthorized: boolean;
@@ -5002,6 +5003,7 @@ export function useMeetingAssistant() {
         runtimeEpoch: input.runtimeEpoch,
         questionSourceHash: input.questionSourceHash,
         settlementId: input.settlementId,
+        settlementSnapshot: input.settlementSnapshot,
         resetSections: input.resetSections,
         revision: input.lease.baseVisibleAnswerRevision + 1,
         committedAt: now,
@@ -5124,6 +5126,7 @@ export function useMeetingAssistant() {
         runtimeEpoch: input.runtimeEpoch,
         questionSourceHash: input.questionSourceHash,
         settlementId: input.settlementId,
+        settlementSnapshot: input.settlementSnapshot,
         manualCorrectionRevision: manualCorrectionRevisionRef.current,
         responseActionRevision: responseActionRevisionRef.current,
         queuedAt: now,
@@ -15044,6 +15047,7 @@ export function useMeetingAssistant() {
               runtimeEpoch: runtimeEpochRef.current,
               questionSourceHash: currentQuestionSettlement?.sourceHash,
               settlementId: currentQuestionSettlement?.settlementId,
+              settlementSnapshot: currentQuestionSettlement,
               resetSections: resetVisibleSections,
               revision: visibleAnswerRevisionBefore + 1,
             })
@@ -15076,6 +15080,7 @@ export function useMeetingAssistant() {
               runtimeEpoch: runtimeEpochRef.current,
               questionSourceHash: currentQuestionSettlement?.sourceHash,
               settlementId: currentQuestionSettlement?.settlementId,
+              settlementSnapshot: currentQuestionSettlement,
               resetSections: resetVisibleSections,
               reason: stableAnswerCommitDecision.reason,
               latestUsefulAnswerMutationAuthorized:
@@ -30200,6 +30205,7 @@ export function useMeetingAssistant() {
                   screenCurrentQuestionSettlement?.sourceHash,
                 settlementId:
                   screenCurrentQuestionSettlement?.settlementId,
+                settlementSnapshot: screenCurrentQuestionSettlement,
                 resetSections: screenStartedNewInterviewParent,
                 revision: visibleAnswerRevisionBefore + 1,
               })
@@ -33582,11 +33588,7 @@ export function useMeetingAssistant() {
           activeMeetingTask: meetingContext.activeMeetingTask,
         });
         const operationId = createMeetingId("response_scope");
-        const committedSettlement =
-          selectCommittedSettlementForLogicalQuestionUnit({
-            settlement: currentQuestionSettlementRef.current,
-            logicalQuestionUnit,
-          });
+        const committedSettlement = targetDecision.settlementSnapshot;
         if (
           targetDecision.sourceHash &&
           committedSettlement?.sourceHash !== targetDecision.sourceHash

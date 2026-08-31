@@ -11,6 +11,7 @@ import {
 } from "./meeting-answer.js";
 import type { ResponseArtifactMutationAuthorization } from "./response-artifact-authorization.js";
 import type { SettledAdvisorArtifactIntent } from "./settled-advisor-execution-plan.js";
+import type { CurrentQuestionSettlementDecision } from "./current-question-settlement.js";
 import { calculateWordEquivalent } from "./transcript-fusion.js";
 import type {
   AdvisorSuggestion,
@@ -34,6 +35,7 @@ export interface StableAnswerRevision {
   logicalQuestionRevision: number | null;
   questionSourceHash?: string;
   settlementId?: string;
+  settlementSnapshot?: CurrentQuestionSettlementDecision;
   suggestion: AdvisorSuggestion;
   sections: Record<AnswerArtifactSection, StableAnswerSectionRevision>;
   committedAt: number;
@@ -70,6 +72,7 @@ export interface PendingAnswerRevision {
   runtimeEpoch?: number;
   questionSourceHash?: string;
   settlementId?: string;
+  settlementSnapshot?: CurrentQuestionSettlementDecision;
   manualCorrectionRevision: number;
   responseActionRevision: number;
   queuedAt: number;
@@ -154,6 +157,7 @@ export function commitStableAnswerRevision(input: {
   runtimeEpoch?: number;
   questionSourceHash?: string;
   settlementId?: string;
+  settlementSnapshot?: CurrentQuestionSettlementDecision;
   resetSections?: boolean;
   revision?: number;
   committedAt?: number;
@@ -185,6 +189,12 @@ export function commitStableAnswerRevision(input: {
     now,
   });
   const revision = input.revision ?? (input.current?.revision ?? 0) + 1;
+  const settlementSnapshot = input.settlementSnapshot
+    ? cloneSettlementSnapshot(input.settlementSnapshot)
+    : current?.logicalQuestionUnitId === input.logicalQuestionUnitId &&
+        current.logicalQuestionRevision === input.logicalQuestionRevision
+      ? current.settlementSnapshot
+      : undefined;
   const sectionRevisions = {} as Record<
     AnswerArtifactSection,
     StableAnswerSectionRevision
@@ -228,6 +238,7 @@ export function commitStableAnswerRevision(input: {
     questionSourceHash:
       input.questionSourceHash ?? current?.questionSourceHash,
     settlementId: input.settlementId ?? current?.settlementId,
+    settlementSnapshot,
     suggestion: {
       ...input.candidate,
       content,
@@ -245,6 +256,20 @@ export function commitStableAnswerRevision(input: {
   };
 }
 
+function cloneSettlementSnapshot(
+  settlement: CurrentQuestionSettlementDecision
+): CurrentQuestionSettlementDecision {
+  return {
+    ...settlement,
+    sourceTurnIds: [...settlement.sourceTurnIds],
+    sourceObservationIds: [...settlement.sourceObservationIds],
+    rejectedProposals: settlement.rejectedProposals.map((proposal) => ({
+      ...proposal,
+      reasons: [...proposal.reasons],
+    })),
+    reasons: [...settlement.reasons],
+  };
+}
 
 export function collectStableAnswerMutatedArtifacts(
   current: StableAnswerRevision | null | undefined,
