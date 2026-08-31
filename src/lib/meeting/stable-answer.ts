@@ -109,6 +109,32 @@ export interface StableAnswerMutationDelta {
   lifecycleResetArtifacts: AnswerArtifactSection[];
 }
 
+export type ArtifactOnlyAnswerSection = Exclude<
+  AnswerArtifactSection,
+  "answer"
+>;
+
+export type StableArtifactOnlyCommitReason =
+  | "authorized"
+  | "visible-answer-missing"
+  | "visible-answer-revision-mismatch"
+  | "task-owner-mismatch"
+  | "logical-question-mismatch"
+  | "logical-question-revision-mismatch"
+  | "settlement-mismatch"
+  | "unsupported-artifact-family"
+  | "artifact-candidate-missing"
+  | "artifact-candidate-invalid"
+  | "artifact-candidate-no-change";
+
+export interface StableArtifactOnlyCommitDecision {
+  disposition: "committed" | "rejected";
+  reason: StableArtifactOnlyCommitReason;
+  stable?: StableAnswerRevision;
+  authorizedArtifacts: ArtifactOnlyAnswerSection[];
+  mutatedArtifacts: ArtifactOnlyAnswerSection[];
+}
+
 const ANSWER_DELIVERY_MIN_WORD_EQUIVALENT = 18;
 const ANSWER_DELIVERY_MIN_DURATION_MS = 6_000;
 const ANSWER_DELIVERY_MIN_TOKEN_OVERLAP = 8;
@@ -253,6 +279,116 @@ export function commitStableAnswerRevision(input: {
     },
     sections: sectionRevisions,
     committedAt: now,
+  };
+}
+
+export function commitStableArtifactOnlyRevision(input: {
+  current?: StableAnswerRevision | null;
+  candidate: AdvisorSuggestion;
+  authorizedArtifacts: ArtifactOnlyAnswerSection[];
+  expectedVisibleAnswerRevision: number;
+  expectedTaskId: string | null;
+  expectedLogicalQuestionUnitId: string | null;
+  expectedLogicalQuestionRevision: number | null;
+  expectedSettlementId?: string;
+  committedAt?: number;
+}): StableArtifactOnlyCommitDecision {
+  const authorizedArtifacts = Array.from(
+    new Set(input.authorizedArtifacts)
+  );
+  const reject = (
+    reason: StableArtifactOnlyCommitReason
+  ): StableArtifactOnlyCommitDecision => ({
+    disposition: "rejected",
+    reason,
+    authorizedArtifacts,
+    mutatedArtifacts: [],
+  });
+  const current = input.current;
+  if (!current) return reject("visible-answer-missing");
+  if (current.revision !== input.expectedVisibleAnswerRevision) {
+    return reject("visible-answer-revision-mismatch");
+  }
+  if (current.taskId !== input.expectedTaskId) {
+    return reject("task-owner-mismatch");
+  }
+  if (current.logicalQuestionUnitId !== input.expectedLogicalQuestionUnitId) {
+    return reject("logical-question-mismatch");
+  }
+  if (
+    current.logicalQuestionRevision !==
+    input.expectedLogicalQuestionRevision
+  ) {
+    return reject("logical-question-revision-mismatch");
+  }
+  if (
+    input.expectedSettlementId &&
+    current.settlementId !== input.expectedSettlementId
+  ) {
+    return reject("settlement-mismatch");
+  }
+
+  const requested = new Set(authorizedArtifacts);
+  const codeFamily = requested.has("code") || requested.has("complexity");
+  const whiteboardFamily = requested.has("whiteboard");
+  if (
+    authorizedArtifacts.length === 0 ||
+    (codeFamily && whiteboardFamily) ||
+    (codeFamily &&
+      (!requested.has("code") || !requested.has("complexity")))
+  ) {
+    return reject("unsupported-artifact-family");
+  }
+  const candidateAnswer = input.candidate.meetingAnswer;
+  if (
+    !candidateAnswer ||
+    candidateAnswer.parseStatus === "empty" ||
+    candidateAnswer.parseStatus === "partial" ||
+    !input.candidate.content.trim()
+  ) {
+    return reject("artifact-candidate-invalid");
+  }
+  if (
+    (whiteboardFamily && !candidateAnswer.sections.whiteboard?.trim()) ||
+    (codeFamily &&
+      (!candidateAnswer.sections.code?.trim() ||
+        !candidateAnswer.sections.complexity?.trim()))
+  ) {
+    return reject("artifact-candidate-missing");
+  }
+
+  const stable = commitStableAnswerRevision({
+    current,
+    candidate: input.candidate,
+    authorizedArtifacts,
+    taskId: current.taskId,
+    logicalQuestionUnitId: current.logicalQuestionUnitId,
+    logicalQuestionRevision: current.logicalQuestionRevision,
+    sessionId: current.sessionId,
+    runtimeEpoch: current.runtimeEpoch,
+    questionSourceHash: current.questionSourceHash,
+    settlementId: current.settlementId,
+    settlementSnapshot: current.settlementSnapshot,
+    revision: current.revision + 1,
+    committedAt: input.committedAt,
+  });
+  if (!stable) return reject("artifact-candidate-invalid");
+  const mutatedArtifacts = collectStableAnswerMutatedArtifacts(
+    current,
+    stable
+  ).filter(
+    (artifact): artifact is ArtifactOnlyAnswerSection =>
+      artifact !== "answer"
+  );
+  if (mutatedArtifacts.length === 0) {
+    return reject("artifact-candidate-no-change");
+  }
+  return {
+    disposition: "committed",
+    reason: "authorized",
+    stable,
+    authorizedArtifacts,
+    mutatedArtifacts,
   };
 }
 

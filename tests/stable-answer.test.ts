@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   collectStableAnswerMutationDelta,
   collectStableAnswerMutatedArtifacts,
+  commitStableArtifactOnlyRevision,
   commitStableAnswerRevision,
   decideStableAnswerCommit,
   formatStableAnswerCommitForTrace,
@@ -76,6 +77,90 @@ Complexity: O(n squared).`
   assert.equal(second.sections.answer.revision, 2);
   assert.equal(second.sections.code.revision, 1);
   assert.equal(second.sections.complexity.revision, 1);
+});
+
+test("publishes a Whiteboard without replacing the visible Answer", () => {
+  const current = commitStableAnswerRevision({
+    candidate: suggestion(
+      "design-1",
+      "Answer: Start with one region.\nWhiteboard:\n```mermaid\ngraph TD\nA-->B\n```"
+    ),
+    authorizedArtifacts: ["answer", "whiteboard"],
+    taskId: "design-parent",
+    logicalQuestionUnitId: "design-question",
+    logicalQuestionRevision: 1,
+  });
+  assert.ok(current);
+
+  const decision = commitStableArtifactOnlyRevision({
+    current,
+    candidate: suggestion(
+      "design-artifact-2",
+      "Answer: This candidate answer must stay hidden.\nWhiteboard:\n```mermaid\ngraph TD\nA-->B\nB-->C\n```"
+    ),
+    authorizedArtifacts: ["whiteboard"],
+    expectedVisibleAnswerRevision: current.revision,
+    expectedTaskId: current.taskId,
+    expectedLogicalQuestionUnitId: current.logicalQuestionUnitId,
+    expectedLogicalQuestionRevision: current.logicalQuestionRevision,
+  });
+
+  assert.equal(decision.disposition, "committed");
+  assert.equal(
+    decision.stable?.suggestion.meetingAnswer?.sections.answer,
+    "Start with one region."
+  );
+  assert.equal(
+    decision.stable?.sections.answer.revision,
+    current.sections.answer.revision
+  );
+  assert.equal(
+    decision.stable?.sections.whiteboard.revision,
+    current.sections.whiteboard.revision + 1
+  );
+  assert.deepEqual(decision.mutatedArtifacts, ["whiteboard"]);
+});
+
+test("requires a complete Coding Artifact family and exact visible owner", () => {
+  const current = commitStableAnswerRevision({
+    candidate: suggestion(
+      "coding-1",
+      "Answer: Use a map.\nCode:\n```python\nprint(1)\n```\nComplexity: O(n)."
+    ),
+    authorizedArtifacts: ["answer", "code", "complexity"],
+    taskId: "coding-parent",
+    logicalQuestionUnitId: "coding-question",
+    logicalQuestionRevision: 1,
+  });
+  assert.ok(current);
+
+  const partial = commitStableArtifactOnlyRevision({
+    current,
+    candidate: suggestion(
+      "coding-partial",
+      "Answer: Ignore this.\nCode:\n```python\nprint(2)\n```"
+    ),
+    authorizedArtifacts: ["code", "complexity"],
+    expectedVisibleAnswerRevision: current.revision,
+    expectedTaskId: current.taskId,
+    expectedLogicalQuestionUnitId: current.logicalQuestionUnitId,
+    expectedLogicalQuestionRevision: current.logicalQuestionRevision,
+  });
+  assert.equal(partial.reason, "artifact-candidate-missing");
+
+  const stale = commitStableArtifactOnlyRevision({
+    current,
+    candidate: suggestion(
+      "coding-complete",
+      "Answer: Ignore this.\nCode:\n```python\nprint(2)\n```\nComplexity: O(1)."
+    ),
+    authorizedArtifacts: ["code", "complexity"],
+    expectedVisibleAnswerRevision: current.revision + 1,
+    expectedTaskId: current.taskId,
+    expectedLogicalQuestionUnitId: current.logicalQuestionUnitId,
+    expectedLogicalQuestionRevision: current.logicalQuestionRevision,
+  });
+  assert.equal(stale.reason, "visible-answer-revision-mismatch");
 });
 
 test("projects the Code family into only its phase-authorized sections", () => {
