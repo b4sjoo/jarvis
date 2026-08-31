@@ -32433,6 +32433,25 @@ export function useMeetingAssistant() {
       taskMutationAuthority: "preserve-parent",
       questionLineage: resolveCurrentSuggestionQuestionLineage(),
     });
+    if (!activateAdvisorJob(advisorJob)) {
+      recordManualRuntimeAction({
+        actionId,
+        action: "regenerate",
+        stage: "terminal",
+        traceId: advisorJob.traceId,
+        terminalDisposition: "rejected",
+        observedLogicalQuestionUnitId: currentLogicalQuestionUnit?.id,
+        observedLogicalQuestionUnitRevision:
+          currentLogicalQuestionUnit?.revision,
+        observedTaskId: currentRuntime.activeMeetingTask?.id,
+        reason: "advisor-job-activation-denied",
+      });
+      setState((previous) => ({
+        ...previous,
+        error: "Regenerate could not acquire Advisor authority.",
+      }));
+      return;
+    }
     recordManualRuntimeAction({
       actionId,
       action: "regenerate",
@@ -32489,6 +32508,7 @@ export function useMeetingAssistant() {
       throw error;
     }
   }, [
+    activateAdvisorJob,
     buildAdvisorJob,
     currentSuggestionText,
     flushPendingSentenceCompletion,
