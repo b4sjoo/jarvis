@@ -104,6 +104,11 @@ import {
   resolveVisibleAnswerResponseActionTarget,
 } from "@/lib/meeting/response-action-target";
 import {
+  formatArtifactRegenerationTargetForTrace,
+  resolveArtifactRegenerationTarget,
+  type ArtifactRegenerationTarget,
+} from "@/lib/meeting/artifact-regeneration";
+import {
   createManualRuntimeActionEvent,
   decideManualRuntimeActionIngress,
   projectManualRuntimeActionAdvisorTerminal,
@@ -196,7 +201,6 @@ import {
   AdvisorResponseFingerprintCache,
   PendingAnswerRevision,
   StableAnswerRevision,
-  ArtifactRegenerationTarget,
   RuntimeCommitToken,
   RuntimeAxisConflictDecision,
   AdvisorTurnIntentDecision,
@@ -862,9 +866,7 @@ import {
   collectStableAnswerMutationDelta,
   commitStableArtifactOnlyRevision,
   commitStableAnswerRevision,
-  formatArtifactRegenerationTargetForTrace,
   formatStableArtifactOnlyCommitForTrace,
-  resolveArtifactRegenerationTarget,
   rebaseAnswerGenerationLeaseAfterOwnedParentMutation,
   isAnswerDeliveryLockActive,
   toAnswerDeliveryPresentation,
@@ -3344,6 +3346,7 @@ export function useMeetingAssistant() {
       observedLogicalQuestionUnitId?: string;
       observedLogicalQuestionUnitRevision?: number;
       observedTaskId?: string;
+      observedVisibleAnswerRevision?: number;
       specializedEventId?: string;
       terminalDisposition?: ManualRuntimeActionTerminalDisposition;
       reason?: string;
@@ -3356,6 +3359,7 @@ export function useMeetingAssistant() {
           runtimeSessionId: runtimeState.sessionId,
           runtimeEpoch: runtimeEpochRef.current,
           observedVisibleAnswerRevision:
+            input.observedVisibleAnswerRevision ??
             visibleAnswerRevisionRef.current,
         })
       );
@@ -14938,6 +14942,16 @@ export function useMeetingAssistant() {
             ? "produced"
             : "ignored"
           : "none",
+        artifactOnlyParentLatestUsefulAnswerPreserved:
+          options.artifactRegenerationTarget
+            ? existingInterviewTask?.latestUsefulAnswer ===
+                continuity.task?.latestUsefulAnswer
+            : undefined,
+        artifactOnlyParentPreviousUsefulAnswerPreserved:
+          options.artifactRegenerationTarget
+            ? existingInterviewTask?.previousUsefulAnswer ===
+                continuity.task?.previousUsefulAnswer
+            : undefined,
         answerWhiteboardArtifactDecision: whiteboardArtifactDecision,
         ...formatWhiteboardRenderValidationForTrace({
           decision: whiteboardRenderValidation,
@@ -15250,12 +15264,25 @@ export function useMeetingAssistant() {
               revision: visibleAnswerRevisionBefore + 1,
             })
             : null;
+      const artifactOnlyCommitMetadata = artifactOnlyCommitDecision
+        ? {
+            ...formatStableArtifactOnlyCommitForTrace(
+              artifactOnlyCommitDecision
+            ),
+            artifactOnlyAnswerSectionRevisionBefore:
+              previousStableAnswer?.sections.answer.revision,
+            artifactOnlyAnswerSectionRevisionAfter:
+              artifactOnlyCommitDecision.stable?.sections.answer.revision,
+            artifactOnlyAnswerSectionPreserved:
+              artifactOnlyCommitDecision.disposition === "committed" &&
+              previousStableAnswer?.sections.answer.revision ===
+                artifactOnlyCommitDecision.stable?.sections.answer.revision,
+          }
+        : {};
       if (traceId && artifactOnlyCommitDecision) {
         traceStoreRef.current.updateMetadata(
           traceId,
-          formatStableArtifactOnlyCommitForTrace(
-            artifactOnlyCommitDecision
-          )
+          artifactOnlyCommitMetadata
         );
       }
       const advisorCandidateMutationDelta =
@@ -15649,6 +15676,7 @@ export function useMeetingAssistant() {
         taskMutationAuthorized: taskMutationAuthorization.authorized,
         taskMutationAuthorizationReason: taskMutationAuthorization.reason,
         ...stableAnswerCommitMetadata,
+        ...artifactOnlyCommitMetadata,
         codeMutationWithoutCodeIntent,
         ...(options.clarifyingFeedback?.requestId
           ? {
@@ -33393,6 +33421,7 @@ export function useMeetingAssistant() {
         logicalQuestionUnitId?: string;
         logicalQuestionUnitRevision?: number;
         taskId?: string;
+        visibleAnswerRevision?: number;
         terminalDisposition?: ManualRuntimeActionTerminalDisposition;
         reason?: string;
       }) => {
@@ -33407,6 +33436,8 @@ export function useMeetingAssistant() {
           observedLogicalQuestionUnitRevision:
             input.logicalQuestionUnitRevision,
           observedTaskId: input.taskId,
+          observedVisibleAnswerRevision:
+            input.visibleAnswerRevision,
           terminalDisposition: input.terminalDisposition,
           reason: input.reason,
         });
@@ -33532,6 +33563,7 @@ export function useMeetingAssistant() {
           logicalQuestionUnitId: logicalQuestionUnit.id,
           logicalQuestionUnitRevision: logicalQuestionUnit.revision,
           taskId: target.parentId,
+          visibleAnswerRevision: target.visibleAnswerRevision,
         });
         await runAdvisor({
           force: true,
@@ -33567,6 +33599,8 @@ export function useMeetingAssistant() {
           logicalQuestionUnitId: logicalQuestionUnit.id,
           logicalQuestionUnitRevision: logicalQuestionUnit.revision,
           taskId: target.parentId,
+          visibleAnswerRevision:
+            stableAnswerRevisionRef.current?.revision,
           terminalDisposition: terminal.disposition ?? "failed",
           reason: terminal.reason,
         });

@@ -1277,6 +1277,42 @@ test("uses explicit committed code evidence before revision heuristics", () => {
   );
 });
 
+test("projects actual Voice Artifact authority instead of the broader playbook plan", () => {
+  const samePhase = {
+    id: "trace_voice_same_phase",
+    kind: "voice",
+    status: "success",
+    startedAt: 1,
+    steps: [],
+    inputs: [],
+    outputs: [],
+    metadata: {
+      advisorOutputCommittedToUi: true,
+      settledExecutionPlanArtifactIntent: "revise-whiteboard",
+      advisorArtifactGenerationAnswerOnly: true,
+      candidateMutatedArtifacts: ["answer"],
+    },
+  } as MeetingTrace;
+  const artifactOnly = {
+    ...samePhase,
+    id: "trace_voice_artifact_only",
+    metadata: {
+      advisorOutputCommittedToUi: true,
+      settledExecutionPlanArtifactIntent: "preserve",
+      artifactOnlyMutatedArtifacts: ["whiteboard"],
+    },
+  } as MeetingTrace;
+
+  assert.equal(
+    buildHumanEvaluationObservedSnapshotV2(samePhase).artifactIntent,
+    "preserve"
+  );
+  assert.equal(
+    buildHumanEvaluationObservedSnapshotV2(artifactOnly).artifactIntent,
+    "revise-whiteboard"
+  );
+});
+
 test("projects a committed screen whiteboard update from the actual decision", () => {
   const trace = {
     id: "trace_screen_whiteboard",

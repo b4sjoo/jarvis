@@ -534,6 +534,16 @@ export interface SessionCompactTraceSummary {
   authorizedArtifacts: string[];
   candidateMutatedArtifacts: string[];
   lifecycleResetArtifacts: string[];
+  advisorArtifactGenerationAuthority?: string;
+  advisorArtifactGenerationAnswerOnly?: boolean;
+  advisorArtifactGenerationReason?: string;
+  artifactOnlyCommitDisposition?: string;
+  artifactOnlyCommitReason?: string;
+  artifactOnlyAuthorizedArtifacts: string[];
+  artifactOnlyMutatedArtifacts: string[];
+  artifactOnlyAnswerSectionPreserved?: boolean;
+  artifactOnlyParentLatestUsefulAnswerPreserved?: boolean;
+  artifactOnlyParentPreviousUsefulAnswerPreserved?: boolean;
   generationRequestedArtifacts: string[];
   parsedArtifacts: string[];
   parentAuthorizedArtifacts: string[];
@@ -5398,6 +5408,46 @@ export function buildCompactTraceSummary({
     lifecycleResetArtifacts: readFirstStringList(
       metadataSources,
       "lifecycleResetArtifacts"
+    ),
+    advisorArtifactGenerationAuthority: readFirstString(
+      metadataSources,
+      "advisorArtifactGenerationAuthority"
+    ),
+    advisorArtifactGenerationAnswerOnly: readFirstBoolean(
+      metadataSources,
+      "advisorArtifactGenerationAnswerOnly"
+    ),
+    advisorArtifactGenerationReason: readFirstString(
+      metadataSources,
+      "advisorArtifactGenerationReason"
+    ),
+    artifactOnlyCommitDisposition: readFirstString(
+      metadataSources,
+      "artifactOnlyCommitDisposition"
+    ),
+    artifactOnlyCommitReason: readFirstString(
+      metadataSources,
+      "artifactOnlyCommitReason"
+    ),
+    artifactOnlyAuthorizedArtifacts: readFirstStringList(
+      metadataSources,
+      "artifactOnlyAuthorizedArtifacts"
+    ),
+    artifactOnlyMutatedArtifacts: readFirstStringList(
+      metadataSources,
+      "artifactOnlyMutatedArtifacts"
+    ),
+    artifactOnlyAnswerSectionPreserved: readFirstBoolean(
+      metadataSources,
+      "artifactOnlyAnswerSectionPreserved"
+    ),
+    artifactOnlyParentLatestUsefulAnswerPreserved: readFirstBoolean(
+      metadataSources,
+      "artifactOnlyParentLatestUsefulAnswerPreserved"
+    ),
+    artifactOnlyParentPreviousUsefulAnswerPreserved: readFirstBoolean(
+      metadataSources,
+      "artifactOnlyParentPreviousUsefulAnswerPreserved"
     ),
     generationRequestedArtifacts: readFirstStringList(
       metadataSources,

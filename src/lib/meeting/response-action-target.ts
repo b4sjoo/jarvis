@@ -44,7 +44,7 @@ export function resolveVisibleAnswerResponseActionTarget(input: {
     requestedParentId: stable?.taskId,
     sourceHash: stable?.questionSourceHash,
     settlementId: stable?.settlementId,
-    settlementSnapshot: stable?.settlementSnapshot,
+    settlementSnapshot: readSettlementSnapshot(stable),
     mismatchFacets,
   });
   if (!stable) return reject("visible-answer-missing", "visible-answer");
@@ -179,7 +179,27 @@ function accepted(
     resolvedLogicalQuestionRevision: logicalQuestionUnit.revision,
     sourceHash: stable.questionSourceHash,
     settlementId: stable.settlementId,
-    settlementSnapshot: stable.settlementSnapshot,
+    settlementSnapshot: readSettlementSnapshot(stable),
     mismatchFacets: [],
   };
+}
+
+function readSettlementSnapshot(
+  stable: StableAnswerRevision | null | undefined
+): CurrentQuestionSettlementDecision | undefined {
+  const snapshot = stable?.settlementSnapshot;
+  const candidate = snapshot as
+    | Partial<CurrentQuestionSettlementDecision>
+    | undefined;
+  if (
+    !stable ||
+    !candidate ||
+    candidate.settlementId !== stable.settlementId ||
+    candidate.logicalQuestionUnitId !== stable.logicalQuestionUnitId ||
+    candidate.revision !== stable.logicalQuestionRevision ||
+    candidate.sourceHash !== stable.questionSourceHash
+  ) {
+    return undefined;
+  }
+  return candidate as CurrentQuestionSettlementDecision;
 }

@@ -73,9 +73,13 @@ export function resolveArtifactRegenerationTarget(input: {
     return reject("visible-answer-settlement-missing");
   }
 
+  const settlementSnapshot = stable.settlementSnapshot as {
+    questionType?: unknown;
+    relation?: unknown;
+  };
   const questionType =
     normalizeCanonicalQuestionType(
-      stable.settlementSnapshot.questionType
+      settlementSnapshot.questionType
     ) ?? "unknown";
   const parentType =
     normalizeCanonicalQuestionType(activeTask.parent.questionType) ??
@@ -89,7 +93,7 @@ export function resolveArtifactRegenerationTarget(input: {
     const visibleAnswerOwnsCodingChild =
       questionType === "coding" &&
       childType === "coding" &&
-      stable.settlementSnapshot.relation === "child-probe" &&
+      settlementSnapshot.relation === "child-probe" &&
       stable.suggestion.codeArtifactMutationAuthorized === true &&
       stable.suggestion.complexityArtifactMutationAuthorized === true;
     if (visibleAnswerOwnsCodingChild) {

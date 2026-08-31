@@ -1217,16 +1217,17 @@ function resolveObservedArtifactIntent(
   const plannedIntent = normalizeArtifactIntentEvaluationFamily(
     metadata.settledExecutionPlanArtifactIntent
   );
-  if (traceKind !== "screen") return plannedIntent;
-
-  const committedArtifacts = readStringArray(
-    metadata.committedArtifacts
+  const committedArtifacts = readStringArray(metadata.committedArtifacts);
+  const artifactOnlyMutatedArtifacts = readStringArray(
+    metadata.artifactOnlyMutatedArtifacts
   );
   const candidateMutatedArtifacts = readStringArray(
     metadata.candidateMutatedArtifacts
   );
   const explicitMutations = committedArtifacts.length
     ? committedArtifacts
+    : artifactOnlyMutatedArtifacts.length
+      ? artifactOnlyMutatedArtifacts
     : candidateMutatedArtifacts;
   if (
     explicitMutations.includes("code") ||
@@ -1238,6 +1239,13 @@ function resolveObservedArtifactIntent(
     return "revise-whiteboard";
   }
   if (explicitMutations.includes("answer")) return "preserve";
+  if (
+    readBoolean(metadata.advisorArtifactGenerationAnswerOnly) === true
+  ) {
+    return "preserve";
+  }
+
+  if (traceKind !== "screen") return plannedIntent;
 
   const codeChanged = didArtifactRevisionChange(
     metadata.previousCodeRevision,

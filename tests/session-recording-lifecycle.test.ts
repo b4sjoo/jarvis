@@ -1254,6 +1254,17 @@ test("session summaries retain answer delivery and artifact stability evidence",
       authorizedArtifacts: ["answer"],
       candidateMutatedArtifacts: ["answer"],
       lifecycleResetArtifacts: ["code", "complexity"],
+      advisorArtifactGenerationAuthority: "artifact-authorized",
+      advisorArtifactGenerationAnswerOnly: false,
+      advisorArtifactGenerationReason:
+        "manual-artifact-regeneration-authority",
+      artifactOnlyCommitDisposition: "committed",
+      artifactOnlyCommitReason: "authorized",
+      artifactOnlyAuthorizedArtifacts: ["code", "complexity"],
+      artifactOnlyMutatedArtifacts: ["code", "complexity"],
+      artifactOnlyAnswerSectionPreserved: true,
+      artifactOnlyParentLatestUsefulAnswerPreserved: true,
+      artifactOnlyParentPreviousUsefulAnswerPreserved: true,
       generationRequestedArtifacts: ["answer", "complexity"],
       generationResultTerminalDisposition: "rejected",
       generationResultTerminalReason: "artifact-authority-revoked",
@@ -1346,6 +1357,20 @@ test("session summaries retain answer delivery and artifact stability evidence",
   assert.deepEqual(compact.authorizedArtifacts, ["answer"]);
   assert.deepEqual(compact.candidateMutatedArtifacts, ["answer"]);
   assert.deepEqual(compact.lifecycleResetArtifacts, ["code", "complexity"]);
+  assert.equal(
+    compact.advisorArtifactGenerationAuthority,
+    "artifact-authorized"
+  );
+  assert.equal(compact.artifactOnlyCommitDisposition, "committed");
+  assert.deepEqual(compact.artifactOnlyMutatedArtifacts, [
+    "code",
+    "complexity",
+  ]);
+  assert.equal(compact.artifactOnlyAnswerSectionPreserved, true);
+  assert.equal(
+    compact.artifactOnlyParentLatestUsefulAnswerPreserved,
+    true
+  );
   const modelGeneration = compact.modelGeneration as {
     terminalDisposition?: string;
     terminalReason?: string;

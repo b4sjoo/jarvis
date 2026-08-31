@@ -306,6 +306,65 @@ test("does not guess across multiple source-turn evaluation attempts", () => {
   assert.equal(procedure.reviewStatus, "needs-review");
 });
 
+test("compiles Regenerate Artifacts with its terminal and expected intent", () => {
+  const actionId = "artifact-action-1";
+  const procedure = buildSessionProcedureV1({
+    recordingSessionId: "recording-artifact",
+    folderName: "session-artifact",
+    sourceDigest: "digest",
+    scriptedValidation: true,
+    forcedScripted: true,
+    recordingIntegrityStatus: "complete",
+    timelineEvents: [
+      {
+        id: "timeline-artifact-request",
+        kind: "manual-runtime-action",
+        createdAt: 100,
+        metadata: { actionId, stage: "requested" },
+      },
+    ],
+    transcriptTurns: [],
+    manualActions: [
+      createManualRuntimeActionEvent({
+        actionId,
+        action: "regenerate-artifacts",
+        stage: "requested",
+        runtimeSessionId: "meeting-1",
+        runtimeEpoch: 2,
+        observedVisibleAnswerRevision: 4,
+        occurredAt: 100,
+      }),
+      createManualRuntimeActionEvent({
+        actionId,
+        action: "regenerate-artifacts",
+        stage: "terminal",
+        runtimeSessionId: "meeting-1",
+        runtimeEpoch: 2,
+        traceId: "trace-artifact",
+        observedVisibleAnswerRevision: 5,
+        terminalDisposition: "completed",
+        reason: "visible-answer-committed",
+        occurredAt: 200,
+      }),
+    ],
+    humanEvaluationProjections: [
+      projectionForAction(actionId, explicitArtifactIntentEvent(actionId)),
+    ],
+    generatedAt: 300,
+  });
+
+  assert.equal(procedure.steps[0]?.kind, "regenerate-artifacts");
+  assert.equal(
+    procedure.steps[0]?.observed?.terminalDisposition,
+    "completed"
+  );
+  assert.equal(procedure.steps[0]?.observed?.visibleAnswerRevision, 5);
+  assert.equal(
+    procedure.steps[0]?.expected?.artifactIntent,
+    "revise-whiteboard"
+  );
+});
+
 function projectionForTurn(
   turnId: string,
   traceId: string,
@@ -393,6 +452,29 @@ function expectedRuntimeActionEvent(
       collection: "scripted-validation",
       actionId,
       recordedAt: 150,
+    },
+    confirmation: "confirmed",
+  };
+}
+
+function explicitArtifactIntentEvent(
+  actionId: string
+): HumanGroundTruthEventV2 {
+  return {
+    schemaVersion: 2,
+    eventId: "truth-artifact-intent",
+    sessionId: "meeting-1",
+    subject: { traceIds: ["trace-artifact"], sourceTurnIds: [] },
+    fact: {
+      kind: "expected-artifact-intent",
+      expectedIntent: "revise-whiteboard",
+    },
+    provenance: {
+      source: "explicit-ui",
+      actor: "human",
+      collection: "scripted-validation",
+      actionId,
+      recordedAt: 250,
     },
     confirmation: "confirmed",
   };

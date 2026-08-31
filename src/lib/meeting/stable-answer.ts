@@ -11,7 +11,6 @@ import {
 } from "./meeting-answer.js";
 import type { ResponseArtifactMutationAuthorization } from "./response-artifact-authorization.js";
 import type { SettledAdvisorArtifactIntent } from "./settled-advisor-execution-plan.js";
-import type { CurrentQuestionSettlementDecision } from "./current-question-settlement.js";
 import { calculateWordEquivalent } from "./transcript-fusion.js";
 import type {
   AdvisorSuggestion,
@@ -26,6 +25,8 @@ export interface StableAnswerSectionRevision {
   updatedAt: number;
 }
 
+export type StableAnswerSettlementSnapshot = object;
+
 export interface StableAnswerRevision {
   revision: number;
   sessionId?: string;
@@ -35,7 +36,7 @@ export interface StableAnswerRevision {
   logicalQuestionRevision: number | null;
   questionSourceHash?: string;
   settlementId?: string;
-  settlementSnapshot?: CurrentQuestionSettlementDecision;
+  settlementSnapshot?: StableAnswerSettlementSnapshot;
   suggestion: AdvisorSuggestion;
   sections: Record<AnswerArtifactSection, StableAnswerSectionRevision>;
   committedAt: number;
@@ -72,7 +73,7 @@ export interface PendingAnswerRevision {
   runtimeEpoch?: number;
   questionSourceHash?: string;
   settlementId?: string;
-  settlementSnapshot?: CurrentQuestionSettlementDecision;
+  settlementSnapshot?: StableAnswerSettlementSnapshot;
   manualCorrectionRevision: number;
   responseActionRevision: number;
   queuedAt: number;
@@ -202,7 +203,7 @@ export function commitStableAnswerRevision(input: {
   runtimeEpoch?: number;
   questionSourceHash?: string;
   settlementId?: string;
-  settlementSnapshot?: CurrentQuestionSettlementDecision;
+  settlementSnapshot?: StableAnswerSettlementSnapshot;
   resetSections?: boolean;
   revision?: number;
   committedAt?: number;
@@ -412,18 +413,9 @@ export function commitStableArtifactOnlyRevision(input: {
 }
 
 function cloneSettlementSnapshot(
-  settlement: CurrentQuestionSettlementDecision
-): CurrentQuestionSettlementDecision {
-  return {
-    ...settlement,
-    sourceTurnIds: [...settlement.sourceTurnIds],
-    sourceObservationIds: [...settlement.sourceObservationIds],
-    rejectedProposals: settlement.rejectedProposals.map((proposal) => ({
-      ...proposal,
-      reasons: [...proposal.reasons],
-    })),
-    reasons: [...settlement.reasons],
-  };
+  settlement: StableAnswerSettlementSnapshot
+): StableAnswerSettlementSnapshot {
+  return structuredClone(settlement);
 }
 
 export function collectStableAnswerMutatedArtifacts(

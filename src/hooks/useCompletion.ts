@@ -974,11 +974,6 @@ export const useCompletion = () => {
     };
   }, []);
 
-  const toggleRecording = useCallback(() => {
-    setEnableVAD(!enableVAD);
-    setMicOpen(!micOpen);
-  }, [enableVAD, micOpen]);
-
   // Cleanup abort controller on unmount
   useEffect(() => {
     return () => {
@@ -990,17 +985,11 @@ export const useCompletion = () => {
     };
   }, []);
 
-  // register callbacks for global shortcuts
+  // Keep the shared input-focus target current.
   useEffect(() => {
-    globalShortcuts.registerAudioCallback(toggleRecording);
     globalShortcuts.registerInputRef(inputRef.current);
-    globalShortcuts.registerScreenshotCallback(captureScreenshot);
   }, [
-    globalShortcuts.registerAudioCallback,
     globalShortcuts.registerInputRef,
-    globalShortcuts.registerScreenshotCallback,
-    toggleRecording,
-    captureScreenshot,
     inputRef,
   ]);
 

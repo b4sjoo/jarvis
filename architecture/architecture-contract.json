@@ -865,10 +865,7 @@
       "speech-detected",
       "speech-discarded",
       "speech-start",
-      "start-audio-recording",
-      "toggle-system-audio",
-      "toggle-window-visibility",
-      "trigger-screenshot"
+      "toggle-window-visibility"
     ],
     "nativeListenedEvents": [
       "manual-stop-continuous"
@@ -900,10 +897,7 @@
       "speech-detected",
       "speech-discarded",
       "speech-start",
-      "start-audio-recording",
-      "toggle-system-audio",
-      "toggle-window-visibility",
-      "trigger-screenshot"
+      "toggle-window-visibility"
     ],
     "dynamicFrontendEmitCallsites": [],
     "dynamicFrontendListenCallsites": [],

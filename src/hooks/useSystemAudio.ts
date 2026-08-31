@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from "react";
-import { useWindowResize, useGlobalShortcuts } from ".";
+import { useWindowResize } from ".";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useApp } from "@/contexts";
@@ -139,7 +139,6 @@ export type useSystemAudioType = ReturnType<typeof useSystemAudio>;
 
 export function useSystemAudio() {
   const { resizeWindow } = useWindowResize();
-  const globalShortcuts = useGlobalShortcuts();
   const [isPopoverOpen, setIsPopoverOpen] = useState(false);
   const [capturing, setCapturing] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -948,16 +947,6 @@ export function useSystemAudio() {
     error,
     resizeWindow,
   ]);
-
-  useEffect(() => {
-    globalShortcuts.registerSystemAudioCallback(async () => {
-      if (capturing) {
-        await stopCapture();
-      } else {
-        await startCapture();
-      }
-    });
-  }, [startCapture, stopCapture]);
 
   useEffect(() => {
     return () => {

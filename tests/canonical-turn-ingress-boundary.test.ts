@@ -173,7 +173,7 @@ test("maps progress-only Source transitions to parent context updates", () => {
 test("treats phase-requested Code as explicit Code intent", () => {
   assert.match(
     source,
-    /const codeMutationWithoutCodeIntent =[\s\S]{0,260}artifactIntent !== "revise-code"[\s\S]{0,160}requestedArtifacts\.includes\("code"\)/
+    /const codeMutationWithoutCodeIntent =[\s\S]{0,260}generationArtifactIntent !== "revise-code"[\s\S]{0,160}requestedArtifacts\.includes\("code"\)/
   );
 });
 
