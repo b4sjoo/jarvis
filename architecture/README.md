@@ -1,10 +1,77 @@
-# Architecture Contracts
+# Jarvis Architecture and Contracts
 
-This directory contains tracked, privacy-safe engineering contracts. No file in
-this directory may contain transcripts, screenshots, memory content, local
-absolute paths, provider secrets, or session-recording payloads.
+This file is the single tracked, privacy-safe architecture map for a clean
+checkout. It intentionally excludes interview content, transcripts, memories,
+provider credentials, local absolute paths, session-recording payloads, and
+private working decisions.
 
-## Files
+## Core Rule
+
+AI handles ambiguous interpretation and answer generation. The runtime owns
+state, transitions, evidence boundaries, artifact authority, stale-result
+rejection, persistence, and recovery.
+
+```mermaid
+flowchart LR
+  Input["Audio, screen, or explicit user action"] --> Runtime["Meeting runtime and authority checks"]
+  Runtime --> Policy["Deterministic meeting policy modules"]
+  Policy --> Models["Runtime, advisor, or complex-task model route"]
+  Models --> Commit["Lease and revision-gated commit"]
+  Commit --> UI["Stable answer and persistent artifacts"]
+  Runtime --> Recording["Local trace, evaluation, and session recording"]
+  Preparation["Preparation snapshot"] --> Runtime
+```
+
+## Ownership Boundaries
+
+- `src/hooks/useMeetingAssistant.ts` composes the current meeting runtime. It is
+  still a migration boundary, not permission to add more independent state
+  authorities.
+- `src/lib/meeting/` contains deterministic policies for question ownership,
+  task settlement, model routing, generation leases, artifacts, evaluation,
+  and recording projections.
+- `MeetingContextManager` privately owns the only live mutable
+  `MeetingTaskRuntimeState`. `ActiveMeetingTask` is its read projection. The
+  recognized external task writers pass through transition or clear entry
+  points; expiration is still a mutation-capable read side effect and remains a
+  Task 151 convergence item.
+- `src/lib/preparation/` owns Interview Preparation Workspace services and the
+  immutable snapshot context consumed by meeting runtime adapters.
+- `src/lib/memory/` owns local retrieval and KMB boundaries. Generated answers
+  are not factual evidence merely because a model produced them.
+- `src-tauri/src/` owns native capture, audio lifecycle, windows, local file
+  operations, and Tauri command registration.
+- Provider adapters may call configured external models, but they do not own
+  meeting task state or visible artifact commit authority.
+
+## Runtime Commit Contract
+
+Every asynchronous result is accepted only when its identity still matches the
+current session, runtime epoch, logical question, task revision, manual action
+revision, artifact owner, and visible-answer revision required by that
+operation. A late result may finish, but it cannot mutate current state after
+its lease becomes stale.
+
+Screen capture and explicit user actions are stronger evidence than passive
+speech. They can request resettlement, but still pass through the same commit
+and artifact authority boundaries.
+
+## Persistence Boundaries
+
+- Application data is local by default.
+- Session Recording and STT evaluation capture are explicit, local evaluation
+  features with separate lifecycle ownership.
+- Preparation materials, current extraction output, reviewed statements, and
+  snapshots use database and local-file boundaries owned by Preparation
+  services. Immutable extraction runs are a pending next-major migration, not a
+  current persistence guarantee.
+- Historical formats remain readable only through explicit migration or replay
+  readers; live producers must not depend on those readers.
+
+## Tracked Contract Files
+
+No file in this directory may contain transcripts, screenshots, memory content,
+local absolute paths, provider secrets, or session-recording payloads.
 
 - `deletion-ledger.schema.json` defines the deletion-governance record.
 - `deletion-ledger.json` maps each planned breaking removal to its replacement,
@@ -17,7 +84,28 @@ absolute paths, provider secrets, or session-recording payloads.
 - `verification-budget.json` records measured gate durations and the 20 percent
   investigation thresholds used by the full verifier.
 
-## Commands
+## Architecture Guardrails
+
+The tracked contracts in this directory reject:
+
+- new task mutation callsites outside the current allowlist;
+- live imports from the historical-reader boundary;
+- new import cycles or new edges inside known cycle components;
+- new consumers of the broad meeting barrel;
+- Tauri command/event registry drift and unexplained cross-side mismatches;
+- recurrence of a surface marked deleted in the deletion ledger.
+
+The initial guard ceiling recorded 18 task-mutation callsites in 2 modules, 0
+live legacy-reader imports, 5 cycle components with 501 internal edges, 7 broad
+meeting-barrel consumers, and 7 explained command-registration exceptions. The
+August 29 measured state is 2 analyzer-recognized transition/clear callsites in
+1 module, 0 live legacy imports, 5 cycle components with 490 internal edges,
+and 7 broad barrel consumers. The task-writer metric is scanner-specific and
+does not count expiration mutation. The checked ceilings prevent recognized
+regression; later maintainability tasks must expand mutation coverage and
+deliberately lower the remaining cycle and barrel counts.
+
+## Verification
 
 ```bash
 npm run verify:deletion-ledger
@@ -29,6 +117,9 @@ npm run verify:next-major
 gate in order and writes `.tmp-architecture/next-major-verification-report.json`.
 The report records the current commit, dirty-file count, command, duration, gate
 status, and budget comparison without recording file contents.
+
+Private working documents under `docs/` are not part of the clean-checkout
+contract. They remain gitignored by design.
 
 ## Updating A Baseline
 

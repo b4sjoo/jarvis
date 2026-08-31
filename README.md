@@ -27,9 +27,9 @@ Jarvis is currently designed for local personal use only.
 
 ## Architecture Notes
 
-Start with [ARCHITECTURE.md](ARCHITECTURE.md) for the tracked, privacy-safe
-runtime map and [architecture/README.md](architecture/README.md) for the
-refactor guardrails. In short, the app uses:
+Start with [architecture/README.md](architecture/README.md) for the single
+tracked, privacy-safe runtime map and refactor-guardrail contract. In short, the
+app uses:
 
 - `src/` for the React frontend, hooks, provider configuration, and assistant UI.
 - `src-tauri/` for the native shell, global shortcuts, window behavior, capture, audio capture, and local database.

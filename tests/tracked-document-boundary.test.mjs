@@ -7,7 +7,6 @@ import test from "node:test";
 const repositoryRoot = process.cwd();
 const trackedEngineeringDocs = [
   "README.md",
-  "ARCHITECTURE.md",
   "architecture/README.md",
   "architecture/deletion-ledger.schema.json",
   "architecture/deletion-ledger.json",
@@ -15,6 +14,14 @@ const trackedEngineeringDocs = [
   "architecture/orchestration-replay-baseline.json",
   "architecture/verification-budget.json",
 ];
+
+test("architecture documentation has one canonical tracked entry point", () => {
+  assert.equal(
+    fs.existsSync(path.join(repositoryRoot, "ARCHITECTURE.md")),
+    false,
+    "root ARCHITECTURE.md must not duplicate architecture/README.md"
+  );
+});
 
 test("clean-checkout engineering documents are present and tracked", () => {
   for (const relativePath of trackedEngineeringDocs) {
@@ -48,7 +55,7 @@ test("tracked architecture documents contain no private runtime artifacts", () =
 });
 
 test("README and tracked architecture markdown links resolve without private docs", () => {
-  for (const relativePath of ["README.md", "ARCHITECTURE.md", "architecture/README.md"]) {
+  for (const relativePath of ["README.md", "architecture/README.md"]) {
     const absolutePath = path.join(repositoryRoot, relativePath);
     const content = fs.readFileSync(absolutePath, "utf8");
     for (const match of content.matchAll(/\[[^\]]+\]\(([^)]+)\)/g)) {
