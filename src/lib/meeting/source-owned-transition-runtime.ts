@@ -113,6 +113,16 @@ export function sourceOwnedTransitionDurableMutationApplied(
   );
 }
 
+export function sourceOwnedTransitionCommittedPhaseIdentityChange(
+  receipt: SourceOwnedDurableTransitionReceipt | undefined
+) {
+  return Boolean(
+    sourceOwnedTransitionDurableMutationApplied(receipt) &&
+      receipt?.sourceResult.candidate.kind === "phase-progress" &&
+      receipt.sourceResult.phaseBefore !== receipt.sourceResult.phaseAfter
+  );
+}
+
 export function sourceOwnedTransitionDurablySatisfied(
   receipt: SourceOwnedDurableTransitionReceipt | undefined
 ) {

@@ -12,6 +12,7 @@ import {
   resolveSourceOwnedRuntimeTransition,
   sourceOwnedDurableTransitionSurvivesModelOutcome,
   sourceOwnedTransitionCommittedFreshParent,
+  sourceOwnedTransitionCommittedPhaseIdentityChange,
   sourceOwnedTransitionDurableMutationApplied,
   sourceOwnedTransitionDurablySatisfied,
   type SourceOwnedDurableTransitionReceipt,
@@ -809,7 +810,10 @@ import {
   restoreSuggestionProjectionAfterFailedManualCorrection,
   stageSuggestionProjectionForManualCorrection,
   authorizeResponseArtifactMutation,
+  decideAdvisorArtifactGenerationAuthority,
+  formatAdvisorArtifactGenerationAuthorityForTrace,
   isExplicitCodingComplexityIntent,
+  projectResponseArtifactAuthorizationForGeneration,
   authorizeSettledAdvisorExecutionPlan,
   rebaseSettledAdvisorExecutionPlanAfterOwnedParentMutation,
   formatResponseArtifactAuthorizationForTrace,
@@ -12851,9 +12855,34 @@ export function useMeetingAssistant() {
         authority: advisorJob.runtimeTypeAdjudicationOutputAuthority,
         taskBoundaryCommitted: taskBoundaryCommittedBeforeAdvisor,
       });
+    const automaticPhaseIdentityTransitionCommitted =
+      sourceOwnedTransitionCommittedPhaseIdentityChange(
+        sourceOwnedTransitionReceipt
+      );
+    const newParentArtifactAuthority = Boolean(
+      taskBoundaryCommittedBeforeAdvisor ||
+        sourceOwnedTransitionCommittedFreshParent(
+          sourceOwnedTransitionReceipt
+        ) ||
+        (settledExecutionPlan?.taskMutationCommittedBeforeAdvisor &&
+          (settledExecutionPlan.taskMutationPolicy.kind ===
+            "create-parent" ||
+            settledExecutionPlan.taskMutationPolicy.kind ===
+              "replace-parent"))
+    );
+    const generationArtifactAuthority =
+      decideAdvisorArtifactGenerationAuthority({
+        hardAnswerOnly:
+          advisorJob.source === "force-advise" ||
+          runtimeTypeAdjudicationAnswerOnly,
+        newParentCommitted: newParentArtifactAuthority,
+        manualPhaseCommitted: manualPhaseAdvanceCommitted,
+        automaticPhaseIdentityTransitionCommitted,
+        manualCorrection: advisorJob.source === "manual-correction",
+      });
     generationAuthorizedArtifacts =
       resolveAdvisorGenerationRequestedArtifacts({
-        forceAnswerOnly: advisorJob.source === "force-advise",
+        forceAnswerOnly: generationArtifactAuthority.answerOnly,
         runtimeTypeAdjudicationAnswerOnly,
         settledPlanArtifacts: settledExecutionPlan
           ? resolveAuthorizedAnswerArtifacts({
@@ -12865,6 +12894,17 @@ export function useMeetingAssistant() {
           ? playbookPhaseDecision.requiredArtifacts
           : undefined,
       });
+    const generationPlaybookPhaseDecision =
+      generationArtifactAuthority.answerOnly
+        ? {
+            ...playbookPhaseDecision,
+            requiredArtifacts: ["answer"] as AnswerArtifactSection[],
+            targetArtifact: "answer" as const,
+          }
+        : playbookPhaseDecision;
+    const generationArtifactIntent = generationArtifactAuthority.answerOnly
+      ? ("preserve" as const)
+      : settledExecutionPlan?.artifactIntent;
     const manualPhaseArtifactContractMetadata =
       manualPhaseAdvance
         ? formatManualPhaseArtifactContractForTrace({
@@ -12950,6 +12990,11 @@ export function useMeetingAssistant() {
           "start"
         ),
         ...manualPhaseArtifactContractMetadata,
+        ...formatAdvisorArtifactGenerationAuthorityForTrace(
+          generationArtifactAuthority
+        ),
+        automaticPhaseIdentityTransitionCommitted,
+        newParentArtifactAuthority,
         modelRequestOptions: advisorModelRequestOptions,
         preparedProgrammingLanguage:
           includePreparedProgrammingLanguage
@@ -13528,13 +13573,15 @@ export function useMeetingAssistant() {
             advisorRuntimePlaybook,
       playbookPhaseDecision: transientPersonalStatusDecision
         ? undefined
-        : playbookPhaseDecision,
+        : generationPlaybookPhaseDecision,
       factAnchorDecision,
       transientPersonalStatusDecision,
       projectBindingDecision,
       openingRoute: advisorTaskSignals.openingRoute,
       whiteboardFormatPreference:
-        settledExecutionPlan?.whiteboardFormatPreference,
+        generationArtifactAuthority.answerOnly
+          ? undefined
+          : settledExecutionPlan?.whiteboardFormatPreference,
       currentQuestionProjection: advisorJob.logicalQuestionUnit
         ? {
             answerFocusText: advisorQuestionAnswerFocusText,
@@ -14289,7 +14336,7 @@ export function useMeetingAssistant() {
             settledExecutionPlan?.whiteboardFormatPreference ??
             resolveWhiteboardFormatPreference({
               questionType: advisorQuestionType,
-              artifactIntent: settledExecutionPlan?.artifactIntent,
+              artifactIntent: generationArtifactIntent,
               sourceQuestion: advisorQuestionSemanticEvidenceText,
             }),
         });
@@ -14565,9 +14612,9 @@ export function useMeetingAssistant() {
         | undefined;
       const whiteboardArtifactIntentAuthorized =
         isWhiteboardRevisionAuthorized({
-          artifactIntent: settledExecutionPlan?.artifactIntent,
+          artifactIntent: generationArtifactIntent,
           policyAllowsWhiteboard:
-            settledExecutionPlan?.artifactPolicy.allowWhiteboard ?? true,
+            generationAuthorizedArtifacts.includes("whiteboard"),
         });
       if (
         parsedMeetingAnswer.sections.whiteboard &&
@@ -14665,7 +14712,7 @@ export function useMeetingAssistant() {
         manualPhaseAdvanceCommitted
           ? undefined
           : playbookPhaseDecision;
-      const settledArtifactAuthorization =
+      const baseSettledArtifactAuthorization =
         settledExecutionPlan?.artifactPolicy ??
         authorizeResponseArtifactMutation({
           parentTaskId: existingInterviewTask?.id,
@@ -14694,6 +14741,11 @@ export function useMeetingAssistant() {
             !existingInterviewTask &&
             shouldCommitAdvisorParent &&
             continuityRelation === "new-parent",
+        });
+      const settledArtifactAuthorization =
+        projectResponseArtifactAuthorizationForGeneration({
+          authorization: baseSettledArtifactAuthorization,
+          authority: generationArtifactAuthority,
         });
       const continuity = shouldCommitAdvisorParent
         ? updateInterviewTaskContinuityForAnswer({
@@ -14743,7 +14795,7 @@ export function useMeetingAssistant() {
               ...settledArtifactAuthorization,
               allowLatestUsefulAnswer: false,
             },
-            artifactIntent: settledExecutionPlan?.artifactIntent,
+            artifactIntent: generationArtifactIntent,
           })
         : {
             task: existingInterviewTask,
@@ -14768,7 +14820,7 @@ export function useMeetingAssistant() {
           settledArtifactAuthorization
         ),
         answerWhiteboardArtifactIntent:
-          settledExecutionPlan?.artifactIntent,
+          generationArtifactIntent,
         answerWhiteboardArtifactIntentAuthorized:
           whiteboardArtifactIntentAuthorized,
         answerCodeArtifactDecision: parsedMeetingAnswer.sections.code
@@ -15321,11 +15373,9 @@ export function useMeetingAssistant() {
             nextStableAnswer.logicalQuestionUnitId,
           logicalQuestionRevision:
             nextStableAnswer.logicalQuestionRevision,
-          requiredArtifacts:
-            settledExecutionPlan?.requiredArtifacts ??
-            generationAuthorizedArtifacts,
-          artifactIntent: settledExecutionPlan?.artifactIntent,
-          artifactPolicy: settledExecutionPlan?.artifactPolicy,
+          requiredArtifacts: generationAuthorizedArtifacts,
+          artifactIntent: generationArtifactIntent,
+          artifactPolicy: settledArtifactAuthorization,
           answerSufficiencyDecision:
             advisorAnswerSufficiencyDecision,
         });
@@ -15372,7 +15422,7 @@ export function useMeetingAssistant() {
       const codeMutationWithoutCodeIntent =
         Boolean(nextVisibleCode) &&
         nextVisibleCode !== previousVisibleCode &&
-        settledExecutionPlan?.artifactIntent !== "revise-code" &&
+        generationArtifactIntent !== "revise-code" &&
         !answerGenerationLease?.requestedArtifacts.includes("code");
       if (
         traceId &&

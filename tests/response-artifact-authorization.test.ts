@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   authorizeResponseArtifactMutation,
+  decideAdvisorArtifactGenerationAuthority,
   formatManualPhaseArtifactContractForTrace,
   formatResponseArtifactAuthorizationForTrace,
   isExplicitCodingComplexityIntent,
+  projectResponseArtifactAuthorizationForGeneration,
   resolveAdvisorGenerationRequestedArtifacts,
 } from "../src/lib/meeting/response-artifact-authorization.js";
 import type { ActiveMeetingTask } from "../src/lib/meeting/active-meeting-task.js";
@@ -309,6 +311,75 @@ test("keeps stronger Answer-only and settled-plan authority ahead of Manual Next
     ["answer", "complexity"]
   );
   assert.deepEqual(resolveAdvisorGenerationRequestedArtifacts({}), ["answer"]);
+});
+
+test("keeps same-phase responses Answer-only and preserves committed phase authority", () => {
+  const samePhase = decideAdvisorArtifactGenerationAuthority({});
+  const progressOnly = decideAdvisorArtifactGenerationAuthority({
+    automaticPhaseIdentityTransitionCommitted: false,
+  });
+  const automaticPhase = decideAdvisorArtifactGenerationAuthority({
+    automaticPhaseIdentityTransitionCommitted: true,
+  });
+  const manualPhase = decideAdvisorArtifactGenerationAuthority({
+    manualPhaseCommitted: true,
+  });
+
+  assert.deepEqual(
+    [samePhase.authority, samePhase.answerOnly],
+    ["answer-only", true]
+  );
+  assert.equal(progressOnly.answerOnly, true);
+  assert.deepEqual(
+    [automaticPhase.authority, automaticPhase.answerOnly],
+    ["artifact-authorized", false]
+  );
+  assert.deepEqual(
+    [manualPhase.authority, manualPhase.answerOnly],
+    ["artifact-authorized", false]
+  );
+});
+
+test("preserves explicit parent and correction artifact authority", () => {
+  assert.equal(
+    decideAdvisorArtifactGenerationAuthority({
+      newParentCommitted: true,
+    }).authority,
+    "artifact-authorized"
+  );
+  assert.equal(
+    decideAdvisorArtifactGenerationAuthority({
+      manualCorrection: true,
+    }).authority,
+    "artifact-authorized"
+  );
+  assert.equal(
+    decideAdvisorArtifactGenerationAuthority({
+      hardAnswerOnly: true,
+      newParentCommitted: true,
+    }).authority,
+    "answer-only"
+  );
+});
+
+test("removes only persistent Artifact rights from same-phase responses", () => {
+  const authorization = authorizeResponseArtifactMutation({
+    parentTaskId: "parent-design",
+    parentQuestionType: "general-system-design",
+    responseOwnerQuestionType: "general-system-design",
+    responseOwnerSource: "committed-parent",
+    relation: "followup-parent",
+  });
+  const projected = projectResponseArtifactAuthorizationForGeneration({
+    authorization,
+    authority: decideAdvisorArtifactGenerationAuthority({}),
+  });
+
+  assert.equal(projected.allowWhiteboard, false);
+  assert.equal(projected.allowCode, false);
+  assert.equal(projected.allowComplexity, false);
+  assert.equal(projected.allowLatestUsefulAnswer, true);
+  assert.equal(projected.allowParentContextMutation, true);
 });
 
 test("reports a Manual Next target missing from requested artifacts", () => {

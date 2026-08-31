@@ -34,6 +34,89 @@ export interface ResponseArtifactMutationAuthorization {
   allowParentContextMutation: boolean;
 }
 
+export type AdvisorArtifactGenerationAuthority =
+  | "answer-only"
+  | "artifact-authorized";
+
+export interface AdvisorArtifactGenerationAuthorityDecision {
+  authority: AdvisorArtifactGenerationAuthority;
+  answerOnly: boolean;
+  reason: string;
+}
+
+export function decideAdvisorArtifactGenerationAuthority(input: {
+  hardAnswerOnly?: boolean;
+  newParentCommitted?: boolean;
+  manualPhaseCommitted?: boolean;
+  automaticPhaseIdentityTransitionCommitted?: boolean;
+  manualCorrection?: boolean;
+}): AdvisorArtifactGenerationAuthorityDecision {
+  if (input.hardAnswerOnly) {
+    return {
+      authority: "answer-only",
+      answerOnly: true,
+      reason: "explicit-answer-only-authority",
+    };
+  }
+  if (input.manualPhaseCommitted) {
+    return {
+      authority: "artifact-authorized",
+      answerOnly: false,
+      reason: "manual-phase-transition-committed",
+    };
+  }
+  if (input.automaticPhaseIdentityTransitionCommitted) {
+    return {
+      authority: "artifact-authorized",
+      answerOnly: false,
+      reason: "automatic-phase-identity-transition-committed",
+    };
+  }
+  if (input.newParentCommitted) {
+    return {
+      authority: "artifact-authorized",
+      answerOnly: false,
+      reason: "new-parent-transition-committed",
+    };
+  }
+  if (input.manualCorrection) {
+    return {
+      authority: "artifact-authorized",
+      answerOnly: false,
+      reason: "manual-correction-artifact-contract-authority",
+    };
+  }
+  return {
+    authority: "answer-only",
+    answerOnly: true,
+    reason: "same-phase-response-preserves-artifacts",
+  };
+}
+
+export function projectResponseArtifactAuthorizationForGeneration(input: {
+  authorization: ResponseArtifactMutationAuthorization;
+  authority: AdvisorArtifactGenerationAuthorityDecision;
+}): ResponseArtifactMutationAuthorization {
+  if (!input.authority.answerOnly) return input.authorization;
+  return {
+    ...input.authorization,
+    reason: `${input.authorization.reason}; ${input.authority.reason}`,
+    allowWhiteboard: false,
+    allowCode: false,
+    allowComplexity: false,
+  };
+}
+
+export function formatAdvisorArtifactGenerationAuthorityForTrace(
+  decision: AdvisorArtifactGenerationAuthorityDecision
+) {
+  return {
+    advisorArtifactGenerationAuthority: decision.authority,
+    advisorArtifactGenerationAnswerOnly: decision.answerOnly,
+    advisorArtifactGenerationReason: decision.reason,
+  };
+}
+
 export function isExplicitCodingComplexityIntent(input: {
   text: string;
   questionType?: unknown;

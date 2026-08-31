@@ -12,6 +12,7 @@ import {
   commitSourceOwnedTransitionToRuntime,
   resolveSourceOwnedRuntimeTransition,
   sourceOwnedDurableTransitionSurvivesModelOutcome,
+  sourceOwnedTransitionCommittedPhaseIdentityChange,
   sourceOwnedTransitionDurableMutationApplied,
   sourceOwnedTransitionDurablySatisfied,
 } from "../src/lib/meeting/source-owned-transition-runtime.js";
@@ -184,6 +185,10 @@ test("keeps a pre-model lifecycle commit after provider failure", () => {
   });
 
   assert.equal(sourceOwnedTransitionDurableMutationApplied(receipt), true);
+  assert.equal(
+    sourceOwnedTransitionCommittedPhaseIdentityChange(receipt),
+    false
+  );
   assert.equal(
     sourceOwnedDurableTransitionSurvivesModelOutcome(receipt, "error"),
     true
@@ -406,6 +411,57 @@ test("commits progress-only phase evidence as parent context", () => {
   assert.equal(sourceOwnedTransitionDurableMutationApplied(receipt), true);
   assert.equal(
     manager.getTaskRuntimeState().parent?.phaseProgress.requirements,
+    true
+  );
+});
+
+test("distinguishes a committed phase identity change from progress-only context", () => {
+  const manager = new MeetingContextManager();
+  const parent = {
+    ...makeParent("parent-phase-change", "general-system-design"),
+    playbookPhase: "requirement_clarification" as const,
+    phaseProgress: {},
+  };
+  setTestTaskRuntime(manager, { parent });
+  const sessionId = manager.getState().sessionId;
+  const candidate = createSourceOwnedTransitionCandidate({
+    sessionId,
+    runtimeEpoch: 3,
+    source: "voice",
+    sourceTurnIds: ["turn-assumptions"],
+    existingTask: parent,
+    relation: "followup-parent",
+    authoritySource: "source-owned-phase-control",
+    mutationAuthorized: true,
+    questionType: "general-system-design",
+    question: "You can make reasonable assumptions.",
+    phaseDecision: {
+      phase: "design_framing",
+      phaseFrom: "requirement_clarification",
+      flags: ["requirements", "whiteboard"],
+      requiredArtifacts: ["answer", "whiteboard"],
+      completedFlags: ["requirements"],
+      action: "advance",
+      reason: "interviewer authorized assumptions",
+      source: "automatic",
+    },
+    now: now + 10,
+  });
+  assert.ok(candidate);
+
+  const receipt = commitThroughRuntime({
+    manager,
+    candidate,
+    expectedTaskRuntimeRevision: manager.getTaskRuntimeState().revision,
+    currentSessionId: sessionId,
+    currentRuntimeEpoch: 3,
+    reason: "voice-source-transition-committed",
+    now: now + 11,
+  });
+
+  assert.equal(receipt.runtimeTransition, "advance-phase");
+  assert.equal(
+    sourceOwnedTransitionCommittedPhaseIdentityChange(receipt),
     true
   );
 });
