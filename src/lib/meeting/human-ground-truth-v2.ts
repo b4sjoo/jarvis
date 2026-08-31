@@ -20,7 +20,10 @@ import type {
 } from "./types.js";
 import type { AdvisorContextReadScope } from "./advisor-context-read-scope.js";
 import type { SettledAdvisorArtifactIntent } from "./settled-advisor-execution-plan.js";
-import { projectObservedParentAction } from "./task-settlement-tuple.js";
+import {
+  projectObservedParentAction,
+  resolveCommittedSourceTransitionLifecycleCommand,
+} from "./task-settlement-tuple.js";
 import {
   projectQuestionTypeObservation,
   type DurableQuestionOwnerMissingReason,
@@ -681,6 +684,13 @@ export function buildHumanEvaluationObservedSnapshotV2(
       metadata.effectiveCurrentQuestionSettlementParentMutationAuthorized ??
         metadata.currentQuestionSettlementParentMutationAuthorized
     ),
+    committedLifecycleCommand:
+      resolveCommittedSourceTransitionLifecycleCommand({
+        runtimeKind: metadata.sourceTransitionRuntimeKind,
+        durableAuthorized: metadata.sourceTransitionDurableAuthorized,
+        durableMutationApplied:
+          metadata.sourceTransitionDurableMutationApplied,
+      }),
     lifecycleCommand: readString(
       metadata.settledExecutionPlanTaskMutationCommand
     ),

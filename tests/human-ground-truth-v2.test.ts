@@ -1014,6 +1014,37 @@ test("projects only a same-parent cross-type replacement as retype", () => {
   );
 });
 
+test("prefers a committed source transition over provisional parent authorization", () => {
+  const trace = buildSettledAttemptTrace({
+    id: "trace_committed_resume",
+    status: "success",
+    questionType: "general-system-design",
+  });
+  trace.metadata = {
+    ...trace.metadata,
+    effectiveCurrentQuestionSettlementRelation: "resume-parent",
+    effectiveCurrentQuestionSettlementParentMutationAuthorized: false,
+    settledExecutionPlanTaskMutationCommand: "preserve",
+    sourceTransitionRuntimeKind: "resume-parent",
+    sourceTransitionDurableAuthorized: true,
+    sourceTransitionDurableMutationApplied: true,
+    sourceTransitionParentBeforeId: "parent-design",
+    sourceTransitionParentAfterId: "parent-design",
+    sourceTransitionChildBeforeId: "child-field",
+  };
+
+  assert.equal(
+    buildHumanEvaluationObservedSnapshotV2(trace).parentAction,
+    "resume"
+  );
+
+  trace.metadata.sourceTransitionDurableMutationApplied = false;
+  assert.equal(
+    buildHumanEvaluationObservedSnapshotV2(trace).parentAction,
+    "preserve"
+  );
+});
+
 test("uses the effective settlement while retaining raw abstention diagnostics", () => {
   const trace = buildSettledAttemptTrace({
     id: "trace_effective_followup",

@@ -46,6 +46,7 @@ export function evaluateTaskSettlementTupleCompatibilityV2(input: {
 export function projectObservedParentAction(input: {
   relation?: TaskSettlementRelationValue;
   mutationAuthorized?: boolean;
+  committedLifecycleCommand?: string;
   lifecycleCommand?: string;
   currentOnly: boolean;
   parentBeforeId?: string;
@@ -53,16 +54,18 @@ export function projectObservedParentAction(input: {
   parentBeforeType?: unknown;
   parentAfterType?: unknown;
 }): ParentActionValue | undefined {
-  if (input.lifecycleCommand === "create-parent") return "create";
-  if (input.lifecycleCommand === "replace-parent") {
+  const lifecycleCommand =
+    input.committedLifecycleCommand ?? input.lifecycleCommand;
+  if (lifecycleCommand === "create-parent") return "create";
+  if (lifecycleCommand === "replace-parent") {
     return isSameParentRetype(input) ? "retype" : "create";
   }
-  if (input.lifecycleCommand === "attach-child") return "attach-child";
-  if (input.lifecycleCommand === "resume-parent") return "resume";
+  if (lifecycleCommand === "attach-child") return "attach-child";
+  if (lifecycleCommand === "resume-parent") return "resume";
   if (
-    input.lifecycleCommand === "preserve" ||
-    input.lifecycleCommand === "update-parent-context" ||
-    input.lifecycleCommand === "advance-phase" ||
+    lifecycleCommand === "preserve" ||
+    lifecycleCommand === "update-parent-context" ||
+    lifecycleCommand === "advance-phase" ||
     input.currentOnly
   ) {
     return "preserve";
@@ -88,6 +91,19 @@ export function projectObservedParentAction(input: {
     return "preserve";
   }
   return input.mutationAuthorized === false ? "none" : undefined;
+}
+
+export function resolveCommittedSourceTransitionLifecycleCommand(input: {
+  runtimeKind?: unknown;
+  durableAuthorized?: unknown;
+  durableMutationApplied?: unknown;
+}) {
+  return input.durableAuthorized === true &&
+    input.durableMutationApplied === true &&
+    typeof input.runtimeKind === "string" &&
+    input.runtimeKind.trim()
+    ? input.runtimeKind
+    : undefined;
 }
 
 export function recommendedParentActionForRelation(

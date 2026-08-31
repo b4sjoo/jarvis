@@ -20,6 +20,7 @@ import {
 } from "../src/lib/meeting/task-relation-adjudication-reflection.js";
 import { buildTaskRelationAuthorityConvergenceReportV1 } from "../src/lib/meeting/task-relation-authority-convergence.js";
 import { projectMeetingMetadataEvaluationObservation } from "../src/lib/meeting/meeting-metadata-evaluation.js";
+import { resolveCommittedSourceTransitionLifecycleCommand } from "../src/lib/meeting/task-settlement-tuple.js";
 import {
   loadSessionHumanEvaluationConsumerView,
   writeHumanEvaluationCompatibilityReport,
@@ -305,6 +306,12 @@ function mergeRuntimeTraceEvidence(
       readBoolean(metadata.taskMutationAuthorized) ??
       compact?.taskMutationAuthorized,
     taskMutationCommand:
+      resolveCommittedSourceTransitionLifecycleCommand({
+        runtimeKind: metadata.sourceTransitionRuntimeKind,
+        durableAuthorized: metadata.sourceTransitionDurableAuthorized,
+        durableMutationApplied:
+          metadata.sourceTransitionDurableMutationApplied,
+      }) ??
       readString(metadata.settledExecutionPlanTaskMutationCommand) ??
       compact?.taskMutationCommand,
     taskLifecycleParentBeforeId:
