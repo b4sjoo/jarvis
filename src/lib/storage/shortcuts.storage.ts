@@ -6,6 +6,7 @@ import {
   ShortcutAction,
 } from "@/types";
 import { getPlatform } from "@/lib";
+import { removeRetiredDefaultShortcutBindings } from "./retired-shortcuts";
 
 /**
  * Get platform-specific default key for a shortcut action
@@ -53,10 +54,20 @@ export const getShortcutsConfig = (): ShortcutsConfig => {
       const parsed = JSON.parse(stored);
       // Merge with defaults to ensure all default actions are present
       const defaults = getDefaultShortcutsConfig();
-      return {
-        bindings: { ...defaults.bindings, ...parsed.bindings },
+      const storedBindings = removeRetiredDefaultShortcutBindings(
+        parsed.bindings ?? {}
+      );
+      const migrated = {
+        bindings: { ...defaults.bindings, ...storedBindings },
         customActions: parsed.customActions || [],
       };
+      if (
+        Object.keys(storedBindings).length !==
+        Object.keys(parsed.bindings ?? {}).length
+      ) {
+        setShortcutsConfig(migrated);
+      }
+      return migrated;
     }
     return getDefaultShortcutsConfig();
   } catch (error) {

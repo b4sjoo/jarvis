@@ -42,36 +42,6 @@ export const DEFAULT_SHORTCUT_ACTIONS: ShortcutAction[] = [
     },
   },
   {
-    id: "system_audio",
-    name: "System Audio",
-    description: "Toggle system audio capture",
-    defaultKey: {
-      macos: "cmd+shift+m",
-      windows: "ctrl+shift+m",
-      linux: "ctrl+shift+m",
-    },
-  },
-  {
-    id: "audio_recording",
-    name: "Voice Input",
-    description: "Start voice recording",
-    defaultKey: {
-      macos: "cmd+shift+a",
-      windows: "ctrl+shift+a",
-      linux: "ctrl+shift+a",
-    },
-  },
-  {
-    id: "screenshot",
-    name: "Screenshot",
-    description: "Capture screenshot",
-    defaultKey: {
-      macos: "cmd+shift+s",
-      windows: "ctrl+shift+s",
-      linux: "ctrl+shift+s",
-    },
-  },
-  {
     id: "meeting_screen_context",
     name: "Meeting Screen Context",
     description: "Capture current screen context for the meeting assistant",
