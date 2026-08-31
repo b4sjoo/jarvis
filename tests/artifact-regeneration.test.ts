@@ -2,10 +2,14 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { resolveArtifactRegenerationTarget } from "../src/lib/meeting/artifact-regeneration.js";
+import {
+  prepareCanonicalWhiteboardRegeneration,
+  resolveArtifactRegenerationTarget,
+} from "../src/lib/meeting/artifact-regeneration.js";
 import type { ActiveMeetingTask } from "../src/lib/meeting/active-meeting-task.js";
 import type { StableAnswerRevision } from "../src/lib/meeting/stable-answer.js";
 import type { CurrentQuestionSettlementDecision } from "../src/lib/meeting/current-question-settlement.js";
+import type { ActiveInterviewParent } from "../src/lib/meeting/types.js";
 
 function settlement(
   questionType: CurrentQuestionSettlementDecision["questionType"],
@@ -96,6 +100,38 @@ function task(
   };
 }
 
+function canonicalParent(): ActiveInterviewParent {
+  return {
+    id: "parent-a",
+    source: "voice",
+    stableKind: "general-system-design",
+    topic: "Current task",
+    playbookPhase: "design_framing",
+    phaseProgress: { requirement_clarification: true },
+    supportedFactAnchors: ["fact-a"],
+    latestUsefulAnswer: "Keep this answer.",
+    previousUsefulAnswer: "Keep the previous answer.",
+    whiteboardArtifact: {
+      id: "whiteboard-a",
+      parentTaskId: "parent-a",
+      domainTrack: "general_sd",
+      archetypeIds: [],
+      selectedOverlayIds: [],
+      currentPhase: "design_framing",
+      title: "URL shortener",
+      content: "Client --> API",
+      summary: "Current diagram",
+      revision: 2,
+      updateSource: "model-output",
+      updatedAt: 20,
+      createdAt: 10,
+    },
+    createdAt: 1,
+    updatedAt: 20,
+    revisions: 3,
+  };
+}
+
 test("authorizes the current Design Whiteboard", () => {
   const decision = resolveArtifactRegenerationTarget({
     stableAnswer: stable("general-system-design"),
@@ -179,5 +215,90 @@ test("routes the manual action through the shared Advisor and atomic publisher",
   assert.match(actionSource, /resolveArtifactRegenerationTarget\(/);
   assert.match(actionSource, /artifactRegenerationTarget: target/);
   assert.match(source, /commitStableArtifactOnlyRevision\(\{/);
+  assert.match(source, /prepareCanonicalWhiteboardRegeneration\(\{/);
+  assert.match(source, /manual-artifact-regeneration-atomic-whiteboard/);
   assert.match(source, /artifactOnly: Boolean\(/);
+});
+
+test("projects only the generated Whiteboard into the canonical parent", () => {
+  const currentParent = canonicalParent();
+  const target = resolveArtifactRegenerationTarget({
+    stableAnswer: stable("general-system-design"),
+    activeMeetingTask: task(
+      "general-system-design",
+      "design_framing"
+    ),
+    sessionId: "session-a",
+    runtimeEpoch: 2,
+  }).target!;
+  const decision = prepareCanonicalWhiteboardRegeneration({
+    target,
+    currentParent,
+    candidateWhiteboard: {
+      ...currentParent.whiteboardArtifact!,
+      content: "Client --> API --> Cache",
+      summary: "Updated diagram",
+      revision: 3,
+      updateSource: "manual-artifact-regeneration",
+      updatedAt: 30,
+    },
+  });
+
+  assert.equal(decision.authorized, true);
+  assert.equal(decision.parent?.revisions, 4);
+  assert.equal(decision.parent?.whiteboardArtifact?.revision, 3);
+  assert.equal(
+    decision.parent?.whiteboardArtifact?.content,
+    "Client --> API --> Cache"
+  );
+  assert.equal(
+    decision.parent?.latestUsefulAnswer,
+    currentParent.latestUsefulAnswer
+  );
+  assert.equal(
+    decision.parent?.previousUsefulAnswer,
+    currentParent.previousUsefulAnswer
+  );
+  assert.equal(decision.parent?.playbookPhase, currentParent.playbookPhase);
+  assert.deepEqual(decision.parent?.phaseProgress, currentParent.phaseProgress);
+  assert.deepEqual(
+    decision.parent?.supportedFactAnchors,
+    currentParent.supportedFactAnchors
+  );
+});
+
+test("rejects stale parent and nonsequential Whiteboard revisions", () => {
+  const currentParent = canonicalParent();
+  const target = resolveArtifactRegenerationTarget({
+    stableAnswer: stable("general-system-design"),
+    activeMeetingTask: task(
+      "general-system-design",
+      "design_framing"
+    ),
+    sessionId: "session-a",
+    runtimeEpoch: 2,
+  }).target!;
+
+  assert.equal(
+    prepareCanonicalWhiteboardRegeneration({
+      target,
+      currentParent: { ...currentParent, revisions: 4 },
+      candidateWhiteboard: {
+        ...currentParent.whiteboardArtifact!,
+        revision: 3,
+      },
+    }).reason,
+    "canonical-parent-revision-mismatch"
+  );
+  assert.equal(
+    prepareCanonicalWhiteboardRegeneration({
+      target,
+      currentParent,
+      candidateWhiteboard: {
+        ...currentParent.whiteboardArtifact!,
+        revision: 4,
+      },
+    }).reason,
+    "canonical-whiteboard-revision-mismatch"
+  );
 });

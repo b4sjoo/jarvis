@@ -104,7 +104,9 @@ import {
   resolveVisibleAnswerResponseActionTarget,
 } from "@/lib/meeting/response-action-target";
 import {
+  formatCanonicalWhiteboardRegenerationForTrace,
   formatArtifactRegenerationTargetForTrace,
+  prepareCanonicalWhiteboardRegeneration,
   resolveArtifactRegenerationTarget,
   type ArtifactRegenerationTarget,
 } from "@/lib/meeting/artifact-regeneration";
@@ -200,6 +202,7 @@ import {
   AdvisorResponseChallengeCoordinator,
   AdvisorResponseFingerprintCache,
   PendingAnswerRevision,
+  StableArtifactOnlyCommitDecision,
   StableAnswerRevision,
   RuntimeCommitToken,
   RuntimeAxisConflictDecision,
@@ -14916,6 +14919,14 @@ export function useMeetingAssistant() {
             startedNewParent: false,
             clearedParent: false,
           };
+      const canonicalWhiteboardRegeneration =
+        options.artifactRegenerationTarget
+          ? prepareCanonicalWhiteboardRegeneration({
+              target: options.artifactRegenerationTarget,
+              currentParent: contextState.taskRuntime.parent,
+              candidateWhiteboard: continuity.task?.whiteboardArtifact,
+            })
+          : undefined;
       const previousWhiteboard = existingInterviewTask?.whiteboardArtifact;
       const nextWhiteboard = continuity.task?.whiteboardArtifact;
       const whiteboardArtifactDecision = parsedMeetingAnswer.sections.whiteboard
@@ -14982,16 +14993,19 @@ export function useMeetingAssistant() {
       const nextActiveScreenTask = promptContext.taskRuntime.screenAttachment;
 
       const advisorGenerationRuntimeTransition =
-        taskMutationAuthorization.authorized &&
-        !responseMutationSuppressed
-          ? classifyCommittedTaskRuntimeTransition({
-              beforeParent: existingInterviewTask,
-              afterParent: continuity.task,
-              beforeScreen:
-                promptContext.taskRuntime.screenAttachment,
-              afterScreen: nextActiveScreenTask,
-            })
-          : undefined;
+        canonicalWhiteboardRegeneration?.required &&
+        canonicalWhiteboardRegeneration.authorized
+          ? "update-parent-context"
+          : taskMutationAuthorization.authorized &&
+              !responseMutationSuppressed
+            ? classifyCommittedTaskRuntimeTransition({
+                beforeParent: existingInterviewTask,
+                afterParent: continuity.task,
+                beforeScreen:
+                  promptContext.taskRuntime.screenAttachment,
+                afterScreen: nextActiveScreenTask,
+              })
+            : undefined;
       const advisorPostModelTransitionAuthorization =
         authorizePostModelTaskRuntimeTransition(
           advisorGenerationRuntimeTransition
@@ -15015,9 +15029,14 @@ export function useMeetingAssistant() {
           ? {
               expectedRevision: contextState.taskRuntime.revision,
               transition: advisorGenerationRuntimeTransition,
-              reason: "advisor-answer-continuity-committed",
+              reason: canonicalWhiteboardRegeneration?.required
+                ? "manual-artifact-regeneration-atomic-whiteboard"
+                : "advisor-answer-continuity-committed",
               screenAttachment: nextActiveScreenTask,
-              parent: continuity.task ?? null,
+              parent:
+                canonicalWhiteboardRegeneration?.parent ??
+                continuity.task ??
+                null,
             }
           : undefined;
       const transientPersonalStatusCommitMetadata =
@@ -15219,10 +15238,23 @@ export function useMeetingAssistant() {
         refreshAuthority: advisorJob.refreshAuthority,
         deliveryLockActive,
       });
+      const canonicalWhiteboardRejection =
+        canonicalWhiteboardRegeneration?.required &&
+        !canonicalWhiteboardRegeneration.authorized
+          ? ({
+              disposition: "rejected",
+              reason: canonicalWhiteboardRegeneration.reason,
+              authorizedArtifacts: [
+                ...options.artifactRegenerationTarget!.artifactFamilies,
+              ],
+              mutatedArtifacts: [],
+            } satisfies StableArtifactOnlyCommitDecision)
+          : undefined;
       const artifactOnlyCommitDecision =
         stableAnswerCommitDecision.disposition === "committed" &&
         options.artifactRegenerationTarget
-          ? commitStableArtifactOnlyRevision({
+          ? canonicalWhiteboardRejection ??
+            commitStableArtifactOnlyRevision({
               current: previousStableAnswer,
               candidate: nextSuggestion,
               authorizedArtifacts:
@@ -15269,6 +15301,13 @@ export function useMeetingAssistant() {
             ...formatStableArtifactOnlyCommitForTrace(
               artifactOnlyCommitDecision
             ),
+            ...formatCanonicalWhiteboardRegenerationForTrace(
+              canonicalWhiteboardRegeneration
+            ),
+            artifactOnlyCandidateCommitDisposition:
+              artifactOnlyCommitDecision.disposition,
+            artifactOnlyCandidateCommitReason:
+              artifactOnlyCommitDecision.reason,
             artifactOnlyAnswerSectionRevisionBefore:
               previousStableAnswer?.sections.answer.revision,
             artifactOnlyAnswerSectionRevisionAfter:
@@ -15466,6 +15505,50 @@ export function useMeetingAssistant() {
           finalizeStableAnswerPublication(advisorPublication);
         }
         advisorGenerationCommit = generationCommit;
+        if (traceId && options.artifactRegenerationTarget) {
+          const committedTaskRuntimeState =
+            contextManagerRef.current.getTaskRuntimeState();
+          const committedParent = committedTaskRuntimeState.parent;
+          const committedStable = stableAnswerRevisionRef.current;
+          const canonicalWhiteboard = committedParent?.whiteboardArtifact;
+          const stableWhiteboard =
+            committedStable?.suggestion.meetingAnswer?.sections.whiteboard;
+          traceStoreRef.current.updateMetadata(traceId, {
+            artifactOnlyCommitDisposition: generationCommit.committed
+              ? "committed"
+              : "rejected",
+            artifactOnlyCommitReason: generationCommit.reason,
+            artifactOnlyCanonicalParentCommitDisposition:
+              canonicalWhiteboardRegeneration?.required
+                ? generationCommit.committed
+                  ? "committed"
+                  : "rejected"
+                : "not-required",
+            artifactOnlyCanonicalParentCommitReason:
+              generationCommit.reason,
+            artifactOnlyCanonicalParentRevisionCommitted:
+              committedParent?.revisions,
+            artifactOnlyCanonicalWhiteboardRevisionCommitted:
+              canonicalWhiteboard?.revision,
+            artifactOnlyStableWhiteboardSectionRevisionCommitted:
+              committedStable?.sections.whiteboard.revision,
+            artifactOnlyCanonicalAndStableWhiteboardCoherent:
+              canonicalWhiteboardRegeneration?.required &&
+              generationCommit.committed
+                ? Boolean(
+                    canonicalWhiteboard?.content.trim() &&
+                      canonicalWhiteboard.content.trim() ===
+                        stableWhiteboard?.trim()
+                  )
+                : undefined,
+            artifactOnlyParentLatestUsefulAnswerPreserved:
+              existingInterviewTask?.latestUsefulAnswer ===
+              committedParent?.latestUsefulAnswer,
+            artifactOnlyParentPreviousUsefulAnswerPreserved:
+              existingInterviewTask?.previousUsefulAnswer ===
+              committedParent?.previousUsefulAnswer,
+          });
+        }
         if (traceId) {
           traceStoreRef.current.updateMetadata(
             traceId,

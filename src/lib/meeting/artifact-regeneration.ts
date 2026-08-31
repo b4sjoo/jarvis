@@ -1,13 +1,17 @@
 import type { ActiveMeetingTask } from "./active-meeting-task.js";
 import type {
   ArtifactOnlyAnswerSection,
+  StableArtifactOnlyCommitReason,
   StableAnswerRevision,
 } from "./stable-answer.js";
 import {
   normalizeCanonicalQuestionType,
   type CanonicalQuestionType,
 } from "./task-taxonomy.js";
-import type { InterviewPlaybookPhase } from "./types.js";
+import type {
+  ActiveInterviewParent,
+  InterviewPlaybookPhase,
+} from "./types.js";
 
 export type ArtifactRegenerationTargetReason =
   | "authorized"
@@ -40,6 +44,33 @@ export interface ArtifactRegenerationTargetDecision {
   authorized: boolean;
   reason: ArtifactRegenerationTargetReason;
   target?: ArtifactRegenerationTarget;
+}
+
+export type CanonicalWhiteboardRegenerationReason =
+  | "authorized"
+  | "not-required"
+  | Extract<
+      StableArtifactOnlyCommitReason,
+      | "canonical-parent-missing"
+      | "canonical-parent-id-mismatch"
+      | "canonical-parent-revision-mismatch"
+      | "canonical-parent-phase-mismatch"
+      | "canonical-parent-child-mismatch"
+      | "canonical-whiteboard-candidate-missing"
+      | "canonical-whiteboard-parent-mismatch"
+      | "canonical-whiteboard-id-mismatch"
+      | "canonical-whiteboard-revision-mismatch"
+    >;
+
+export interface CanonicalWhiteboardRegenerationDecision {
+  required: boolean;
+  authorized: boolean;
+  reason: CanonicalWhiteboardRegenerationReason;
+  parent?: ActiveInterviewParent;
+  parentRevisionBefore?: number;
+  parentRevisionAfter?: number;
+  whiteboardRevisionBefore?: number;
+  whiteboardRevisionCandidate?: number;
 }
 
 export function resolveArtifactRegenerationTarget(input: {
@@ -157,6 +188,103 @@ export function formatArtifactRegenerationTargetForTrace(
     artifactRegenerationPlaybookPhase: decision.target?.playbookPhase,
     artifactRegenerationRequestedArtifacts:
       decision.target?.artifactFamilies,
+  };
+}
+
+export function prepareCanonicalWhiteboardRegeneration(input: {
+  target: ArtifactRegenerationTarget;
+  currentParent?: ActiveInterviewParent;
+  candidateWhiteboard?: ActiveInterviewParent["whiteboardArtifact"];
+}): CanonicalWhiteboardRegenerationDecision {
+  if (!input.target.artifactFamilies.includes("whiteboard")) {
+    return {
+      required: false,
+      authorized: true,
+      reason: "not-required",
+    };
+  }
+
+  const currentParent = input.currentParent;
+  const candidate = input.candidateWhiteboard;
+  const reject = (
+    reason: Exclude<
+      CanonicalWhiteboardRegenerationReason,
+      "authorized" | "not-required"
+    >
+  ): CanonicalWhiteboardRegenerationDecision => ({
+    required: true,
+    authorized: false,
+    reason,
+    parentRevisionBefore: currentParent?.revisions,
+    whiteboardRevisionBefore: currentParent?.whiteboardArtifact?.revision,
+    whiteboardRevisionCandidate: candidate?.revision,
+  });
+
+  if (!currentParent) return reject("canonical-parent-missing");
+  if (currentParent.id !== input.target.parentId) {
+    return reject("canonical-parent-id-mismatch");
+  }
+  if (currentParent.revisions !== input.target.parentRevision) {
+    return reject("canonical-parent-revision-mismatch");
+  }
+  if (currentParent.playbookPhase !== input.target.playbookPhase) {
+    return reject("canonical-parent-phase-mismatch");
+  }
+  if (currentParent.child?.id !== input.target.childId) {
+    return reject("canonical-parent-child-mismatch");
+  }
+  if (!candidate?.content.trim()) {
+    return reject("canonical-whiteboard-candidate-missing");
+  }
+  if (
+    candidate.parentTaskId !== currentParent.id ||
+    candidate.currentPhase !== currentParent.playbookPhase
+  ) {
+    return reject("canonical-whiteboard-parent-mismatch");
+  }
+  const currentWhiteboard = currentParent.whiteboardArtifact;
+  if (currentWhiteboard && candidate.id !== currentWhiteboard.id) {
+    return reject("canonical-whiteboard-id-mismatch");
+  }
+  if (
+    candidate.revision !== (currentWhiteboard?.revision ?? 0) + 1
+  ) {
+    return reject("canonical-whiteboard-revision-mismatch");
+  }
+
+  const parent: ActiveInterviewParent = {
+    ...currentParent,
+    whiteboardArtifact: structuredClone(candidate),
+    updatedAt: candidate.updatedAt,
+    revisions: currentParent.revisions + 1,
+  };
+  return {
+    required: true,
+    authorized: true,
+    reason: "authorized",
+    parent,
+    parentRevisionBefore: currentParent.revisions,
+    parentRevisionAfter: parent.revisions,
+    whiteboardRevisionBefore: currentWhiteboard?.revision,
+    whiteboardRevisionCandidate: candidate.revision,
+  };
+}
+
+export function formatCanonicalWhiteboardRegenerationForTrace(
+  decision: CanonicalWhiteboardRegenerationDecision | undefined
+) {
+  return {
+    artifactOnlyCanonicalParentCommitRequired: decision?.required,
+    artifactOnlyCanonicalParentCommitAuthorized: decision?.authorized,
+    artifactOnlyCanonicalParentCommitReason: decision?.reason,
+    artifactOnlyCanonicalParentRevisionBefore:
+      decision?.parentRevisionBefore,
+    artifactOnlyCanonicalParentRevisionCandidate:
+      decision?.parentRevisionAfter,
+    artifactOnlyCanonicalWhiteboardRevisionBefore:
+      decision?.whiteboardRevisionBefore,
+    artifactOnlyCanonicalWhiteboardRevisionCandidate:
+      decision?.whiteboardRevisionCandidate,
   };
 }
 
