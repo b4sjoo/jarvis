@@ -13,6 +13,9 @@ const regenerateEnd = hookSource.indexOf(
 const regenerateSource = hookSource.slice(regenerateStart, regenerateEnd);
 
 test("Regenerate activates its one prepared Advisor job before acceptance", () => {
+  const targetIndex = regenerateSource.indexOf(
+    "resolveVisibleAnswerResponseActionTarget"
+  );
   const buildIndex = regenerateSource.indexOf(
     "const advisorJob = buildAdvisorJob"
   );
@@ -22,7 +25,8 @@ test("Regenerate activates its one prepared Advisor job before acceptance", () =
   const acceptedIndex = regenerateSource.indexOf('stage: "accepted"');
   const executeIndex = regenerateSource.indexOf("await runAdvisor({");
 
-  assert.ok(buildIndex >= 0);
+  assert.ok(targetIndex >= 0);
+  assert.ok(buildIndex > targetIndex);
   assert.ok(activateIndex > buildIndex);
   assert.ok(acceptedIndex > activateIndex);
   assert.ok(executeIndex > acceptedIndex);
@@ -31,6 +35,21 @@ test("Regenerate activates its one prepared Advisor job before acceptance", () =
     1
   );
   assert.match(regenerateSource, /advisorJob,\s*\}\);/);
+  assert.match(
+    regenerateSource,
+    /logicalQuestionUnit: visibleTarget\.logicalQuestionUnit/
+  );
+  assert.match(
+    regenerateSource,
+    /currentQuestionSettlementOverride:\s*visibleTarget\.settlementSnapshot/
+  );
+});
+
+test("Regenerate rejects a stale visible owner before building a job", () => {
+  assert.match(
+    regenerateSource,
+    /if \(!visibleTarget\.authorized \|\| !visibleTarget\.logicalQuestionUnit\)[\s\S]*terminalDisposition: "stale"[\s\S]*reason: visibleTarget\.reason[\s\S]*return;/
+  );
 });
 
 test("Regenerate terminalizes activation denial without executing", () => {

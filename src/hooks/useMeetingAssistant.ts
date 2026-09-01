@@ -32765,6 +32765,30 @@ export function useMeetingAssistant() {
       return;
     }
     flushPendingSentenceCompletion("regenerate");
+    const visibleTarget = resolveVisibleAnswerResponseActionTarget({
+      stableAnswer: stableAnswerRevisionRef.current,
+      currentLogicalQuestionUnit,
+      meetingContext: currentRuntime,
+      runtimeEpoch: runtimeEpochRef.current,
+    });
+    if (!visibleTarget.authorized || !visibleTarget.logicalQuestionUnit) {
+      recordManualRuntimeAction({
+        actionId,
+        action: "regenerate",
+        stage: "terminal",
+        terminalDisposition: "stale",
+        observedLogicalQuestionUnitId: currentLogicalQuestionUnit?.id,
+        observedLogicalQuestionUnitRevision:
+          currentLogicalQuestionUnit?.revision,
+        observedTaskId: currentRuntime.activeMeetingTask?.id,
+        reason: visibleTarget.reason,
+      });
+      setState((previous) => ({
+        ...previous,
+        error: "Regenerate target changed. Use the latest visible answer and try again.",
+      }));
+      return;
+    }
     const advisorJob = buildAdvisorJob({
       force: true,
       mode: "regenerate",
@@ -32772,6 +32796,9 @@ export function useMeetingAssistant() {
       advisorJobSource: "regenerate",
       taskMutationAuthority: "preserve-parent",
       questionLineage: resolveCurrentSuggestionQuestionLineage(),
+      logicalQuestionUnit: visibleTarget.logicalQuestionUnit,
+      currentQuestionSettlementOverride:
+        visibleTarget.settlementSnapshot,
     });
     if (!activateAdvisorJob(advisorJob)) {
       recordManualRuntimeAction({
