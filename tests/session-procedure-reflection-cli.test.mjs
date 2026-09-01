@@ -29,6 +29,11 @@ test("writes a replay-safe procedure for a scripted recording", async (t) => {
   assert.equal(procedure.steps.length, 2);
   assert.equal(procedure.steps[0].kind, "them-text");
   assert.equal(procedure.steps[0].expected.questionType, "coding");
+  assert.deepEqual(procedure.steps[0].observed.contextSourceTurnIds, [
+    "turn-setup",
+  ]);
+  assert.equal(procedure.steps[0].observed.questionType, "coding");
+  assert.equal(procedure.steps[0].observed.relation, "new-parent");
   assert.equal(procedure.steps[1].kind, "force-advise");
   assert.deepEqual(procedure.steps[1].input, {});
   assert.equal("targetStepId" in procedure.steps[1].input, false);
@@ -94,6 +99,37 @@ test("writes typed Screen fixture paths and digests without enabling replay", as
       ],
     })}\n`,
     { flag: "a" }
+  );
+  const traceSummariesPath = path.join(
+    session,
+    "metrics",
+    "trace-summaries.latest.json"
+  );
+  const traceSummaries = JSON.parse(
+    await readFile(traceSummariesPath, "utf8")
+  );
+  traceSummaries.traces.push({
+    traceId: "trace-screen",
+    logicalQuestionUnitId: "lqu-screen",
+    logicalQuestionUnitRevision: 1,
+    logicalQuestionSourceTurnIds: [],
+    logicalQuestionContextSourceTurnIds: [],
+    questionType: "coding",
+    taskRelation: "new-parent",
+    currentQuestionSettlement: {
+      questionType: "coding",
+      relation: "new-parent",
+      contextReadScope: "current-only",
+      disposition: "committed-parent",
+    },
+    stableAnswerCommitDisposition: "committed",
+    advisorOutputCommittedToUi: true,
+    requestedArtifacts: ["answer", "code", "complexity"],
+  });
+  await writeFile(
+    traceSummariesPath,
+    `${JSON.stringify(traceSummaries)}\n`,
+    "utf8"
   );
 
   const result = runCompiler(session);
@@ -166,6 +202,9 @@ async function writeSessionFixture(sessionDirectory, scriptedValidation) {
   await mkdir(path.join(sessionDirectory, "runtime-regression"), {
     recursive: true,
   });
+  await mkdir(path.join(sessionDirectory, "metrics"), {
+    recursive: true,
+  });
   await writeFile(
     path.join(sessionDirectory, "manifest.json"),
     `${JSON.stringify({
@@ -194,6 +233,17 @@ async function writeSessionFixture(sessionDirectory, scriptedValidation) {
     path.join(sessionDirectory, "timeline.jsonl"),
     [
       {
+        id: "timeline-ingress",
+        kind: "capture-lifecycle",
+        createdAt: 95,
+        traceId: "trace-turn-1",
+        metadata: {
+          stage: "canonical-turn-ingress-admitted",
+          canonicalTurnIngressTurnId: "turn-1",
+          traceId: "trace-turn-1",
+        },
+      },
+      {
         id: "timeline-turn",
         kind: "transcript-turn",
         createdAt: 100,
@@ -208,6 +258,35 @@ async function writeSessionFixture(sessionDirectory, scriptedValidation) {
     ]
       .map((value) => JSON.stringify(value))
       .join("\n") + "\n",
+    "utf8"
+  );
+  await writeFile(
+    path.join(sessionDirectory, "metrics", "trace-summaries.latest.json"),
+    `${JSON.stringify({
+      version: 1,
+      traces: [
+        {
+          traceId: "trace-turn-1",
+          logicalQuestionUnitId: "lqu-turn-1",
+          logicalQuestionUnitRevision: 1,
+          logicalQuestionSourceTurnIds: ["turn-1"],
+          logicalQuestionContextSourceTurnIds: ["turn-setup"],
+          primaryAskSourceTurnIds: ["turn-1"],
+          responseOpportunityDecision: "output-request",
+          questionType: "coding",
+          taskRelation: "new-parent",
+          currentQuestionSettlement: {
+            questionType: "coding",
+            relation: "new-parent",
+            contextReadScope: "current-only",
+            disposition: "committed-parent",
+          },
+          stableAnswerCommitDisposition: "committed",
+          advisorOutputCommittedToUi: true,
+          requestedArtifacts: ["answer"],
+        },
+      ],
+    })}\n`,
     "utf8"
   );
   await writeFile(
@@ -257,7 +336,11 @@ async function writeSessionFixture(sessionDirectory, scriptedValidation) {
           schemaVersion: 2,
           projectionId: "projection-1",
           sessionId: "meeting-1",
-          subject: { traceIds: [], sourceTurnIds: ["turn-1"] },
+          subject: {
+            attemptId: "trace-turn-1",
+            traceIds: ["trace-turn-1"],
+            sourceTurnIds: ["turn-1"],
+          },
           derivationVersion: "human-evaluation-v2.11",
           inputEventIds: ["truth-1"],
           semanticInputEventIds: ["truth-1"],
@@ -268,7 +351,11 @@ async function writeSessionFixture(sessionDirectory, scriptedValidation) {
               schemaVersion: 2,
               eventId: "truth-1",
               sessionId: "meeting-1",
-              subject: { traceIds: [], sourceTurnIds: ["turn-1"] },
+              subject: {
+                attemptId: "trace-turn-1",
+                traceIds: ["trace-turn-1"],
+                sourceTurnIds: ["turn-1"],
+              },
               fact: {
                 kind: "expected-task-settlement",
                 expectedQuestionType: "coding",

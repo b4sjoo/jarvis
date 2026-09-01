@@ -164,6 +164,106 @@ test("compiles ordered source and action steps without injecting resolved target
   );
 });
 
+test("projects exact runtime source and publication evidence without changing replay input", () => {
+  const procedure = buildSessionProcedureV1({
+    recordingSessionId: "recording-runtime-evidence",
+    folderName: "session-runtime-evidence",
+    sourceDigest: "digest",
+    scriptedValidation: true,
+    forcedScripted: true,
+    recordingIntegrityStatus: "complete",
+    timelineEvents: [
+      {
+        id: "timeline-ingress",
+        kind: "capture-lifecycle",
+        createdAt: 95,
+        metadata: {
+          stage: "canonical-turn-ingress-admitted",
+          canonicalTurnIngressTurnId: "turn-ask",
+          traceId: "trace-ask",
+        },
+      },
+      {
+        id: "timeline-turn",
+        kind: "transcript-turn",
+        createdAt: 100,
+        metadata: { turnId: "turn-ask" },
+      },
+    ],
+    transcriptTurns: [
+      {
+        id: "turn-ask",
+        speaker: "them",
+        source: "manual-text",
+        text: "Within this RAG system, implement the merge function.",
+        startedAt: 90,
+        endedAt: 95,
+        isFinal: true,
+      },
+    ],
+    manualActions: [],
+    humanEvaluationProjections: [],
+    traceSummaries: [
+      {
+        traceId: "trace-ask",
+        logicalQuestionUnitId: "lqu-coding",
+        logicalQuestionUnitRevision: 1,
+        logicalQuestionSourceTurnIds: ["turn-ask"],
+        logicalQuestionContextSourceTurnIds: ["turn-setup"],
+        primaryAskSourceTurnIds: ["turn-ask"],
+        responseOpportunityDecision: "output-request",
+        questionType: "coding",
+        taskRelation: "child-probe",
+        currentQuestionSettlement: {
+          logicalQuestionUnitId: "lqu-coding",
+          logicalQuestionUnitRevision: 1,
+          questionType: "coding",
+          relation: "child-probe",
+          contextReadScope: "active-child-read",
+          disposition: "committed-child",
+        },
+        settledExecutionPlan: {
+          contextReadScope: "active-child-read",
+        },
+        taskBoundary: { mutationDisposition: "commit-before-advisor" },
+        requestedArtifacts: ["answer", "code", "complexity"],
+        stableAnswerCommitDisposition: "committed",
+        staleCommitRejected: false,
+        advisorOutputCommittedToUi: true,
+        visibleAnswerRevisionAfter: 4,
+        activeMeetingTaskId: "parent-rag",
+      },
+    ],
+    generatedAt: 200,
+  });
+
+  const step = procedure.steps[0];
+  assert.deepEqual(step?.input, {
+    text: "Within this RAG system, implement the merge function.",
+  });
+  assert.deepEqual(step?.provenance.sourceTurnIds, ["turn-ask"]);
+  assert.deepEqual(step?.observed, {
+    traceIds: ["trace-ask"],
+    logicalQuestionUnitId: "lqu-coding",
+    logicalQuestionUnitRevision: 1,
+    primarySourceTurnIds: ["turn-ask"],
+    contextSourceTurnIds: ["turn-setup"],
+    responseOpportunityDecision: "output-request",
+    questionType: "coding",
+    relation: "child-probe",
+    contextReadScope: "active-child-read",
+    settlementDisposition: "committed-child",
+    taskMutationDisposition: "commit-before-advisor",
+    requestedArtifacts: ["answer", "code", "complexity"],
+    stableAnswerCommitDisposition: "committed",
+    staleCommitRejected: false,
+    visibleCommitted: true,
+    taskId: "parent-rag",
+    visibleAnswerRevision: 4,
+  });
+  assert.equal("targetStepId" in (step?.input ?? {}), false);
+});
+
 test("does not promote action-derived observations into expected truth", () => {
   const actionId = "action-2";
   const procedure = buildSessionProcedureV1({

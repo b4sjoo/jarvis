@@ -51,6 +51,11 @@ export interface SessionProcedureTranscriptTurn {
   isFinal?: boolean;
 }
 
+export interface SessionProcedureTraceSummary {
+  traceId: string;
+  [key: string]: unknown;
+}
+
 export interface SessionProcedureExpectedEvidenceRef {
   eventId: string;
   factKind: HumanGroundTruthEventV2["fact"]["kind"];
@@ -97,6 +102,19 @@ export interface SessionProcedureStepV1 {
     terminalReason?: string;
     logicalQuestionUnitId?: string;
     logicalQuestionUnitRevision?: number;
+    primarySourceTurnIds?: string[];
+    contextSourceTurnIds?: string[];
+    responseOpportunityDecision?: string;
+    responseOpportunityDisposition?: string;
+    questionType?: string;
+    relation?: string;
+    contextReadScope?: string;
+    settlementDisposition?: string;
+    taskMutationDisposition?: string;
+    requestedArtifacts?: string[];
+    stableAnswerCommitDisposition?: string;
+    staleCommitRejected?: boolean;
+    visibleCommitted?: boolean;
     taskId?: string;
     visibleAnswerRevision?: number;
     correctionDisposition?: string;
@@ -149,6 +167,7 @@ export function buildSessionProcedureV1(input: {
   transcriptTurns: SessionProcedureTranscriptTurn[];
   manualActions: ManualRuntimeActionEventV1[];
   humanEvaluationProjections: HumanEvaluationProjectionV2[];
+  traceSummaries?: SessionProcedureTraceSummary[];
   generatedAt?: number;
 }): SessionProcedureV1 {
   const turnsById = new Map(
@@ -158,6 +177,10 @@ export function buildSessionProcedureV1(input: {
   const ingressTraceIdsByTurnId = collectIngressTraceIdsByTurnId(
     input.timelineEvents
   );
+  const traceSummariesById = new Map(
+    (input.traceSummaries ?? []).map((summary) => [summary.traceId, summary])
+  );
+  const traceSummaryProjectionEnabled = input.traceSummaries !== undefined;
   const steps: SessionProcedureStepV1[] = [];
   const representedTurnIds = new Set<string>();
   const representedActionIds = new Set<string>();
@@ -176,6 +199,8 @@ export function buildSessionProcedureV1(input: {
       turnsById,
       manualActionsById,
       ingressTraceIdsByTurnId,
+      traceSummariesById,
+      traceSummaryProjectionEnabled,
       projections: input.humanEvaluationProjections,
     });
     if (!step) continue;
@@ -283,6 +308,8 @@ function buildTimelineStep(input: {
   turnsById: Map<string, SessionProcedureTranscriptTurn>;
   manualActionsById: Map<string, ManualRuntimeActionEventV1[]>;
   ingressTraceIdsByTurnId: Map<string, string[]>;
+  traceSummariesById: Map<string, SessionProcedureTraceSummary>;
+  traceSummaryProjectionEnabled: boolean;
   projections: HumanEvaluationProjectionV2[];
 }) {
   const metadata = input.event.metadata ?? {};
@@ -313,8 +340,13 @@ function buildTimelineStep(input: {
       step = buildManualActionStep(input.event, events);
     }
   }
-  return step
-    ? attachExpectedContract(step, input.projections)
+  const observedStep = step
+    ? attachRuntimeTraceSummary(step, input.traceSummariesById, {
+        enabled: input.traceSummaryProjectionEnabled,
+      })
+    : undefined;
+  return observedStep
+    ? attachExpectedContract(observedStep, input.projections)
     : undefined;
 }
 
@@ -523,6 +555,101 @@ function baseStep(input: {
       actionId: input.actionId,
       specializedEventId: input.specializedEventId,
     },
+  };
+}
+
+function attachRuntimeTraceSummary(
+  step: SessionProcedureStepV1,
+  summariesById: Map<string, SessionProcedureTraceSummary>,
+  options: { enabled: boolean }
+): SessionProcedureStepV1 {
+  if (
+    !options.enabled ||
+    (step.kind !== "them-text" && step.kind !== "screen-input") ||
+    step.provenance.traceIds.length === 0
+  ) {
+    return step;
+  }
+  const summaries = step.provenance.traceIds
+    .map((traceId) => summariesById.get(traceId))
+    .filter(
+      (summary): summary is SessionProcedureTraceSummary => Boolean(summary)
+    );
+  if (summaries.length !== 1) {
+    const evidenceGaps = uniqueStrings([
+      ...step.evidenceGaps,
+      summaries.length === 0
+        ? "runtime-trace-summary-missing"
+        : "ambiguous-runtime-trace-summary-join",
+    ]);
+    return {
+      ...step,
+      evidenceGaps,
+      reviewStatus: "needs-review",
+    };
+  }
+
+  const summary = summaries[0];
+  const settlement = readRecord(summary.currentQuestionSettlement);
+  const plan = readRecord(summary.settledExecutionPlan);
+  const taskBoundary = readRecord(summary.taskBoundary);
+  return {
+    ...step,
+    observed: removeUndefined({
+      ...step.observed,
+      traceIds: uniqueStrings([
+        ...(step.observed?.traceIds ?? []),
+        summary.traceId,
+      ]),
+      logicalQuestionUnitId:
+        readString(summary.logicalQuestionUnitId) ??
+        readString(settlement?.logicalQuestionUnitId) ??
+        step.observed?.logicalQuestionUnitId,
+      logicalQuestionUnitRevision:
+        readNumber(summary.logicalQuestionUnitRevision) ??
+        readNumber(settlement?.logicalQuestionUnitRevision) ??
+        step.observed?.logicalQuestionUnitRevision,
+      primarySourceTurnIds: readStringArray(
+        summary.primaryAskSourceTurnIds ??
+          summary.logicalQuestionSourceTurnIds
+      ),
+      contextSourceTurnIds: readStringArray(
+        summary.logicalQuestionContextSourceTurnIds
+      ),
+      responseOpportunityDecision: readString(
+        summary.responseOpportunityDecision
+      ),
+      responseOpportunityDisposition: readString(
+        summary.responseOpportunityDisposition
+      ),
+      questionType:
+        readString(settlement?.questionType) ??
+        readString(summary.questionType),
+      relation:
+        readString(settlement?.relation) ??
+        readString(summary.taskRelation),
+      contextReadScope:
+        readString(plan?.contextReadScope) ??
+        readString(settlement?.contextReadScope),
+      settlementDisposition: readString(settlement?.disposition),
+      taskMutationDisposition: readString(taskBoundary?.mutationDisposition),
+      requestedArtifacts: readStringArray(summary.requestedArtifacts),
+      stableAnswerCommitDisposition: readString(
+        summary.stableAnswerCommitDisposition
+      ),
+      staleCommitRejected: readBoolean(summary.staleCommitRejected),
+      visibleCommitted: readBoolean(summary.advisorOutputCommittedToUi),
+      taskId:
+        readString(summary.activeMeetingTaskId) ?? step.observed?.taskId,
+      visibleAnswerRevision:
+        readNumber(summary.visibleAnswerRevisionAfter) ??
+        step.observed?.visibleAnswerRevision,
+      terminalDisposition: step.observed?.terminalDisposition,
+      terminalReason: step.observed?.terminalReason,
+      correctionDisposition: step.observed?.correctionDisposition,
+      ingressSource: step.observed?.ingressSource,
+      ingressReceivedAt: step.observed?.ingressReceivedAt,
+    }),
   };
 }
 
@@ -807,6 +934,22 @@ function readStringArray(value: unknown): string[] {
   if (Array.isArray(value)) return value.filter(isString);
   if (isString(value)) return [value];
   return [];
+}
+
+function readRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function readNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
+}
+
+function readBoolean(value: unknown) {
+  return typeof value === "boolean" ? value : undefined;
 }
 
 function isString(value: unknown): value is string {

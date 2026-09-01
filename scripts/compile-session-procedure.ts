@@ -9,6 +9,7 @@ import {
   type SessionProcedureFileRef,
   type SessionProcedureScreenInput,
   type SessionProcedureTimelineEvent,
+  type SessionProcedureTraceSummary,
   type SessionProcedureTranscriptTurn,
 } from "../src/lib/meeting/session-procedure.js";
 import { readEffectiveSessionEvaluationProvenance } from "./lib/session-evaluation-provenance.js";
@@ -55,14 +56,25 @@ async function main() {
       "human-evaluation",
       "projections-v2.json"
     ),
+    traceSummaries: path.join(
+      sessionDirectory,
+      "metrics",
+      "trace-summaries.latest.json"
+    ),
   };
-  const [timelineText, transcriptText, manualActionText, projectionText] =
-    await Promise.all([
-      readOptionalText(sourcePaths.timeline),
-      readOptionalText(sourcePaths.transcripts),
-      readOptionalText(sourcePaths.manualActions),
-      readOptionalText(sourcePaths.projections),
-    ]);
+  const [
+    timelineText,
+    transcriptText,
+    manualActionText,
+    projectionText,
+    traceSummaryText,
+  ] = await Promise.all([
+    readOptionalText(sourcePaths.timeline),
+    readOptionalText(sourcePaths.transcripts),
+    readOptionalText(sourcePaths.manualActions),
+    readOptionalText(sourcePaths.projections),
+    readOptionalText(sourcePaths.traceSummaries),
+  ]);
   const [termCorrectionRecords, typeCorrectionRecords] = await Promise.all([
     readSpecializedRecords(
       sessionDirectory,
@@ -93,12 +105,18 @@ async function main() {
         projections?: HumanEvaluationProjectionV2[];
       }).projections ?? [])
     : [];
+  const traceSummaries = traceSummaryText
+    ? ((JSON.parse(traceSummaryText) as {
+        traces?: SessionProcedureTraceSummary[];
+      }).traces ?? [])
+    : undefined;
   const sourceDigest = createHash("sha256")
     .update(manifestText)
     .update(timelineText)
     .update(transcriptText)
     .update(manualActionText)
     .update(projectionText)
+    .update(traceSummaryText)
     .update(JSON.stringify(termCorrectionRecords))
     .update(JSON.stringify(typeCorrectionRecords))
     .update(
@@ -134,6 +152,7 @@ async function main() {
     transcriptTurns,
     manualActions,
     humanEvaluationProjections: projections,
+    traceSummaries,
     generatedAt: generatedAt || Date.now(),
   });
   const outputDirectory = path.join(
