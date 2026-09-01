@@ -212,6 +212,15 @@ function compactActiveMeetingTask(context: AdvisorPromptContext) {
           ...task.child,
           question: boundText(task.child.question, 800),
           compactSummary: boundText(task.child.compactSummary, 500),
+          phaseState: task.child.phaseState
+            ? {
+                ...task.child.phaseState,
+                playbook: { ...task.child.phaseState.playbook },
+                phaseProgress: {
+                  ...task.child.phaseState.phaseProgress,
+                },
+              }
+            : undefined,
         }
       : undefined,
     screen: task.screen

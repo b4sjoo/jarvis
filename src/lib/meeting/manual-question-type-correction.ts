@@ -1,4 +1,5 @@
 import type { ActiveMeetingTask } from "./active-meeting-task";
+import { preserveOrCreateCodingChildPhaseState } from "./active-branch-phase.js";
 import type {
   CurrentQuestionRelation,
   CurrentQuestionSettlementDisposition,
@@ -842,6 +843,11 @@ export function applyManualQuestionTypeCorrectionToParent({
         ...parent.child,
         questionType: decision.correctedType,
         compactSummary: undefined,
+        phaseState: preserveOrCreateCodingChildPhaseState({
+          questionType: decision.correctedType,
+          existing: parent.child.phaseState,
+          playbook: correctedPlaybook,
+        }),
         updatedAt: now,
       },
       updatedAt: now,

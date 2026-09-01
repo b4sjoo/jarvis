@@ -240,6 +240,15 @@ function cloneTask(task: ActiveInterviewParent): ActiveInterviewParent {
                 },
               }
             : undefined,
+          phaseState: task.child.phaseState
+            ? {
+                ...task.child.phaseState,
+                playbook: { ...task.child.phaseState.playbook },
+                phaseProgress: {
+                  ...task.child.phaseState.phaseProgress,
+                },
+              }
+            : undefined,
         }
       : undefined,
     phaseProgress: { ...task.phaseProgress },

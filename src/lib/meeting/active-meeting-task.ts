@@ -1,5 +1,6 @@
 import type {
   ActiveInterviewChild as RuntimeActiveInterviewChild,
+  ActiveBranchPhaseState,
   ActiveInterviewParent,
   ActiveScreenTask,
   InterviewPlaybookPhase,
@@ -77,6 +78,7 @@ export interface ActiveMeetingChild {
   basedOnTurnIds: string[];
   basedOnObservationIds: string[];
   returnCapsule?: ParentReturnCapsule;
+  phaseState?: ActiveBranchPhaseState;
 }
 
 export interface ActiveMeetingScreenContext {
@@ -559,6 +561,7 @@ export function formatActiveMeetingTaskForRecording(
           returnCapsule: cloneParentReturnCapsule(
             task.child.returnCapsule
           ),
+          phaseState: cloneBranchPhaseState(task.child.phaseState),
         }
       : undefined,
     screen: task.screen ? { ...task.screen } : undefined,
@@ -711,6 +714,18 @@ function buildChild(task: RuntimeActiveInterviewChild): ActiveMeetingChild {
     basedOnTurnIds: [...task.basedOnTurnIds],
     basedOnObservationIds: [...task.basedOnObservationIds],
     returnCapsule: cloneParentReturnCapsule(task.returnCapsule),
+    phaseState: cloneBranchPhaseState(task.phaseState),
+  };
+}
+
+function cloneBranchPhaseState(
+  state: ActiveBranchPhaseState | undefined
+): ActiveBranchPhaseState | undefined {
+  if (!state) return undefined;
+  return {
+    ...state,
+    playbook: { ...state.playbook },
+    phaseProgress: { ...state.phaseProgress },
   };
 }
 

@@ -127,6 +127,10 @@ import {
   formatPostModelContinuityAuthorityForTrace,
   resolvePostModelContinuityAuthority,
 } from "@/lib/meeting/post-model-continuity-authority";
+import {
+  createCodingChildPhaseState,
+  preserveOrCreateCodingChildPhaseState,
+} from "@/lib/meeting/active-branch-phase";
 import { materializeHumanEvaluationAttemptProjectionV2 } from "@/lib/meeting/human-evaluation-attempt-projection";
 import { validateHumanEvaluationAttemptSubjectV2 } from "@/lib/meeting/human-evaluation-attempt";
 import { toHumanEvaluationCollectionProvenance } from "@/lib/meeting/session-evaluation-provenance";
@@ -266,6 +270,7 @@ import {
   InterviewBriefType,
   FactAnchorState,
   InterviewPlaybookPhase,
+  SelectedInterviewPlaybook,
   ProjectTrajectoryChildContinuity,
   InterviewSubtaskIntent,
   InterviewTaskRelation,
@@ -38116,6 +38121,7 @@ function updateInterviewTaskContinuityForAnswer({
           subtaskIntent,
           question: topic,
           parsedAnswer: parsed,
+          playbook,
           latestTurn,
           observationId,
         })
@@ -38128,6 +38134,11 @@ function updateInterviewTaskContinuityForAnswer({
             ...generatedChild,
             id: existingTask.child.id,
             createdAt: existingTask.child.createdAt,
+            phaseState: preserveOrCreateCodingChildPhaseState({
+              questionType: generatedChild.questionType,
+              existing: existingTask.child.phaseState,
+              playbook: generatedChild.phaseState?.playbook,
+            }),
             basedOnTurnIds: Array.from(
               new Set([
                 ...existingTask.child.basedOnTurnIds,
@@ -38801,6 +38812,7 @@ function buildActiveInterviewChild({
   subtaskIntent,
   question,
   parsedAnswer,
+  playbook,
   latestTurn,
   observationId,
 }: {
@@ -38808,6 +38820,7 @@ function buildActiveInterviewChild({
   subtaskIntent: InterviewSubtaskIntent;
   question: string;
   parsedAnswer: ParsedMeetingAnswer;
+  playbook?: SelectedInterviewPlaybook;
   latestTurn?: TranscriptTurn;
   observationId?: string;
 }) {
@@ -38828,6 +38841,10 @@ function buildActiveInterviewChild({
     }),
     basedOnTurnIds: latestTurn ? [latestTurn.id] : [],
     basedOnObservationIds: observationId ? [observationId] : [],
+    phaseState: createCodingChildPhaseState({
+      questionType,
+      playbook,
+    }),
   };
 }
 

@@ -1,5 +1,9 @@
 import { createMeetingId } from "./context-manager.js";
 import {
+  createCodingChildPhaseState,
+  preserveOrCreateCodingChildPhaseState,
+} from "./active-branch-phase.js";
+import {
   createInitialPlaybookPhaseProgress,
   applyPlaybookPhaseDecisionToProgress,
   type PlaybookPhaseDecision,
@@ -586,6 +590,11 @@ function applyTransition(
             basedOnObservationIds: [
               ...candidate.sourceObservationIds,
             ],
+            phaseState: preserveOrCreateCodingChildPhaseState({
+              questionType: candidate.questionType,
+              existing: currentTask.child.phaseState,
+              playbook: candidate.playbook,
+            }),
           },
           updatedAt: now,
           expiresAt: candidate.expiresAt,
@@ -612,6 +621,17 @@ function applyTransition(
         reason: "already-applied",
       };
     }
+    const phaseState = createCodingChildPhaseState({
+      questionType: candidate.questionType,
+      playbook: candidate.playbook,
+    });
+    if (candidate.questionType === "coding" && !phaseState) {
+      return {
+        task: currentTask,
+        mutationApplied: false,
+        reason: "coding-child-playbook-required",
+      };
+    }
     return {
       task: {
         ...currentTask,
@@ -628,6 +648,7 @@ function applyTransition(
             ...candidate.sourceObservationIds,
           ],
           returnCapsule: createParentReturnCapsule(currentTask, now),
+          phaseState,
         },
         updatedAt: now,
         expiresAt: candidate.expiresAt,

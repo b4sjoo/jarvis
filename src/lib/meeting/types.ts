@@ -690,6 +690,13 @@ export interface ParentReturnCapsule {
   createdAt: number;
 }
 
+export interface ActiveBranchPhaseState {
+  playbook: SelectedInterviewPlaybook;
+  phase: InterviewPlaybookPhase;
+  phaseProgress: Record<string, boolean>;
+  revision: number;
+}
+
 export interface ActiveInterviewChild {
   id: string;
   createdAt: number;
@@ -703,6 +710,7 @@ export interface ActiveInterviewChild {
   basedOnTurnIds: string[];
   basedOnObservationIds: string[];
   returnCapsule?: ParentReturnCapsule;
+  phaseState?: ActiveBranchPhaseState;
 }
 
 export type ParentAdmissionDurability = "provisional" | "durable";

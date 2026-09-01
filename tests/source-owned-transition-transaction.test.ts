@@ -32,6 +32,11 @@ test("commits a child before output and preserves parent artifacts", () => {
     questionType: "coding",
     question: "Implement the loss function.",
     subtaskIntent: "implementation-probe",
+    playbook: makePlaybook(
+      "coding_algorithm",
+      "coding",
+      "baseline_reasoning"
+    ),
     now: 100,
   });
   assert.ok(candidate);
@@ -48,6 +53,17 @@ test("commits a child before output and preserves parent artifacts", () => {
   assert.equal(result.mutationApplied, true);
   assert.equal(result.task?.id, parent.id);
   assert.equal(result.task?.child?.questionType, "coding");
+  assert.equal(
+    result.task?.child?.phaseState?.phase,
+    "implementation_validation"
+  );
+  assert.equal(
+    result.task?.child?.phaseState?.playbook.phase,
+    "implementation_validation"
+  );
+  assert.deepEqual(result.task?.child?.phaseState?.phaseProgress, {
+    implementation_validation: true,
+  });
   assert.equal(result.task?.child?.returnCapsule?.parentId, parent.id);
   assert.equal(
     result.task?.child?.returnCapsule?.parentPhase,
@@ -410,6 +426,11 @@ test("rejects parent resume after the project binding changes", () => {
     questionType: "coding",
     question: "Implement a parser helper.",
     subtaskIntent: "implementation-probe",
+    playbook: makePlaybook(
+      "coding_algorithm",
+      "coding",
+      "baseline_reasoning"
+    ),
     now: 100,
   });
   assert.ok(childCandidate);
@@ -878,6 +899,11 @@ test("rejects stale parent revisions and keeps current state", () => {
     mutationAuthorized: true,
     questionType: "coding",
     question: "Implement the loss function.",
+    playbook: makePlaybook(
+      "coding_algorithm",
+      "coding",
+      "baseline_reasoning"
+    ),
     now: 100,
   });
   assert.ok(candidate);
@@ -909,6 +935,11 @@ test("repeated source revision is idempotent", () => {
     mutationAuthorized: true,
     questionType: "coding",
     question: "Implement the loss function.",
+    playbook: makePlaybook(
+      "coding_algorithm",
+      "coding",
+      "baseline_reasoning"
+    ),
     now: 100,
   });
   assert.ok(candidate);
@@ -931,6 +962,11 @@ test("repeated source revision is idempotent", () => {
     mutationAuthorized: true,
     questionType: "coding",
     question: "Implement the loss function.",
+    playbook: makePlaybook(
+      "coding_algorithm",
+      "coding",
+      "baseline_reasoning"
+    ),
     now: 120,
   });
   assert.ok(repeatedCandidate);
