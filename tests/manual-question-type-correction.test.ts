@@ -773,6 +773,28 @@ test("uses an authorized new-parent settlement instead of retyping a stale paren
   assert.equal(scope.reason, "authorized-new-parent-re-roots-current-question");
 });
 
+test("keeps a revision-stable parent origin as same-question retype", () => {
+  const task = makeActiveTask({ questionType: "general-system-design" });
+  task.parent.sourceQuestionUnitId = "lqu-parent";
+  task.parent.sourceQuestionRevision = 1;
+  const decision = decideManualQuestionTypeCorrection(
+    task,
+    "ai-ml-system-design"
+  );
+  const scope = decideManualCorrectionScope({
+    task,
+    decision,
+    lineage: makeLineage(task.parent.startTurnId ?? "turn-parent"),
+    latestQuestionText: "Design a URL shortener.",
+    currentQuestionMatchesParentOrigin: true,
+    currentQuestionRelation: "new-parent",
+    currentQuestionSource: "voice",
+  });
+
+  assert.equal(scope.scope, "same-question-retype");
+  assert.equal(scope.reason, "current-question-is-active-parent-origin");
+});
+
 test("keeps a relation-unsettled screen correction current-only", () => {
   const task = makeActiveTask({ questionType: "coding" });
   const decision = decideManualQuestionTypeCorrection(task, "behavioral");

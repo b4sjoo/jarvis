@@ -498,6 +498,14 @@ export function decideManualCorrectionScope({
     };
   }
 
+  if (currentQuestionIsParentOrigin) {
+    return {
+      ...base,
+      scope: "same-question-retype",
+      reason: "current-question-is-active-parent-origin",
+    };
+  }
+
   if (currentQuestionRelation === "new-parent") {
     return {
       ...base,
@@ -509,14 +517,6 @@ export function decideManualCorrectionScope({
         continuity.score >= 4
           ? "authorized-new-parent-keeps-bounded-domain-link"
           : "authorized-new-parent-re-roots-current-question",
-    };
-  }
-
-  if (currentQuestionIsParentOrigin) {
-    return {
-      ...base,
-      scope: "same-question-retype",
-      reason: "current-question-is-active-parent-origin",
     };
   }
 
