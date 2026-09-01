@@ -12093,8 +12093,7 @@ export function useMeetingAssistant() {
             interviewSessionContext: promptContext.interviewSessionContext,
           });
     const advisorPhaseQuestionType = normalizeQuestionTypeAlias(
-      effectiveAdvisorSettlementView.parent?.questionType ??
-        effectiveAdvisorSettlementView.questionType
+      effectiveAdvisorSettlementView.questionType
     );
     const startsNewParentForPhase =
       effectiveAdvisorSettlementView.startsNewParent &&

@@ -10,6 +10,7 @@ import { MeetingContextManager } from "../src/lib/meeting/context-manager.js";
 import type { CurrentQuestionSettlementDecision } from "../src/lib/meeting/current-question-settlement.js";
 import { selectInterviewPlaybook } from "../src/lib/meeting/interview-playbook.js";
 import type { MeetingModelProviderSnapshot } from "../src/lib/meeting/meeting-model-route.js";
+import { decidePlaybookPhaseProgression } from "../src/lib/meeting/playbook-phase.js";
 import { resolvePostModelContinuityAuthority } from "../src/lib/meeting/post-model-continuity-authority.js";
 import {
   buildEffectiveAdvisorSettlementView,
@@ -66,6 +67,17 @@ test("commits a Coding child with implementation phase and coherent consumers", 
     activeTaskPlaybook: preCommitView.playbook,
   });
   assert.equal(codingPlaybook?.questionType, "coding");
+  const preCommitPhaseDecision = decidePlaybookPhaseProgression({
+    questionType: preCommitView.questionType,
+    playbookId: codingPlaybook?.id,
+    currentPhase: codingPlaybook?.phase,
+    currentQuestion: "Implement the reranker.",
+    relation: "child-probe",
+    subtaskIntent: "implementation-probe",
+  });
+  assert.equal(preCommitPhaseDecision.action, "child-probe");
+  assert.equal(preCommitPhaseDecision.phase, "baseline_reasoning");
+  assert.equal(preCommitPhaseDecision.requirementTrack, undefined);
   const candidate = createSourceOwnedTransitionCandidate({
     sessionId: before.sessionId,
     runtimeEpoch: 1,
@@ -81,6 +93,7 @@ test("commits a Coding child with implementation phase and coherent consumers", 
     question: "Implement the reranker.",
     subtaskIntent: "implementation-probe",
     playbook: codingPlaybook,
+    phaseDecision: preCommitPhaseDecision,
     now: 20,
   });
   assert.ok(candidate);
