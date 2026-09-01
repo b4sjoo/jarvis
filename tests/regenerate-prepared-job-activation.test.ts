@@ -58,3 +58,21 @@ test("Regenerate terminalizes activation denial without executing", () => {
     /if \(!activateAdvisorJob\(advisorJob\)\)[\s\S]*terminalDisposition: "rejected"[\s\S]*reason: "advisor-job-activation-denied"[\s\S]*return;/
   );
 });
+
+test("Regenerate records its resolved visible owner after ingress", () => {
+  assert.match(
+    regenerateSource,
+    /const resolvedLogicalQuestionUnit = visibleTarget\.logicalQuestionUnit/
+  );
+  assert.match(
+    regenerateSource,
+    /stage: "accepted",[\s\S]*observedLogicalQuestionUnitId: resolvedLogicalQuestionUnit\.id[\s\S]*observedLogicalQuestionUnitRevision:[\s\S]*resolvedLogicalQuestionUnit\.revision/
+  );
+  assert.doesNotMatch(
+    regenerateSource.slice(
+      regenerateSource.indexOf("const resolvedLogicalQuestionUnit"),
+      regenerateSource.indexOf("const setPreparationRuntimeCapabilities")
+    ),
+    /observedLogicalQuestionUnitId: currentLogicalQuestionUnit\?\.id/
+  );
+});

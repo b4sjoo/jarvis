@@ -33143,6 +33143,9 @@ export function useMeetingAssistant() {
       currentQuestionSettlementOverride:
         visibleTarget.settlementSnapshot,
     });
+    const resolvedLogicalQuestionUnit = visibleTarget.logicalQuestionUnit;
+    const resolvedTaskId =
+      visibleTarget.requestedParentId ?? currentRuntime.activeMeetingTask?.id;
     if (!activateAdvisorJob(advisorJob)) {
       recordManualRuntimeAction({
         actionId,
@@ -33150,10 +33153,10 @@ export function useMeetingAssistant() {
         stage: "terminal",
         traceId: advisorJob.traceId,
         terminalDisposition: "rejected",
-        observedLogicalQuestionUnitId: currentLogicalQuestionUnit?.id,
+        observedLogicalQuestionUnitId: resolvedLogicalQuestionUnit.id,
         observedLogicalQuestionUnitRevision:
-          currentLogicalQuestionUnit?.revision,
-        observedTaskId: currentRuntime.activeMeetingTask?.id,
+          resolvedLogicalQuestionUnit.revision,
+        observedTaskId: resolvedTaskId ?? undefined,
         reason: "advisor-job-activation-denied",
       });
       setState((previous) => ({
@@ -33167,10 +33170,10 @@ export function useMeetingAssistant() {
       action: "regenerate",
       stage: "accepted",
       traceId: advisorJob.traceId,
-      observedLogicalQuestionUnitId: currentLogicalQuestionUnit?.id,
+      observedLogicalQuestionUnitId: resolvedLogicalQuestionUnit.id,
       observedLogicalQuestionUnitRevision:
-        currentLogicalQuestionUnit?.revision,
-      observedTaskId: currentRuntime.activeMeetingTask?.id,
+        resolvedLogicalQuestionUnit.revision,
+      observedTaskId: resolvedTaskId ?? undefined,
     });
     try {
       await runAdvisor({
@@ -33194,10 +33197,10 @@ export function useMeetingAssistant() {
           stage: "terminal",
           traceId: advisorJob.traceId,
           terminalDisposition: terminal.disposition,
-          observedLogicalQuestionUnitId: currentLogicalQuestionUnit?.id,
+          observedLogicalQuestionUnitId: resolvedLogicalQuestionUnit.id,
           observedLogicalQuestionUnitRevision:
-            currentLogicalQuestionUnit?.revision,
-          observedTaskId: currentRuntime.activeMeetingTask?.id,
+            resolvedLogicalQuestionUnit.revision,
+          observedTaskId: resolvedTaskId ?? undefined,
           reason: terminal.reason,
         });
       }
@@ -33208,10 +33211,10 @@ export function useMeetingAssistant() {
         stage: "terminal",
         traceId: advisorJob.traceId,
         terminalDisposition: "failed",
-        observedLogicalQuestionUnitId: currentLogicalQuestionUnit?.id,
+        observedLogicalQuestionUnitId: resolvedLogicalQuestionUnit.id,
         observedLogicalQuestionUnitRevision:
-          currentLogicalQuestionUnit?.revision,
-        observedTaskId: currentRuntime.activeMeetingTask?.id,
+          resolvedLogicalQuestionUnit.revision,
+        observedTaskId: resolvedTaskId ?? undefined,
         reason:
           error instanceof Error ? error.message : "regenerate-failed",
       });
