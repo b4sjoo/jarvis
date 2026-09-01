@@ -27,11 +27,13 @@ export function compileSettledAdvisorPromptContext(input: {
   const selectedIds = new Set(
     input.logicalQuestionUnit?.sourceTurnIds ?? []
   );
+  const ownedContextIds = new Set(
+    input.logicalQuestionUnit?.contextSourceTurnIds ?? []
+  );
+  for (const turnId of ownedContextIds) {
+    selectedIds.add(turnId);
+  }
   if (scope !== "current-only") {
-    for (const turnId of
-      input.logicalQuestionUnit?.contextSourceTurnIds ?? []) {
-      selectedIds.add(turnId);
-    }
     for (const turnId of input.recentSourceContext?.sourceTurnIds ?? []) {
       selectedIds.add(turnId);
     }
@@ -67,19 +69,27 @@ export function compileSettledAdvisorPromptContext(input: {
       (input.logicalQuestionUnit?.sourceTurnIds.length === 0 &&
         input.baseContext.activeMeetingTask?.screen)
   );
+  const recentSourceContextOwnedByCurrentQuestion = Boolean(
+    input.recentSourceContext?.sourceTurnIds.length &&
+      input.recentSourceContext.sourceTurnIds.every((turnId) =>
+        ownedContextIds.has(turnId)
+      )
+  );
+  const authorizedRecentSourceContext =
+    scope !== "current-only" || recentSourceContextOwnedByCurrentQuestion
+      ? input.recentSourceContext
+      : undefined;
   const advisorEvidencePacket = projectEvidencePacketForScope(
     input.baseContext.advisorEvidencePacket,
     scope,
-    input.recentSourceContext
+    authorizedRecentSourceContext
   );
 
   return {
     scope,
     selectedSourceTurnIds,
     recentSourceContextIncluded: Boolean(
-      scope !== "current-only" &&
-        ((input.logicalQuestionUnit?.contextSourceTurnIds?.length ?? 0) > 0 ||
-          input.recentSourceContext)
+      ownedContextIds.size > 0 || authorizedRecentSourceContext
     ),
     rawTranscriptBypassRemoved:
       transcript !== input.baseContext.transcript,
@@ -144,8 +154,7 @@ function projectEvidencePacketForScope(
   if (!packet) return undefined;
   return {
     ...packet,
-    sourceOwnedSemanticContext:
-      scope === "current-only" ? undefined : recentSourceContext,
+    sourceOwnedSemanticContext: recentSourceContext,
     continuity:
       scope === "current-only" ? undefined : packet.continuity,
     generatedContinuity:

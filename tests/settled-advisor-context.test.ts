@@ -15,7 +15,10 @@ test("current-only removes raw transcript and task continuity bypasses", () => {
   const compilation = compileSettledAdvisorPromptContext({
     baseContext: context(),
     contextReadScope: "current-only",
-    logicalQuestionUnit: lqu(),
+    logicalQuestionUnit: {
+      ...lqu(),
+      contextSourceTurnIds: undefined,
+    },
     transcriptTurns: turns(),
     recentSourceContext: {
       text: "The corpus has access control lists.",
@@ -42,6 +45,30 @@ test("current-only removes raw transcript and task continuity bypasses", () => {
   );
   assert.deepEqual(compilation.selectedSourceTurnIds, ["turn-current"]);
   assert.equal(compilation.rawTranscriptBypassRemoved, true);
+});
+
+test("current-only keeps setup explicitly owned by the current LQU", () => {
+  const compilation = compileSettledAdvisorPromptContext({
+    baseContext: context(),
+    contextReadScope: "current-only",
+    logicalQuestionUnit: lqu(),
+    transcriptTurns: turns(),
+    recentSourceContext: {
+      text: "The corpus has access control lists.",
+      sourceTurnIds: ["turn-context"],
+      parentId: "parent-rag",
+      parentRevision: 3,
+      retentionReason: "same-parent-adjacent-setup",
+    },
+  });
+
+  assert.match(compilation.context.transcript, /access control lists/i);
+  assert.equal(
+    compilation.context.advisorEvidencePacket?.sourceOwnedSemanticContext
+      ?.text,
+    "The corpus has access control lists."
+  );
+  assert.doesNotMatch(compilation.context.transcript, /unrelated old task/i);
 });
 
 test("active-child scope includes only current, recent, parent, and child sources", () => {
