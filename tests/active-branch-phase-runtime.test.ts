@@ -8,6 +8,7 @@ import {
 import { buildActiveMeetingTask } from "../src/lib/meeting/active-meeting-task.js";
 import { MeetingContextManager } from "../src/lib/meeting/context-manager.js";
 import type { CurrentQuestionSettlementDecision } from "../src/lib/meeting/current-question-settlement.js";
+import { selectInterviewPlaybook } from "../src/lib/meeting/interview-playbook.js";
 import type { MeetingModelProviderSnapshot } from "../src/lib/meeting/meeting-model-route.js";
 import { resolvePostModelContinuityAuthority } from "../src/lib/meeting/post-model-continuity-authority.js";
 import {
@@ -44,11 +45,27 @@ test("commits a Coding child with implementation phase and coherent consumers", 
   const parent = makeParent();
   setTestTaskRuntime(manager, { parent });
   const before = manager.getState();
-  const codingPlaybook = makePlaybook(
-    "coding_algorithm",
-    "coding",
-    "baseline_reasoning"
-  );
+  const currentSettlement = settlement({
+    sessionId: before.sessionId,
+    questionType: "coding",
+    relation: "child-probe",
+    relationMutationAuthorized: true,
+  });
+  const preCommitView = buildEffectiveAdvisorSettlementView({
+    settlement: currentSettlement,
+    activeMeetingTask: before.activeMeetingTask,
+    taskRuntimeRevision: before.taskRuntime.revision,
+    fallback: { questionType: "coding", relation: "child-probe" },
+  });
+  assert.equal(preCommitView.playbook, undefined);
+  assert.equal(preCommitView.playbookPhase, undefined);
+  assert.equal(preCommitView.phaseOwnerKind, undefined);
+  const codingPlaybook = selectInterviewPlaybook({
+    query: "Implement the reranker.",
+    questionType: preCommitView.questionType,
+    activeTaskPlaybook: preCommitView.playbook,
+  });
+  assert.equal(codingPlaybook?.questionType, "coding");
   const candidate = createSourceOwnedTransitionCandidate({
     sessionId: before.sessionId,
     runtimeEpoch: 1,
@@ -85,22 +102,16 @@ test("commits a Coding child with implementation phase and coherent consumers", 
   assert.equal(committed.authorized, true);
   assert.equal(committed.mutationApplied, true);
 
-  const activeTask = manager.getState().activeMeetingTask;
-  assert.ok(activeTask);
-  assert.equal(activeTask.parent.playbookPhase, "design_framing");
+  const activeTaskAfter = manager.getState().activeMeetingTask;
+  assert.ok(activeTaskAfter);
+  assert.equal(activeTaskAfter.parent.playbookPhase, "design_framing");
   assert.equal(
-    activeTask.child?.phaseState?.phase,
+    activeTaskAfter.child?.phaseState?.phase,
     "implementation_validation"
   );
-  const currentSettlement = settlement({
-    sessionId: before.sessionId,
-    questionType: "coding",
-    relation: "child-probe",
-    relationMutationAuthorized: true,
-  });
   const effective = buildEffectiveAdvisorSettlementView({
     settlement: currentSettlement,
-    activeMeetingTask: activeTask,
+    activeMeetingTask: activeTaskAfter,
     taskRuntimeRevision: manager.getState().taskRuntime.revision,
     fallback: { questionType: "coding", relation: "child-probe" },
   });
@@ -109,7 +120,7 @@ test("commits a Coding child with implementation phase and coherent consumers", 
 
   const plan = buildSettledAdvisorExecutionPlan({
     settlement: currentSettlement,
-    activeMeetingTask: activeTask,
+    activeMeetingTask: activeTaskAfter,
     expectedActiveMeetingTask: before.activeMeetingTask,
     taskBoundaryCommitted: false,
     childOwnsResponse: true,

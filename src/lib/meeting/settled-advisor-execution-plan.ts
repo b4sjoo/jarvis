@@ -432,24 +432,29 @@ export function buildEffectiveAdvisorSettlementView(input: {
     (currentOnly ? input.fallback.projectAnchor : undefined);
   const activeChildPhase =
     relation === "child-probe" ? activeTask?.child?.phaseState : undefined;
-  const playbook = activeChildPhase?.playbook ??
-    parent?.playbook ??
-    (settlement ? undefined : input.fallback.playbook);
-  const playbookPhase = activeChildPhase?.phase ??
-    parent?.playbookPhase ??
-    (settlement ? undefined : input.fallback.playbookPhase);
+  const childOwnsProspectiveResponse = relation === "child-probe";
+  const playbook = childOwnsProspectiveResponse
+    ? activeChildPhase?.playbook
+    : parent?.playbook ??
+      (settlement ? undefined : input.fallback.playbook);
+  const playbookPhase = childOwnsProspectiveResponse
+    ? activeChildPhase?.phase
+    : parent?.playbookPhase ??
+      (settlement ? undefined : input.fallback.playbookPhase);
   const phaseOwnerKind = activeChildPhase
     ? "child"
-    : parent?.playbook
+    : !childOwnsProspectiveResponse && parent?.playbook
       ? "parent"
       : undefined;
   const phaseOwnerId = activeChildPhase
     ? activeTask?.child?.id
-    : parent?.playbook
+    : !childOwnsProspectiveResponse && parent?.playbook
       ? parent.id
       : undefined;
   const phaseOwnerRevision = activeChildPhase?.revision ??
-    (parent?.playbook ? parent.revisions : undefined);
+    (!childOwnsProspectiveResponse && parent?.playbook
+      ? parent.revisions
+      : undefined);
 
   return Object.freeze({
     source: settlement
