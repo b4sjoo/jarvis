@@ -31,6 +31,7 @@ test("writes a replay-safe procedure for a scripted recording", async (t) => {
   assert.equal(procedure.steps[0].expected.questionType, "coding");
   assert.deepEqual(procedure.steps[0].observed.contextSourceTurnIds, [
     "turn-setup",
+    "turn-previous",
   ]);
   assert.equal(procedure.steps[0].observed.questionType, "coding");
   assert.equal(procedure.steps[0].observed.relation, "new-parent");
@@ -271,6 +272,9 @@ async function writeSessionFixture(sessionDirectory, scriptedValidation) {
           logicalQuestionUnitRevision: 1,
           logicalQuestionSourceTurnIds: ["turn-1"],
           logicalQuestionContextSourceTurnIds: ["turn-setup"],
+          logicalQuestionRecentLogicalQuestionSourceTurnIds: [
+            "turn-previous",
+          ],
           primaryAskSourceTurnIds: ["turn-1"],
           responseOpportunityDecision: "output-request",
           questionType: "coding",

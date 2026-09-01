@@ -153,12 +153,17 @@ export function compileSettledAdvisorPromptContext(input: {
   const ownedContextIds = new Set(
     input.logicalQuestionUnit?.contextSourceTurnIds ?? []
   );
+  const recentLogicalQuestionSourceTurnIds =
+    input.logicalQuestionUnit?.recentLogicalQuestionSourceTurnIds ?? [];
   if (!responseActionContextSelection.authorized) {
     for (const turnId of ownedContextIds) {
       selectedIds.add(turnId);
     }
   }
   if (!responseActionContextSelection.authorized && scope !== "current-only") {
+    for (const turnId of recentLogicalQuestionSourceTurnIds) {
+      selectedIds.add(turnId);
+    }
     for (const turnId of input.recentSourceContext?.sourceTurnIds ?? []) {
       selectedIds.add(turnId);
     }

@@ -5,6 +5,7 @@ import type { LogicalQuestionUnit } from "../src/lib/meeting/logical-question-un
 import {
   appendSourceOwnedSetupCandidate,
   createSourceOwnedSetupCandidate,
+  selectPreviousLogicalQuestionContext,
   selectSourceOwnedSemanticContext,
 } from "../src/lib/meeting/source-owned-semantic-context.js";
 import type { TranscriptTurn } from "../src/lib/meeting/types.js";
@@ -281,4 +282,86 @@ test("excludes explicit meeting logistics from recent source context", () => {
     runtimeEpoch: 3,
   });
   assert.equal(candidate, undefined);
+});
+
+test("selects the previous effective LQU inside the rolling source window", () => {
+  const previousTurn = turn(
+    "turn-previous",
+    "How would you evaluate retrieval quality?",
+    1_000,
+    2_000
+  );
+  const previous = {
+    ...unit(previousTurn),
+    id: "lqu-previous",
+  };
+  const currentTurn = turn(
+    "turn-current",
+    "What would you monitor in production?",
+    30_000,
+    31_000
+  );
+  const selection = selectPreviousLogicalQuestionContext({
+    previousLogicalQuestionUnit: previous,
+    currentLogicalQuestionUnit: unit(currentTurn),
+    effectiveRecords: [
+      {
+        recordId: "record-previous",
+        sessionId: "session-a",
+        runtimeEpoch: 3,
+        logicalQuestionUnitId: "lqu-previous",
+        logicalQuestionRevision: 1,
+        sourceHash: "source-previous",
+        sourceTurnIds: [previousTurn.id],
+        text: previousTurn.text,
+        startedAt: previous.startedAt,
+        updatedAt: previous.updatedAt,
+        speechAct: "question",
+        disposition: "answer-primary-ask",
+        relation: "followup-parent",
+        owner: { kind: "parent-mainline", parentId: "parent-oasis" },
+        settledAt: 2_500,
+      },
+    ],
+  });
+
+  assert.equal(selection.reason, "selected-previous-logical-question");
+  assert.deepEqual(selection.sourceTurnIds, [previousTurn.id]);
+  assert.equal(selection.logicalQuestionUnitId, "lqu-previous");
+});
+
+test("rejects an expired or explicitly separated previous LQU", () => {
+  const previousTurn = turn(
+    "turn-previous",
+    "How would you evaluate retrieval quality?",
+    1_000,
+    2_000
+  );
+  const previous = { ...unit(previousTurn), id: "lqu-previous" };
+  const current = unit(
+    turn(
+      "turn-current",
+      "Design a separate notification service.",
+      48_000,
+      49_000
+    )
+  );
+
+  assert.equal(
+    selectPreviousLogicalQuestionContext({
+      previousLogicalQuestionUnit: previous,
+      currentLogicalQuestionUnit: current,
+      effectiveRecords: [],
+    }).reason,
+    "previous-source-expired"
+  );
+  assert.equal(
+    selectPreviousLogicalQuestionContext({
+      previousLogicalQuestionUnit: previous,
+      currentLogicalQuestionUnit: { ...current, startedAt: 30_000 },
+      effectiveRecords: [],
+      explicitBoundary: true,
+    }).reason,
+    "explicit-boundary"
+  );
 });

@@ -1,4 +1,5 @@
 import type { ActiveMeetingTask } from "./active-meeting-task.js";
+import type { EffectiveQuestionSourceRecord } from "./effective-question-source-ledger.js";
 import type { LogicalQuestionUnit } from "./logical-question-unit.js";
 import { isExplicitMeetingLogisticsTranscript } from "./meeting-logistics.js";
 import { projectPrimaryAsk } from "./primary-ask-projection.js";
@@ -49,6 +50,105 @@ export interface SourceOwnedSemanticContextSelection {
     | "selected-recent-source-context"
     | "intervening-source-turn";
   consumeCandidate: boolean;
+}
+
+export interface PreviousLogicalQuestionContextSelection {
+  sourceTurnIds: string[];
+  logicalQuestionUnitId?: string;
+  logicalQuestionRevision?: number;
+  reason:
+    | "selected-previous-logical-question"
+    | "previous-logical-question-missing"
+    | "session-mismatch"
+    | "runtime-epoch-mismatch"
+    | "explicit-boundary"
+    | "previous-source-empty"
+    | "previous-source-expired"
+    | "previous-source-not-substantive";
+}
+
+export function selectPreviousLogicalQuestionContext(input: {
+  previousLogicalQuestionUnit?: LogicalQuestionUnit;
+  currentLogicalQuestionUnit: LogicalQuestionUnit;
+  effectiveRecords: readonly EffectiveQuestionSourceRecord[];
+  explicitBoundary?: boolean;
+}): PreviousLogicalQuestionContextSelection {
+  const previous = input.previousLogicalQuestionUnit;
+  if (!previous) {
+    return { sourceTurnIds: [], reason: "previous-logical-question-missing" };
+  }
+  const current = input.currentLogicalQuestionUnit;
+  if (previous.sessionId !== current.sessionId) {
+    return { sourceTurnIds: [], reason: "session-mismatch" };
+  }
+  if (previous.runtimeEpoch !== current.runtimeEpoch) {
+    return { sourceTurnIds: [], reason: "runtime-epoch-mismatch" };
+  }
+  if (input.explicitBoundary) {
+    return { sourceTurnIds: [], reason: "explicit-boundary" };
+  }
+  const previousEndedAt = Math.max(
+    ...previous.sources.map((source) => source.endedAt)
+  );
+  if (!Number.isFinite(previousEndedAt)) {
+    return { sourceTurnIds: [], reason: "previous-source-empty" };
+  }
+  if (
+    current.startedAt < previousEndedAt ||
+    current.startedAt - previousEndedAt > SOURCE_OWNED_SETUP_MAX_AGE_MS
+  ) {
+    return { sourceTurnIds: [], reason: "previous-source-expired" };
+  }
+  const effectiveRecord = [...input.effectiveRecords]
+    .filter(
+      (record) =>
+        record.sessionId === previous.sessionId &&
+        record.runtimeEpoch === previous.runtimeEpoch &&
+        record.logicalQuestionUnitId === previous.id
+    )
+    .sort(
+      (left, right) =>
+        right.logicalQuestionRevision - left.logicalQuestionRevision ||
+        right.settledAt - left.settledAt ||
+        right.recordId.localeCompare(left.recordId)
+    )[0];
+  const text = effectiveRecord?.text ?? previous.normalizedText;
+  const projection = projectPrimaryAsk({
+    turnId: previous.currentTurnId,
+    text,
+  });
+  if (
+    projection.disposition === "append-setup" ||
+    isExcludedSourceContextTurn(text, projection.speechAct)
+  ) {
+    return { sourceTurnIds: [], reason: "previous-source-not-substantive" };
+  }
+  const sourceTurnIds = Array.from(
+    new Set(effectiveRecord?.sourceTurnIds ?? previous.sourceTurnIds)
+  ).filter(Boolean);
+  if (!sourceTurnIds.length) {
+    return { sourceTurnIds: [], reason: "previous-source-empty" };
+  }
+  return {
+    sourceTurnIds,
+    logicalQuestionUnitId: previous.id,
+    logicalQuestionRevision:
+      effectiveRecord?.logicalQuestionRevision ?? previous.revision,
+    reason: "selected-previous-logical-question",
+  };
+}
+
+export function formatPreviousLogicalQuestionContextSelectionForTrace(
+  selection: PreviousLogicalQuestionContextSelection
+): Record<string, unknown> {
+  return {
+    previousLogicalQuestionContextSelectionReason: selection.reason,
+    previousLogicalQuestionContextSourceTurnIds: selection.sourceTurnIds,
+    previousLogicalQuestionContextLogicalQuestionUnitId:
+      selection.logicalQuestionUnitId,
+    previousLogicalQuestionContextLogicalQuestionRevision:
+      selection.logicalQuestionRevision,
+  };
 }
 
 export function createSourceOwnedSetupCandidate(input: {

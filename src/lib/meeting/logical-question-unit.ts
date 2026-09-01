@@ -45,6 +45,7 @@ export interface LogicalQuestionUnit {
   currentTurnId: string;
   sourceTurnIds: string[];
   contextSourceTurnIds?: string[];
+  recentLogicalQuestionSourceTurnIds?: string[];
   sources: LogicalQuestionSource[];
   normalizedText: string;
   startedAt: number;
@@ -91,6 +92,7 @@ export interface LogicalQuestionUnitTraceMetadata {
   logicalQuestionCurrentTurnId?: string;
   logicalQuestionSourceTurnIds?: string[];
   logicalQuestionContextSourceTurnIds?: string[];
+  logicalQuestionRecentLogicalQuestionSourceTurnIds?: string[];
   logicalQuestionChars?: number;
   logicalQuestionCompositionReasons?: string[];
   logicalQuestionBoundaryReason?: string;
@@ -238,6 +240,8 @@ export function formatLogicalQuestionUnitForTrace(
     logicalQuestionSourceTurnIds: unit.sourceTurnIds,
     logicalQuestionContextSourceTurnIds:
       unit.contextSourceTurnIds ?? [],
+    logicalQuestionRecentLogicalQuestionSourceTurnIds:
+      unit.recentLogicalQuestionSourceTurnIds ?? [],
     logicalQuestionChars: unit.normalizedText.length,
     logicalQuestionCompositionReasons: unit.compositionReasons,
     logicalQuestionBoundaryReason: unit.boundaryReason,

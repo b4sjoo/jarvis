@@ -11,10 +11,12 @@ import { compileSettledAdvisorPromptContext } from "../src/lib/meeting/settled-a
 import { composeExpandedAdvisorPromptContext } from "../src/lib/meeting/context-scope-response-action.js";
 import { composeCanonicalTurnCandidate } from "../src/lib/meeting/logical-question-unit.js";
 import { selectInterviewPlaybook } from "../src/lib/meeting/interview-playbook.js";
+import { selectOwnerScopedRelationEvidence } from "../src/lib/meeting/effective-question-source-ledger.js";
 import { buildQuestionTypeAdjudicationRequest } from "../src/lib/meeting/question-type-adjudication.js";
 import {
   appendSourceOwnedSetupCandidate,
   createSourceOwnedSetupCandidate,
+  selectPreviousLogicalQuestionContext,
   selectSourceOwnedSemanticContext,
 } from "../src/lib/meeting/source-owned-semantic-context.js";
 import {
@@ -241,6 +243,97 @@ test("orphan context expires after 45 seconds while task-owned context persists"
     transcriptTurns: [setupTurn, askTurn],
   });
   assert.match(compiled.context.transcript, /private customer documents/i);
+});
+
+test("previous LQU reaches Relation and only authorized Advisor scopes", () => {
+  const parentTurn = turn({
+    id: "turn-parent",
+    text: "Design an enterprise RAG system.",
+    startedAt: 1_000,
+    endedAt: 2_000,
+  });
+  const previousTurn = turn({
+    id: "turn-previous-lqu",
+    text: "How would you evaluate retrieval quality?",
+    startedAt: 10_000,
+    endedAt: 11_000,
+  });
+  const currentTurn = turn({
+    id: "turn-current-lqu",
+    text: "What would you monitor in production?",
+    startedAt: 30_000,
+    endedAt: 31_000,
+  });
+  const parent = activeParent(parentTurn);
+  const active = projectActiveMeetingTask({ state: { revision: 2, parent } });
+  assert.ok(active);
+  const previous = composeCanonicalTurnCandidate({
+    currentTurn: previousTurn,
+    sessionId: "session-previous-lqu",
+    runtimeEpoch: 1,
+  });
+  const record = {
+    recordId: "record-previous-lqu",
+    sessionId: "session-previous-lqu",
+    runtimeEpoch: 1,
+    logicalQuestionUnitId: previous.id,
+    logicalQuestionRevision: previous.revision,
+    sourceHash: "source-previous-lqu",
+    sourceTurnIds: [previousTurn.id],
+    text: previousTurn.text,
+    startedAt: previous.startedAt,
+    updatedAt: previous.updatedAt,
+    speechAct: "question" as const,
+    disposition: "answer-primary-ask" as const,
+    relation: "followup-parent" as const,
+    owner: { kind: "parent-mainline" as const, parentId: parent.id },
+    settledAt: 12_000,
+  };
+  const candidate = composeCanonicalTurnCandidate({
+    currentTurn: currentTurn,
+    sessionId: "session-previous-lqu",
+    runtimeEpoch: 1,
+  });
+  const previousContext = selectPreviousLogicalQuestionContext({
+    previousLogicalQuestionUnit: previous,
+    currentLogicalQuestionUnit: candidate,
+    effectiveRecords: [record],
+  });
+  const current = {
+    ...candidate,
+    recentLogicalQuestionSourceTurnIds: previousContext.sourceTurnIds,
+  };
+  const evidence = selectOwnerScopedRelationEvidence({
+    records: [record],
+    currentLogicalQuestionUnit: current,
+    activeMeetingTask: active,
+    transcriptTurns: [parentTurn, previousTurn, currentTurn],
+  });
+  const relationRequest = buildTaskRelationAdjudicationRequest({
+    logicalQuestionUnit: current,
+    activeMeetingTask: active,
+    recentTurns: [parentTurn, previousTurn, currentTurn],
+    ownerEvidenceSelection: evidence,
+  });
+  assert.match(
+    relationRequest.recentSourceEvidence.map((item) => item.text).join(" "),
+    /evaluate retrieval quality/i
+  );
+
+  const parentRead = compileSettledAdvisorPromptContext({
+    baseContext: promptContext(active, [parentTurn, previousTurn, currentTurn]),
+    contextReadScope: "active-parent-read",
+    logicalQuestionUnit: current,
+    transcriptTurns: [parentTurn, previousTurn, currentTurn],
+  });
+  const newParentRead = compileSettledAdvisorPromptContext({
+    baseContext: promptContext(active, [parentTurn, previousTurn, currentTurn]),
+    contextReadScope: "current-only",
+    logicalQuestionUnit: current,
+    transcriptTurns: [parentTurn, previousTurn, currentTurn],
+  });
+  assert.match(parentRead.context.transcript, /evaluate retrieval quality/i);
+  assert.doesNotMatch(newParentRead.context.transcript, /evaluate retrieval quality/i);
 });
 
 test("filler preserves the active lease and a later substantive LQU wins publication", () => {

@@ -149,6 +149,29 @@ test("persisted LQU context survives candidate consumption on regenerate", () =>
   assert.equal(compilation.recentSourceContextIncluded, true);
 });
 
+test("previous LQU context follows final scope instead of current-question ownership", () => {
+  const logicalQuestionUnit = {
+    ...lqu(),
+    contextSourceTurnIds: undefined,
+    recentLogicalQuestionSourceTurnIds: ["turn-old"],
+  };
+  const parentRead = compileSettledAdvisorPromptContext({
+    baseContext: context(),
+    contextReadScope: "active-parent-read",
+    logicalQuestionUnit,
+    transcriptTurns: turns(),
+  });
+  const newParentRead = compileSettledAdvisorPromptContext({
+    baseContext: context(),
+    contextReadScope: "current-only",
+    logicalQuestionUnit,
+    transcriptTurns: turns(),
+  });
+
+  assert.match(parentRead.context.transcript, /unrelated old task/i);
+  assert.doesNotMatch(newParentRead.context.transcript, /unrelated old task/i);
+});
+
 test("screen LQU preserves current screen context before task commit", () => {
   const compilation = compileSettledAdvisorPromptContext({
     baseContext: {

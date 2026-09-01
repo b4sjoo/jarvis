@@ -149,7 +149,9 @@ import {
 import {
   appendSourceOwnedSetupCandidate,
   createSourceOwnedSetupCandidate,
+  formatPreviousLogicalQuestionContextSelectionForTrace,
   formatSourceOwnedSemanticContextSelectionForTrace,
+  selectPreviousLogicalQuestionContext,
   selectSourceOwnedSemanticContext,
   SOURCE_OWNED_SETUP_MAX_CHARS,
   type SourceOwnedSetupCandidate,
@@ -23006,6 +23008,7 @@ export function useMeetingAssistant() {
       const effectivePrimaryAskProjection =
         primaryAskProjection ??
         projectPrimaryAsk({ turnId: turn.id, text: turn.text });
+      const previousLogicalQuestionUnit = logicalQuestionUnitRef.current;
       const logicalQuestionCandidate = composeCanonicalTurnCandidate({
         currentTurn: turn,
         sessionId: contextState.sessionId,
@@ -23037,14 +23040,34 @@ export function useMeetingAssistant() {
           activeMeetingTask: contextState.activeMeetingTask,
           transcriptTurns: contextState.transcriptTurns,
         });
-      const logicalQuestionUnit = recentSourceContextSelection.context
-        ? {
-            ...logicalQuestionCandidate,
-            contextSourceTurnIds: [
-              ...recentSourceContextSelection.context.sourceTurnIds,
-            ],
-          }
-        : logicalQuestionCandidate;
+      const previousLogicalQuestionContextSelection =
+        selectPreviousLogicalQuestionContext({
+          previousLogicalQuestionUnit,
+          currentLogicalQuestionUnit: logicalQuestionCandidate,
+          effectiveRecords: effectiveQuestionSourceLedgerRef.current.list(),
+          explicitBoundary: Boolean(
+            explicitTaskSwitch ||
+              sectionHint?.disposition === "applied" ||
+              taskBoundaryEvidence?.disposition === "applied"
+          ),
+        });
+      const logicalQuestionUnit = {
+        ...logicalQuestionCandidate,
+        ...(recentSourceContextSelection.context
+          ? {
+              contextSourceTurnIds: [
+                ...recentSourceContextSelection.context.sourceTurnIds,
+              ],
+            }
+          : {}),
+        ...(previousLogicalQuestionContextSelection.sourceTurnIds.length
+          ? {
+              recentLogicalQuestionSourceTurnIds: [
+                ...previousLogicalQuestionContextSelection.sourceTurnIds,
+              ],
+            }
+          : {}),
+      };
       if (commitCanonical) {
         logicalQuestionUnitRef.current = logicalQuestionUnit;
       }
@@ -23052,6 +23075,9 @@ export function useMeetingAssistant() {
         traceId,
         {
           ...formatLogicalQuestionUnitForTrace(logicalQuestionUnit),
+          ...formatPreviousLogicalQuestionContextSelectionForTrace(
+            previousLogicalQuestionContextSelection
+          ),
           logicalQuestionCandidateOnly: !commitCanonical,
         }
       );

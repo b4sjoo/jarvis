@@ -614,7 +614,12 @@ function attachRuntimeTraceSummary(
           summary.logicalQuestionSourceTurnIds
       ),
       contextSourceTurnIds: readStringArray(
-        summary.logicalQuestionContextSourceTurnIds
+        [
+          ...readStringArray(summary.logicalQuestionContextSourceTurnIds),
+          ...readStringArray(
+            summary.logicalQuestionRecentLogicalQuestionSourceTurnIds
+          ),
+        ]
       ),
       responseOpportunityDecision: readString(
         summary.responseOpportunityDecision
