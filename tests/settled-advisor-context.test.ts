@@ -108,6 +108,8 @@ test("active-child scope includes only current, recent, parent, and child source
       settledAdvisorContextSourceTurnCount: 4,
       settledAdvisorRecentSourceContextIncluded: true,
       settledAdvisorRawTranscriptBypassRemoved: true,
+      settledAdvisorScreenContextIncluded: false,
+      settledAdvisorScreenContextReason: "settled-screen-owner-missing",
     }
   );
 });
@@ -171,10 +173,75 @@ test("screen LQU preserves current screen context before task commit", () => {
   });
 
   assert.equal(compilation.context.screenContext, "Visible coding problem");
+  assert.equal(compilation.screenContextReason, "current-screen-source");
   assert.equal(
     compilation.context.transcript,
     "Them: How would you index it?"
   );
+});
+
+test("Voice follow-up keeps the active Screen context through settled scope", () => {
+  const activeMeetingTask = {
+    ...task(),
+    source: "mixed" as const,
+    screen: {
+      activeScreenTaskId: "screen-task-1",
+      observationId: "observation-1",
+      basedOnObservationId: "observation-1",
+      question: "Implement the visible cache method.",
+    },
+  };
+  const compilation = compileSettledAdvisorPromptContext({
+    baseContext: {
+      ...context(),
+      activeMeetingTask,
+      screenContext: "Visible code lines 35 through 38",
+    },
+    contextReadScope: "active-parent-read",
+    logicalQuestionUnit: lqu(),
+    transcriptTurns: turns(),
+    screenScopeDecision: {
+      action: "keep",
+      reason: "existing-task-continuity",
+    },
+  });
+
+  assert.equal(
+    compilation.context.screenContext,
+    "Visible code lines 35 through 38"
+  );
+  assert.equal(compilation.screenContextIncluded, true);
+  assert.equal(compilation.screenContextReason, "settled-screen-scope-keep");
+});
+
+test("Screen clear authority survives the final Context compiler", () => {
+  const activeMeetingTask = {
+    ...task(),
+    source: "mixed" as const,
+    screen: {
+      activeScreenTaskId: "screen-task-1",
+      observationId: "observation-1",
+      basedOnObservationId: "observation-1",
+    },
+  };
+  const compilation = compileSettledAdvisorPromptContext({
+    baseContext: {
+      ...context(),
+      activeMeetingTask,
+      screenContext: "Stale visible task",
+    },
+    contextReadScope: "active-parent-read",
+    logicalQuestionUnit: lqu(),
+    transcriptTurns: turns(),
+    screenScopeDecision: {
+      action: "clear",
+      reason: "voice-new-parent",
+    },
+  });
+
+  assert.equal(compilation.context.screenContext, "");
+  assert.equal(compilation.screenContextIncluded, false);
+  assert.equal(compilation.screenContextReason, "screen-scope-clear");
 });
 
 function context(): AdvisorPromptContext {

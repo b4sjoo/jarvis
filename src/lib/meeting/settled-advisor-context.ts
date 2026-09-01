@@ -1,5 +1,6 @@
 import type { AdvisorContextReadScope } from "./advisor-context-read-scope.js";
 import type { LogicalQuestionUnit } from "./logical-question-unit.js";
+import type { ScreenScopeDecision } from "./screen-task-scope.js";
 import type {
   AdvisorEvidencePacket,
   AdvisorPromptContext,
@@ -13,6 +14,13 @@ export interface SettledAdvisorContextCompilation {
   selectedSourceTurnIds: string[];
   recentSourceContextIncluded: boolean;
   rawTranscriptBypassRemoved: boolean;
+  screenContextIncluded: boolean;
+  screenContextReason:
+    | "current-screen-source"
+    | "settled-screen-scope-keep"
+    | "screen-scope-clear"
+    | "context-scope-current-only"
+    | "settled-screen-owner-missing";
 }
 
 export function compileSettledAdvisorPromptContext(input: {
@@ -21,6 +29,7 @@ export function compileSettledAdvisorPromptContext(input: {
   logicalQuestionUnit?: LogicalQuestionUnit;
   transcriptTurns: TranscriptTurn[];
   recentSourceContext?: AdvisorSourceOwnedSemanticContext;
+  screenScopeDecision?: Pick<ScreenScopeDecision, "action" | "reason">;
 }): SettledAdvisorContextCompilation {
   const scope = input.contextReadScope;
   const task = input.baseContext.activeMeetingTask;
@@ -69,6 +78,12 @@ export function compileSettledAdvisorPromptContext(input: {
       (input.logicalQuestionUnit?.sourceTurnIds.length === 0 &&
         input.baseContext.activeMeetingTask?.screen)
   );
+  const screenContextDecision = resolveSettledScreenContext({
+    currentScreenOwned,
+    contextReadScope: scope,
+    screenScopeDecision: input.screenScopeDecision,
+    settledTask: scopedTask,
+  });
   const recentSourceContextOwnedByCurrentQuestion = Boolean(
     input.recentSourceContext?.sourceTurnIds.length &&
       input.recentSourceContext.sourceTurnIds.every((turnId) =>
@@ -93,12 +108,14 @@ export function compileSettledAdvisorPromptContext(input: {
     ),
     rawTranscriptBypassRemoved:
       transcript !== input.baseContext.transcript,
+    screenContextIncluded: screenContextDecision.included,
+    screenContextReason: screenContextDecision.reason,
     context: {
       ...input.baseContext,
       transcript,
       advisorPromptSourceTurnIds: selectedSourceTurnIds,
       latestTurn: selectedTurns.at(-1),
-      screenContext: currentScreenOwned
+      screenContext: screenContextDecision.included
         ? input.baseContext.screenContext
         : "",
       activeMeetingTask: scopedTask,
@@ -132,7 +149,38 @@ export function formatSettledAdvisorContextCompilationForTrace(
       compilation.recentSourceContextIncluded,
     settledAdvisorRawTranscriptBypassRemoved:
       compilation.rawTranscriptBypassRemoved,
+    settledAdvisorScreenContextIncluded:
+      compilation.screenContextIncluded,
+    settledAdvisorScreenContextReason:
+      compilation.screenContextReason,
   };
+}
+
+function resolveSettledScreenContext(input: {
+  currentScreenOwned: boolean;
+  contextReadScope: AdvisorContextReadScope;
+  screenScopeDecision?: Pick<ScreenScopeDecision, "action" | "reason">;
+  settledTask: AdvisorPromptContext["activeMeetingTask"];
+}): {
+  included: boolean;
+  reason: SettledAdvisorContextCompilation["screenContextReason"];
+} {
+  if (input.currentScreenOwned) {
+    return { included: true, reason: "current-screen-source" };
+  }
+  if (input.screenScopeDecision?.action === "clear") {
+    return { included: false, reason: "screen-scope-clear" };
+  }
+  if (input.contextReadScope === "current-only") {
+    return { included: false, reason: "context-scope-current-only" };
+  }
+  if (
+    input.screenScopeDecision?.action === "keep" &&
+    input.settledTask?.screen
+  ) {
+    return { included: true, reason: "settled-screen-scope-keep" };
+  }
+  return { included: false, reason: "settled-screen-owner-missing" };
 }
 
 function projectTaskForScope(

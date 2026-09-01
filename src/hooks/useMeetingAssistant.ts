@@ -14050,6 +14050,7 @@ export function useMeetingAssistant() {
           transcriptTurns:
             contextManagerRef.current.getState().transcriptTurns,
           recentSourceContext: advisorSourceOwnedSemanticContext,
+          screenScopeDecision: advisorScreenScopeDecision,
         });
     if (traceId && settledAdvisorContextCompilation) {
       traceStoreRef.current.updateMetadata(
