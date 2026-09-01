@@ -297,7 +297,7 @@ test("previous LQU reaches Relation and only authorized Advisor scopes", () => {
   const previousContext = selectPreviousLogicalQuestionContext({
     previousLogicalQuestionUnit: previous,
     currentLogicalQuestionUnit: candidate,
-    effectiveRecords: [record],
+    effectiveRecord: record,
   });
   const current = {
     ...candidate,

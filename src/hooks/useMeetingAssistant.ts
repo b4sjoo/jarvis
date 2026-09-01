@@ -23042,7 +23042,19 @@ export function useMeetingAssistant() {
         selectPreviousLogicalQuestionContext({
           previousLogicalQuestionUnit,
           currentLogicalQuestionUnit: logicalQuestionCandidate,
-          effectiveRecords: effectiveQuestionSourceLedgerRef.current.list(),
+          effectiveRecord: previousLogicalQuestionUnit
+            ? effectiveQuestionSourceLedgerRef.current
+                .list()
+                .find(
+                  (record) =>
+                    record.sessionId ===
+                      previousLogicalQuestionUnit.sessionId &&
+                    record.runtimeEpoch ===
+                      previousLogicalQuestionUnit.runtimeEpoch &&
+                    record.logicalQuestionUnitId ===
+                      previousLogicalQuestionUnit.id
+                )
+            : undefined,
           explicitBoundary: Boolean(
             explicitTaskSwitch ||
               sectionHint?.disposition === "applied" ||

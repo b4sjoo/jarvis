@@ -70,7 +70,7 @@ export interface PreviousLogicalQuestionContextSelection {
 export function selectPreviousLogicalQuestionContext(input: {
   previousLogicalQuestionUnit?: LogicalQuestionUnit;
   currentLogicalQuestionUnit: LogicalQuestionUnit;
-  effectiveRecords: readonly EffectiveQuestionSourceRecord[];
+  effectiveRecord?: EffectiveQuestionSourceRecord;
   explicitBoundary?: boolean;
 }): PreviousLogicalQuestionContextSelection {
   const previous = input.previousLogicalQuestionUnit;
@@ -99,19 +99,15 @@ export function selectPreviousLogicalQuestionContext(input: {
   ) {
     return { sourceTurnIds: [], reason: "previous-source-expired" };
   }
-  const effectiveRecord = [...input.effectiveRecords]
-    .filter(
-      (record) =>
-        record.sessionId === previous.sessionId &&
-        record.runtimeEpoch === previous.runtimeEpoch &&
-        record.logicalQuestionUnitId === previous.id
-    )
-    .sort(
-      (left, right) =>
-        right.logicalQuestionRevision - left.logicalQuestionRevision ||
-        right.settledAt - left.settledAt ||
-        right.recordId.localeCompare(left.recordId)
-    )[0];
+  const effectiveRecord = input.effectiveRecord;
+  if (
+    effectiveRecord &&
+    (effectiveRecord.sessionId !== previous.sessionId ||
+      effectiveRecord.runtimeEpoch !== previous.runtimeEpoch ||
+      effectiveRecord.logicalQuestionUnitId !== previous.id)
+  ) {
+    throw new Error("Previous LQU effective record identity mismatch.");
+  }
   const text = effectiveRecord?.text ?? previous.normalizedText;
   const projection = projectPrimaryAsk({
     turnId: previous.currentTurnId,

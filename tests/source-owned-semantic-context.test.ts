@@ -10,6 +10,7 @@ import {
   selectSourceOwnedSemanticContext,
 } from "../src/lib/meeting/source-owned-semantic-context.js";
 import { projectEffectiveSourceTurnGroup } from "../src/lib/meeting/logical-question-effective-projection.js";
+import { EffectiveQuestionSourceLedger } from "../src/lib/meeting/effective-question-source-ledger.js";
 import type { TranscriptTurn } from "../src/lib/meeting/types.js";
 
 function task(parentId = "parent-oasis"): ActiveMeetingTask {
@@ -303,33 +304,46 @@ test("selects the previous effective LQU inside the rolling source window", () =
     30_000,
     31_000
   );
+  const rev1 = {
+    recordId: "record-previous-rev1",
+    sessionId: "session-a",
+    runtimeEpoch: 3,
+    logicalQuestionUnitId: "lqu-previous",
+    logicalQuestionRevision: 1,
+    sourceHash: "source-previous-rev1",
+    sourceTurnIds: [previousTurn.id],
+    text: previousTurn.text,
+    startedAt: previous.startedAt,
+    updatedAt: previous.updatedAt,
+    speechAct: "question" as const,
+    disposition: "answer-primary-ask" as const,
+    relation: "followup-parent" as const,
+    owner: { kind: "parent-mainline" as const, parentId: "parent-oasis" },
+    settledAt: 2_500,
+  };
+  const ledger = new EffectiveQuestionSourceLedger();
+  ledger.upsert(rev1);
+  ledger.upsert({
+    ...rev1,
+    recordId: "record-previous-rev2",
+    logicalQuestionRevision: 2,
+    sourceHash: "source-previous-rev2",
+    text: "How would you evaluate retrieval relevance?",
+    settledAt: 2_600,
+  });
+  const effectiveRecord = ledger.list().find(
+    (record) => record.logicalQuestionUnitId === previous.id
+  );
   const selection = selectPreviousLogicalQuestionContext({
     previousLogicalQuestionUnit: previous,
     currentLogicalQuestionUnit: unit(currentTurn),
-    effectiveRecords: [
-      {
-        recordId: "record-previous",
-        sessionId: "session-a",
-        runtimeEpoch: 3,
-        logicalQuestionUnitId: "lqu-previous",
-        logicalQuestionRevision: 1,
-        sourceHash: "source-previous",
-        sourceTurnIds: [previousTurn.id],
-        text: previousTurn.text,
-        startedAt: previous.startedAt,
-        updatedAt: previous.updatedAt,
-        speechAct: "question",
-        disposition: "answer-primary-ask",
-        relation: "followup-parent",
-        owner: { kind: "parent-mainline", parentId: "parent-oasis" },
-        settledAt: 2_500,
-      },
-    ],
+    effectiveRecord,
   });
 
   assert.equal(selection.reason, "selected-previous-logical-question");
   assert.deepEqual(selection.sourceTurnIds, [previousTurn.id]);
   assert.equal(selection.logicalQuestionUnitId, "lqu-previous");
+  assert.equal(selection.logicalQuestionRevision, 2);
 });
 
 test("rejects an expired or explicitly separated previous LQU", () => {
@@ -353,7 +367,6 @@ test("rejects an expired or explicitly separated previous LQU", () => {
     selectPreviousLogicalQuestionContext({
       previousLogicalQuestionUnit: previous,
       currentLogicalQuestionUnit: current,
-      effectiveRecords: [],
     }).reason,
     "previous-source-expired"
   );
@@ -361,7 +374,6 @@ test("rejects an expired or explicitly separated previous LQU", () => {
     selectPreviousLogicalQuestionContext({
       previousLogicalQuestionUnit: previous,
       currentLogicalQuestionUnit: { ...current, startedAt: 30_000 },
-      effectiveRecords: [],
       explicitBoundary: true,
     }).reason,
     "explicit-boundary"
