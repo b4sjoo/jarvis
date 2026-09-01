@@ -638,6 +638,7 @@ import {
   formatRuntimeInferenceOperationForTrace,
   getRuntimeInferenceOperationDefinition,
   formatCurrentQuestionSettlementForTrace,
+  formatCurrentQuestionSettlementIdentityValidationForTrace,
   settlementAuthorizesTaskTransition,
   formatCurrentQuestionTerminalNoAnswerForTrace,
   formatQuestionTypeConsumerObservationForTrace,
@@ -651,6 +652,7 @@ import {
   resolveCurrentQuestionSettlementDisposition,
   reduceTaskLifecycleTransaction,
   settleCurrentQuestion,
+  validateCurrentQuestionSettlementIdentity,
   settleCurrentQuestionTerminalNoAnswer,
   expireTaskBoundaryCandidate,
   applySourceOwnedPhaseControlToTurnIntent,
@@ -10329,8 +10331,48 @@ export function useMeetingAssistant() {
     }
     let advisorStepId: string | undefined;
     let effectiveRuntimeCommitToken = advisorJob.runtimeCommitToken;
+    const settlementOverride = options.currentQuestionSettlementOverride;
+    const settlementIdentityQuestion = advisorJob.logicalQuestionUnit
+      ? createProvisionalCurrentQuestion({
+          logicalQuestionUnit: advisorJob.logicalQuestionUnit,
+          sourceKind:
+            settlementOverride?.sourceKind ??
+            (promptContext.taskRuntime.screenAttachment
+              ? "mixed"
+              : "voice"),
+          sourceObservationIds: promptContext.taskRuntime.screenAttachment
+            ? [promptContext.taskRuntime.screenAttachment.observationId]
+            : [],
+        })
+      : undefined;
+    const settlementOverrideIdentityValidation = settlementOverride
+      ? settlementIdentityQuestion
+        ? validateCurrentQuestionSettlementIdentity({
+            settlement: settlementOverride,
+            currentQuestion: settlementIdentityQuestion,
+          })
+        : {
+            authorized: false as const,
+            reasons: ["logical-question-unit-mismatch" as const],
+          }
+      : undefined;
     let currentQuestionSettlement =
-      options.currentQuestionSettlementOverride;
+      settlementOverrideIdentityValidation?.authorized === false
+        ? undefined
+        : settlementOverride;
+    if (traceId && settlementOverride) {
+      traceStoreRef.current.updateMetadata(traceId, {
+        ...formatCurrentQuestionSettlementIdentityValidationForTrace(
+          settlementOverrideIdentityValidation
+        ),
+        currentQuestionSettlementInputId: settlementOverride.settlementId,
+        currentQuestionSettlementInputRevision: settlementOverride.revision,
+        currentQuestionSettlementInputSourceHash:
+          settlementOverride.sourceHash,
+        currentQuestionSettlementInputDiscarded:
+          settlementOverrideIdentityValidation?.authorized === false,
+      });
+    }
     let currentQuestionSettlementDurationMs: number | undefined;
     let settledExecutionPlan =
       options.settledExecutionPlanOverride;
@@ -11638,11 +11680,11 @@ export function useMeetingAssistant() {
             currentQuestionSettlementDurationMs,
             currentQuestionSettlementLlmWaitMs: 0,
             currentQuestionSettlementLlmWaitDisposition:
-              options.currentQuestionSettlementOverride
+              settlementOverrideIdentityValidation?.authorized
                 ? "correction-owned"
                 : "not-awaited",
             currentQuestionSettlementOverrideApplied: Boolean(
-              options.currentQuestionSettlementOverride
+              settlementOverrideIdentityValidation?.authorized
             ),
           }
         );

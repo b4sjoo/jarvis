@@ -5,6 +5,7 @@ import {
   decideCurrentQuestionMutationAuthority,
   formatCurrentQuestionMutationAuthorityForTrace,
   formatCurrentQuestionSettlementForTrace,
+  formatCurrentQuestionSettlementIdentityValidationForTrace,
   formatCurrentQuestionTerminalNoAnswerForTrace,
   formatProvisionalCurrentQuestionForTrace,
   resolveCurrentQuestionSourceKind,
@@ -14,6 +15,7 @@ import {
   settleCurrentQuestion,
   settleCurrentQuestionTerminalNoAnswer,
   selectCommittedSettlementForLogicalQuestionUnit,
+  validateCurrentQuestionSettlementIdentity,
   type CurrentQuestionSettlementDisposition,
   type CurrentQuestionSettlementProposal,
 } from "../src/lib/meeting/current-question-settlement.js";
@@ -161,6 +163,56 @@ test("creates a stable versioned provisional question snapshot", () => {
   assert.deepEqual(trace.currentQuestionSettlementSourceObservationIds, [
     "observation-a",
   ]);
+});
+
+test("validates the complete settlement identity before consumer use", () => {
+  const currentQuestion = createProvisionalCurrentQuestion({
+    logicalQuestionUnit: logicalQuestion(),
+    sourceKind: "voice",
+  });
+  const settlement = settleCurrentQuestion({
+    currentQuestion,
+    deterministicProposal: proposal("deterministic-fast-path", {
+      sourceHash: currentQuestion.sourceHash,
+    }),
+    manualCorrectionRevision: 0,
+    policy: {
+      runtimeMutationAuthorized: true,
+      questionComplete: true,
+      commitParent: true,
+    },
+  });
+
+  const valid = validateCurrentQuestionSettlementIdentity({
+    settlement,
+    currentQuestion,
+  });
+  assert.equal(valid.authorized, true);
+  assert.deepEqual(valid.reasons, []);
+
+  const revisedQuestion = createProvisionalCurrentQuestion({
+    logicalQuestionUnit: logicalQuestion(3),
+    sourceKind: "voice",
+  });
+  const stale = validateCurrentQuestionSettlementIdentity({
+    settlement,
+    currentQuestion: revisedQuestion,
+  });
+  assert.equal(stale.authorized, false);
+  assert.deepEqual(stale.reasons, [
+    "logical-question-revision-mismatch",
+    "source-hash-mismatch",
+  ]);
+  assert.deepEqual(
+    formatCurrentQuestionSettlementIdentityValidationForTrace(stale),
+    {
+      currentQuestionSettlementInputIdentityAuthorized: false,
+      currentQuestionSettlementInputIdentityMismatchReasons: [
+        "logical-question-revision-mismatch",
+        "source-hash-mismatch",
+      ],
+    }
+  );
 });
 
 test("derives source kind from owned evidence before compatibility fallback", () => {

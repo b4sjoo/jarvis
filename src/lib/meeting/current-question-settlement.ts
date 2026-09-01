@@ -58,6 +58,18 @@ export interface ProvisionalCurrentQuestion {
   expiresAt?: number;
 }
 
+export type CurrentQuestionSettlementIdentityMismatchReason =
+  | "session-mismatch"
+  | "runtime-epoch-mismatch"
+  | "logical-question-unit-mismatch"
+  | "logical-question-revision-mismatch"
+  | "source-hash-mismatch";
+
+export interface CurrentQuestionSettlementIdentityValidation {
+  authorized: boolean;
+  reasons: CurrentQuestionSettlementIdentityMismatchReason[];
+}
+
 export interface CurrentQuestionMutationAuthorityDecision {
   authority: CurrentQuestionAuthority;
   authoritySource: CurrentQuestionAuthoritySource;
@@ -349,6 +361,57 @@ export function createProvisionalCurrentQuestion(input: {
     createdAt: logicalQuestionUnit.startedAt,
     updatedAt: input.now ?? logicalQuestionUnit.updatedAt,
     expiresAt: input.expiresAt,
+  };
+}
+
+export function validateCurrentQuestionSettlementIdentity(input: {
+  settlement: Pick<
+    CurrentQuestionSettlementDecision,
+    | "sessionId"
+    | "runtimeEpoch"
+    | "logicalQuestionUnitId"
+    | "revision"
+    | "sourceHash"
+  >;
+  currentQuestion: Pick<
+    ProvisionalCurrentQuestion,
+    | "sessionId"
+    | "runtimeEpoch"
+    | "logicalQuestionUnitId"
+    | "revision"
+    | "sourceHash"
+  >;
+}): CurrentQuestionSettlementIdentityValidation {
+  const reasons: CurrentQuestionSettlementIdentityMismatchReason[] = [];
+  if (input.settlement.sessionId !== input.currentQuestion.sessionId) {
+    reasons.push("session-mismatch");
+  }
+  if (input.settlement.runtimeEpoch !== input.currentQuestion.runtimeEpoch) {
+    reasons.push("runtime-epoch-mismatch");
+  }
+  if (
+    input.settlement.logicalQuestionUnitId !==
+    input.currentQuestion.logicalQuestionUnitId
+  ) {
+    reasons.push("logical-question-unit-mismatch");
+  }
+  if (input.settlement.revision !== input.currentQuestion.revision) {
+    reasons.push("logical-question-revision-mismatch");
+  }
+  if (input.settlement.sourceHash !== input.currentQuestion.sourceHash) {
+    reasons.push("source-hash-mismatch");
+  }
+  return { authorized: reasons.length === 0, reasons };
+}
+
+export function formatCurrentQuestionSettlementIdentityValidationForTrace(
+  validation: CurrentQuestionSettlementIdentityValidation | undefined
+): Record<string, unknown> {
+  return {
+    currentQuestionSettlementInputIdentityAuthorized:
+      validation?.authorized,
+    currentQuestionSettlementInputIdentityMismatchReasons:
+      validation?.reasons ?? [],
   };
 }
 
