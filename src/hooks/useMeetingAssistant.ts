@@ -28986,7 +28986,7 @@ export function useMeetingAssistant() {
           taskRuntimeTransitionCommitted:
             screenTaskRuntimeTransitionCommitted,
         });
-        let screenPhaseDecision =
+        const screenPhaseDecision: PlaybookPhaseDecision =
           screenBranchPhaseView?.ownerKind === "child"
             ? {
                 ...screenTransitionSeedPhaseDecision,
@@ -29002,7 +29002,7 @@ export function useMeetingAssistant() {
                   screenBranchPhaseView.questionType === "coding" &&
                   screenBranchPhaseView.phase ===
                     "implementation_validation"
-                    ? (["implementation", "edge_case_validation"] as const)
+                    ? ["implementation", "edge_case_validation"]
                     : screenTransitionSeedPhaseDecision.flags,
                 targetArtifact:
                   screenBranchPhaseView.questionType === "coding" &&

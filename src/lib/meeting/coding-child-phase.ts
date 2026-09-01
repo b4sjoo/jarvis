@@ -3,10 +3,8 @@ interface CodingChildPlaybookLike {
   phase: unknown;
 }
 
-interface CodingChildPhaseStateLike<
-  TPlaybook extends CodingChildPlaybookLike = CodingChildPlaybookLike,
-> {
-  playbook: TPlaybook;
+interface CodingChildPhaseStateLike {
+  playbook: CodingChildPlaybookLike;
   phase: string;
   phaseProgress: Record<string, boolean>;
   revision: number;
@@ -35,7 +33,7 @@ export function createCodingChildPhaseState<
 
 export function preserveOrCreateCodingChildPhaseState<
   TPlaybook extends CodingChildPlaybookLike,
-  TState extends CodingChildPhaseStateLike<TPlaybook>,
+  TState extends CodingChildPhaseStateLike,
 >(input: {
   questionType: unknown;
   existing?: TState;
@@ -47,7 +45,7 @@ export function preserveOrCreateCodingChildPhaseState<
       ...input.existing,
       playbook: { ...input.existing.playbook },
       phaseProgress: { ...input.existing.phaseProgress },
-    };
+    } as TState;
   }
   return createCodingChildPhaseState(input);
 }
