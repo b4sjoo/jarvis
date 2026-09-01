@@ -333,6 +333,7 @@ test("Narrow receipt excludes automatic LQU-owned context", () => {
   assert.deepEqual(compilation.selectedSourceTurnIds, ["turn-current"]);
   assert.doesNotMatch(compilation.context.transcript, /access control lists/i);
   assert.equal(compilation.context.activeMeetingTask, undefined);
+  assert.equal(compilation.recentSourceContextIncluded, false);
 });
 
 test("rejects a response-action receipt for another LQU revision", () => {

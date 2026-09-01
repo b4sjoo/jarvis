@@ -221,6 +221,11 @@ export function compileSettledAdvisorPromptContext(input: {
       : scope !== "current-only" || recentSourceContextOwnedByCurrentQuestion
         ? input.recentSourceContext
         : undefined;
+  const contextCandidateIds = new Set([
+    ...ownedContextIds,
+    ...recentLogicalQuestionSourceTurnIds,
+    ...(authorizedRecentSourceContext?.sourceTurnIds ?? []),
+  ]);
   const advisorEvidencePacket = projectEvidencePacketForScope(
     input.baseContext.advisorEvidencePacket,
     scope,
@@ -231,7 +236,7 @@ export function compileSettledAdvisorPromptContext(input: {
     scope,
     selectedSourceTurnIds,
     recentSourceContextIncluded: Boolean(
-      ownedContextIds.size > 0 || authorizedRecentSourceContext
+      selectedSourceTurnIds.some((turnId) => contextCandidateIds.has(turnId))
     ),
     rawTranscriptBypassRemoved:
       transcript !== input.baseContext.transcript,
