@@ -8,7 +8,7 @@ import {
 test("uses settled Relation only before a lifecycle command commits", () => {
   assert.deepEqual(
     resolvePostModelContinuityAuthority({
-      command: "advance-phase",
+      command: "set-phase",
       lifecycleCommittedBeforeAdvisor: false,
       activeChild: false,
     }),
@@ -23,7 +23,7 @@ test("uses settled Relation only before a lifecycle command commits", () => {
 test("projects committed lifecycle commands to their existing response owner", () => {
   assert.equal(
     resolvePostModelContinuityAuthority({
-      command: "advance-phase",
+      command: "set-phase",
       lifecycleCommittedBeforeAdvisor: true,
       activeChild: false,
     }).owner,

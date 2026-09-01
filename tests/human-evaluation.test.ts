@@ -875,6 +875,9 @@ test("stores whiteboard, manual next, and diagram overlay evaluation fields", ()
       questionType: "general-system-design",
       playbookId: "general_system_design",
       playbookPhase: "design_framing",
+      phaseOwnerKind: "parent",
+      phaseOwnerId: "parent_1",
+      phaseOwnerRevision: 4,
       whiteboardArtifactId: "whiteboard_1",
       whiteboardArtifactRevision: 2,
       whiteboardArtifactDomainTrack: "general_sd",
@@ -909,6 +912,9 @@ test("stores whiteboard, manual next, and diagram overlay evaluation fields", ()
   assert.equal(evaluations[0].detectedManualPhaseTo, "design_framing");
   assert.equal(evaluations[0].detectedManualPhaseTargetArtifact, "whiteboard");
   assert.equal(evaluations[0].detectedManualPhaseGuardStatus, "advanced");
+  assert.equal(evaluations[0].detectedPhaseOwnerKind, "parent");
+  assert.equal(evaluations[0].detectedPhaseOwnerId, "parent_1");
+  assert.equal(evaluations[0].detectedPhaseOwnerRevision, 4);
   assert.deepEqual(evaluations[0].selectedDiagramOverlayIds, [
     "mem_overlay_geo_dynamic_matching",
   ]);

@@ -106,7 +106,7 @@ test("allows only same-owner context updates after model execution", () => {
     "replace-parent",
     "attach-child",
     "resume-parent",
-    "advance-phase",
+    "set-phase",
     "update-source-attachment",
   ] as const) {
     assert.deepEqual(authorizePostModelTaskRuntimeTransition(transition), {

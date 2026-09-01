@@ -494,6 +494,78 @@ test("compiles Regenerate Artifacts with its terminal and expected intent", () =
   );
 });
 
+test("records the resolved visible owner for Regenerate instead of the ingress LQU", () => {
+  const actionId = "regenerate-visible-owner";
+  const procedure = buildSessionProcedureV1({
+    recordingSessionId: "recording-regenerate",
+    folderName: "session-regenerate",
+    sourceDigest: "digest",
+    scriptedValidation: true,
+    forcedScripted: true,
+    recordingIntegrityStatus: "complete",
+    timelineEvents: [
+      {
+        id: "timeline-regenerate-request",
+        kind: "manual-runtime-action",
+        createdAt: 100,
+        metadata: { actionId, stage: "requested" },
+      },
+    ],
+    transcriptTurns: [],
+    manualActions: [
+      createManualRuntimeActionEvent({
+        actionId,
+        action: "regenerate",
+        stage: "requested",
+        runtimeSessionId: "meeting-1",
+        runtimeEpoch: 2,
+        observedLogicalQuestionUnitId: "lqu-current-b",
+        observedLogicalQuestionUnitRevision: 2,
+        occurredAt: 100,
+      }),
+      createManualRuntimeActionEvent({
+        actionId,
+        action: "regenerate",
+        stage: "accepted",
+        runtimeSessionId: "meeting-1",
+        runtimeEpoch: 2,
+        traceId: "trace-regenerate-a",
+        observedLogicalQuestionUnitId: "lqu-visible-a",
+        observedLogicalQuestionUnitRevision: 1,
+        observedTaskId: "parent-a",
+        occurredAt: 110,
+      }),
+      createManualRuntimeActionEvent({
+        actionId,
+        action: "regenerate",
+        stage: "terminal",
+        runtimeSessionId: "meeting-1",
+        runtimeEpoch: 2,
+        traceId: "trace-regenerate-a",
+        observedLogicalQuestionUnitId: "lqu-visible-a",
+        observedLogicalQuestionUnitRevision: 1,
+        observedTaskId: "parent-a",
+        terminalDisposition: "completed",
+        reason: "visible-answer-committed",
+        occurredAt: 200,
+      }),
+    ],
+    humanEvaluationProjections: [],
+    generatedAt: 300,
+  });
+
+  assert.equal(procedure.steps[0]?.kind, "regenerate");
+  assert.equal(
+    procedure.steps[0]?.observed?.logicalQuestionUnitId,
+    "lqu-visible-a"
+  );
+  assert.equal(procedure.steps[0]?.observed?.logicalQuestionUnitRevision, 1);
+  assert.equal(
+    "targetStepId" in (procedure.steps[0]?.input ?? {}),
+    false
+  );
+});
+
 function projectionForTurn(
   turnId: string,
   traceId: string,

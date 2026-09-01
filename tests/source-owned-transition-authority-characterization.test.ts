@@ -459,7 +459,7 @@ test("distinguishes a committed phase identity change from progress-only context
     now: now + 11,
   });
 
-  assert.equal(receipt.runtimeTransition, "advance-phase");
+  assert.equal(receipt.runtimeTransition, "set-phase");
   assert.equal(
     sourceOwnedTransitionCommittedPhaseIdentityChange(receipt),
     true
