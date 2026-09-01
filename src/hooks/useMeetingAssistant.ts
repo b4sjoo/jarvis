@@ -123,6 +123,10 @@ import {
   type ManualRuntimeActionTerminalDisposition,
 } from "@/lib/meeting/manual-runtime-action";
 import { projectObservedAdvisorAttempt } from "@/lib/meeting/observed-advisor-outcome";
+import {
+  formatPostModelContinuityAuthorityForTrace,
+  resolvePostModelContinuityAuthority,
+} from "@/lib/meeting/post-model-continuity-authority";
 import { materializeHumanEvaluationAttemptProjectionV2 } from "@/lib/meeting/human-evaluation-attempt-projection";
 import { validateHumanEvaluationAttemptSubjectV2 } from "@/lib/meeting/human-evaluation-attempt";
 import { toHumanEvaluationCollectionProvenance } from "@/lib/meeting/session-evaluation-provenance";
@@ -14864,7 +14868,7 @@ export function useMeetingAssistant() {
       }
 
       let contextState = contextManagerRef.current.getState();
-      const existingInterviewTask =
+      const promptInterviewTask =
         promptContext.taskRuntime.parent ??
         (promptContext.activeMeetingTask?.screen && promptContext.taskRuntime.screenAttachment
           ? buildInterviewParentFromScreenTask(promptContext.taskRuntime.screenAttachment)
@@ -14873,14 +14877,28 @@ export function useMeetingAssistant() {
         triggerSource: advisorJob.source,
         hasActiveScreenTask: Boolean(promptContext.taskRuntime.screenAttachment),
       });
-      const parentMutationCommittedBeforeAdvisor = Boolean(
-        taskBoundaryCommittedBeforeAdvisor ||
-          (settledExecutionPlan?.taskMutationCommittedBeforeAdvisor &&
-            (settledExecutionPlan.taskMutationPolicy.kind ===
-              "create-parent" ||
-              settledExecutionPlan.taskMutationPolicy.kind ===
-                "replace-parent"))
-      );
+      const precommittedLifecycleCommand =
+        settledExecutionPlan?.taskMutationCommittedBeforeAdvisor
+          ? settledExecutionPlan.taskMutationPolicy.kind
+          : sourceOwnedTransitionCommittedBeforeAdvisor
+            ? sourceOwnedTransitionReceipt?.runtimeTransition
+            : taskBoundaryCommittedBeforeAdvisor
+              ? "create-parent"
+              : manualPhaseAdvanceCommitted
+                ? "advance-phase"
+                : undefined;
+      const postModelContinuityAuthority =
+        resolvePostModelContinuityAuthority({
+          command: precommittedLifecycleCommand,
+          lifecycleCommittedBeforeAdvisor: Boolean(
+            precommittedLifecycleCommand
+          ),
+          activeChild: Boolean(contextState.activeMeetingTask?.child),
+        });
+      const existingInterviewTask =
+        postModelContinuityAuthority.lifecycleCommittedBeforeAdvisor
+          ? contextState.taskRuntime.parent ?? promptInterviewTask
+          : promptInterviewTask;
       const shouldCommitAdvisorParent =
         !transientPersonalStatusDecision &&
         !responseMutationSuppressed &&
@@ -14893,7 +14911,7 @@ export function useMeetingAssistant() {
         effectiveAdvisorSettlementView.relationApplicable &&
         advisorTaskSignals.openingRoute?.commitParent !== false &&
         (effectiveAdvisorSettlementView.relation !== "new-parent" ||
-          parentMutationCommittedBeforeAdvisor ||
+          postModelContinuityAuthority.lifecycleCommittedBeforeAdvisor ||
           revisionStableParentContinuation ||
           Boolean(
             responseOpportunityGenerationGateOperationId &&
@@ -14902,9 +14920,11 @@ export function useMeetingAssistant() {
         (!sourceOwnedTransitionReceipt ||
           sourceOwnedTransitionCommittedBeforeAdvisor);
       const continuityRelation =
-        parentMutationCommittedBeforeAdvisor
-          ? "followup-parent"
-          : advisorContinuityRelation;
+        postModelContinuityAuthority.owner === "active-child"
+          ? "child-probe"
+          : postModelContinuityAuthority.owner === "active-parent"
+            ? "followup-parent"
+            : advisorContinuityRelation;
       const outputPhaseDecision =
         taskBoundaryCommittedBeforeAdvisor ||
         sourceOwnedTransitionCommittedBeforeAdvisor ||
@@ -15003,7 +15023,7 @@ export function useMeetingAssistant() {
               ? undefined
               : outputPhaseDecision,
             sourceTransitionPrecommitted:
-              sourceOwnedTransitionCommittedBeforeAdvisor,
+              postModelContinuityAuthority.lifecycleCommittedBeforeAdvisor,
             latestTurn,
             observationId:
               advisorEvidenceSource === "screen"
@@ -15057,6 +15077,9 @@ export function useMeetingAssistant() {
           ? "preserved"
           : "none";
       const answerArtifactMetadata = {
+        ...formatPostModelContinuityAuthorityForTrace(
+          postModelContinuityAuthority
+        ),
         ...formatResponseArtifactAuthorizationForTrace(
           effectiveArtifactAuthorization
         ),
