@@ -53,6 +53,17 @@ export interface EffectiveSourceTurnTextProjection {
   correctionIds: string[];
 }
 
+export interface EffectiveSourceTurnGroupProjection<
+  TSource extends { turnId: string; text: string },
+> {
+  sources: TSource[];
+  replaced: boolean;
+  replacedTurnIds: string[];
+  correctionIds: string[];
+  logicalQuestionUnitIds: string[];
+  logicalQuestionRevisions: number[];
+}
+
 export function projectEffectiveLogicalQuestionSources(
   unit: LogicalQuestionUnit
 ): EffectiveLogicalQuestionSourceProjection {
@@ -240,6 +251,53 @@ export function projectEffectiveTextForSourceTurn(input: {
     logicalQuestionUnitId: projection.logicalQuestionUnitId,
     logicalQuestionRevision: projection.logicalQuestionRevision,
     correctionIds: [...projection.correctionIds],
+  };
+}
+
+export function projectEffectiveSourceTurnGroup<
+  TSource extends { turnId: string; text: string },
+>(input: {
+  sources: readonly TSource[];
+  effectiveRecords?: EffectiveLogicalQuestionModelRecord[];
+  logicalQuestionUnit?: LogicalQuestionUnit;
+  sessionId: string;
+  runtimeEpoch: number;
+}): EffectiveSourceTurnGroupProjection<TSource> {
+  const projections = input.sources.map((source) => ({
+    source,
+    projection: projectEffectiveTextForSourceTurn({
+      turnId: source.turnId,
+      text: source.text,
+      effectiveRecords: input.effectiveRecords,
+      logicalQuestionUnit: input.logicalQuestionUnit,
+      sessionId: input.sessionId,
+      runtimeEpoch: input.runtimeEpoch,
+    }),
+  }));
+  return {
+    sources: projections.map(({ source, projection }) => ({
+      ...source,
+      text: projection.text,
+    })),
+    replaced: projections.some(({ projection }) => projection.replaced),
+    replacedTurnIds: projections
+      .filter(({ projection }) => projection.replaced)
+      .map(({ source }) => source.turnId),
+    correctionIds: uniqueStrings(
+      projections.flatMap(({ projection }) => projection.correctionIds)
+    ),
+    logicalQuestionUnitIds: uniqueStrings(
+      projections
+        .map(({ projection }) => projection.logicalQuestionUnitId)
+        .filter((value): value is string => Boolean(value))
+    ),
+    logicalQuestionRevisions: Array.from(
+      new Set(
+        projections
+          .map(({ projection }) => projection.logicalQuestionRevision)
+          .filter((value): value is number => typeof value === "number")
+      )
+    ).sort((left, right) => left - right),
   };
 }
 

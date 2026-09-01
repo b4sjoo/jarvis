@@ -204,16 +204,26 @@ export function appendSourceOwnedSetupCandidate(
   ) {
     return cloneCandidate(next);
   }
-  const sources = dedupeSources([...current.sources, ...next.sources]).slice(
-    -SOURCE_OWNED_SETUP_MAX_SOURCES
+  return rebuildSourceOwnedSetupCandidate(
+    next,
+    dedupeSources([...current.sources, ...next.sources])
   );
+}
+
+export function rebuildSourceOwnedSetupCandidate(
+  candidate: SourceOwnedSetupCandidate,
+  sources: readonly SourceOwnedSetupSource[]
+): SourceOwnedSetupCandidate {
+  const boundedSources = dedupeSources(
+    sources.map((source) => ({ ...source }))
+  ).slice(-SOURCE_OWNED_SETUP_MAX_SOURCES);
   return {
-    ...next,
-    sourceTurnIds: sources.map((source) => source.turnId),
-    sources,
-    text: boundSourceContextText(sources),
-    startedAt: sources[0]?.startedAt ?? next.startedAt,
-    endedAt: sources.at(-1)?.endedAt ?? next.endedAt,
+    ...candidate,
+    sourceTurnIds: boundedSources.map((source) => source.turnId),
+    sources: boundedSources,
+    text: boundSourceContextText(boundedSources),
+    startedAt: boundedSources[0]?.startedAt ?? candidate.startedAt,
+    endedAt: boundedSources.at(-1)?.endedAt ?? candidate.endedAt,
   };
 }
 

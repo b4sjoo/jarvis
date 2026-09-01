@@ -5,9 +5,11 @@ import type { LogicalQuestionUnit } from "../src/lib/meeting/logical-question-un
 import {
   appendSourceOwnedSetupCandidate,
   createSourceOwnedSetupCandidate,
+  rebuildSourceOwnedSetupCandidate,
   selectPreviousLogicalQuestionContext,
   selectSourceOwnedSemanticContext,
 } from "../src/lib/meeting/source-owned-semantic-context.js";
+import { projectEffectiveSourceTurnGroup } from "../src/lib/meeting/logical-question-effective-projection.js";
 import type { TranscriptTurn } from "../src/lib/meeting/types.js";
 
 function task(parentId = "parent-oasis"): ActiveMeetingTask {
@@ -364,4 +366,74 @@ test("rejects an expired or explicitly separated previous LQU", () => {
     }).reason,
     "explicit-boundary"
   );
+});
+
+test("uses per-source effective text when selecting a grouped setup", () => {
+  const firstTurn = turn(
+    "turn-context-1",
+    "The ride-sharing corpus changes daily.",
+    1_000,
+    2_000
+  );
+  const secondTurn = turn(
+    "turn-context-2",
+    "Documents have access control lists.",
+    3_000,
+    4_000
+  );
+  const first = createSourceOwnedSetupCandidate({
+    turn: firstTurn,
+    sessionId: "session-a",
+    runtimeEpoch: 3,
+  });
+  const second = createSourceOwnedSetupCandidate({
+    turn: secondTurn,
+    sessionId: "session-a",
+    runtimeEpoch: 3,
+  });
+  assert.ok(first);
+  assert.ok(second);
+  const group = appendSourceOwnedSetupCandidate(first, second);
+  const projection = projectEffectiveSourceTurnGroup({
+    sources: group.sources,
+    effectiveRecords: [
+      {
+        sessionId: "session-a",
+        runtimeEpoch: 3,
+        logicalQuestionUnitId: "lqu-corrected-setup",
+        logicalQuestionRevision: 2,
+        sourceTurnIds: [firstTurn.id],
+        text: "The RAG corpus changes daily.",
+        correctionIds: ["correction-rag"],
+        effectiveSourceTexts: [
+          { turnId: firstTurn.id, text: "The RAG corpus changes daily." },
+        ],
+        updatedAt: 2_500,
+        settledAt: 2_500,
+      },
+    ],
+    sessionId: "session-a",
+    runtimeEpoch: 3,
+  });
+  const effectiveGroup = rebuildSourceOwnedSetupCandidate(
+    group,
+    projection.sources
+  );
+  const ask = turn(
+    "turn-ask",
+    "How would you index those documents?",
+    5_000,
+    6_000
+  );
+  const selection = selectSourceOwnedSemanticContext({
+    candidate: effectiveGroup,
+    sessionId: "session-a",
+    runtimeEpoch: 3,
+    logicalQuestionUnit: unit(ask),
+    transcriptTurns: [firstTurn, secondTurn, ask],
+  });
+
+  assert.match(selection.context?.text ?? "", /RAG corpus/);
+  assert.doesNotMatch(selection.context?.text ?? "", /ride-sharing/i);
+  assert.match(selection.context?.text ?? "", /access control lists/i);
 });

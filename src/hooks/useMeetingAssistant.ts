@@ -151,9 +151,9 @@ import {
   createSourceOwnedSetupCandidate,
   formatPreviousLogicalQuestionContextSelectionForTrace,
   formatSourceOwnedSemanticContextSelectionForTrace,
+  rebuildSourceOwnedSetupCandidate,
   selectPreviousLogicalQuestionContext,
   selectSourceOwnedSemanticContext,
-  SOURCE_OWNED_SETUP_MAX_CHARS,
   type SourceOwnedSetupCandidate,
 } from "@/lib/meeting/source-owned-semantic-context";
 import {
@@ -165,8 +165,8 @@ import {
 } from "@/lib/meeting/effective-question-source-ledger";
 import {
   projectAdvisorTranscriptForLogicalQuestion,
+  projectEffectiveSourceTurnGroup,
   projectEffectiveLogicalQuestionSources,
-  projectEffectiveTextForSourceTurn,
 } from "@/lib/meeting/logical-question-effective-projection";
 import {
   coordinateOrderedSettlement,
@@ -12822,9 +12822,8 @@ export function useMeetingAssistant() {
       effectiveQuestionSourceLedgerRef.current.listHistory().length;
     const sourceOwnedSetupCandidate = latestSourceOwnedSetupRef.current;
     const sourceOwnedSetupProjection = sourceOwnedSetupCandidate
-      ? projectEffectiveTextForSourceTurn({
-          turnId: sourceOwnedSetupCandidate.turnId,
-          text: sourceOwnedSetupCandidate.text,
+      ? projectEffectiveSourceTurnGroup({
+          sources: sourceOwnedSetupCandidate.sources,
           effectiveRecords: effectiveQuestionSourceRecords,
           logicalQuestionUnit: advisorJob.logicalQuestionUnit,
           sessionId: effectiveSettlementContextState.sessionId,
@@ -12833,13 +12832,10 @@ export function useMeetingAssistant() {
       : undefined;
     const effectiveSourceOwnedSetupCandidate =
       sourceOwnedSetupCandidate && sourceOwnedSetupProjection?.replaced
-        ? {
-            ...sourceOwnedSetupCandidate,
-            text: sourceOwnedSetupProjection.text.slice(
-              0,
-              SOURCE_OWNED_SETUP_MAX_CHARS
-            ),
-          }
+        ? rebuildSourceOwnedSetupCandidate(
+            sourceOwnedSetupCandidate,
+            sourceOwnedSetupProjection.sources
+          )
         : sourceOwnedSetupCandidate;
     const sourceOwnedSetupSelection =
       selectSourceOwnedSemanticContext({
@@ -12881,11 +12877,13 @@ export function useMeetingAssistant() {
         sourceOwnedSetupEffectiveProjectionApplied:
           sourceOwnedSetupProjection?.replaced ?? false,
         sourceOwnedSetupEffectiveLogicalQuestionUnitId:
-          sourceOwnedSetupProjection?.logicalQuestionUnitId,
+          sourceOwnedSetupProjection?.logicalQuestionUnitIds.at(-1),
         sourceOwnedSetupEffectiveLogicalQuestionRevision:
-          sourceOwnedSetupProjection?.logicalQuestionRevision,
+          sourceOwnedSetupProjection?.logicalQuestionRevisions.at(-1),
         sourceOwnedSetupEffectiveCorrectionIds:
           sourceOwnedSetupProjection?.correctionIds,
+        sourceOwnedSetupEffectiveProjectedTurnIds:
+          sourceOwnedSetupProjection?.replacedTurnIds,
       });
     }
     advisorProjectAnchor = transientPersonalStatusDecision

@@ -4,6 +4,7 @@ import { applyActiveQuestionTermCorrection } from "../src/lib/meeting/active-que
 import {
   projectAdvisorTranscriptForLogicalQuestion,
   projectEffectiveLogicalQuestionSources,
+  projectEffectiveSourceTurnGroup,
   projectEffectiveTextForSourceTurn,
   type EffectiveLogicalQuestionModelRecord,
 } from "../src/lib/meeting/logical-question-effective-projection.js";
@@ -195,6 +196,37 @@ test("projects one corrected setup turn without widening its source scope", () =
   assert.match(projection.text, /RAG/);
   assert.doesNotMatch(projection.text, /ride-sharing/i);
   assert.equal(projection.logicalQuestionUnitId, "logical-question-1");
+});
+
+test("projects every corrected source in a bounded setup group", () => {
+  const corrected = correct(unit("The ride-sharing corpus changes daily."));
+  const projection = projectEffectiveSourceTurnGroup({
+    sources: [
+      {
+        turnId: "turn-1",
+        text: "The ride-sharing corpus changes daily.",
+        startedAt: 1,
+      },
+      {
+        turnId: "turn-2",
+        text: "Documents have access control lists.",
+        startedAt: 2,
+      },
+    ],
+    effectiveRecords: [modelRecord(corrected)],
+    sessionId: "session-1",
+    runtimeEpoch: 1,
+  });
+
+  assert.equal(projection.replaced, true);
+  assert.deepEqual(projection.replacedTurnIds, ["turn-1"]);
+  assert.match(projection.sources[0]?.text ?? "", /RAG/);
+  assert.doesNotMatch(projection.sources[0]?.text ?? "", /ride-sharing/i);
+  assert.equal(
+    projection.sources[1]?.text,
+    "Documents have access control lists."
+  );
+  assert.deepEqual(projection.correctionIds, ["correction-1"]);
 });
 
 function correct(logicalQuestionUnit: LogicalQuestionUnit) {
