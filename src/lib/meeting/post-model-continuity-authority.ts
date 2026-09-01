@@ -17,6 +17,7 @@ export function resolvePostModelContinuityAuthority(input: {
   command?: string;
   lifecycleCommittedBeforeAdvisor: boolean;
   activeChild?: boolean;
+  phaseOwnerKind?: "parent" | "child";
 }): PostModelContinuityAuthority {
   if (!input.lifecycleCommittedBeforeAdvisor || !input.command) {
     return {
@@ -27,7 +28,8 @@ export function resolvePostModelContinuityAuthority(input: {
   }
   if (
     input.command === "attach-child" ||
-    (input.command === "update-source-attachment" && input.activeChild)
+    (input.command === "update-source-attachment" && input.activeChild) ||
+    (input.command === "set-phase" && input.phaseOwnerKind === "child")
   ) {
     return {
       owner: "active-child",

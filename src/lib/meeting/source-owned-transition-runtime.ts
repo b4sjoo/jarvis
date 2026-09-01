@@ -43,7 +43,7 @@ export function resolveSourceOwnedRuntimeTransition(input: {
   }
   if (sourceResult.candidate.kind === "phase-progress") {
     return sourceResult.phaseBefore !== sourceResult.phaseAfter
-      ? "advance-phase"
+      ? "set-phase"
       : "update-parent-context";
   }
   return runtimeBefore.parent ? "replace-parent" : "create-parent";

@@ -166,7 +166,7 @@ test("accepts a semantic phase command and rejects a mislabeled transition", () 
     mutation: {
       id: "phase-1",
       kind: "commit-transition",
-      transition: "advance-phase",
+      transition: "set-phase",
       reason: "manual-next",
       parent: phaseParent,
     },

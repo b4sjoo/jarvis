@@ -993,12 +993,29 @@ function validateRuntimeTransition(input: {
       ? undefined
       : "invalid-transition";
   }
-  if (transition === "advance-phase") {
+  if (transition === "set-phase") {
+    const parentPhaseChanged = Boolean(
+      beforeParent &&
+        afterParent &&
+        !beforeParent.child &&
+        !afterParent.child &&
+        beforeParent.playbookPhase !== afterParent.playbookPhase
+    );
+    const childPhaseChanged = Boolean(
+      beforeParent?.child?.id &&
+        beforeParent.child.id === afterParent?.child?.id &&
+        beforeParent.child.phaseState &&
+        afterParent?.child?.phaseState &&
+        beforeParent.child.phaseState.phase !==
+          afterParent.child.phaseState.phase &&
+        afterParent.child.phaseState.revision ===
+          beforeParent.child.phaseState.revision + 1
+    );
     return Boolean(
       beforeParent &&
         afterParent &&
         beforeParent.id === afterParent.id &&
-        beforeParent.playbookPhase !== afterParent.playbookPhase &&
+        (parentPhaseChanged || childPhaseChanged) &&
         afterParent.revisions === beforeParent.revisions + 1
     )
       ? undefined

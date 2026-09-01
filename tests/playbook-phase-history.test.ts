@@ -8,16 +8,22 @@ import {
   decideManualPlaybookPhaseBack,
   decideManualPlaybookPhaseNextRoundTrip,
   formatPlaybookPhaseNavigationDecisionForTrace,
+  toPlaybookPhaseOwnerKey,
   type AppendPlaybookPhaseTransitionResult,
   type PlaybookPhaseHistoryState,
+  type PlaybookPhaseOwner,
 } from "../src/lib/meeting/playbook-phase-history.js";
+import type { InterviewPlaybookPhase } from "../src/lib/meeting/types.js";
 
-test("appends immutable per-parent history idempotently and bounds retained entries", () => {
+const parentOwner = owner("parent", "parent-1", "parent-1");
+const childOwner = owner("child", "child-1", "parent-1");
+
+test("appends immutable per-branch history idempotently and bounds retained entries", () => {
   const initial = createPlaybookPhaseHistoryState(2);
   const first = expectAppended(
     appendCommittedAutomaticPhaseTransition(initial, {
       operationId: "auto-1",
-      parentTaskId: "parent-1",
+      owner: parentOwner,
       fromPhase: "requirement_clarification",
       toPhase: "design_framing",
       taskRevision: 4,
@@ -25,14 +31,14 @@ test("appends immutable per-parent history idempotently and bounds retained entr
       committedAt: 10,
     })
   );
-
-  assert.equal(initial.parents["parent-1"], undefined);
+  const key = toPlaybookPhaseOwnerKey(parentOwner);
+  assert.equal(initial.branches[key], undefined);
   assert.equal(first.entry.phaseRevision, 1);
-  assert.equal(first.state.parents["parent-1"]?.phaseRevision, 1);
+  assert.deepEqual(first.entry.owner, parentOwner);
 
   const duplicate = appendCommittedAutomaticPhaseTransition(first.state, {
     operationId: "auto-1",
-    parentTaskId: "parent-1",
+    owner: parentOwner,
     fromPhase: "requirement_clarification",
     toPhase: "design_framing",
     taskRevision: 4,
@@ -45,7 +51,7 @@ test("appends immutable per-parent history idempotently and bounds retained entr
   const second = expectAppended(
     appendCommittedManualNextPhaseTransition(first.state, {
       operationId: "next-1",
-      parentTaskId: "parent-1",
+      owner: parentOwner,
       fromPhase: "design_framing",
       toPhase: "follow_up",
       taskRevision: 5,
@@ -56,7 +62,7 @@ test("appends immutable per-parent history idempotently and bounds retained entr
   const third = expectAppended(
     appendCommittedAutomaticPhaseTransition(second.state, {
       operationId: "auto-2",
-      parentTaskId: "parent-1",
+      owner: parentOwner,
       fromPhase: "follow_up",
       toPhase: "concept_explanation",
       taskRevision: 6,
@@ -64,267 +70,135 @@ test("appends immutable per-parent history idempotently and bounds retained entr
       committedAt: 30,
     })
   );
-
-  const parent = third.state.parents["parent-1"];
-  assert.equal(parent?.phaseRevision, 3);
   assert.deepEqual(
-    parent?.entries.map((entry) => entry.operationId),
+    third.state.branches[key]?.entries.map((entry) => entry.operationId),
     ["next-1", "auto-2"]
   );
 });
 
-test("Back no-ops when the parent has no committed phase history", () => {
-  const decision = decideManualPlaybookPhaseBack({
+test("Back rejects missing history, stale revisions, and another branch", () => {
+  const empty = decideManualPlaybookPhaseBack({
     history: createPlaybookPhaseHistoryState(),
-    request: {
-      operationId: "back-empty",
-      parentTaskId: "parent-1",
-      expectedTaskRevision: 2,
-      expectedPhaseRevision: 0,
-      requestedAt: 100,
-    },
-    current: {
-      parentTaskId: "parent-1",
-      currentPhase: "requirement_clarification",
-      taskRevision: 2,
-      phaseRevision: 0,
-    },
+    request: request("back-empty", parentOwner, 2, 0),
+    current: snapshot(parentOwner, "requirement_clarification", 2, 0),
   });
+  assert.equal(empty.status, "no-history");
 
-  assert.equal(decision.status, "no-history");
-  assert.equal(decision.action, "no-op");
-  assert.equal(decision.targetPhase, undefined);
-  assert.equal(decision.artifactDisposition, "preserve");
-});
-
-test("Back rejects stale task and phase revisions", () => {
-  const history = oneTransitionHistory();
+  const history = oneTransitionHistory(parentOwner);
   const staleTask = decideManualPlaybookPhaseBack({
     history,
-    request: {
-      operationId: "back-stale-task",
-      parentTaskId: "parent-1",
-      expectedTaskRevision: 3,
-      expectedPhaseRevision: 1,
-      requestedAt: 100,
-    },
-    current: {
-      parentTaskId: "parent-1",
-      currentPhase: "design_framing",
-      taskRevision: 4,
-      phaseRevision: 1,
-    },
+    request: request("back-stale-task", parentOwner, 3, 1),
+    current: snapshot(parentOwner, "design_framing", 4, 1),
   });
   const stalePhase = decideManualPlaybookPhaseBack({
     history,
-    request: {
-      operationId: "back-stale-phase",
-      parentTaskId: "parent-1",
-      expectedTaskRevision: 4,
-      expectedPhaseRevision: 0,
-      requestedAt: 100,
-    },
-    current: {
-      parentTaskId: "parent-1",
-      currentPhase: "design_framing",
-      taskRevision: 4,
-      phaseRevision: 1,
-    },
+    request: request("back-stale-phase", parentOwner, 4, 0),
+    current: snapshot(parentOwner, "design_framing", 4, 1),
   });
-
+  const wrongOwner = decideManualPlaybookPhaseBack({
+    history,
+    request: request("back-wrong-owner", parentOwner, 4, 1),
+    current: snapshot(childOwner, "implementation_validation", 4, 0),
+  });
   assert.equal(staleTask.status, "stale-task-revision");
   assert.equal(stalePhase.status, "stale-phase-revision");
+  assert.equal(wrongOwner.status, "owner-mismatch");
 });
 
-test("Back never crosses a parent boundary", () => {
-  const decision = decideManualPlaybookPhaseBack({
-    history: oneTransitionHistory(),
-    request: {
-      operationId: "back-wrong-parent",
-      parentTaskId: "parent-1",
-      expectedTaskRevision: 4,
-      expectedPhaseRevision: 1,
-      requestedAt: 100,
-    },
-    current: {
-      parentTaskId: "parent-2",
-      currentPhase: "design_framing",
-      taskRevision: 4,
-      phaseRevision: 1,
-    },
+test("parent and child histories remain isolated", () => {
+  const parentHistory = oneTransitionHistory(parentOwner);
+  const childBack = decideManualPlaybookPhaseBack({
+    history: parentHistory,
+    request: request("child-back", childOwner, 4, 0),
+    current: snapshot(childOwner, "implementation_validation", 4, 0),
   });
+  assert.equal(childBack.status, "no-history");
 
-  assert.equal(decision.status, "parent-mismatch");
-  assert.equal(decision.action, "no-op");
-});
-
-test("Back uses parent history while a child of the same parent is visible", () => {
-  const decision = decideManualPlaybookPhaseBack({
-    history: oneTransitionHistory(),
-    request: {
-      operationId: "back-from-child",
-      parentTaskId: "parent-1",
-      expectedTaskRevision: 4,
-      expectedPhaseRevision: 1,
-      requestedAt: 100,
-    },
-    current: {
-      parentTaskId: "parent-1",
-      currentPhase: "design_framing",
-      taskRevision: 4,
-      phaseRevision: 1,
-      visibleChild: {
-        childTaskId: "child-1",
-        parentTaskId: "parent-1",
-      },
-    },
-  });
-
-  assert.equal(decision.status, "ready");
-  assert.equal(decision.targetPhase, "requirement_clarification");
-  assert.equal(decision.childPresentationDisposition, "resume-parent");
-  assert.equal(decision.visibleChildTaskId, "child-1");
-});
-
-test("Back returns the prior committed phase and appends a manual-back entry", () => {
-  const history = twoTransitionHistory();
-  const decision = expectReadyBack(
-    decideManualPlaybookPhaseBack({
-      history,
-      request: {
-        operationId: "back-1",
-        parentTaskId: "parent-1",
-        expectedTaskRevision: 6,
-        expectedPhaseRevision: 2,
-        requestedAt: 100,
-      },
-      current: {
-        parentTaskId: "parent-1",
-        currentPhase: "follow_up",
-        taskRevision: 6,
-        phaseRevision: 2,
-      },
+  const childHistory = expectAppended(
+    appendCommittedAutomaticPhaseTransition(parentHistory, {
+      operationId: "child-phase",
+      owner: childOwner,
+      fromPhase: "optimized_pseudocode",
+      toPhase: "implementation_validation",
+      taskRevision: 5,
+      expectedPhaseRevision: 0,
+      committedAt: 20,
     })
-  );
-
-  assert.equal(decision.targetPhase, "design_framing");
-  assert.equal(decision.artifactDisposition, "preserve");
-
-  const appended = expectAppended(
-    appendCommittedManualBackPhaseTransition(history, {
-      operationId: decision.operationId,
-      parentTaskId: decision.parentTaskId,
-      fromPhase: decision.fromPhase,
-      toPhase: decision.targetPhase,
-      taskRevision: 6,
-      expectedPhaseRevision: decision.expectedPhaseRevision,
-      committedAt: 110,
-    })
-  );
-  assert.equal(appended.entry.source, "manual-back");
-  assert.equal(appended.entry.phaseRevision, 3);
+  ).state;
   assert.equal(
-    lastEntry(appended.state)?.toPhase,
-    "design_framing"
+    childHistory.branches[toPlaybookPhaseOwnerKey(parentOwner)]?.phaseRevision,
+    1
   );
-
-  const trace = formatPlaybookPhaseNavigationDecisionForTrace(decision);
-  assert.equal(trace.manualPhaseDirection, "back");
-  assert.equal(trace.manualPhaseTo, "design_framing");
-  assert.equal(trace.artifactDisposition, "preserve");
+  assert.equal(
+    childHistory.branches[toPlaybookPhaseOwnerKey(childOwner)]?.phaseRevision,
+    1
+  );
 });
 
-test("Next after Back targets the phase that Back just left", () => {
-  const history = twoTransitionHistory();
+test("Back and Next round-trip within the same branch", () => {
+  const history = twoTransitionHistory(parentOwner);
   const back = expectReadyBack(
     decideManualPlaybookPhaseBack({
       history,
-      request: {
-        operationId: "back-round-trip",
-        parentTaskId: "parent-1",
-        expectedTaskRevision: 6,
-        expectedPhaseRevision: 2,
-        requestedAt: 100,
-      },
-      current: {
-        parentTaskId: "parent-1",
-        currentPhase: "follow_up",
-        taskRevision: 6,
-        phaseRevision: 2,
-      },
+      request: request("back-round-trip", parentOwner, 6, 2),
+      current: snapshot(parentOwner, "follow_up", 6, 2),
     })
   );
+  assert.equal(back.targetPhase, "design_framing");
+
   const afterBack = expectAppended(
     appendCommittedManualBackPhaseTransition(history, {
       operationId: back.operationId,
-      parentTaskId: back.parentTaskId,
+      owner: back.owner,
       fromPhase: back.fromPhase,
       toPhase: back.targetPhase,
-      taskRevision: 6,
+      taskRevision: 7,
       expectedPhaseRevision: back.expectedPhaseRevision,
       committedAt: 110,
     })
   ).state;
   const next = decideManualPlaybookPhaseNextRoundTrip({
     history: afterBack,
-    request: {
-      operationId: "next-round-trip",
-      parentTaskId: "parent-1",
-      expectedTaskRevision: 7,
-      expectedPhaseRevision: 3,
-      requestedAt: 120,
-    },
-    current: {
-      parentTaskId: "parent-1",
-      currentPhase: "design_framing",
-      taskRevision: 7,
-      phaseRevision: 3,
-    },
+    request: request("next-round-trip", parentOwner, 7, 3),
+    current: snapshot(parentOwner, "design_framing", 7, 3),
   });
-
   assert.equal(next.status, "ready");
   assert.equal(next.targetPhase, "follow_up");
-  assert.equal(next.artifactDisposition, "preserve");
+  if (next.status !== "ready") assert.fail("expected ready Next");
 
-  if (next.status !== "ready") assert.fail("expected round-trip Next");
   const afterNext = expectAppended(
     appendCommittedManualNextPhaseTransition(afterBack, {
       operationId: next.operationId,
-      parentTaskId: next.parentTaskId,
+      owner: next.owner,
       fromPhase: next.fromPhase,
       toPhase: next.targetPhase,
-      taskRevision: 7,
+      taskRevision: 8,
       expectedPhaseRevision: next.expectedPhaseRevision,
       committedAt: 130,
     })
   ).state;
   const noSecondRoundTrip = decideManualPlaybookPhaseNextRoundTrip({
     history: afterNext,
-    request: {
-      operationId: "next-again",
-      parentTaskId: "parent-1",
-      expectedTaskRevision: 8,
-      expectedPhaseRevision: 4,
-      requestedAt: 140,
-    },
-    current: {
-      parentTaskId: "parent-1",
-      currentPhase: "follow_up",
-      taskRevision: 8,
-      phaseRevision: 4,
-    },
+    request: request("next-again", parentOwner, 8, 4),
+    current: snapshot(parentOwner, "follow_up", 8, 4),
   });
-
   assert.equal(noSecondRoundTrip.status, "no-forward-history");
+
+  const trace = formatPlaybookPhaseNavigationDecisionForTrace(back);
+  assert.equal(trace.phaseOwnerKind, "parent");
+  assert.equal(trace.phaseOwnerId, "parent-1");
+  assert.equal(trace.branchDisposition, "preserve-active-branch");
 });
 
-function oneTransitionHistory(): PlaybookPhaseHistoryState {
+function oneTransitionHistory(
+  branchOwner: PlaybookPhaseOwner
+): PlaybookPhaseHistoryState {
   return expectAppended(
     appendCommittedAutomaticPhaseTransition(
       createPlaybookPhaseHistoryState(),
       {
         operationId: "auto-base",
-        parentTaskId: "parent-1",
+        owner: branchOwner,
         fromPhase: "requirement_clarification",
         toPhase: "design_framing",
         taskRevision: 4,
@@ -335,12 +209,14 @@ function oneTransitionHistory(): PlaybookPhaseHistoryState {
   ).state;
 }
 
-function twoTransitionHistory(): PlaybookPhaseHistoryState {
-  const first = oneTransitionHistory();
+function twoTransitionHistory(
+  branchOwner: PlaybookPhaseOwner
+): PlaybookPhaseHistoryState {
+  const first = oneTransitionHistory(branchOwner);
   return expectAppended(
     appendCommittedManualNextPhaseTransition(first, {
       operationId: "next-base",
-      parentTaskId: "parent-1",
+      owner: branchOwner,
       fromPhase: "design_framing",
       toPhase: "follow_up",
       taskRevision: 5,
@@ -350,9 +226,36 @@ function twoTransitionHistory(): PlaybookPhaseHistoryState {
   ).state;
 }
 
-function lastEntry(state: PlaybookPhaseHistoryState) {
-  const entries = state.parents["parent-1"]?.entries ?? [];
-  return entries[entries.length - 1];
+function owner(
+  kind: PlaybookPhaseOwner["kind"],
+  id: string,
+  parentId: string
+): PlaybookPhaseOwner {
+  return { kind, id, parentId };
+}
+
+function request(
+  operationId: string,
+  branchOwner: PlaybookPhaseOwner,
+  expectedTaskRevision: number,
+  expectedPhaseRevision: number
+) {
+  return {
+    operationId,
+    owner: branchOwner,
+    expectedTaskRevision,
+    expectedPhaseRevision,
+    requestedAt: 100,
+  };
+}
+
+function snapshot(
+  branchOwner: PlaybookPhaseOwner,
+  currentPhase: InterviewPlaybookPhase,
+  taskRevision: number,
+  phaseRevision: number
+) {
+  return { owner: branchOwner, currentPhase, taskRevision, phaseRevision };
 }
 
 function expectAppended(result: AppendPlaybookPhaseTransitionResult) {

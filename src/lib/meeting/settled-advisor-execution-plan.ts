@@ -54,6 +54,7 @@ import type {
   TaskTopicDomain,
   TransientPersonalStatusDecision,
 } from "./types.js";
+import type { MeetingPhaseOwner } from "./meeting-task-runtime-transition.js";
 
 export interface SettledAdvisorMemoryPolicy {
   questionType: CurrentQuestionSettlementDecision["questionType"];
@@ -109,7 +110,11 @@ export type TaskLifecycleCommand =
       question: string;
     }
   | { kind: "resume-parent" }
-  | { kind: "advance-phase"; phase: InterviewPlaybookPhase }
+  | {
+      kind: "set-phase";
+      owner: MeetingPhaseOwner;
+      phase: InterviewPlaybookPhase;
+    }
   | { kind: "update-parent-context" };
 
 export interface SettledAdvisorExecutionPlan {

@@ -1,9 +1,14 @@
+export interface MeetingPhaseOwner {
+  kind: "parent" | "child";
+  id: string;
+}
+
 export type MeetingTaskRuntimeTransitionKind =
   | "create-parent"
   | "replace-parent"
   | "attach-child"
   | "resume-parent"
-  | "advance-phase"
+  | "set-phase"
   | "update-parent-context"
   | "update-source-attachment";
 
@@ -15,11 +20,12 @@ export function normalizeMeetingTaskRuntimeTransitionKind(
     value === "replace-parent" ||
     value === "attach-child" ||
     value === "resume-parent" ||
-    value === "advance-phase" ||
+    value === "set-phase" ||
     value === "update-parent-context" ||
     value === "update-source-attachment"
   ) {
     return value;
   }
+  if (value === "advance-phase") return "set-phase";
   return undefined;
 }

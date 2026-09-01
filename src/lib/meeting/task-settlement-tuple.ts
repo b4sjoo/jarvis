@@ -89,7 +89,7 @@ export function projectObservedParentAction(input: {
   if (
     lifecycleCommand === "preserve" ||
     lifecycleCommand === "update-parent-context" ||
-    lifecycleCommand === "advance-phase" ||
+    lifecycleCommand === "set-phase" ||
     input.currentOnly
   ) {
     return "preserve";

@@ -110,7 +110,7 @@ function selectTestTransition(input: {
     afterParent &&
     beforeParent.playbookPhase !== afterParent.playbookPhase
   ) {
-    return "advance-phase";
+    return "set-phase";
   }
   return "update-parent-context";
 }

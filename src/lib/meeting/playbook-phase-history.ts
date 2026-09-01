@@ -5,9 +5,15 @@ export type PlaybookPhaseTransitionSource =
   | "manual-next"
   | "manual-back";
 
+export interface PlaybookPhaseOwner {
+  kind: "parent" | "child";
+  id: string;
+  parentId: string;
+}
+
 export interface PlaybookPhaseHistoryEntry {
   operationId: string;
-  parentTaskId: string;
+  owner: PlaybookPhaseOwner;
   fromPhase: InterviewPlaybookPhase;
   toPhase: InterviewPlaybookPhase;
   source: PlaybookPhaseTransitionSource;
@@ -16,20 +22,20 @@ export interface PlaybookPhaseHistoryEntry {
   committedAt: number;
 }
 
-export interface ParentPlaybookPhaseHistory {
-  parentTaskId: string;
+export interface BranchPlaybookPhaseHistory {
+  owner: PlaybookPhaseOwner;
   phaseRevision: number;
   entries: readonly PlaybookPhaseHistoryEntry[];
 }
 
 export interface PlaybookPhaseHistoryState {
-  maxEntriesPerParent: number;
-  parents: Readonly<Record<string, ParentPlaybookPhaseHistory>>;
+  maxEntriesPerBranch: number;
+  branches: Readonly<Record<string, BranchPlaybookPhaseHistory>>;
 }
 
 export interface AppendCommittedPlaybookPhaseTransitionInput {
   operationId: string;
-  parentTaskId: string;
+  owner: PlaybookPhaseOwner;
   fromPhase: InterviewPlaybookPhase;
   toPhase: InterviewPlaybookPhase;
   taskRevision: number;
@@ -58,19 +64,15 @@ export type AppendPlaybookPhaseTransitionResult =
     };
 
 export interface PlaybookPhaseRuntimeSnapshot {
-  parentTaskId: string;
+  owner: PlaybookPhaseOwner;
   currentPhase: InterviewPlaybookPhase;
   taskRevision: number;
   phaseRevision: number;
-  visibleChild?: {
-    childTaskId: string;
-    parentTaskId: string;
-  };
 }
 
 export interface ManualPlaybookPhaseBackRequest {
   operationId: string;
-  parentTaskId: string;
+  owner: PlaybookPhaseOwner;
   expectedTaskRevision: number;
   expectedPhaseRevision: number;
   requestedAt: number;
@@ -81,21 +83,20 @@ export type ManualPlaybookPhaseNavigationGuardStatus =
   | "duplicate-operation"
   | "no-history"
   | "no-forward-history"
-  | "parent-mismatch"
+  | "owner-mismatch"
   | "stale-task-revision"
   | "stale-phase-revision"
   | "phase-history-mismatch";
 
 interface ManualPlaybookPhaseDecisionBase {
   operationId: string;
-  parentTaskId: string;
+  owner: PlaybookPhaseOwner;
   fromPhase: InterviewPlaybookPhase;
   expectedTaskRevision: number;
   expectedPhaseRevision: number;
   historyDepth: number;
   artifactDisposition: "preserve";
-  childPresentationDisposition: "unchanged" | "resume-parent";
-  visibleChildTaskId?: string;
+  branchDisposition: "preserve-active-branch";
   reason: string;
 }
 
@@ -122,7 +123,7 @@ export type ManualPlaybookPhaseBackDecision =
 
 export interface ManualPlaybookPhaseNextRoundTripRequest {
   operationId: string;
-  parentTaskId: string;
+  owner: PlaybookPhaseOwner;
   expectedTaskRevision: number;
   expectedPhaseRevision: number;
   requestedAt: number;
@@ -152,14 +153,14 @@ export type ManualPlaybookPhaseNextRoundTripDecision =
 export const DEFAULT_PLAYBOOK_PHASE_HISTORY_LIMIT = 24;
 
 export function createPlaybookPhaseHistoryState(
-  maxEntriesPerParent = DEFAULT_PLAYBOOK_PHASE_HISTORY_LIMIT
+  maxEntriesPerBranch = DEFAULT_PLAYBOOK_PHASE_HISTORY_LIMIT
 ): PlaybookPhaseHistoryState {
-  if (!Number.isInteger(maxEntriesPerParent) || maxEntriesPerParent < 1) {
-    throw new Error("maxEntriesPerParent must be a positive integer");
+  if (!Number.isInteger(maxEntriesPerBranch) || maxEntriesPerBranch < 1) {
+    throw new Error("maxEntriesPerBranch must be a positive integer");
   }
   return {
-    maxEntriesPerParent,
-    parents: {},
+    maxEntriesPerBranch,
+    branches: {},
   };
 }
 
@@ -199,7 +200,8 @@ export function appendCommittedPlaybookPhaseTransition(
     };
   }
 
-  const existing = state.parents[input.parentTaskId];
+  const branchKey = toPlaybookPhaseOwnerKey(input.owner);
+  const existing = state.branches[branchKey];
   const currentPhaseRevision = existing?.phaseRevision ?? 0;
   if (input.expectedPhaseRevision !== currentPhaseRevision) {
     return {
@@ -232,7 +234,7 @@ export function appendCommittedPlaybookPhaseTransition(
 
   const entry: PlaybookPhaseHistoryEntry = {
     operationId: input.operationId,
-    parentTaskId: input.parentTaskId,
+    owner: { ...input.owner },
     fromPhase: input.fromPhase,
     toPhase: input.toPhase,
     source,
@@ -241,10 +243,10 @@ export function appendCommittedPlaybookPhaseTransition(
     committedAt: input.committedAt,
   };
   const entries = [...(existing?.entries ?? []), entry].slice(
-    -state.maxEntriesPerParent
+    -state.maxEntriesPerBranch
   );
-  const parent: ParentPlaybookPhaseHistory = {
-    parentTaskId: input.parentTaskId,
+  const branch: BranchPlaybookPhaseHistory = {
+    owner: { ...input.owner },
     phaseRevision: entry.phaseRevision,
     entries,
   };
@@ -253,9 +255,9 @@ export function appendCommittedPlaybookPhaseTransition(
     status: "appended",
     state: {
       ...state,
-      parents: {
-        ...state.parents,
-        [input.parentTaskId]: parent,
+      branches: {
+        ...state.branches,
+        [branchKey]: branch,
       },
     },
     entry,
@@ -270,7 +272,7 @@ export function decideManualPlaybookPhaseBack(input: {
   const common = validateNavigationRequest({
     history: input.history,
     operationId: input.request.operationId,
-    requestedParentTaskId: input.request.parentTaskId,
+    requestedOwner: input.request.owner,
     expectedTaskRevision: input.request.expectedTaskRevision,
     expectedPhaseRevision: input.request.expectedPhaseRevision,
     current: input.current,
@@ -288,7 +290,7 @@ export function decideManualPlaybookPhaseBack(input: {
       ...common.base,
       status: "no-history",
       action: "no-op",
-      reason: "no previous committed coarse phase exists for this parent",
+      reason: "no previous committed coarse phase exists for this branch",
     };
   }
 
@@ -298,7 +300,7 @@ export function decideManualPlaybookPhaseBack(input: {
     action: "manual-back",
     targetPhase:
       common.navigation.backStack[common.navigation.backStack.length - 2],
-    reason: "restore the previous committed coarse phase for this parent",
+    reason: "restore the previous committed coarse phase for this branch",
   };
 }
 
@@ -310,7 +312,7 @@ export function decideManualPlaybookPhaseNextRoundTrip(input: {
   const common = validateNavigationRequest({
     history: input.history,
     operationId: input.request.operationId,
-    requestedParentTaskId: input.request.parentTaskId,
+    requestedOwner: input.request.owner,
     expectedTaskRevision: input.request.expectedTaskRevision,
     expectedPhaseRevision: input.request.expectedPhaseRevision,
     current: input.current,
@@ -364,12 +366,13 @@ export function formatPlaybookPhaseNavigationDecisionForTrace(
     manualPhaseHistoryDepth: decision.historyDepth,
     manualPhaseGuardStatus: decision.status,
     manualPhaseCommitApplied: false,
-    parentTaskId: decision.parentTaskId,
+    phaseOwnerKind: decision.owner.kind,
+    phaseOwnerId: decision.owner.id,
+    parentTaskId: decision.owner.parentId,
     taskRevision: decision.expectedTaskRevision,
     phaseRevision: decision.expectedPhaseRevision,
     artifactDisposition: decision.artifactDisposition,
-    childPresentationDisposition: decision.childPresentationDisposition,
-    visibleChildTaskId: decision.visibleChildTaskId,
+    branchDisposition: decision.branchDisposition,
     reason: decision.reason,
   };
 }
@@ -397,41 +400,38 @@ type NavigationValidationFailureStatus = Exclude<
 function validateNavigationRequest(input: {
   history: PlaybookPhaseHistoryState;
   operationId: string;
-  requestedParentTaskId: string;
+  requestedOwner: PlaybookPhaseOwner;
   expectedTaskRevision: number;
   expectedPhaseRevision: number;
   current: PlaybookPhaseRuntimeSnapshot;
 }): NavigationValidationResult {
-  const childParentTaskId = input.current.visibleChild?.parentTaskId;
-  const parentMatches =
-    input.requestedParentTaskId === input.current.parentTaskId &&
-    (!childParentTaskId ||
-      childParentTaskId === input.current.parentTaskId);
-  const parentHistory = input.history.parents[input.requestedParentTaskId];
+  const ownerMatches = samePlaybookPhaseOwner(
+    input.requestedOwner,
+    input.current.owner
+  );
+  const branchHistory =
+    input.history.branches[toPlaybookPhaseOwnerKey(input.requestedOwner)];
   const base: ManualPlaybookPhaseDecisionBase = {
     operationId: input.operationId,
-    parentTaskId: input.requestedParentTaskId,
+    owner: { ...input.requestedOwner },
     fromPhase: input.current.currentPhase,
     expectedTaskRevision: input.expectedTaskRevision,
     expectedPhaseRevision: input.expectedPhaseRevision,
-    historyDepth: parentHistory?.entries.length ?? 0,
+    historyDepth: branchHistory?.entries.length ?? 0,
     artifactDisposition: "preserve",
-    childPresentationDisposition: input.current.visibleChild
-      ? "resume-parent"
-      : "unchanged",
-    visibleChildTaskId: input.current.visibleChild?.childTaskId,
+    branchDisposition: "preserve-active-branch",
     reason: "",
   };
 
-  if (!parentMatches) {
+  if (!ownerMatches) {
     return {
       ...base,
-      status: "parent-mismatch",
-      reason: "manual phase navigation cannot cross a parent boundary",
+      status: "owner-mismatch",
+      reason: "manual phase navigation cannot cross an active branch boundary",
     };
   }
 
-  const duplicate = parentHistory?.entries.find(
+  const duplicate = branchHistory?.entries.find(
     (entry) => entry.operationId === input.operationId
   );
   if (duplicate) {
@@ -454,7 +454,7 @@ function validateNavigationRequest(input: {
 
   if (
     input.expectedPhaseRevision !== input.current.phaseRevision ||
-    input.expectedPhaseRevision !== (parentHistory?.phaseRevision ?? 0)
+    input.expectedPhaseRevision !== (branchHistory?.phaseRevision ?? 0)
   ) {
     return {
       ...base,
@@ -462,19 +462,19 @@ function validateNavigationRequest(input: {
       reason:
         `expected phase revision ${input.expectedPhaseRevision}, ` +
         `runtime=${input.current.phaseRevision}, ` +
-        `history=${parentHistory?.phaseRevision ?? 0}`,
+        `history=${branchHistory?.phaseRevision ?? 0}`,
     };
   }
 
-  if (!parentHistory?.entries.length) {
+  if (!branchHistory?.entries.length) {
     return {
       ...base,
       status: "no-history",
-      reason: "no committed phase transition exists for this parent",
+      reason: "no committed phase transition exists for this branch",
     };
   }
 
-  const navigation = replayPhaseNavigation(parentHistory.entries);
+  const navigation = replayPhaseNavigation(branchHistory.entries);
   const derivedCurrentPhase =
     navigation.backStack[navigation.backStack.length - 1];
   if (derivedCurrentPhase !== input.current.currentPhase) {
@@ -537,11 +537,26 @@ function findOperation(
   state: PlaybookPhaseHistoryState,
   operationId: string
 ): PlaybookPhaseHistoryEntry | undefined {
-  for (const parent of Object.values(state.parents)) {
-    const entry = parent.entries.find(
+  for (const branch of Object.values(state.branches)) {
+    const entry = branch.entries.find(
       (candidate) => candidate.operationId === operationId
     );
     if (entry) return entry;
   }
   return undefined;
+}
+
+export function toPlaybookPhaseOwnerKey(owner: PlaybookPhaseOwner) {
+  return `${owner.kind}:${owner.id}`;
+}
+
+function samePlaybookPhaseOwner(
+  left: PlaybookPhaseOwner,
+  right: PlaybookPhaseOwner
+) {
+  return (
+    left.kind === right.kind &&
+    left.id === right.id &&
+    left.parentId === right.parentId
+  );
 }

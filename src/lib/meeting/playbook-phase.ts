@@ -55,7 +55,8 @@ export type PlaybookPhaseTargetArtifact =
 export type PlaybookPhaseGuardStatus =
   | "automatic"
   | "advanced"
-  | "blocked-no-parent";
+  | "blocked-no-parent"
+  | "blocked-no-next-phase";
 
 export type PlaybookRequirementEvidenceCategory =
   | "functional_scope"
@@ -864,9 +865,25 @@ export function decideManualNextPhaseTransition(
     };
   }
 
-  const questionType = normalizeCanonicalQuestionType(task.parent.questionType);
-  const currentPhase = task.parent.playbookPhase;
-  const phaseProgress = task.parent.phaseProgress;
+  return decideManualNextPhaseTransitionForBranch({
+    ownerKind: "parent",
+    questionType: task.parent.questionType,
+    currentPhase: task.parent.playbookPhase,
+    phaseProgress: task.parent.phaseProgress,
+    playbookId: task.parent.playbook?.id,
+  });
+}
+
+export function decideManualNextPhaseTransitionForBranch(input: {
+  ownerKind: "parent" | "child";
+  questionType: unknown;
+  currentPhase: InterviewPlaybookPhase;
+  phaseProgress?: Record<string, boolean>;
+  playbookId?: InterviewPlaybookId;
+}): PlaybookPhaseDecision {
+  const questionType = normalizeCanonicalQuestionType(input.questionType);
+  const currentPhase = input.currentPhase;
+  const phaseProgress = input.phaseProgress;
   const flags = chooseManualNextFlags(questionType, currentPhase, phaseProgress);
   const phase = chooseManualNextPhase(questionType, currentPhase);
   const targetArtifact = chooseManualNextTargetArtifact(
@@ -886,12 +903,36 @@ export function decideManualNextPhaseTransition(
       )
     : undefined;
 
+  if (
+    input.ownerKind === "child" &&
+    questionType === "coding" &&
+    currentPhase === "implementation_validation"
+  ) {
+    return {
+      phase: currentPhase,
+      flags: [],
+      requiredArtifacts: resolvePlaybookRequiredArtifacts({
+        questionType,
+        playbookId: input.playbookId,
+        phase: currentPhase,
+      }),
+      action: "stay",
+      reason: "manual-next blocked because the active branch has no next phase",
+      source: "manual-next",
+      targetArtifact: "none",
+      guardStatus: "blocked-no-next-phase",
+      phaseFrom: currentPhase,
+      manualPhaseFrom: currentPhase,
+      manualPhaseTo: currentPhase,
+    };
+  }
+
   return {
     phase,
     flags,
     requiredArtifacts: resolvePlaybookRequiredArtifacts({
       questionType,
-      playbookId: task.parent.playbook?.id,
+      playbookId: input.playbookId,
       phase,
     }),
     completedFlags: requirementTrack

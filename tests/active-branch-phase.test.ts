@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  createCodingChildPhaseState,
-  preserveOrCreateCodingChildPhaseState,
   resolveEffectiveBranchPhase,
 } from "../src/lib/meeting/active-branch-phase.js";
+import {
+  createCodingChildPhaseState,
+  preserveOrCreateCodingChildPhaseState,
+} from "../src/lib/meeting/coding-child-phase.js";
 import type {
   ActiveInterviewParent,
   InterviewPlaybookId,

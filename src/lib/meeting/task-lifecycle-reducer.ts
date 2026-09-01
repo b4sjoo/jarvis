@@ -329,8 +329,22 @@ function validateCommandTransition(input: {
       ? undefined
       : "command-transition-mismatch";
   }
-  if (command.kind === "advance-phase") {
-    return after.playbookPhase === command.phase
+  if (command.kind === "set-phase") {
+    if (command.owner.kind === "parent") {
+      return command.owner.id === after.id &&
+        !before.child &&
+        !after.child &&
+        before.playbookPhase !== after.playbookPhase &&
+        after.playbookPhase === command.phase
+        ? undefined
+        : "command-transition-mismatch";
+    }
+    return command.owner.id === before.child?.id &&
+      command.owner.id === after.child?.id &&
+      before.child.phaseState &&
+      after.child.phaseState &&
+      before.child.phaseState.phase !== after.child.phaseState.phase &&
+      after.child.phaseState.phase === command.phase
       ? undefined
       : "command-transition-mismatch";
   }

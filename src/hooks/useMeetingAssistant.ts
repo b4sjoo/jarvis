@@ -128,9 +128,15 @@ import {
   resolvePostModelContinuityAuthority,
 } from "@/lib/meeting/post-model-continuity-authority";
 import {
+  applyActiveBranchPhase,
+  detectCommittedBranchPhaseTransition,
+  resolveEffectiveBranchPhase,
+  type CommittedBranchPhaseTransition,
+} from "@/lib/meeting/active-branch-phase";
+import {
   createCodingChildPhaseState,
   preserveOrCreateCodingChildPhaseState,
-} from "@/lib/meeting/active-branch-phase";
+} from "@/lib/meeting/coding-child-phase";
 import { materializeHumanEvaluationAttemptProjectionV2 } from "@/lib/meeting/human-evaluation-attempt-projection";
 import { validateHumanEvaluationAttemptSubjectV2 } from "@/lib/meeting/human-evaluation-attempt";
 import { toHumanEvaluationCollectionProvenance } from "@/lib/meeting/session-evaluation-provenance";
@@ -649,6 +655,7 @@ import {
   expireTaskBoundaryCandidate,
   applySourceOwnedPhaseControlToTurnIntent,
   decideAdvisorTurnIntent,
+  decideManualNextPhaseTransitionForBranch,
   decideSentenceCompletion,
   decideSentenceCompletionContinuation,
   authorizeSttContinuationPromptLease,
@@ -687,6 +694,7 @@ import {
   decideManualPlaybookPhaseBack,
   decideManualPlaybookPhaseNextRoundTrip,
   formatPlaybookPhaseNavigationDecisionForTrace,
+  toPlaybookPhaseOwnerKey,
   decideLatestTurnTaxonomyBoundary,
   formatAdvisorTurnIntentForTrace,
   formatLogicalQuestionUnitForTrace,
@@ -1304,7 +1312,11 @@ function mapSourceOwnedExecutionPlanCommand(
   if (candidate.kind === "phase-progress" && result.task) {
     return result.phaseBefore !== result.phaseAfter
       ? {
-          kind: "advance-phase",
+          kind: "set-phase",
+          owner: {
+            kind: "parent",
+            id: result.task.id,
+          },
           phase: result.task.playbookPhase,
         }
       : { kind: "update-parent-context" };
@@ -1333,7 +1345,7 @@ function classifyCommittedTaskRuntimeTransition(input: {
     if (!beforeParent.child && afterParent.child) return "attach-child";
     if (beforeParent.child && !afterParent.child) return "resume-parent";
     if (beforeParent.playbookPhase !== afterParent.playbookPhase) {
-      return "advance-phase";
+      return "set-phase";
     }
   }
   if (beforeScreen !== afterScreen) return "update-source-attachment";
@@ -2380,6 +2392,7 @@ interface RunAdvisorOptions {
   promptContextOverride?: AdvisorPromptContext;
   manualPhaseTargetOverride?: InterviewPlaybookPhase;
   manualPhaseOperationId?: string;
+  precommittedPhaseTransition?: CommittedBranchPhaseTransition;
   currentQuestionSettlementOverride?: CurrentQuestionSettlementDecision;
   runtimeTypeAdjudicationOutputAuthority?: RuntimeTypeAdjudicationOutputAuthority;
   settledExecutionPlanOverride?: SettledAdvisorExecutionPlan;
@@ -5835,21 +5848,33 @@ export function useMeetingAssistant() {
       if (
         !input.before ||
         !input.after ||
-        input.before.id !== input.after.id ||
-        input.before.playbookPhase === input.after.playbookPhase
+        input.before.id !== input.after.id
       ) {
         return undefined;
       }
-
-      const parentHistory =
-        playbookPhaseHistoryRef.current.parents[input.after.id];
+      const transition = detectCommittedBranchPhaseTransition({
+        before: input.before,
+        after: input.after,
+      });
+      if (!transition || transition.fromPhase === transition.toPhase) {
+        return undefined;
+      }
+      const owner = {
+        kind: transition.ownerKind,
+        id: transition.ownerId,
+        parentId: transition.parentId,
+      } as const;
+      const branchHistory =
+        playbookPhaseHistoryRef.current.branches[
+          toPlaybookPhaseOwnerKey(owner)
+        ];
       const appendInput = {
         operationId: input.operationId,
-        parentTaskId: input.after.id,
-        fromPhase: input.before.playbookPhase,
-        toPhase: input.after.playbookPhase,
-        taskRevision: input.after.revisions,
-        expectedPhaseRevision: parentHistory?.phaseRevision ?? 0,
+        owner,
+        fromPhase: transition.fromPhase,
+        toPhase: transition.toPhase,
+        taskRevision: transition.taskRevision,
+        expectedPhaseRevision: branchHistory?.phaseRevision ?? 0,
         committedAt: Date.now(),
       };
       const result =
@@ -5876,12 +5901,14 @@ export function useMeetingAssistant() {
           playbookPhaseHistoryOperationId: input.operationId,
           playbookPhaseHistorySource: input.source,
           playbookPhaseHistoryStatus: result.status,
-          playbookPhaseHistoryFrom: input.before.playbookPhase,
-          playbookPhaseHistoryTo: input.after.playbookPhase,
+          playbookPhaseHistoryOwnerKind: transition.ownerKind,
+          playbookPhaseHistoryOwnerId: transition.ownerId,
+          playbookPhaseHistoryFrom: transition.fromPhase,
+          playbookPhaseHistoryTo: transition.toPhase,
           playbookPhaseHistoryRevision:
             result.status === "appended"
               ? result.entry.phaseRevision
-              : parentHistory?.phaseRevision ?? 0,
+              : branchHistory?.phaseRevision ?? 0,
           playbookPhaseHistoryReason:
             result.status === "appended" ? undefined : result.reason,
         });
@@ -10739,10 +10766,29 @@ export function useMeetingAssistant() {
       return;
     }
 
-    const manualPhaseAdvance = options.responseAction === "next-phase";
+    const advisorPhaseParent =
+      promptContext.taskRuntime.parent ??
+      (promptContext.activeMeetingTask
+        ? buildCorrectionParentFromActiveMeetingTask(
+            promptContext.activeMeetingTask,
+            normalizeCanonicalQuestionType(
+              promptContext.activeMeetingTask.parent.questionType
+            ) ?? "unknown"
+          )
+        : undefined);
+    const advisorPhaseResolution = resolveEffectiveBranchPhase(
+      advisorPhaseParent
+    );
+    const advisorPhaseView =
+      advisorPhaseResolution.status === "resolved"
+        ? advisorPhaseResolution.view
+        : undefined;
+    const manualPhaseAdvance =
+      options.responseAction === "next-phase" &&
+      !options.precommittedPhaseTransition;
     const manualPhaseAdvanceFromPhase =
-      promptContext.activeMeetingTask?.parent.playbookPhase ??
-      promptContext.taskRuntime.parent?.playbookPhase;
+      options.precommittedPhaseTransition?.fromPhase ??
+      advisorPhaseView?.phase;
     const advisorQuestionAnswerFocusText =
       getLogicalQuestionAnswerFocusText(
         advisorJob.logicalQuestionUnit
@@ -12050,10 +12096,15 @@ export function useMeetingAssistant() {
       ),
       freshParentCreated: startsNewParentForPhase,
     });
-    const defaultManualPhaseDecision =
-      decideManualNextPhaseTransition(
-        promptContext.activeMeetingTask
-      );
+    const defaultManualPhaseDecision = advisorPhaseView
+      ? decideManualNextPhaseTransitionForBranch({
+          ownerKind: advisorPhaseView.ownerKind,
+          questionType: advisorPhaseView.questionType,
+          currentPhase: advisorPhaseView.phase,
+          phaseProgress: advisorPhaseView.phaseProgress,
+          playbookId: advisorPhaseView.playbook.id,
+        })
+      : decideManualNextPhaseTransition(undefined);
     const manualPhaseDecision = options.manualPhaseTargetOverride
       ? {
           ...defaultManualPhaseDecision,
@@ -12068,12 +12119,13 @@ export function useMeetingAssistant() {
       authority: advisorJob.taskMutationAuthority,
       taskMutationAuthorized: taskMutationAuthorization.authorized,
       manualPhaseAdvance,
-      currentPhase: preservedPlaybookPhase,
+      currentPhase: advisorPhaseView?.phase ?? preservedPlaybookPhase,
       hasActiveChild: hasAdvisorActiveChild(promptContext),
       automaticDecision: automaticPlaybookPhaseDecision,
       manualDecision: manualPhaseDecision,
     });
-    let manualPhaseAdvanceCommitted = false;
+    let committedPhaseTransition = options.precommittedPhaseTransition;
+    let manualPhaseAdvanceCommitted = Boolean(committedPhaseTransition);
 
     if (
       manualPhaseAdvance &&
@@ -12087,34 +12139,70 @@ export function useMeetingAssistant() {
           ? buildInterviewParentFromScreenTask(contextState.taskRuntime.screenAttachment)
           : undefined);
 
-      if (existingInterviewTask) {
-        const now = Date.now();
-        const updatedPlaybook = withInterviewPlaybookPhase(
-          advisorPlaybook ?? existingInterviewTask.playbook,
-          playbookPhaseDecision.phase
-        );
-        const updatedInterviewTask: ActiveInterviewParent = {
-          ...existingInterviewTask,
-          playbook: updatedPlaybook,
-          playbookPhase: playbookPhaseDecision.phase,
+      const currentPhaseResolution = resolveEffectiveBranchPhase(
+        existingInterviewTask
+      );
+      if (
+        existingInterviewTask &&
+        currentPhaseResolution.status === "resolved"
+      ) {
+        const currentPhaseOwner = currentPhaseResolution.view;
+        const updatedInterviewTask = applyActiveBranchPhase({
+          parent: existingInterviewTask,
+          owner: currentPhaseOwner,
+          targetPhase: playbookPhaseDecision.phase,
           phaseProgress: applyPlaybookPhaseDecisionToProgress(
-            existingInterviewTask.phaseProgress,
+            currentPhaseOwner.phaseProgress,
             playbookPhaseDecision,
-            existingInterviewTask.playbookPhase
+            currentPhaseOwner.phase
           ),
-          child: undefined,
-          updatedAt: now,
-          revisions: existingInterviewTask.revisions + 1,
-        };
-
-        submitTaskRuntimeTransition(contextManagerRef.current, {
-          transition: contextState.taskRuntime.parent
-            ? "advance-phase"
-            : "create-parent",
-          reason: "manual-next-phase-committed",
-          screenAttachment: contextState.taskRuntime.screenAttachment,
-          parent: updatedInterviewTask,
+          playbook: currentPhaseOwner.playbook,
         });
+        const phaseRuntimeResult = updatedInterviewTask
+          ? submitTaskRuntimeTransition(contextManagerRef.current, {
+              transition:
+                currentPhaseOwner.phase === playbookPhaseDecision.phase
+                  ? "update-parent-context"
+                  : "set-phase",
+              reason: "manual-next-phase-committed",
+              expectedRevision: contextState.taskRuntime.revision,
+              screenAttachment: contextState.taskRuntime.screenAttachment,
+              parent: updatedInterviewTask,
+            })
+          : undefined;
+        committedPhaseTransition = updatedInterviewTask
+          ? detectCommittedBranchPhaseTransition({
+              before: existingInterviewTask,
+              after: updatedInterviewTask,
+            })
+          : undefined;
+        if (
+          !updatedInterviewTask ||
+          !committedPhaseTransition ||
+          !phaseRuntimeResult?.authorized ||
+          !phaseRuntimeResult.mutationApplied
+        ) {
+          const reason =
+            phaseRuntimeResult?.reason ?? "active-branch-phase-commit-rejected";
+          updateForceAdviseTargetForAdvisorOutcome({
+            advisorJob,
+            status: "failed",
+            outcome: reason,
+          });
+          releaseAdvisorJob(advisorJob, "error", {
+            commitAuthorized: false,
+            commitAuthorizationReason: reason,
+          });
+          if (traceId) {
+            traceStoreRef.current.finishTrace(traceId, "error", reason);
+          }
+          setState((previous) => ({
+            ...previous,
+            status: runtimeActiveRef.current ? "listening" : returnStatus,
+            error: `Next was not applied: ${reason}`,
+          }));
+          return;
+        }
         const phaseHistoryCommit =
           recordCommittedPlaybookPhaseTransition({
             operationId:
@@ -12728,12 +12816,18 @@ export function useMeetingAssistant() {
             advisorQuestionSemanticEvidenceText,
           subtaskIntent: advisorTaskSignals.subtaskIntent,
           explicitTaskMutationCommand:
-            manualPhaseAdvanceCommitted &&
-            playbookPhaseDecision?.phase
-              ? {
-                  kind: "advance-phase",
-                  phase: playbookPhaseDecision.phase,
-                }
+            manualPhaseAdvanceCommitted && committedPhaseTransition
+              ? committedPhaseTransition.fromPhase ===
+                committedPhaseTransition.toPhase
+                ? { kind: "update-parent-context" }
+                : {
+                    kind: "set-phase",
+                    owner: {
+                      kind: committedPhaseTransition.ownerKind,
+                      id: committedPhaseTransition.ownerId,
+                    },
+                    phase: committedPhaseTransition.toPhase,
+                  }
               : sourceOwnedExecutionPlanCommand,
           taskMutationCommittedBeforeAdvisor:
             operationCommittedTaskMutationBeforePlan,
@@ -14890,8 +14984,12 @@ export function useMeetingAssistant() {
             : taskBoundaryCommittedBeforeAdvisor
               ? "create-parent"
               : manualPhaseAdvanceCommitted
-                ? "advance-phase"
+                ? "set-phase"
                 : undefined;
+      const precommittedPhaseOwnerKind =
+        settledExecutionPlan?.taskMutationPolicy.kind === "set-phase"
+          ? settledExecutionPlan.taskMutationPolicy.owner.kind
+          : committedPhaseTransition?.ownerKind;
       const postModelContinuityAuthority =
         resolvePostModelContinuityAuthority({
           command: precommittedLifecycleCommand,
@@ -14899,6 +14997,7 @@ export function useMeetingAssistant() {
             precommittedLifecycleCommand
           ),
           activeChild: Boolean(contextState.activeMeetingTask?.child),
+          phaseOwnerKind: precommittedPhaseOwnerKind,
         });
       const existingInterviewTask =
         postModelContinuityAuthority.lifecycleCommittedBeforeAdvisor
@@ -34138,9 +34237,38 @@ export function useMeetingAssistant() {
               meetingContext.taskRuntime.screenAttachment
             ),
           });
-        const parentHistory =
-          playbookPhaseHistoryRef.current.parents[
-            existingInterviewTask.id
+        const phaseResolution = resolveEffectiveBranchPhase(
+          existingInterviewTask
+        );
+        if (phaseResolution.status !== "resolved") {
+          recordResponseAction({
+            stage: "terminal",
+            logicalQuestionUnitId:
+              responseActionLogicalQuestionUnit?.id,
+            logicalQuestionUnitRevision:
+              responseActionLogicalQuestionUnit?.revision,
+            taskId: existingInterviewTask.id,
+            terminalDisposition: "rejected",
+            reason: phaseResolution.reason,
+          });
+          setState((previous) => ({
+            ...previous,
+            error:
+              phaseResolution.reason === "active-child-phase-unavailable"
+                ? "The current child task has no phase to navigate."
+                : "The current task has no phase to navigate.",
+          }));
+          return;
+        }
+        const phaseOwner = phaseResolution.view;
+        const phaseOwnerIdentity = {
+          kind: phaseOwner.ownerKind,
+          id: phaseOwner.ownerId,
+          parentId: phaseOwner.parentId,
+        } as const;
+        const branchHistory =
+          playbookPhaseHistoryRef.current.branches[
+            toPlaybookPhaseOwnerKey(phaseOwnerIdentity)
           ];
         const operationId = createMeetingId(
           responseAction === "previous-phase"
@@ -34148,16 +34276,10 @@ export function useMeetingAssistant() {
             : "phase_forward"
         );
         const runtimeSnapshot = {
-          parentTaskId: existingInterviewTask.id,
-          currentPhase: existingInterviewTask.playbookPhase,
+          owner: phaseOwnerIdentity,
+          currentPhase: phaseOwner.phase,
           taskRevision: existingInterviewTask.revisions,
-          phaseRevision: parentHistory?.phaseRevision ?? 0,
-          visibleChild: existingInterviewTask.child
-            ? {
-                childTaskId: existingInterviewTask.child.id,
-                parentTaskId: existingInterviewTask.id,
-              }
-            : undefined,
+          phaseRevision: branchHistory?.phaseRevision ?? 0,
         };
 
         if (responseAction === "previous-phase") {
@@ -34165,11 +34287,11 @@ export function useMeetingAssistant() {
             history: playbookPhaseHistoryRef.current,
             request: {
               operationId,
-              parentTaskId: existingInterviewTask.id,
+              owner: phaseOwnerIdentity,
               expectedTaskRevision:
                 existingInterviewTask.revisions,
               expectedPhaseRevision:
-                parentHistory?.phaseRevision ?? 0,
+                branchHistory?.phaseRevision ?? 0,
               requestedAt: Date.now(),
             },
             current: runtimeSnapshot,
@@ -34221,33 +34343,56 @@ export function useMeetingAssistant() {
             taskId: existingInterviewTask.id,
           });
 
-          const updatedInterviewTask: ActiveInterviewParent = {
-            ...existingInterviewTask,
-            playbook: withInterviewPlaybookPhase(
-              existingInterviewTask.playbook,
-              decision.targetPhase
-            ),
-            playbookPhase: decision.targetPhase,
-            child: undefined,
-            updatedAt: Date.now(),
-            revisions: existingInterviewTask.revisions + 1,
-          };
-          const childOwnedScreen =
-            Boolean(existingInterviewTask.child) &&
-            Boolean(
-              meetingContext.taskRuntime.screenAttachment &&
-                existingInterviewTask.child?.basedOnObservationIds.includes(
-                  meetingContext.taskRuntime.screenAttachment.observationId
-                )
-            );
-          submitTaskRuntimeTransition(contextManagerRef.current, {
-            transition: "advance-phase",
-            reason: "manual-back-phase-committed",
-            screenAttachment: childOwnedScreen
-              ? null
-              : meetingContext.taskRuntime.screenAttachment,
-            parent: updatedInterviewTask,
+          const updatedInterviewTask = applyActiveBranchPhase({
+            parent: existingInterviewTask,
+            owner: phaseOwner,
+            targetPhase: decision.targetPhase,
+            phaseProgress: phaseOwner.phaseProgress,
+            playbook: phaseOwner.playbook,
           });
+          const phaseTransition = updatedInterviewTask
+            ? detectCommittedBranchPhaseTransition({
+                before: existingInterviewTask,
+                after: updatedInterviewTask,
+              })
+            : undefined;
+          const phaseRuntimeResult = updatedInterviewTask
+            ? submitTaskRuntimeTransition(contextManagerRef.current, {
+                transition: "set-phase",
+                reason: "manual-back-phase-committed",
+                expectedRevision: meetingContext.taskRuntime.revision,
+                screenAttachment:
+                  meetingContext.taskRuntime.screenAttachment,
+                parent: updatedInterviewTask,
+              })
+            : undefined;
+          if (
+            !updatedInterviewTask ||
+            !phaseTransition ||
+            !phaseRuntimeResult?.authorized ||
+            !phaseRuntimeResult.mutationApplied
+          ) {
+            const reason =
+              phaseRuntimeResult?.reason ??
+              "active-branch-phase-commit-rejected";
+            traceStoreRef.current.finishTrace(trace.id, "error", reason);
+            recordResponseAction({
+              stage: "terminal",
+              traceId: trace.id,
+              logicalQuestionUnitId:
+                responseActionLogicalQuestionUnit?.id,
+              logicalQuestionUnitRevision:
+                responseActionLogicalQuestionUnit?.revision,
+              taskId: existingInterviewTask.id,
+              terminalDisposition: "failed",
+              reason,
+            });
+            setState((previous) => ({
+              ...previous,
+              error: `Back was not applied: ${reason}`,
+            }));
+            return;
+          }
           const phaseCommit =
             recordCommittedPlaybookPhaseTransition({
               operationId,
@@ -34259,6 +34404,8 @@ export function useMeetingAssistant() {
           traceStoreRef.current.updateMetadata(trace.id, {
             manualPhaseCommitApplied:
               phaseCommit?.status === "appended",
+            manualPhaseOwnerKind: phaseTransition.ownerKind,
+            manualPhaseOwnerId: phaseTransition.ownerId,
           });
           const updatedContext =
             contextManagerRef.current.getState();
@@ -34280,6 +34427,7 @@ export function useMeetingAssistant() {
               resolveCurrentSuggestionQuestionLineage(),
             logicalQuestionUnit:
               responseActionLogicalQuestionUnit,
+            precommittedPhaseTransition: phaseTransition,
           });
           const completedTrace = traceStoreRef.current
             .getTraces()
@@ -34308,11 +34456,11 @@ export function useMeetingAssistant() {
             history: playbookPhaseHistoryRef.current,
             request: {
               operationId,
-              parentTaskId: existingInterviewTask.id,
+              owner: phaseOwnerIdentity,
               expectedTaskRevision:
                 existingInterviewTask.revisions,
               expectedPhaseRevision:
-                parentHistory?.phaseRevision ?? 0,
+                branchHistory?.phaseRevision ?? 0,
               requestedAt: Date.now(),
             },
             current: runtimeSnapshot,
@@ -34372,6 +34520,48 @@ export function useMeetingAssistant() {
                   : "completed",
             reason: completedTrace?.error,
           });
+          return;
+        }
+        if (forwardDecision.status !== "no-forward-history") {
+          recordResponseAction({
+            stage: "terminal",
+            logicalQuestionUnitId:
+              responseActionLogicalQuestionUnit?.id,
+            logicalQuestionUnitRevision:
+              responseActionLogicalQuestionUnit?.revision,
+            taskId: existingInterviewTask.id,
+            terminalDisposition: "rejected",
+            reason: forwardDecision.reason,
+          });
+          setState((previous) => ({
+            ...previous,
+            error: `Next was not applied: ${forwardDecision.reason}`,
+          }));
+          return;
+        }
+        const nextPhaseDecision =
+          decideManualNextPhaseTransitionForBranch({
+            ownerKind: phaseOwner.ownerKind,
+            questionType: phaseOwner.questionType,
+            currentPhase: phaseOwner.phase,
+            phaseProgress: phaseOwner.phaseProgress,
+            playbookId: phaseOwner.playbook.id,
+          });
+        if (nextPhaseDecision.guardStatus === "blocked-no-next-phase") {
+          recordResponseAction({
+            stage: "terminal",
+            logicalQuestionUnitId:
+              responseActionLogicalQuestionUnit?.id,
+            logicalQuestionUnitRevision:
+              responseActionLogicalQuestionUnit?.revision,
+            taskId: existingInterviewTask.id,
+            terminalDisposition: "rejected",
+            reason: "no-next-phase",
+          });
+          setState((previous) => ({
+            ...previous,
+            error: "The current branch has no next playbook phase.",
+          }));
           return;
         }
       }

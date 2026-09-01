@@ -1436,7 +1436,8 @@ test("freezes an explicit phase advance independently from response and artifact
     askFrame: "hypothetical-design",
     topicDomain: "backend",
     explicitTaskMutationCommand: {
-      kind: "advance-phase",
+      kind: "set-phase",
+      owner: { kind: "parent", id: "parent-a" },
       phase: "design_framing",
     },
   });
@@ -1445,7 +1446,8 @@ test("freezes an explicit phase advance independently from response and artifact
   assert.equal(plan.contextReadScope, "active-parent-read");
   assert.equal(plan.artifactIntent, "revise-whiteboard");
   assert.deepEqual(plan.taskMutationPolicy, {
-    kind: "advance-phase",
+    kind: "set-phase",
+    owner: { kind: "parent", id: "parent-a" },
     phase: "design_framing",
   });
 });
@@ -1496,7 +1498,8 @@ test("freezes phase-owned Coding artifact authority across Manual Next", () => {
       askFrame: "direct-answer",
       topicDomain: "backend",
       explicitTaskMutationCommand: {
-        kind: "advance-phase",
+        kind: "set-phase",
+        owner: { kind: "parent", id: "parent-a" },
         phase: current.phase,
       },
     });
@@ -1509,7 +1512,8 @@ test("freezes phase-owned Coding artifact authority across Manual Next", () => {
       current.allowComplexity
     );
     assert.deepEqual(plan.taskMutationPolicy, {
-      kind: "advance-phase",
+      kind: "set-phase",
+      owner: { kind: "parent", id: "parent-a" },
       phase: current.phase,
     });
   }
