@@ -1,3 +1,12 @@
+import {
+  normalizeMeetingTaskRuntimeTransitionKind,
+  type MeetingTaskRuntimeTransitionKind,
+} from "./meeting-task-runtime-transition.js";
+import {
+  normalizeCanonicalQuestionType,
+  type CanonicalQuestionType,
+} from "./task-taxonomy.js";
+
 export type TaskSettlementRelationValue =
   | "new-parent"
   | "followup-parent"
@@ -15,6 +24,17 @@ export type ParentActionValue =
   | "resume"
   | "attach-child"
   | "none";
+
+export interface CommittedLifecycleEvidence {
+  command: MeetingTaskRuntimeTransitionKind;
+  parentBeforeId?: string;
+  parentAfterId?: string;
+  parentBeforeType?: CanonicalQuestionType;
+  parentAfterType?: CanonicalQuestionType;
+  childBeforeId?: string;
+  childAfterId?: string;
+  authority: "source-transition-durable-receipt";
+}
 
 export interface TaskSettlementTupleCompatibilityV2 {
   compatible: boolean;
@@ -46,7 +66,7 @@ export function evaluateTaskSettlementTupleCompatibilityV2(input: {
 export function projectObservedParentAction(input: {
   relation?: TaskSettlementRelationValue;
   mutationAuthorized?: boolean;
-  committedLifecycleCommand?: string;
+  committedLifecycleEvidence?: CommittedLifecycleEvidence;
   lifecycleCommand?: string;
   currentOnly: boolean;
   parentBeforeId?: string;
@@ -54,8 +74,12 @@ export function projectObservedParentAction(input: {
   parentBeforeType?: unknown;
   parentAfterType?: unknown;
 }): ParentActionValue | undefined {
-  const lifecycleCommand =
-    input.committedLifecycleCommand ?? input.lifecycleCommand;
+  if (input.committedLifecycleEvidence) {
+    return projectCommittedLifecycleParentAction(
+      input.committedLifecycleEvidence
+    );
+  }
+  const lifecycleCommand = input.lifecycleCommand;
   if (lifecycleCommand === "create-parent") return "create";
   if (lifecycleCommand === "replace-parent") {
     return isSameParentRetype(input) ? "retype" : "create";
@@ -93,17 +117,35 @@ export function projectObservedParentAction(input: {
   return input.mutationAuthorized === false ? "none" : undefined;
 }
 
-export function resolveCommittedSourceTransitionLifecycleCommand(input: {
+export function resolveCommittedSourceTransitionLifecycleEvidence(input: {
   runtimeKind?: unknown;
   durableAuthorized?: unknown;
   durableMutationApplied?: unknown;
-}) {
-  return input.durableAuthorized === true &&
-    input.durableMutationApplied === true &&
-    typeof input.runtimeKind === "string" &&
-    input.runtimeKind.trim()
-    ? input.runtimeKind
-    : undefined;
+  parentBeforeId?: unknown;
+  parentAfterId?: unknown;
+  parentBeforeType?: unknown;
+  parentAfterType?: unknown;
+  childBeforeId?: unknown;
+  childAfterId?: unknown;
+}): CommittedLifecycleEvidence | undefined {
+  const command = normalizeMeetingTaskRuntimeTransitionKind(input.runtimeKind);
+  if (
+    input.durableAuthorized !== true ||
+    input.durableMutationApplied !== true ||
+    !command
+  ) {
+    return undefined;
+  }
+  return {
+    command,
+    parentBeforeId: normalizeOptionalString(input.parentBeforeId),
+    parentAfterId: normalizeOptionalString(input.parentAfterId),
+    parentBeforeType: normalizeCanonicalQuestionType(input.parentBeforeType),
+    parentAfterType: normalizeCanonicalQuestionType(input.parentAfterType),
+    childBeforeId: normalizeOptionalString(input.childBeforeId),
+    childAfterId: normalizeOptionalString(input.childAfterId),
+    authority: "source-transition-durable-receipt",
+  };
 }
 
 export function recommendedParentActionForRelation(
@@ -155,6 +197,32 @@ function isSameParentRetype(input: {
       afterType &&
       beforeType !== afterType
   );
+}
+
+function projectCommittedLifecycleParentAction(
+  evidence: CommittedLifecycleEvidence
+): ParentActionValue | undefined {
+  if (evidence.command === "create-parent") return "create";
+  if (evidence.command === "replace-parent") {
+    if (
+      !evidence.parentBeforeId ||
+      !evidence.parentAfterId ||
+      !evidence.parentBeforeType ||
+      !evidence.parentAfterType
+    ) {
+      return undefined;
+    }
+    return isSameParentRetype(evidence) ? "retype" : "create";
+  }
+  if (evidence.command === "attach-child") return "attach-child";
+  if (evidence.command === "resume-parent") return "resume";
+  return "preserve";
+}
+
+function normalizeOptionalString(value: unknown) {
+  return typeof value === "string" && value.trim()
+    ? value.trim()
+    : undefined;
 }
 
 function normalizeComparableType(value: unknown) {

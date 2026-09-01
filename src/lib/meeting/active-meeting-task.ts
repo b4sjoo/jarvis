@@ -21,6 +21,9 @@ import {
   isParentCanonicalQuestionType,
   normalizeCanonicalQuestionType,
 } from "./task-taxonomy.js";
+import type { MeetingTaskRuntimeTransitionKind } from "./meeting-task-runtime-transition.js";
+
+export type { MeetingTaskRuntimeTransitionKind } from "./meeting-task-runtime-transition.js";
 
 export type ActiveMeetingTaskSource = "screen" | "voice" | "mixed";
 
@@ -142,15 +145,6 @@ export type MeetingTaskRuntimeMutation =
       parent?: ActiveInterviewParent | null;
       screenAttachment?: ActiveScreenTask | null;
     });
-
-export type MeetingTaskRuntimeTransitionKind =
-  | "create-parent"
-  | "replace-parent"
-  | "attach-child"
-  | "resume-parent"
-  | "advance-phase"
-  | "update-parent-context"
-  | "update-source-attachment";
 
 export interface MeetingTaskRuntimeMutationResult {
   state: MeetingTaskRuntimeState;

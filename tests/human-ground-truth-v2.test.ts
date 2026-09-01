@@ -1043,6 +1043,61 @@ test("prefers a committed source transition over provisional parent authorizatio
     buildHumanEvaluationObservedSnapshotV2(trace).parentAction,
     "preserve"
   );
+
+  trace.metadata.sourceTransitionDurableMutationApplied = true;
+  trace.metadata.sourceTransitionRuntimeKind = "unexpected-command";
+  assert.equal(
+    buildHumanEvaluationObservedSnapshotV2(trace).parentAction,
+    "preserve"
+  );
+});
+
+test("projects replacement identity only from the coherent committed receipt", () => {
+  const trace = buildSettledAttemptTrace({
+    id: "trace_committed_retype",
+    status: "success",
+    questionType: "ai-ml-system-design",
+  });
+  trace.metadata = {
+    ...trace.metadata,
+    effectiveCurrentQuestionSettlementRelation: "new-parent",
+    effectiveCurrentQuestionSettlementParentMutationAuthorized: true,
+    settledExecutionPlanTaskMutationCommand: "preserve",
+    taskLifecycleParentBeforeId: "stale-parent-before",
+    taskLifecycleParentAfterId: "stale-parent-after",
+    taskLifecycleParentBeforeType: "coding",
+    taskLifecycleParentAfterType: "behavioral",
+    sourceTransitionRuntimeKind: "replace-parent",
+    sourceTransitionDurableAuthorized: true,
+    sourceTransitionDurableMutationApplied: true,
+    sourceTransitionParentBeforeId: "parent-design",
+    sourceTransitionParentAfterId: "parent-design",
+    sourceTransitionParentBeforeType: "general-system-design",
+    sourceTransitionParentAfterType: "ai-ml-system-design",
+  };
+
+  assert.equal(
+    buildHumanEvaluationObservedSnapshotV2(trace).parentAction,
+    "retype"
+  );
+
+  trace.metadata.sourceTransitionParentAfterId = "parent-new-question";
+  assert.equal(
+    buildHumanEvaluationObservedSnapshotV2(trace).parentAction,
+    "create"
+  );
+
+  delete trace.metadata.sourceTransitionParentAfterType;
+  assert.equal(
+    buildHumanEvaluationObservedSnapshotV2(trace).parentAction,
+    undefined
+  );
+
+  trace.metadata.sourceTransitionDurableMutationApplied = false;
+  assert.equal(
+    buildHumanEvaluationObservedSnapshotV2(trace).parentAction,
+    "preserve"
+  );
 });
 
 test("uses the effective settlement while retaining raw abstention diagnostics", () => {

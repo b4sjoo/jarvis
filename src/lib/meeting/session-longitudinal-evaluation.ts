@@ -10,7 +10,10 @@ import {
 import type { HumanEvaluationProjectionV2 } from "./human-ground-truth-v2.js";
 import type { TaskRelationAdjudicationReflectionReport } from "./task-relation-adjudication-reflection.js";
 import type { TaskRelationAuthorityConvergenceReportV1 } from "./task-relation-authority-convergence.js";
-import { projectObservedParentAction } from "./task-settlement-tuple.js";
+import {
+  projectObservedParentAction,
+  type CommittedLifecycleEvidence,
+} from "./task-settlement-tuple.js";
 import type { HumanEvaluationTaskRelation } from "./types.js";
 
 export interface LongitudinalSessionManifest {
@@ -59,6 +62,7 @@ export interface LongitudinalTraceSummary {
   advisorExecutionAuthorized?: boolean;
   taskMutationAuthorized?: boolean;
   taskMutationCommand?: string;
+  committedLifecycleEvidence?: CommittedLifecycleEvidence;
   taskLifecycleParentBeforeId?: string;
   taskLifecycleParentAfterId?: string;
   taskLifecycleParentBeforeType?: string;
@@ -2050,6 +2054,7 @@ function actualParentAction(trace: LongitudinalTraceSummary) {
   const projected = projectObservedParentAction({
     relation: normalizeObservedRelation(trace.taskRelation),
     mutationAuthorized: trace.taskMutationAuthorized,
+    committedLifecycleEvidence: trace.committedLifecycleEvidence,
     lifecycleCommand: trace.taskMutationCommand,
     currentOnly: trace.taskRelation === "none",
     parentBeforeId:

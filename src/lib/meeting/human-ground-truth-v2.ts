@@ -22,7 +22,7 @@ import type { AdvisorContextReadScope } from "./advisor-context-read-scope.js";
 import type { SettledAdvisorArtifactIntent } from "./settled-advisor-execution-plan.js";
 import {
   projectObservedParentAction,
-  resolveCommittedSourceTransitionLifecycleCommand,
+  resolveCommittedSourceTransitionLifecycleEvidence,
 } from "./task-settlement-tuple.js";
 import {
   projectQuestionTypeObservation,
@@ -684,12 +684,18 @@ export function buildHumanEvaluationObservedSnapshotV2(
       metadata.effectiveCurrentQuestionSettlementParentMutationAuthorized ??
         metadata.currentQuestionSettlementParentMutationAuthorized
     ),
-    committedLifecycleCommand:
-      resolveCommittedSourceTransitionLifecycleCommand({
+    committedLifecycleEvidence:
+      resolveCommittedSourceTransitionLifecycleEvidence({
         runtimeKind: metadata.sourceTransitionRuntimeKind,
         durableAuthorized: metadata.sourceTransitionDurableAuthorized,
         durableMutationApplied:
           metadata.sourceTransitionDurableMutationApplied,
+        parentBeforeId: metadata.sourceTransitionParentBeforeId,
+        parentAfterId: metadata.sourceTransitionParentAfterId,
+        parentBeforeType: metadata.sourceTransitionParentBeforeType,
+        parentAfterType: metadata.sourceTransitionParentAfterType,
+        childBeforeId: metadata.sourceTransitionChildBeforeId,
+        childAfterId: metadata.sourceTransitionChildAfterId,
       }),
     lifecycleCommand: readString(
       metadata.settledExecutionPlanTaskMutationCommand

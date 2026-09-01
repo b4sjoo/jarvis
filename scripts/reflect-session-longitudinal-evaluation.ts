@@ -20,7 +20,7 @@ import {
 } from "../src/lib/meeting/task-relation-adjudication-reflection.js";
 import { buildTaskRelationAuthorityConvergenceReportV1 } from "../src/lib/meeting/task-relation-authority-convergence.js";
 import { projectMeetingMetadataEvaluationObservation } from "../src/lib/meeting/meeting-metadata-evaluation.js";
-import { resolveCommittedSourceTransitionLifecycleCommand } from "../src/lib/meeting/task-settlement-tuple.js";
+import { resolveCommittedSourceTransitionLifecycleEvidence } from "../src/lib/meeting/task-settlement-tuple.js";
 import {
   loadSessionHumanEvaluationConsumerView,
   writeHumanEvaluationCompatibilityReport,
@@ -270,6 +270,18 @@ function mergeRuntimeTraceEvidence(
   const perTypeScores = readRecord(metadata.taxonomySemanticPerTypeScores);
   const meetingMetadataObservation =
     projectMeetingMetadataEvaluationObservation(metadata);
+  const committedLifecycleEvidence =
+    resolveCommittedSourceTransitionLifecycleEvidence({
+      runtimeKind: metadata.sourceTransitionRuntimeKind,
+      durableAuthorized: metadata.sourceTransitionDurableAuthorized,
+      durableMutationApplied: metadata.sourceTransitionDurableMutationApplied,
+      parentBeforeId: metadata.sourceTransitionParentBeforeId,
+      parentAfterId: metadata.sourceTransitionParentAfterId,
+      parentBeforeType: metadata.sourceTransitionParentBeforeType,
+      parentAfterType: metadata.sourceTransitionParentAfterType,
+      childBeforeId: metadata.sourceTransitionChildBeforeId,
+      childAfterId: metadata.sourceTransitionChildAfterId,
+    });
   return {
     ...compact,
     traceId: runtime.traceId,
@@ -305,13 +317,10 @@ function mergeRuntimeTraceEvidence(
     taskMutationAuthorized:
       readBoolean(metadata.taskMutationAuthorized) ??
       compact?.taskMutationAuthorized,
+    committedLifecycleEvidence:
+      committedLifecycleEvidence ?? compact?.committedLifecycleEvidence,
     taskMutationCommand:
-      resolveCommittedSourceTransitionLifecycleCommand({
-        runtimeKind: metadata.sourceTransitionRuntimeKind,
-        durableAuthorized: metadata.sourceTransitionDurableAuthorized,
-        durableMutationApplied:
-          metadata.sourceTransitionDurableMutationApplied,
-      }) ??
+      committedLifecycleEvidence?.command ??
       readString(metadata.settledExecutionPlanTaskMutationCommand) ??
       compact?.taskMutationCommand,
     taskLifecycleParentBeforeId:

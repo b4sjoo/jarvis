@@ -136,6 +136,52 @@ test("scores a same-parent cross-type replacement as retype", () => {
   });
 });
 
+test("scores parent action from one coherent committed lifecycle receipt", () => {
+  const report = buildSessionLongitudinalEvaluationReport([
+    {
+      directory: "/recordings/session-committed-retype",
+      manifest: { sessionId: "session-committed-retype" },
+      transcriptTurns: [],
+      traceSummaries: [
+        {
+          traceId: "trace-committed-retype",
+          logicalQuestionUnitId: "question-committed-retype",
+          taskRelation: "new-parent",
+          taskMutationAuthorized: true,
+          taskMutationCommand: "preserve",
+          taskLifecycleParentBeforeId: "stale-before",
+          taskLifecycleParentAfterId: "stale-after",
+          taskLifecycleParentBeforeType: "coding",
+          taskLifecycleParentAfterType: "behavioral",
+          committedLifecycleEvidence: {
+            command: "replace-parent",
+            parentBeforeId: "parent-design",
+            parentAfterId: "parent-design",
+            parentBeforeType: "general-system-design",
+            parentAfterType: "ai-ml-system-design",
+            authority: "source-transition-durable-receipt",
+          },
+        },
+      ],
+      questionEvaluations: [
+        {
+          id: "evaluation-committed-retype",
+          questionId: "question-committed-retype",
+          traceIds: ["trace-committed-retype"],
+          expectedRelation: "new-parent",
+          expectedParentAction: "retype",
+        },
+      ],
+    },
+  ]);
+
+  assert.deepEqual(report.continuityFunnel.parentActionAgreement, {
+    numerator: 1,
+    denominator: 1,
+    rate: 1,
+  });
+});
+
 test("separates metadata proposal quality from effective company safety", () => {
   const subject = {
     questionId: "company-opening",
