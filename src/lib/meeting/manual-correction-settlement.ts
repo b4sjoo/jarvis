@@ -10,8 +10,10 @@ import {
 } from "./task-relation-adjudication.js";
 import {
   isParentCanonicalQuestionType,
+  normalizeCanonicalQuestionType,
   type CanonicalQuestionType,
 } from "./task-taxonomy.js";
+import type { ManualCorrectionScope } from "./types.js";
 
 export interface ManualQuestionTypeCorrectionSettlementResult {
   settlement: CurrentQuestionSettlementDecision;
@@ -30,6 +32,42 @@ export interface ManualCorrectionRelationAdmissionDecision {
     LlmTaskRelationAdjudication["relation"],
     "unknown"
   >;
+}
+
+export function authorizeManualCorrectionLifecycle(input: {
+  settlement: CurrentQuestionSettlementDecision;
+  scope: ManualCorrectionScope;
+  activeParentId?: string;
+  activeParentType?: unknown;
+}): CurrentQuestionSettlementDecision {
+  const correctedType = normalizeCanonicalQuestionType(
+    input.settlement.questionType
+  );
+  const activeParentType = normalizeCanonicalQuestionType(
+    input.activeParentType
+  );
+  if (
+    input.scope !== "same-question-retype" ||
+    input.settlement.relation !== "new-parent" ||
+    !input.activeParentId ||
+    input.settlement.activeParentId !== input.activeParentId ||
+    !correctedType ||
+    !isParentCanonicalQuestionType(correctedType) ||
+    !activeParentType ||
+    correctedType === activeParentType
+  ) {
+    return input.settlement;
+  }
+  return Object.freeze({
+    ...input.settlement,
+    parentMutationAuthorized: true,
+    reasons: Array.from(
+      new Set([
+        ...input.settlement.reasons,
+        "manual-correction-same-question-retype-authorized",
+      ])
+    ),
+  });
 }
 
 export function settleManualQuestionTypeCorrection(input: {

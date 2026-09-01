@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import type { ActiveMeetingTask } from "../src/lib/meeting/active-meeting-task.js";
 import { createProvisionalCurrentQuestion } from "../src/lib/meeting/current-question-settlement.js";
@@ -18,7 +19,10 @@ import {
   ManualCorrectionOperationCoordinator,
   type ManualCorrectionTargetHistoryEntry,
 } from "../src/lib/meeting/manual-question-type-correction.js";
-import { settleManualQuestionTypeCorrection } from "../src/lib/meeting/manual-correction-settlement.js";
+import {
+  authorizeManualCorrectionLifecycle,
+  settleManualQuestionTypeCorrection,
+} from "../src/lib/meeting/manual-correction-settlement.js";
 import type {
   ActiveInterviewChild,
   ActiveInterviewParent,
@@ -62,6 +66,64 @@ test("settles manual type authority and relation authority in one correction tra
   assert.equal(result.settlement.typeAuthoritySource, "manual-correction");
   assert.equal(result.settlement.relationAuthoritySource, "runtime-adjudication");
   assert.equal(result.settlement.parentMutationAuthorized, true);
+});
+
+test("reauthorizes only a parent-origin cross-type lifecycle", () => {
+  const unit = makeLogicalQuestion(
+    "question-retype",
+    "turn-retype",
+    "Design a URL shortener."
+  );
+  const settled = settleManualQuestionTypeCorrection({
+    operationId: "correction-retype",
+    currentQuestion: createProvisionalCurrentQuestion({
+      logicalQuestionUnit: unit,
+      sourceKind: "voice",
+    }),
+    correctedType: "ai-ml-system-design",
+    activeParentId: "parent-design",
+    activeParentRevision: 2,
+    manualCorrectionRevision: 1,
+    revisionStableRelation: "new-parent",
+  }).settlement;
+  const projected = authorizeManualCorrectionLifecycle({
+    settlement: { ...settled, parentMutationAuthorized: false },
+    scope: "same-question-retype",
+    activeParentId: "parent-design",
+    activeParentType: "general-system-design",
+  });
+
+  assert.equal(projected.parentMutationAuthorized, true);
+  assert.ok(
+    projected.reasons.includes(
+      "manual-correction-same-question-retype-authorized"
+    )
+  );
+  assert.equal(
+    authorizeManualCorrectionLifecycle({
+      settlement: { ...settled, parentMutationAuthorized: false },
+      scope: "independent-new-parent",
+      activeParentId: "parent-design",
+      activeParentType: "general-system-design",
+    }).parentMutationAuthorized,
+    false
+  );
+});
+
+test("shares one correction lifecycle commit boundary across correction paths", () => {
+  const source = readFileSync("src/hooks/useMeetingAssistant.ts", "utf8");
+  assert.equal(
+    source.match(/commitCorrectionLifecycleWithManager\(/g)?.length,
+    3
+  );
+  assert.match(
+    source,
+    /correctionScopeDecision\.scope === "same-question-retype"[\s\S]*commitCorrectionLifecycleWithManager\(/
+  );
+  assert.match(
+    source,
+    /correctionOwnedResettlement\?\.parentMutationAuthorized[\s\S]*commitCorrectionLifecycleWithManager\(/
+  );
 });
 
 test("keeps the current parent when correction-owned relation adjudication abstains", () => {
