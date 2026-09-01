@@ -34095,6 +34095,8 @@ export function useMeetingAssistant() {
         return;
       }
 
+      let responseActionLogicalQuestionUnit =
+        logicalQuestionUnitRef.current;
       if (
         responseAction === "previous-phase" ||
         responseAction === "next-phase"
@@ -34119,7 +34121,7 @@ export function useMeetingAssistant() {
           }));
           return;
         }
-        const phaseNavigationLogicalQuestionUnit =
+        responseActionLogicalQuestionUnit =
           resolveResponseActionLogicalQuestionUnit({
             currentLogicalQuestionUnit: logicalQuestionUnitRef.current,
             meetingContext,
@@ -34191,9 +34193,9 @@ export function useMeetingAssistant() {
               stage: "terminal",
               traceId: trace.id,
               logicalQuestionUnitId:
-                phaseNavigationLogicalQuestionUnit?.id,
+                responseActionLogicalQuestionUnit?.id,
               logicalQuestionUnitRevision:
-                phaseNavigationLogicalQuestionUnit?.revision,
+                responseActionLogicalQuestionUnit?.revision,
               taskId: existingInterviewTask.id,
               terminalDisposition: "rejected",
               reason: decision.reason,
@@ -34205,9 +34207,9 @@ export function useMeetingAssistant() {
             stage: "accepted",
             traceId: trace.id,
             logicalQuestionUnitId:
-              phaseNavigationLogicalQuestionUnit?.id,
+              responseActionLogicalQuestionUnit?.id,
             logicalQuestionUnitRevision:
-              phaseNavigationLogicalQuestionUnit?.revision,
+              responseActionLogicalQuestionUnit?.revision,
             taskId: existingInterviewTask.id,
           });
 
@@ -34269,7 +34271,7 @@ export function useMeetingAssistant() {
             questionLineage:
               resolveCurrentSuggestionQuestionLineage(),
             logicalQuestionUnit:
-              phaseNavigationLogicalQuestionUnit,
+              responseActionLogicalQuestionUnit,
           });
           const completedTrace = traceStoreRef.current
             .getTraces()
@@ -34278,9 +34280,9 @@ export function useMeetingAssistant() {
             stage: "terminal",
             traceId: trace.id,
             logicalQuestionUnitId:
-              phaseNavigationLogicalQuestionUnit?.id,
+              responseActionLogicalQuestionUnit?.id,
             logicalQuestionUnitRevision:
-              phaseNavigationLogicalQuestionUnit?.revision,
+              responseActionLogicalQuestionUnit?.revision,
             taskId: existingInterviewTask.id,
             terminalDisposition:
               completedTrace?.status === "error"
@@ -34322,9 +34324,9 @@ export function useMeetingAssistant() {
             stage: "accepted",
             traceId: trace.id,
             logicalQuestionUnitId:
-              phaseNavigationLogicalQuestionUnit?.id,
+              responseActionLogicalQuestionUnit?.id,
             logicalQuestionUnitRevision:
-              phaseNavigationLogicalQuestionUnit?.revision,
+              responseActionLogicalQuestionUnit?.revision,
             taskId: existingInterviewTask.id,
           });
           await runAdvisor({
@@ -34338,7 +34340,7 @@ export function useMeetingAssistant() {
             questionLineage:
               resolveCurrentSuggestionQuestionLineage(),
             logicalQuestionUnit:
-              phaseNavigationLogicalQuestionUnit,
+              responseActionLogicalQuestionUnit,
             manualPhaseTargetOverride:
               forwardDecision.targetPhase,
             manualPhaseOperationId: operationId,
@@ -34350,9 +34352,9 @@ export function useMeetingAssistant() {
             stage: "terminal",
             traceId: trace.id,
             logicalQuestionUnitId:
-              phaseNavigationLogicalQuestionUnit?.id,
+              responseActionLogicalQuestionUnit?.id,
             logicalQuestionUnitRevision:
-              phaseNavigationLogicalQuestionUnit?.revision,
+              responseActionLogicalQuestionUnit?.revision,
             taskId: existingInterviewTask.id,
             terminalDisposition:
               completedTrace?.status === "error"
@@ -34540,29 +34542,52 @@ export function useMeetingAssistant() {
         return;
       }
 
+      const genericActionContext = contextManagerRef.current.getState();
+      const genericActionTrace = traceStoreRef.current.startTrace(
+        genericActionContext.taskRuntime.screenAttachment
+          ? "screen"
+          : "voice",
+        {
+          source: "advisor-response-action",
+          responseAction,
+        }
+      );
       recordResponseAction({
         stage: "accepted",
-        logicalQuestionUnitId: logicalQuestionUnitRef.current?.id,
+        traceId: genericActionTrace.id,
+        logicalQuestionUnitId: responseActionLogicalQuestionUnit?.id,
         logicalQuestionUnitRevision:
-          logicalQuestionUnitRef.current?.revision,
-        taskId: contextManagerRef.current.getState().activeMeetingTask?.id,
+          responseActionLogicalQuestionUnit?.revision,
+        taskId: genericActionContext.activeMeetingTask?.id,
       });
       await runAdvisor({
         force: true,
         mode: "response-action",
         responseAction,
         currentSuggestion: currentSuggestionText,
+        traceId: genericActionTrace.id,
         advisorJobSource: "response-action",
         taskMutationAuthority: "preserve-parent",
         questionLineage: resolveCurrentSuggestionQuestionLineage(),
+        logicalQuestionUnit: responseActionLogicalQuestionUnit,
       });
+      const completedTrace = traceStoreRef.current
+        .getTraces()
+        .find((candidate) => candidate.id === genericActionTrace.id);
       recordResponseAction({
         stage: "terminal",
-        logicalQuestionUnitId: logicalQuestionUnitRef.current?.id,
+        traceId: genericActionTrace.id,
+        logicalQuestionUnitId: responseActionLogicalQuestionUnit?.id,
         logicalQuestionUnitRevision:
-          logicalQuestionUnitRef.current?.revision,
+          responseActionLogicalQuestionUnit?.revision,
         taskId: contextManagerRef.current.getState().activeMeetingTask?.id,
-        terminalDisposition: "completed",
+        terminalDisposition:
+          completedTrace?.status === "error"
+            ? "failed"
+            : completedTrace?.status === "cancelled"
+              ? "cancelled"
+              : "completed",
+        reason: completedTrace?.error,
       });
     },
     [

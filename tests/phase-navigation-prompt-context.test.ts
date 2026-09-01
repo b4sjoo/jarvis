@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { composePhaseNavigationPromptContext } from "../src/lib/meeting/phase-navigation-prompt-context.js";
 import type { AdvisorPromptContext } from "../src/lib/meeting/types.js";
@@ -103,4 +104,19 @@ test("previous phase navigation does not manufacture a previous suggestion", () 
 
   assert.equal(result.currentSuggestion, undefined);
   assert.match(result.promptContext.transcript, /Explain the architecture/);
+});
+
+test("first-time phase navigation shares one trace with its manual action", () => {
+  const source = readFileSync("src/hooks/useMeetingAssistant.ts", "utf8");
+  const genericAction = source.slice(
+    source.indexOf("const genericActionTrace"),
+    source.indexOf("const answerClarifyingQuestion")
+  );
+  assert.match(genericAction, /stage: "accepted",\s*traceId: genericActionTrace\.id/);
+  assert.match(genericAction, /runAdvisor\(\{[\s\S]*traceId: genericActionTrace\.id/);
+  assert.match(genericAction, /stage: "terminal",\s*traceId: genericActionTrace\.id/);
+  assert.match(
+    genericAction,
+    /logicalQuestionUnit: responseActionLogicalQuestionUnit/
+  );
 });
