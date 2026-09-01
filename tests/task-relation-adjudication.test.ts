@@ -313,6 +313,43 @@ test("keeps raw recent interviewer context when no lexical role matches", () => 
   assert.deepEqual(request.recentTransitions, []);
 });
 
+test("keeps recent source context separate from the current question", () => {
+  const request = buildTaskRelationAdjudicationRequest({
+    logicalQuestionUnit: unit(
+      "Within this RAG system, implement the retrieval merge function."
+    ),
+    activeMeetingTask: activeTask(),
+    recentTurns: [],
+    recentSourceContext: {
+      text: "The system uses hybrid retrieval over enterprise documents.",
+      sourceTurnIds: ["turn-recent-context"],
+      parentId: "parent-a",
+      parentRevision: 3,
+      retentionReason: "same-parent-adjacent-setup",
+    },
+  });
+  const prompts = buildTaskRelationAdjudicationPrompts(request);
+  const modelInput = JSON.parse(prompts.userMessage) as {
+    currentQuestion: { sourceTexts: string[] };
+    recentEvidence: Array<{ text: string }>;
+  };
+
+  assert.deepEqual(modelInput.currentQuestion.sourceTexts, [
+    "Within this RAG system, implement the retrieval merge function.",
+  ]);
+  assert.ok(
+    modelInput.recentEvidence.some((item) =>
+      item.text.includes("hybrid retrieval")
+    )
+  );
+  assert.equal(
+    modelInput.currentQuestion.sourceTexts.some((text) =>
+      text.includes("hybrid retrieval")
+    ),
+    false
+  );
+});
+
 test("uses the current source instead of issuing a context-free relation request", () => {
   const request = buildTaskRelationAdjudicationRequest({
     logicalQuestionUnit: unit("How should we proceed from here?"),

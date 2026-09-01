@@ -1375,9 +1375,11 @@ export interface AdvisorRetrievalHint {
 export interface AdvisorSourceOwnedSemanticContext {
   text: string;
   sourceTurnIds: string[];
-  parentId: string;
-  parentRevision: number;
-  retentionReason: "same-parent-adjacent-setup";
+  parentId?: string;
+  parentRevision?: number;
+  retentionReason:
+    | "same-parent-adjacent-setup"
+    | "recent-source-context";
 }
 
 export interface AdvisorEvidencePacket {

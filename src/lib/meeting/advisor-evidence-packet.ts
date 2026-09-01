@@ -555,7 +555,7 @@ function normalizeSourceOwnedSemanticContext(
   const text = boundText(context.text, 600);
   const parentId = cleanText(context.parentId);
   const sourceTurnIds = uniqueStrings(context.sourceTurnIds);
-  if (!text || !parentId || !sourceTurnIds.length) return undefined;
+  if (!text || !sourceTurnIds.length) return undefined;
   return {
     text,
     sourceTurnIds,

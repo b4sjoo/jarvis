@@ -27,6 +27,7 @@ import {
   type CanonicalQuestionType,
 } from "./task-taxonomy.js";
 import type {
+  AdvisorSourceOwnedSemanticContext,
   MeetingTaskRelationAdjudicationMode,
   TranscriptTurn,
 } from "./types.js";
@@ -430,6 +431,7 @@ export function buildTaskRelationAdjudicationRequest(input: {
   currentQuestion?: ProvisionalCurrentQuestion;
   recentTurns?: TranscriptTurn[];
   ownerEvidenceSelection?: TaskRelationOwnerEvidenceSelectionInput;
+  recentSourceContext?: AdvisorSourceOwnedSemanticContext;
 }): TaskRelationAdjudicationRequest {
   const parent = input.activeMeetingTask.parent;
   const child = input.activeMeetingTask.child;
@@ -472,7 +474,21 @@ export function buildTaskRelationAdjudicationRequest(input: {
         maxTurns: 5,
         sourceScope: "parent-scope",
       });
-  let recentParentEvidence = parentEvidenceSelection.evidence;
+  const recentContextEvidence = input.recentSourceContext
+    ? {
+        turnId:
+          input.recentSourceContext.sourceTurnIds.at(-1) ??
+          input.logicalQuestionUnit.currentTurnId,
+        text: input.recentSourceContext.text,
+        role: "constraint" as const,
+        selectionReason: "raw-recent-turn" as const,
+        sourceScope: "cross-boundary-prior-turn" as const,
+      }
+    : undefined;
+  let recentParentEvidence = dedupeTaskRelationEvidence([
+    ...parentEvidenceSelection.evidence,
+    ...(recentContextEvidence ? [recentContextEvidence] : []),
+  ]);
   let recentSourceEvidence = dedupeTaskRelationEvidence([
     ...recentParentEvidence,
     ...recentBranchEvidence,

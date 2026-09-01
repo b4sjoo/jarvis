@@ -44,6 +44,7 @@ export interface LogicalQuestionUnit {
   runtimeEpoch: number;
   currentTurnId: string;
   sourceTurnIds: string[];
+  contextSourceTurnIds?: string[];
   sources: LogicalQuestionSource[];
   normalizedText: string;
   startedAt: number;
@@ -89,6 +90,7 @@ export interface LogicalQuestionUnitTraceMetadata {
   logicalQuestionUnitRevision?: number;
   logicalQuestionCurrentTurnId?: string;
   logicalQuestionSourceTurnIds?: string[];
+  logicalQuestionContextSourceTurnIds?: string[];
   logicalQuestionChars?: number;
   logicalQuestionCompositionReasons?: string[];
   logicalQuestionBoundaryReason?: string;
@@ -234,6 +236,8 @@ export function formatLogicalQuestionUnitForTrace(
     logicalQuestionUnitRevision: unit.revision,
     logicalQuestionCurrentTurnId: unit.currentTurnId,
     logicalQuestionSourceTurnIds: unit.sourceTurnIds,
+    logicalQuestionContextSourceTurnIds:
+      unit.contextSourceTurnIds ?? [],
     logicalQuestionChars: unit.normalizedText.length,
     logicalQuestionCompositionReasons: unit.compositionReasons,
     logicalQuestionBoundaryReason: unit.boundaryReason,

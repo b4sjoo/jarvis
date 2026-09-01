@@ -141,6 +141,7 @@ import { materializeHumanEvaluationAttemptProjectionV2 } from "@/lib/meeting/hum
 import { validateHumanEvaluationAttemptSubjectV2 } from "@/lib/meeting/human-evaluation-attempt";
 import { toHumanEvaluationCollectionProvenance } from "@/lib/meeting/session-evaluation-provenance";
 import {
+  appendSourceOwnedSetupCandidate,
   createSourceOwnedSetupCandidate,
   formatSourceOwnedSemanticContextSelectionForTrace,
   selectSourceOwnedSemanticContext,
@@ -20081,12 +20082,37 @@ export function useMeetingAssistant() {
           activeMeetingTask,
           transcriptTurns: contextState.transcriptTurns,
         });
+      const recentSourceContextCandidate =
+        latestSourceOwnedSetupRef.current;
+      const recentSourceContextSelection =
+        selectSourceOwnedSemanticContext({
+          candidate: recentSourceContextCandidate,
+          sessionId: contextState.sessionId,
+          runtimeEpoch: runtimeEpochRef.current,
+          logicalQuestionUnit,
+          activeMeetingTask,
+          transcriptTurns: contextState.transcriptTurns,
+        });
+      if (
+        recentSourceContextSelection.consumeCandidate &&
+        !recentSourceContextSelection.context
+      ) {
+        latestSourceOwnedSetupRef.current = undefined;
+      }
+      traceStoreRef.current.updateMetadata(
+        traceId,
+        formatSourceOwnedSemanticContextSelectionForTrace(
+          recentSourceContextCandidate,
+          recentSourceContextSelection
+        )
+      );
       const request = buildTaskRelationAdjudicationRequest({
         logicalQuestionUnit,
         activeMeetingTask,
         currentQuestion,
         recentTurns: contextState.transcriptTurns,
         ownerEvidenceSelection,
+        recentSourceContext: recentSourceContextSelection.context,
       });
       const splitHandle = scheduleTaskRelationSplitRuntime({
         traceId,
@@ -22916,7 +22942,7 @@ export function useMeetingAssistant() {
       const effectivePrimaryAskProjection =
         primaryAskProjection ??
         projectPrimaryAsk({ turnId: turn.id, text: turn.text });
-      const logicalQuestionUnit = composeCanonicalTurnCandidate({
+      const logicalQuestionCandidate = composeCanonicalTurnCandidate({
         currentTurn: turn,
         sessionId: contextState.sessionId,
         runtimeEpoch: runtimeEpochRef.current,
@@ -22938,6 +22964,23 @@ export function useMeetingAssistant() {
         taskBoundaryEvidence,
         primaryAskProjection: effectivePrimaryAskProjection,
       });
+      const recentSourceContextSelection =
+        selectSourceOwnedSemanticContext({
+          candidate: latestSourceOwnedSetupRef.current,
+          sessionId: contextState.sessionId,
+          runtimeEpoch: runtimeEpochRef.current,
+          logicalQuestionUnit: logicalQuestionCandidate,
+          activeMeetingTask: contextState.activeMeetingTask,
+          transcriptTurns: contextState.transcriptTurns,
+        });
+      const logicalQuestionUnit = recentSourceContextSelection.context
+        ? {
+            ...logicalQuestionCandidate,
+            contextSourceTurnIds: [
+              ...recentSourceContextSelection.context.sourceTurnIds,
+            ],
+          }
+        : logicalQuestionCandidate;
       if (commitCanonical) {
         logicalQuestionUnitRef.current = logicalQuestionUnit;
       }
@@ -23236,11 +23279,17 @@ export function useMeetingAssistant() {
           activeMeetingTask: activeContextState.activeMeetingTask,
         });
       if (sourceOwnedSetupCandidate) {
-        latestSourceOwnedSetupRef.current = sourceOwnedSetupCandidate;
+        latestSourceOwnedSetupRef.current =
+          appendSourceOwnedSetupCandidate(
+            latestSourceOwnedSetupRef.current,
+            sourceOwnedSetupCandidate
+          );
         traceStoreRef.current.updateMetadata(traceId, {
           sourceOwnedSetupCandidateStored: true,
           sourceOwnedSetupCandidateTurnId:
             sourceOwnedSetupCandidate.turnId,
+          sourceOwnedSetupCandidateTurnIds:
+            latestSourceOwnedSetupRef.current.sourceTurnIds,
           sourceOwnedSetupCandidateSpeechAct:
             sourceOwnedSetupCandidate.speechAct,
           sourceOwnedSetupCandidateParentId:
