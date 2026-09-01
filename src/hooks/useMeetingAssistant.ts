@@ -665,6 +665,7 @@ import {
   consumeSttContinuationPromptLease,
   createSttContinuationPromptLease,
   composeLogicalQuestionUnit,
+  composeCanonicalTurnCandidate,
   getLogicalQuestionAnswerFocusText,
   getLogicalQuestionSemanticEvidenceText,
   authorizeLogicalQuestionUnitLease,
@@ -22901,18 +22902,6 @@ export function useMeetingAssistant() {
       commitCanonical?: boolean;
     }) => {
       const contextState = contextManagerRef.current.getState();
-      const previous = logicalQuestionUnitRef.current;
-      const previousEndedAt =
-        previous?.sources[previous.sources.length - 1]?.endedAt;
-      const interveningTurns =
-        previousEndedAt === undefined
-          ? []
-          : contextState.transcriptTurns.filter(
-              (candidate) =>
-                candidate.id !== turn.id &&
-                candidate.startedAt >= previousEndedAt &&
-                candidate.endedAt <= turn.startedAt
-            );
       const cancelledAdvisorTurnIds = new Set(
         cancelledAdvisorTurnIdsRef.current
       );
@@ -22927,20 +22916,17 @@ export function useMeetingAssistant() {
       const effectivePrimaryAskProjection =
         primaryAskProjection ??
         projectPrimaryAsk({ turnId: turn.id, text: turn.text });
-      const committedStableAnswer = stableAnswerRevisionRef.current;
-      const logicalQuestionUnit = composeLogicalQuestionUnit({
+      const logicalQuestionUnit = composeCanonicalTurnCandidate({
         currentTurn: turn,
         sessionId: contextState.sessionId,
         runtimeEpoch: runtimeEpochRef.current,
         intentDecision,
-        previousUnit: previous,
         cancelledAdvisorTurnIds,
         pendingBoundarySourceTurnIds:
           pendingBoundary?.state === "pending"
             ? pendingBoundary.sourceTurnIds
             : undefined,
         relatedSourceTurnIds: turn.relatedTurnIds,
-        interveningTurns,
         recentThemTurns: contextState.transcriptTurns.filter(
           (candidate) =>
             candidate.speaker === "them" &&
@@ -22951,16 +22937,6 @@ export function useMeetingAssistant() {
         sectionHint,
         taskBoundaryEvidence,
         primaryAskProjection: effectivePrimaryAskProjection,
-        committedAnswerBoundary:
-          committedStableAnswer?.logicalQuestionUnitId &&
-          committedStableAnswer.logicalQuestionRevision !== null
-            ? {
-                logicalQuestionUnitId:
-                  committedStableAnswer.logicalQuestionUnitId,
-                logicalQuestionRevision:
-                  committedStableAnswer.logicalQuestionRevision,
-              }
-            : undefined,
       });
       if (commitCanonical) {
         logicalQuestionUnitRef.current = logicalQuestionUnit;

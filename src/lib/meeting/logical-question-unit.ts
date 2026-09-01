@@ -81,10 +81,6 @@ export interface ComposeLogicalQuestionUnitInput {
     settledSourceTurnIds: string[];
     currentSourceOwnedSubstantive: boolean;
   };
-  committedAnswerBoundary?: {
-    logicalQuestionUnitId: string;
-    logicalQuestionRevision: number;
-  };
 }
 
 export interface LogicalQuestionUnitTraceMetadata {
@@ -98,8 +94,15 @@ export interface LogicalQuestionUnitTraceMetadata {
   logicalQuestionBoundaryReason?: string;
   logicalQuestionTruncated?: boolean;
   logicalQuestionTerminalNoAnswerBoundaryApplied?: boolean;
-  logicalQuestionCommittedAnswerBoundaryApplied?: boolean;
 }
+
+export type ComposeCanonicalTurnCandidateInput = Omit<
+  ComposeLogicalQuestionUnitInput,
+  | "previousUnit"
+  | "authoritativeCorrection"
+  | "committedParentBoundary"
+  | "terminalNoAnswerBoundary"
+>;
 
 interface LogicalQuestionCompositionBoundary {
   extend: boolean;
@@ -213,6 +216,12 @@ export function composeLogicalQuestionUnit(
   };
 }
 
+export function composeCanonicalTurnCandidate(
+  input: ComposeCanonicalTurnCandidateInput
+): LogicalQuestionUnit {
+  return composeLogicalQuestionUnit(input);
+}
+
 export function formatLogicalQuestionUnitForTrace(
   unit: LogicalQuestionUnit | undefined
 ): LogicalQuestionUnitTraceMetadata {
@@ -234,8 +243,6 @@ export function formatLogicalQuestionUnitForTrace(
         "terminal-no-answer-substantive-boundary" ||
       unit.boundaryReason ===
         "terminal-no-answer-ambient-continuation",
-    logicalQuestionCommittedAnswerBoundaryApplied:
-      unit.boundaryReason === "visible-answer-committed-boundary",
     sectionHintId: unit.sectionHint?.id,
     sectionHintType: unit.sectionHint?.questionType,
     sectionHintDisposition: unit.sectionHint?.disposition,
@@ -338,12 +345,6 @@ function resolveCompositionBoundary(
   }
   if (input.committedParentBoundary) {
     return boundary(false, "committed-parent-boundary");
-  }
-  if (
-    input.committedAnswerBoundary?.logicalQuestionUnitId === previous.id &&
-    input.committedAnswerBoundary.logicalQuestionRevision === previous.revision
-  ) {
-    return boundary(false, "visible-answer-committed-boundary");
   }
   const referentialCompletion = isReferentialCompletion(input, previous);
   const maxQuestionAgeMs = referentialCompletion
