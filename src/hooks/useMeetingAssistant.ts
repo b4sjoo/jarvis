@@ -10337,6 +10337,7 @@ export function useMeetingAssistant() {
     }
     let advisorStepId: string | undefined;
     let effectiveRuntimeCommitToken = advisorJob.runtimeCommitToken;
+    let promptContext = advisorJob.promptContextSnapshot;
     const settlementOverride = options.currentQuestionSettlementOverride;
     const settlementIdentityQuestion = advisorJob.logicalQuestionUnit
       ? createProvisionalCurrentQuestion({
@@ -10775,7 +10776,6 @@ export function useMeetingAssistant() {
       return;
     }
 
-    let promptContext = advisorJob.promptContextSnapshot;
     const preparationRuntimeReinforcement =
       resolvePreparationRuntimeReinforcement(
         preparationRuntimeContextRef.current,
