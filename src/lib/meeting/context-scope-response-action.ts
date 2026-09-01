@@ -99,6 +99,7 @@ export function composeCurrentOnlyAdvisorPromptContext(
     activeMeetingTask: task,
     selectedCandidates: [current],
     preserveTaskProcedure: true,
+    preserveActiveScreenContext: false,
   });
 
   return buildResult({
@@ -160,6 +161,7 @@ export function composeExpandedAdvisorPromptContext(
     activeMeetingTask: independentQuestionGuardApplied ? undefined : task,
     selectedCandidates: selected,
     preserveTaskProcedure: !independentQuestionGuardApplied,
+    preserveActiveScreenContext: !independentQuestionGuardApplied,
   });
 
   return buildResult({
@@ -494,6 +496,7 @@ function buildSafePromptContext(input: {
   activeMeetingTask?: ActiveMeetingTask;
   selectedCandidates: ContextScopeCandidate[];
   preserveTaskProcedure: boolean;
+  preserveActiveScreenContext: boolean;
 }): AdvisorPromptContext {
   const screenOwned = isScreenOwnedLogicalQuestion(
     input.logicalQuestionUnit,
@@ -524,7 +527,9 @@ function buildSafePromptContext(input: {
     ),
     screenContext: screenOwned
       ? currentQuestionCandidate?.text ?? ""
-      : "",
+      : input.preserveActiveScreenContext && input.activeMeetingTask?.screen
+        ? input.baseContext.screenContext
+        : "",
     interviewSessionBrief: undefined,
     interviewSessionContext: undefined,
     taskRuntime: {

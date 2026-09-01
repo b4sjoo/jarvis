@@ -7,6 +7,10 @@ import {
   composeCurrentOnlyAdvisorPromptContext,
   composeExpandedAdvisorPromptContext,
 } from "../src/lib/meeting/context-scope-response-action.js";
+import {
+  compileSettledAdvisorPromptContext,
+  resolveSettledResponseActionContextSelection,
+} from "../src/lib/meeting/settled-advisor-context.js";
 import type { ActiveMeetingTask } from "../src/lib/meeting/active-meeting-task.js";
 import type { LogicalQuestionUnit } from "../src/lib/meeting/logical-question-unit.js";
 import type {
@@ -186,6 +190,73 @@ test("Enhance selects a bounded recent source window for a referential request",
     result.promptContext.transcript,
     /MY_LONG_ATTEMPT_SHOULD_NOT_BE_INCLUDED/
   );
+});
+
+test("Enhance preserves active Screen evidence through the final compiler", () => {
+  const prior = turn(
+    "turn_prior",
+    "The highlighted method updates the cache order.",
+    1_000
+  );
+  const current = turn(
+    "turn_current",
+    "Can you explain those highlighted lines?",
+    2_000
+  );
+  const unit = logicalQuestion(
+    "logical-screen-followup",
+    1,
+    current,
+    current.text,
+    ["independent-current-turn"],
+    "independent-current-turn"
+  );
+  const task = activeTask({
+    parentTurnIds: [prior.id],
+    screenAnswer: "GENERATED_SCREEN_ANSWER",
+  });
+  const state = meetingContext([prior, current], task);
+  const selection = composeExpandedAdvisorPromptContext({
+    baseContext: baseContext(task),
+    logicalQuestionUnit: unit,
+    meetingContext: state,
+    activeMeetingTask: task,
+    questionRelation: "referential-follow-up",
+  });
+  const promptContext = {
+    ...selection.promptContext,
+    responseActionContextScope: {
+      operationId: "scope-screen-enhance",
+      action: "enhance-context" as const,
+      mode: selection.contextScopeMode,
+      logicalQuestionUnitId: selection.logicalQuestionUnitId,
+      logicalQuestionUnitRevision: selection.logicalQuestionUnitRevision,
+      selectedContextSourceKinds: selection.selectedKinds,
+      selectedContextTurnIds: selection.selectedTurnIds,
+      selectedContextChars: selection.selectedChars,
+      selectionReason: selection.selectionReason,
+      expansionBudget: selection.budgets.maxExpansionChars,
+    },
+  };
+  const receipt = resolveSettledResponseActionContextSelection({
+    snapshot: promptContext.responseActionContextScope,
+    logicalQuestionUnit: unit,
+  });
+  const compiled = compileSettledAdvisorPromptContext({
+    baseContext: promptContext,
+    contextReadScope: "active-parent-read",
+    logicalQuestionUnit: unit,
+    transcriptTurns: state.transcriptTurns,
+    screenScopeDecision: {
+      action: "keep",
+      reason: "explicit-action-preserve",
+    },
+    responseActionContextSelection: receipt,
+  });
+
+  assert.equal(selection.promptContext.screenContext, "OLD_SCREEN_CONTEXT");
+  assert.equal(compiled.context.screenContext, "OLD_SCREEN_CONTEXT");
+  assert.equal(compiled.screenContextReason, "settled-screen-scope-keep");
 });
 
 test("Enhance can use a source-only child capsule without compactSummary", () => {
