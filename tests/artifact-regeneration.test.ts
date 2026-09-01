@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
+  formatCanonicalWhiteboardRegenerationForTrace,
   prepareCanonicalWhiteboardRegeneration,
   resolveArtifactRegenerationTarget,
 } from "../src/lib/meeting/artifact-regeneration.js";
@@ -203,6 +204,10 @@ test("rejects a visible Answer owned by another parent", () => {
 
 test("routes the manual action through the shared Advisor and atomic publisher", () => {
   const source = readFileSync("src/hooks/useMeetingAssistant.ts", "utf8");
+  const stableAnswerSource = readFileSync(
+    "src/lib/meeting/stable-answer.ts",
+    "utf8"
+  );
   const actionStart = source.indexOf(
     'if (responseAction === "regenerate-artifacts")'
   );
@@ -218,6 +223,15 @@ test("routes the manual action through the shared Advisor and atomic publisher",
   assert.match(source, /prepareCanonicalWhiteboardRegeneration\(\{/);
   assert.match(source, /manual-artifact-regeneration-atomic-whiteboard/);
   assert.match(source, /artifactOnly: Boolean\(/);
+  assert.match(source, /reason: "canonical-parent-commit-rejected"/);
+  assert.match(
+    source,
+    /artifactOnlyCanonicalParentCommitReason:\s*canonicalWhiteboardRegeneration\?\.reason/
+  );
+  assert.doesNotMatch(
+    stableAnswerSource,
+    /canonical-parent-revision-mismatch/
+  );
 });
 
 test("projects only the generated Whiteboard into the canonical parent", () => {
@@ -279,15 +293,21 @@ test("rejects stale parent and nonsequential Whiteboard revisions", () => {
     runtimeEpoch: 2,
   }).target!;
 
+  const staleParentDecision = prepareCanonicalWhiteboardRegeneration({
+    target,
+    currentParent: { ...currentParent, revisions: 4 },
+    candidateWhiteboard: {
+      ...currentParent.whiteboardArtifact!,
+      revision: 3,
+    },
+  });
   assert.equal(
-    prepareCanonicalWhiteboardRegeneration({
-      target,
-      currentParent: { ...currentParent, revisions: 4 },
-      candidateWhiteboard: {
-        ...currentParent.whiteboardArtifact!,
-        revision: 3,
-      },
-    }).reason,
+    staleParentDecision.reason,
+    "canonical-parent-revision-mismatch"
+  );
+  assert.equal(
+    formatCanonicalWhiteboardRegenerationForTrace(staleParentDecision)
+      .artifactOnlyCanonicalParentCommitReason,
     "canonical-parent-revision-mismatch"
   );
   assert.equal(
