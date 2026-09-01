@@ -463,6 +463,7 @@ export interface SessionCompactTraceSummary {
   logicalQuestionSourceTurnIds: string[];
   logicalQuestionContextSourceTurnIds: string[];
   logicalQuestionRecentLogicalQuestionSourceTurnIds: string[];
+  settledAdvisorContextSourceTurnIds: string[];
   logicalQuestionCompositionReasons: string[];
   logicalQuestionBoundaryReason?: string;
   logicalQuestionTruncated?: boolean;
@@ -5156,6 +5157,10 @@ export function buildCompactTraceSummary({
     logicalQuestionRecentLogicalQuestionSourceTurnIds: readFirstStringList(
       metadataSources,
       "logicalQuestionRecentLogicalQuestionSourceTurnIds"
+    ),
+    settledAdvisorContextSourceTurnIds: readFirstStringList(
+      metadataSources,
+      "settledAdvisorContextSourceTurnIds"
     ),
     logicalQuestionCompositionReasons: readFirstStringList(
       metadataSources,

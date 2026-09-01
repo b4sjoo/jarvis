@@ -2051,6 +2051,12 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
       logicalQuestionSourceTurnIds: ["turn_1", "turn_2"],
       logicalQuestionContextSourceTurnIds: ["turn_setup"],
       logicalQuestionRecentLogicalQuestionSourceTurnIds: ["turn_previous"],
+      settledAdvisorContextSourceTurnIds: [
+        "turn_1",
+        "turn_setup",
+        "turn_previous",
+        "turn_2",
+      ],
       logicalQuestionCompositionReasons: [
         "new-question",
         "referential-completion",
@@ -2177,6 +2183,12 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
   ]);
   assert.deepEqual(summary.logicalQuestionRecentLogicalQuestionSourceTurnIds, [
     "turn_previous",
+  ]);
+  assert.deepEqual(summary.settledAdvisorContextSourceTurnIds, [
+    "turn_1",
+    "turn_setup",
+    "turn_previous",
+    "turn_2",
   ]);
   assert.deepEqual(summary.logicalQuestionCompositionReasons, [
     "new-question",

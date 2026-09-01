@@ -103,7 +103,9 @@ export interface SessionProcedureStepV1 {
     logicalQuestionUnitId?: string;
     logicalQuestionUnitRevision?: number;
     primarySourceTurnIds?: string[];
-    contextSourceTurnIds?: string[];
+    currentQuestionContextSourceTurnIds?: string[];
+    recentLogicalQuestionSourceTurnIds?: string[];
+    advisorContextSourceTurnIds?: string[];
     responseOpportunityDecision?: string;
     responseOpportunityDisposition?: string;
     questionType?: string;
@@ -613,13 +615,14 @@ function attachRuntimeTraceSummary(
         summary.primaryAskSourceTurnIds ??
           summary.logicalQuestionSourceTurnIds
       ),
-      contextSourceTurnIds: readStringArray(
-        [
-          ...readStringArray(summary.logicalQuestionContextSourceTurnIds),
-          ...readStringArray(
-            summary.logicalQuestionRecentLogicalQuestionSourceTurnIds
-          ),
-        ]
+      currentQuestionContextSourceTurnIds: readStringArray(
+        summary.logicalQuestionContextSourceTurnIds
+      ),
+      recentLogicalQuestionSourceTurnIds: readStringArray(
+        summary.logicalQuestionRecentLogicalQuestionSourceTurnIds
+      ),
+      advisorContextSourceTurnIds: readStringArray(
+        summary.settledAdvisorContextSourceTurnIds
       ),
       responseOpportunityDecision: readString(
         summary.responseOpportunityDecision
