@@ -583,6 +583,13 @@ function cloneLogicalQuestionUnit(unit: LogicalQuestionUnit) {
   return {
     ...unit,
     sourceTurnIds: [...unit.sourceTurnIds],
+    contextSourceTurnIds: unit.contextSourceTurnIds
+      ? [...unit.contextSourceTurnIds]
+      : undefined,
+    recentLogicalQuestionSourceTurnIds:
+      unit.recentLogicalQuestionSourceTurnIds
+        ? [...unit.recentLogicalQuestionSourceTurnIds]
+        : undefined,
     sources: unit.sources.map((source) => ({ ...source })),
     compositionReasons: [...unit.compositionReasons],
     primaryAskProjection: unit.primaryAskProjection

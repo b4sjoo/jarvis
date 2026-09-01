@@ -265,6 +265,8 @@ test("freezes and traces the bounded logical question owned by a job", () => {
     runtimeEpoch: 1,
     currentTurnId: "turn-b",
     sourceTurnIds: ["turn-a", "turn-b"],
+    contextSourceTurnIds: ["turn-setup"],
+    recentLogicalQuestionSourceTurnIds: ["turn-previous"],
     sources: [
       {
         turnId: "turn-a",
@@ -299,9 +301,19 @@ test("freezes and traces the bounded logical question owned by a job", () => {
 
   logicalQuestionUnit.sources[0].text = "mutated";
   logicalQuestionUnit.sourceTurnIds.push("turn-c");
+  logicalQuestionUnit.contextSourceTurnIds.push("turn-mutated-setup");
+  logicalQuestionUnit.recentLogicalQuestionSourceTurnIds.push(
+    "turn-mutated-previous"
+  );
 
   assert.equal(job.logicalQuestionUnit?.sources[0].text, "Implement a queue");
   assert.deepEqual(job.logicalQuestionUnit?.sourceTurnIds, ["turn-a", "turn-b"]);
+  assert.deepEqual(job.logicalQuestionUnit?.contextSourceTurnIds, [
+    "turn-setup",
+  ]);
+  assert.deepEqual(job.logicalQuestionUnit?.recentLogicalQuestionSourceTurnIds, [
+    "turn-previous",
+  ]);
   const metadata = formatAdvisorTriggerJobForTrace(job, "scheduled");
   assert.equal(metadata.logicalQuestionUnitId, "logical-question-a");
   assert.deepEqual(metadata.logicalQuestionSourceTurnIds, ["turn-a", "turn-b"]);
