@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   LOGICAL_QUESTION_MAX_CHARS,
   composeLogicalQuestionUnit,
+  formatLogicalQuestionUnitForTrace,
   getLogicalQuestionAnswerFocusText,
   getLogicalQuestionSemanticEvidenceText,
 } from "../src/lib/meeting/logical-question-unit.js";
@@ -156,6 +157,100 @@ test("starts a new unit for an independent question or explicit switch", () => {
   assert.equal(next.revision, 1);
   assert.deepEqual(next.sourceTurnIds, ["turn_new"]);
   assert.equal(next.boundaryReason, "explicit-task-switch");
+});
+
+test("starts a fresh unit for a referential ask after the previous revision has a visible answer", () => {
+  const parentTurn = turn(
+    "turn_parent",
+    "Design a RAG system for enterprise search. Start with requirements and a high-level architecture.",
+    1_000
+  );
+  const previous = composeLogicalQuestionUnit({
+    currentTurn: parentTurn,
+    sessionId: "session-a",
+    runtimeEpoch: 1,
+    primaryAskProjection: projectPrimaryAsk({
+      turnId: parentTurn.id,
+      text: parentTurn.text,
+    }),
+  });
+  const childTurn = turn(
+    "turn_child",
+    "Within this RAG system, implement the document chunking and retrieval merge function in Python.",
+    2_000
+  );
+  const next = composeLogicalQuestionUnit({
+    currentTurn: childTurn,
+    sessionId: "session-a",
+    runtimeEpoch: 1,
+    intentDecision: decideAdvisorTurnIntent(childTurn.text, {
+      hasActiveTask: true,
+      hasRecentQuestionContext: true,
+    }),
+    previousUnit: previous,
+    primaryAskProjection: projectPrimaryAsk({
+      turnId: childTurn.id,
+      text: childTurn.text,
+    }),
+    committedAnswerBoundary: {
+      logicalQuestionUnitId: previous.id,
+      logicalQuestionRevision: previous.revision,
+    },
+  });
+
+  assert.notEqual(next.id, previous.id);
+  assert.equal(next.revision, 1);
+  assert.deepEqual(next.sourceTurnIds, ["turn_child"]);
+  assert.equal(next.boundaryReason, "visible-answer-committed-boundary");
+  assert.match(next.normalizedText, /implement the document chunking/i);
+  assert.equal(
+    formatLogicalQuestionUnitForTrace(next)
+      .logicalQuestionCommittedAnswerBoundaryApplied,
+    true
+  );
+});
+
+test("does not apply a stale visible-answer boundary to a newer unresolved revision", () => {
+  const initialTurn = turn("turn_initial", "Implement a queue.", 1_000);
+  const initial = composeLogicalQuestionUnit({
+    currentTurn: initialTurn,
+    sessionId: "session-a",
+    runtimeEpoch: 1,
+  });
+  const constraintTurn = turn("turn_constraint", "Use Python.", 2_000);
+  const revised = composeLogicalQuestionUnit({
+    currentTurn: constraintTurn,
+    sessionId: "session-a",
+    runtimeEpoch: 1,
+    previousUnit: initial,
+    intentDecision: decideAdvisorTurnIntent(constraintTurn.text, {
+      hasActiveTask: true,
+      hasRecentQuestionContext: true,
+    }),
+  });
+  const completionTurn = turn(
+    "turn_completion",
+    "Also explain the complexity.",
+    3_000
+  );
+  const completion = composeLogicalQuestionUnit({
+    currentTurn: completionTurn,
+    sessionId: "session-a",
+    runtimeEpoch: 1,
+    previousUnit: revised,
+    intentDecision: decideAdvisorTurnIntent(completionTurn.text, {
+      hasActiveTask: true,
+      hasRecentQuestionContext: true,
+    }),
+    committedAnswerBoundary: {
+      logicalQuestionUnitId: initial.id,
+      logicalQuestionRevision: initial.revision,
+    },
+  });
+
+  assert.equal(completion.id, revised.id);
+  assert.equal(completion.revision, revised.revision + 1);
+  assert.equal(completion.boundaryReason, "bounded-continuation");
 });
 
 test("freezes an applied section hint into the owned logical question", () => {

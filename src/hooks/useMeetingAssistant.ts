@@ -22886,6 +22886,7 @@ export function useMeetingAssistant() {
       const effectivePrimaryAskProjection =
         primaryAskProjection ??
         projectPrimaryAsk({ turnId: turn.id, text: turn.text });
+      const committedStableAnswer = stableAnswerRevisionRef.current;
       const logicalQuestionUnit = composeLogicalQuestionUnit({
         currentTurn: turn,
         sessionId: contextState.sessionId,
@@ -22909,6 +22910,16 @@ export function useMeetingAssistant() {
         sectionHint,
         taskBoundaryEvidence,
         primaryAskProjection: effectivePrimaryAskProjection,
+        committedAnswerBoundary:
+          committedStableAnswer?.logicalQuestionUnitId &&
+          committedStableAnswer.logicalQuestionRevision !== null
+            ? {
+                logicalQuestionUnitId:
+                  committedStableAnswer.logicalQuestionUnitId,
+                logicalQuestionRevision:
+                  committedStableAnswer.logicalQuestionRevision,
+              }
+            : undefined,
       });
       if (commitCanonical) {
         logicalQuestionUnitRef.current = logicalQuestionUnit;

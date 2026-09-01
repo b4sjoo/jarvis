@@ -82,14 +82,45 @@ test("uses an authoritative Screen milestone as the bounded new-parent fallback"
   assert.equal(decision.relation.reason, "screen-milestone-new-parent");
 });
 
-function task(): ActiveMeetingTask {
+test("settles a fresh Coding LQU as a child of a related AI/ML parent", () => {
+  const activeMeetingTask = task("ai-ml-system-design");
+  const ordered = decideOrderedTaskRelationResolution({
+    sourceKind: "voice",
+    currentQuestionType: "coding",
+    activeParentQuestionType: "ai-ml-system-design",
+    hasActiveChild: false,
+    parentAffinity: {
+      schemaVersion: 1,
+      affinityKind: "parent",
+      decision: "related",
+      confidence: 0.95,
+      currentEvidenceSpans: ["Within this RAG system"],
+      branchEvidenceSpans: ["Design a RAG system for enterprise search"],
+    },
+    finalizeWithNullHypothesis: true,
+  });
+  const decision = coordinateOrderedSettlement({
+    sourceKind: "voice",
+    currentQuestionType: "coding",
+    activeMeetingTask,
+    orderedRelation: ordered,
+  });
+
+  assert.equal(decision.relation.relation, "child-probe");
+  assert.equal(decision.relation.reason, "allowed-child-parent-related");
+});
+
+function task(
+  questionType: ActiveMeetingTask["parent"]["questionType"] =
+    "general-system-design"
+): ActiveMeetingTask {
   return {
     id: "parent-design",
     runtimeRevision: 1,
     source: "voice",
     parent: {
       id: "parent-design",
-      questionType: "general-system-design",
+      questionType,
       topic: "Design a URL shortener.",
       playbookPhase: "requirement_clarification",
       phaseProgress: {},
