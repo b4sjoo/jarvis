@@ -1388,32 +1388,34 @@ export const MeetingAssistant = ({
 
   const meetingShortcutCallbacks = useMemo(
     () => ({
-      meeting_screen_context: (invocation) => {
+      meeting_screen_context: (invocation: GlobalShortcutInvocation) => {
         runDispatchedShortcut(invocation, () => {
           void captureScreenContextFromHotkey();
         });
       },
-      meeting_focus_mode: (invocation) => {
+      meeting_focus_mode: (invocation: GlobalShortcutInvocation) => {
         runDispatchedShortcut(invocation, toggleFocusMode);
       },
-      meeting_toggle_listening: (invocation) => {
+      meeting_toggle_listening: (invocation: GlobalShortcutInvocation) => {
         runDispatchedShortcut(invocation, () => {
           void handleFocusListeningShortcut();
         });
       },
       meeting_regenerate: handleRegenerateShortcut,
       meeting_regenerate_artifacts: handleRegenerateArtifactsShortcut,
-      meeting_enhance_context: (invocation) => {
+      meeting_enhance_context: (invocation: GlobalShortcutInvocation) => {
         handleScopedResponseActionShortcut("enhance-context", invocation);
       },
-      meeting_narrow_context: (invocation) => {
+      meeting_narrow_context: (invocation: GlobalShortcutInvocation) => {
         handleScopedResponseActionShortcut("narrow-context", invocation);
       },
-      meeting_previous_phase: (invocation) => {
+      meeting_previous_phase: (invocation: GlobalShortcutInvocation) => {
         handleScopedResponseActionShortcut("previous-phase", invocation);
       },
       meeting_next_phase: handleNextPhaseShortcut,
-      meeting_toggle_microphone_context: (invocation) => {
+      meeting_toggle_microphone_context: (
+        invocation: GlobalShortcutInvocation
+      ) => {
         runDispatchedShortcut(
           invocation,
           meeting.toggleMicrophoneContext
@@ -1577,7 +1579,7 @@ export const MeetingAssistant = ({
         void handlePauseResume();
         break;
       case "regenerate":
-        handleRegenerateShortcut();
+        void meeting.regenerateSuggestion();
         break;
       case "force-advise":
         void meeting.forceAdviseLatestTurn();
@@ -2321,7 +2323,9 @@ export const MeetingAssistant = ({
                         "cursor-not-allowed opacity-50"
                     )}
                     title="Regenerate with the current Meeting Assistant response settings"
-                    onClick={meeting.regenerateSuggestion}
+                    onClick={() => {
+                      void meeting.regenerateSuggestion();
+                    }}
                     aria-disabled={isBusy || !hasMeetingContext}
                   >
                     Regenerate

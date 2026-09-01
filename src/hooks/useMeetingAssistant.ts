@@ -33063,21 +33063,21 @@ export function useMeetingAssistant() {
       ingressSource: invocation.ingressSource ?? "ui",
       ingressReceivedAt: invocation.ingressReceivedAt,
     });
-    if (invocation.preflightRejectionReason) {
+    const preflightRejectionReason =
+      invocation.preflightRejectionReason;
+    if (preflightRejectionReason) {
       recordManualRuntimeAction({
         actionId,
         action: "regenerate",
         stage: "terminal",
         terminalDisposition: "rejected",
-        reason: invocation.preflightRejectionReason,
+        reason: preflightRejectionReason,
         ingressSource: invocation.ingressSource ?? "shortcut",
         ingressReceivedAt: invocation.ingressReceivedAt,
       });
       setState((previous) => ({
         ...previous,
-        error: shortcutRejectionMessage(
-          invocation.preflightRejectionReason
-        ),
+        error: shortcutRejectionMessage(preflightRejectionReason),
       }));
       return;
     }
@@ -33910,17 +33910,17 @@ export function useMeetingAssistant() {
           logicalQuestionUnitRef.current?.revision,
         taskId: requestedRuntime.activeMeetingTask?.id,
       });
-      if (manualAction && invocation.preflightRejectionReason) {
+      const preflightRejectionReason =
+        invocation.preflightRejectionReason;
+      if (manualAction && preflightRejectionReason) {
         recordResponseAction({
           stage: "terminal",
           terminalDisposition: "rejected",
-          reason: invocation.preflightRejectionReason,
+          reason: preflightRejectionReason,
         });
         setState((previous) => ({
           ...previous,
-          error: shortcutRejectionMessage(
-            invocation.preflightRejectionReason
-          ),
+          error: shortcutRejectionMessage(preflightRejectionReason),
         }));
         return;
       }
