@@ -15245,7 +15245,7 @@ export function useMeetingAssistant() {
         !canonicalWhiteboardRegeneration.authorized
           ? {
               disposition: "rejected",
-              reason: canonicalWhiteboardRegeneration.rejectionReason!,
+              reason: "canonical-parent-commit-rejected",
               authorizedArtifacts: [
                 ...options.artifactRegenerationTarget!.artifactFamilies,
               ],
@@ -15527,6 +15527,7 @@ export function useMeetingAssistant() {
                   : "rejected"
                 : "not-required",
             artifactOnlyCanonicalParentCommitReason:
+              canonicalWhiteboardRegeneration?.reason ??
               generationCommit.reason,
             artifactOnlyCanonicalParentRevisionCommitted:
               committedParent?.revisions,

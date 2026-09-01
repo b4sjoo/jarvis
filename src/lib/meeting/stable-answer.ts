@@ -127,15 +127,7 @@ export type StableArtifactOnlyCommitReason =
   | "artifact-candidate-missing"
   | "artifact-candidate-invalid"
   | "artifact-candidate-no-change"
-  | "canonical-parent-missing"
-  | "canonical-parent-id-mismatch"
-  | "canonical-parent-revision-mismatch"
-  | "canonical-parent-phase-mismatch"
-  | "canonical-parent-child-mismatch"
-  | "canonical-whiteboard-candidate-missing"
-  | "canonical-whiteboard-parent-mismatch"
-  | "canonical-whiteboard-id-mismatch"
-  | "canonical-whiteboard-revision-mismatch";
+  | "canonical-parent-commit-rejected";
 
 export interface StableArtifactOnlyCommitDecision {
   disposition: "committed" | "rejected";

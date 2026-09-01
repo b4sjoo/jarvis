@@ -1,7 +1,6 @@
 import type { ActiveMeetingTask } from "./active-meeting-task.js";
 import type {
   ArtifactOnlyAnswerSection,
-  StableArtifactOnlyCommitReason,
   StableAnswerRevision,
 } from "./stable-answer.js";
 import {
@@ -49,24 +48,20 @@ export interface ArtifactRegenerationTargetDecision {
 export type CanonicalWhiteboardRegenerationReason =
   | "authorized"
   | "not-required"
-  | Extract<
-      StableArtifactOnlyCommitReason,
-      | "canonical-parent-missing"
-      | "canonical-parent-id-mismatch"
-      | "canonical-parent-revision-mismatch"
-      | "canonical-parent-phase-mismatch"
-      | "canonical-parent-child-mismatch"
-      | "canonical-whiteboard-candidate-missing"
-      | "canonical-whiteboard-parent-mismatch"
-      | "canonical-whiteboard-id-mismatch"
-      | "canonical-whiteboard-revision-mismatch"
-    >;
+  | "canonical-parent-missing"
+  | "canonical-parent-id-mismatch"
+  | "canonical-parent-revision-mismatch"
+  | "canonical-parent-phase-mismatch"
+  | "canonical-parent-child-mismatch"
+  | "canonical-whiteboard-candidate-missing"
+  | "canonical-whiteboard-parent-mismatch"
+  | "canonical-whiteboard-id-mismatch"
+  | "canonical-whiteboard-revision-mismatch";
 
 export interface CanonicalWhiteboardRegenerationDecision {
   required: boolean;
   authorized: boolean;
   reason: CanonicalWhiteboardRegenerationReason;
-  rejectionReason?: StableArtifactOnlyCommitReason;
   parent?: ActiveInterviewParent;
   parentRevisionBefore?: number;
   parentRevisionAfter?: number;
@@ -216,7 +211,6 @@ export function prepareCanonicalWhiteboardRegeneration(input: {
     required: true,
     authorized: false,
     reason,
-    rejectionReason: reason,
     parentRevisionBefore: currentParent?.revisions,
     whiteboardRevisionBefore: currentParent?.whiteboardArtifact?.revision,
     whiteboardRevisionCandidate: candidate?.revision,
