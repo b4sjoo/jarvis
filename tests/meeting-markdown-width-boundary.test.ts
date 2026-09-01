@@ -14,6 +14,13 @@ const globalStyles = await readFile(
   path.join(process.cwd(), "src/global.css"),
   "utf8"
 );
+const recordedScreenOutput = await readFile(
+  path.join(
+    process.cwd(),
+    "tests/fixtures/task-192-screen-output.md"
+  ),
+  "utf8"
+);
 
 test("scopes generated markdown width containment to Meeting Assistant", () => {
   assert.match(
@@ -36,4 +43,27 @@ test("scopes generated markdown width containment to Meeting Assistant", () => {
     globalStyles,
     /\.meeting-assistant-markdown \{\s*overflow-wrap: anywhere;/
   );
+});
+
+test("contains the Meeting ScrollArea intrinsic-width wrapper", () => {
+  assert.match(
+    meetingUiSource,
+    /meeting-assistant-main-scroll min-h-0 min-w-0 max-w-full flex-1 overflow-hidden/
+  );
+  assert.match(
+    globalStyles,
+    /\.meeting-assistant-main-scroll > \[data-slot="scroll-area-viewport"\] > div \{[\s\S]*?display: block !important;/
+  );
+  assert.match(
+    globalStyles,
+    /\.meeting-assistant-main-scroll,[\s\S]*?min-width: 0 !important;[\s\S]*?width: 100% !important;[\s\S]*?max-width: 100% !important;/
+  );
+});
+
+test("keeps the recorded Screen response as the width regression fixture", () => {
+  assert.ok(recordedScreenOutput.length >= 4_000);
+  assert.match(recordedScreenOutput, /multi-region failover/);
+  assert.match(recordedScreenOutput, /\$\$62\^7/);
+  assert.match(recordedScreenOutput, /Clarifying options:/);
+  assert.match(recordedScreenOutput, /Cross-Region Async Replication/);
 });

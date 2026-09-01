@@ -261,3 +261,18 @@ body {
 .meeting-assistant-markdown [data-streamdown="mermaid-block"] svg {
   max-width: 100%;
 }
+
+/* Radix inserts a display:table viewport child that WebKit may size from
+   generated content. Keep that implementation wrapper local to the panel. */
+.meeting-assistant-main-scroll,
+.meeting-assistant-main-scroll > [data-slot="scroll-area-viewport"],
+.meeting-assistant-main-scroll > [data-slot="scroll-area-viewport"] > div {
+  box-sizing: border-box;
+  min-width: 0 !important;
+  width: 100% !important;
+  max-width: 100% !important;
+}
+
+.meeting-assistant-main-scroll > [data-slot="scroll-area-viewport"] > div {
+  display: block !important;
+}

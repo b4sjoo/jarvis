@@ -1808,7 +1808,7 @@ export const MeetingAssistant = ({
             />
           ) : (
             <>
-              <ScrollArea className="min-h-0 flex-1 overflow-hidden">
+              <ScrollArea className="meeting-assistant-main-scroll min-h-0 min-w-0 max-w-full flex-1 overflow-hidden">
             <div className="min-w-0 max-w-full space-y-3 overflow-x-hidden p-3">
               <ConfigurationsPanel
                 open={configurationsOpen}
