@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -59,6 +60,80 @@ test("skips an organic recording without writing a procedure", async (t) => {
   );
 });
 
+test("writes typed Screen fixture paths and digests without enabling replay", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "jarvis-procedure-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const session = path.join(root, "session-screen");
+  await writeSessionFixture(session, true);
+  const screenshots = path.join(session, "screenshots");
+  await mkdir(screenshots, { recursive: true });
+  const image = Buffer.from([0xff, 0xd8, 0xff, 0x01, 0x02]);
+  const focusImage = Buffer.from([0xff, 0xd8, 0xff, 0x03, 0x04]);
+  const metadata = Buffer.from('{"id":"screen-1"}\n', "utf8");
+  await Promise.all([
+    writeFile(path.join(screenshots, "screen-1.jpeg"), image),
+    writeFile(path.join(screenshots, "screen-1.focus.jpeg"), focusImage),
+    writeFile(path.join(screenshots, "screen-1.metadata.json"), metadata),
+  ]);
+  await writeFile(
+    path.join(session, "timeline.jsonl"),
+    `${JSON.stringify({
+      id: "timeline-screen",
+      kind: "screen-capture",
+      createdAt: 300,
+      traceId: "trace-screen",
+      metadata: {
+        observationId: "screen-1",
+        imageMediaType: "image/jpeg",
+        focusImageMediaType: "image/jpeg",
+      },
+      artifactRefs: [
+        "screenshots/screen-1.jpeg",
+        "screenshots/screen-1.focus.jpeg",
+        "screenshots/screen-1.metadata.json",
+      ],
+    })}\n`,
+    { flag: "a" }
+  );
+
+  const result = runCompiler(session);
+  assert.equal(result.status, 0, result.stderr);
+  const procedure = JSON.parse(
+    await readFile(
+      path.join(
+        session,
+        "runtime-regression",
+        "session-procedure.v1.json"
+      ),
+      "utf8"
+    )
+  );
+  const screen = procedure.steps.find(
+    (step) => step.kind === "screen-input"
+  );
+
+  assert.equal(screen.replaySupport, "capture-only");
+  assert.deepEqual(screen.provenance.sourceObservationIds, ["screen-1"]);
+  assert.deepEqual(screen.input.screen, {
+    image: {
+      path: "screenshots/screen-1.jpeg",
+      sha256: sha256(image),
+      mediaType: "image/jpeg",
+    },
+    focusImage: {
+      path: "screenshots/screen-1.focus.jpeg",
+      sha256: sha256(focusImage),
+      mediaType: "image/jpeg",
+    },
+    metadata: {
+      path: "screenshots/screen-1.metadata.json",
+      sha256: sha256(metadata),
+      mediaType: "application/json",
+    },
+  });
+  assert.deepEqual(screen.evidenceGaps, []);
+});
+
 function runCompiler(sessionDirectory) {
   return spawnSync(
     "npm",
@@ -75,6 +150,10 @@ function runCompiler(sessionDirectory) {
       env: process.env,
     }
   );
+}
+
+function sha256(value) {
+  return `sha256:${createHash("sha256").update(value).digest("hex")}`;
 }
 
 async function writeSessionFixture(sessionDirectory, scriptedValidation) {

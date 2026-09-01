@@ -17,6 +17,18 @@ export type SessionProcedureStepKind =
 
 export type SessionProcedureReplaySupport = "ready" | "capture-only";
 
+export interface SessionProcedureFileRef {
+  path: string;
+  sha256: string;
+  mediaType?: string;
+}
+
+export interface SessionProcedureScreenInput {
+  image: SessionProcedureFileRef;
+  focusImage?: SessionProcedureFileRef;
+  metadata?: SessionProcedureFileRef;
+}
+
 export interface SessionProcedureTimelineEvent {
   id: string;
   kind: string;
@@ -25,6 +37,8 @@ export interface SessionProcedureTimelineEvent {
   taskId?: string;
   metadata?: Record<string, unknown>;
   artifactRefs?: string[];
+  screenInput?: SessionProcedureScreenInput;
+  evidenceGaps?: string[];
 }
 
 export interface SessionProcedureTranscriptTurn {
@@ -71,6 +85,7 @@ export interface SessionProcedureStepV1 {
   input: {
     text?: string;
     artifactRefs?: string[];
+    screen?: SessionProcedureScreenInput;
     correctedType?: string;
     correctionText?: string;
     sourceTerm?: string;
@@ -94,6 +109,7 @@ export interface SessionProcedureStepV1 {
     timelineEventId: string;
     traceIds: string[];
     sourceTurnIds: string[];
+    sourceObservationIds?: string[];
     sourceTransport?: string;
     actionId?: string;
     specializedEventId?: string;
@@ -322,11 +338,20 @@ function buildTranscriptStep(
 function buildScreenStep(
   event: SessionProcedureTimelineEvent
 ): SessionProcedureStepV1 {
+  const observationId = readString(event.metadata?.observationId);
   return baseStep({
     event,
     kind: "screen-input",
     replaySupport: "capture-only",
-    input: { artifactRefs: [...(event.artifactRefs ?? [])] },
+    input: {
+      artifactRefs: [...(event.artifactRefs ?? [])],
+      screen: event.screenInput,
+    },
+    sourceObservationIds: observationId ? [observationId] : [],
+    evidenceGaps: uniqueStrings([
+      ...(event.evidenceGaps ?? []),
+      ...(event.screenInput ? [] : ["screen-primary-image-unresolved"]),
+    ]),
   });
 }
 
@@ -463,6 +488,7 @@ function baseStep(input: {
   specializedEventId?: string;
   traceIds?: string[];
   sourceTurnIds?: string[];
+  sourceObservationIds?: string[];
   sourceTransport?: string;
   observed?: SessionProcedureStepV1["observed"];
   evidenceGaps?: string[];
@@ -488,6 +514,7 @@ function baseStep(input: {
       timelineEventId: input.event.id,
       traceIds,
       sourceTurnIds: input.sourceTurnIds ?? [],
+      sourceObservationIds: input.sourceObservationIds,
       sourceTransport: input.sourceTransport,
       actionId: input.actionId,
       specializedEventId: input.specializedEventId,

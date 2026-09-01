@@ -6,6 +6,8 @@ import type { HumanEvaluationProjectionV2 } from "../src/lib/meeting/human-groun
 import type { ManualRuntimeActionEventV1 } from "../src/lib/meeting/manual-runtime-action.js";
 import {
   buildSessionProcedureV1,
+  type SessionProcedureFileRef,
+  type SessionProcedureScreenInput,
   type SessionProcedureTimelineEvent,
   type SessionProcedureTranscriptTurn,
 } from "../src/lib/meeting/session-procedure.js";
@@ -71,10 +73,14 @@ async function main() {
       "manual-question-type-corrections.jsonl"
     ),
   ]);
-  const timelineEvents = enrichSpecializedTimelineEvents(
+  const specializedTimelineEvents = enrichSpecializedTimelineEvents(
     parseJsonLines<SessionProcedureTimelineEvent>(timelineText),
     termCorrectionRecords,
     typeCorrectionRecords
+  );
+  const timelineEvents = await enrichScreenTimelineEvents(
+    sessionDirectory,
+    specializedTimelineEvents
   );
   const transcriptTurns = parseJsonLines<SessionProcedureTranscriptTurn>(
     transcriptText
@@ -95,6 +101,15 @@ async function main() {
     .update(projectionText)
     .update(JSON.stringify(termCorrectionRecords))
     .update(JSON.stringify(typeCorrectionRecords))
+    .update(
+      JSON.stringify(
+        timelineEvents.map((event) => ({
+          id: event.id,
+          screenInput: event.screenInput,
+          evidenceGaps: event.evidenceGaps,
+        }))
+      )
+    )
     .digest("hex");
   const recordingSessionId = manifest.sessionId?.trim();
   if (!recordingSessionId) {
@@ -255,6 +270,143 @@ function enrichSpecializedTimelineEvents(
     }
     return event;
   });
+}
+
+async function enrichScreenTimelineEvents(
+  sessionDirectory: string,
+  events: SessionProcedureTimelineEvent[]
+) {
+  return Promise.all(
+    events.map(async (event) => {
+      if (event.kind !== "screen-capture") return event;
+      const metadata = event.metadata ?? {};
+      const artifactRefs = event.artifactRefs ?? [];
+      const imagePath =
+        readString(metadata.imageArtifactRef) ??
+        artifactRefs.find(
+          (candidate) =>
+            isImageArtifactPath(candidate) &&
+            !isFocusImageArtifactPath(candidate)
+        );
+      const focusImagePath =
+        readString(metadata.focusImageArtifactRef) ??
+        artifactRefs.find(isFocusImageArtifactPath);
+      const metadataPath =
+        readString(metadata.metadataArtifactRef) ??
+        artifactRefs.find((candidate) =>
+          candidate.endsWith(".metadata.json")
+        );
+      const [image, focusImage, screenMetadata] = await Promise.all([
+        readScreenProcedureFile({
+          sessionDirectory,
+          relativePath: imagePath,
+          mediaType:
+            readString(metadata.imageMediaType) ??
+            mediaTypeForArtifactPath(imagePath),
+          role: "primary-image",
+          required: true,
+        }),
+        readScreenProcedureFile({
+          sessionDirectory,
+          relativePath: focusImagePath,
+          mediaType:
+            readString(metadata.focusImageMediaType) ??
+            mediaTypeForArtifactPath(focusImagePath),
+          role: "focus-image",
+          required: false,
+        }),
+        readScreenProcedureFile({
+          sessionDirectory,
+          relativePath: metadataPath,
+          mediaType: "application/json",
+          role: "metadata",
+          required: false,
+        }),
+      ]);
+      const screenInput: SessionProcedureScreenInput | undefined = image.file
+        ? {
+            image: image.file,
+            focusImage: focusImage.file,
+            metadata: screenMetadata.file,
+          }
+        : undefined;
+      return {
+        ...event,
+        screenInput,
+        evidenceGaps: [
+          ...(event.evidenceGaps ?? []),
+          ...[image.gap, focusImage.gap, screenMetadata.gap].filter(
+            (gap): gap is string => Boolean(gap)
+          ),
+        ],
+      };
+    })
+  );
+}
+
+async function readScreenProcedureFile(input: {
+  sessionDirectory: string;
+  relativePath?: string;
+  mediaType?: string;
+  role: "primary-image" | "focus-image" | "metadata";
+  required: boolean;
+}): Promise<{ file?: SessionProcedureFileRef; gap?: string }> {
+  if (!input.relativePath) {
+    return input.required
+      ? { gap: `screen-${input.role}-reference-missing` }
+      : {};
+  }
+  const normalizedPath = input.relativePath.replace(/\\/g, "/");
+  if (
+    (input.role === "primary-image" || input.role === "focus-image") &&
+    !isImageArtifactPath(normalizedPath)
+  ) {
+    return { gap: `screen-${input.role}-media-unsupported` };
+  }
+  if (input.role === "metadata" && !normalizedPath.endsWith(".json")) {
+    return { gap: "screen-metadata-media-unsupported" };
+  }
+  const absolutePath = path.resolve(input.sessionDirectory, normalizedPath);
+  const relativeToSession = path.relative(input.sessionDirectory, absolutePath);
+  if (
+    path.isAbsolute(normalizedPath) ||
+    relativeToSession.startsWith("..") ||
+    path.isAbsolute(relativeToSession)
+  ) {
+    return { gap: `screen-${input.role}-outside-session` };
+  }
+  let bytes: Buffer;
+  try {
+    bytes = await readFile(absolutePath);
+  } catch (error) {
+    if (isMissingFile(error)) {
+      return { gap: `screen-${input.role}-file-missing` };
+    }
+    throw error;
+  }
+  return {
+    file: {
+      path: normalizedPath,
+      sha256: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+      mediaType: input.mediaType,
+    },
+  };
+}
+
+function isImageArtifactPath(value: string) {
+  return /\.(?:jpe?g|png|webp)$/i.test(value);
+}
+
+function isFocusImageArtifactPath(value: string) {
+  return /\.focus\.(?:jpe?g|png|webp)$/i.test(value);
+}
+
+function mediaTypeForArtifactPath(value: string | undefined) {
+  if (!value) return undefined;
+  if (/\.png$/i.test(value)) return "image/png";
+  if (/\.webp$/i.test(value)) return "image/webp";
+  if (/\.jpe?g$/i.test(value)) return "image/jpeg";
+  return undefined;
 }
 
 function latestRecordsById(

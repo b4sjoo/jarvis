@@ -1955,9 +1955,12 @@ export class SessionRecordingManager {
     const focusExtension = imageExtension(observation.focusImageMediaType);
     const basePath = `screenshots/${observation.id}`;
     const metadataPath = `${basePath}.metadata.json`;
+    let imageArtifactRef: string | undefined;
+    let focusImageArtifactRef: string | undefined;
 
     if (observation.imageBase64) {
       const imagePath = `${basePath}.${extension}`;
+      imageArtifactRef = imagePath;
       artifactRefs.push(imagePath);
       this.enqueue(session, () =>
         this.writeBase64(session, imagePath, observation.imageBase64 ?? "")
@@ -1965,6 +1968,7 @@ export class SessionRecordingManager {
     }
     if (observation.focusImageBase64) {
       const focusPath = `${basePath}.focus.${focusExtension}`;
+      focusImageArtifactRef = focusPath;
       artifactRefs.push(focusPath);
       this.enqueue(session, () =>
         this.writeBase64(
@@ -1995,6 +1999,9 @@ export class SessionRecordingManager {
         hash: observation.hash,
         imageMediaType: observation.imageMediaType,
         focusImageMediaType: observation.focusImageMediaType,
+        imageArtifactRef,
+        focusImageArtifactRef,
+        metadataArtifactRef: metadataPath,
         captureTarget: observation.captureTarget,
       },
       artifactRefs,

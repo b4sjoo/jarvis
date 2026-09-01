@@ -77,7 +77,15 @@ test("compiles ordered source and action steps without injecting resolved target
       kind: "screen-capture",
       createdAt: 400,
       traceId: "trace-screen",
+      metadata: { observationId: "screen-1" },
       artifactRefs: ["screenshots/screen-1.png"],
+      screenInput: {
+        image: {
+          path: "screenshots/screen-1.png",
+          sha256: "sha256:screen-1",
+          mediaType: "image/png",
+        },
+      },
     },
   ];
   const procedure = buildSessionProcedureV1({
@@ -143,6 +151,17 @@ test("compiles ordered source and action steps without injecting resolved target
   ]);
   assert.equal(procedure.steps[0]?.replaySupport, "ready");
   assert.equal(procedure.steps[3]?.replaySupport, "capture-only");
+  assert.deepEqual(procedure.steps[3]?.input.screen, {
+    image: {
+      path: "screenshots/screen-1.png",
+      sha256: "sha256:screen-1",
+      mediaType: "image/png",
+    },
+  });
+  assert.deepEqual(
+    procedure.steps[3]?.provenance.sourceObservationIds,
+    ["screen-1"]
+  );
 });
 
 test("does not promote action-derived observations into expected truth", () => {
