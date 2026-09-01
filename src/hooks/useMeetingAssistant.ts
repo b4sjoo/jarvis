@@ -115,6 +115,7 @@ import {
   decideManualRuntimeActionIngress,
   projectManualRuntimeActionAdvisorTerminal,
   type ManualRuntimeActionEventStage,
+  type ManualRuntimeActionInvocation,
   type ManualRuntimeActionKind,
   type ManualRuntimeActionTerminalDisposition,
 } from "@/lib/meeting/manual-runtime-action";
@@ -3354,6 +3355,8 @@ export function useMeetingAssistant() {
       terminalDisposition?: ManualRuntimeActionTerminalDisposition;
       reason?: string;
       occurredAt?: number;
+      ingressSource?: "ui" | "shortcut";
+      ingressReceivedAt?: number;
     }) => {
       const runtimeState = contextManagerRef.current.getState();
       return sessionRecordingManagerRef.current?.recordManualRuntimeAction(
@@ -32725,8 +32728,10 @@ export function useMeetingAssistant() {
     [state.latestSuggestion]
   );
 
-  const regenerateSuggestion = useCallback(async () => {
-    const actionId = createMeetingId("manual_action");
+  const regenerateSuggestion = useCallback(async (
+    invocation: ManualRuntimeActionInvocation = {}
+  ) => {
+    const actionId = invocation.actionId ?? createMeetingId("manual_action");
     const currentRuntime = contextManagerRef.current.getState();
     const currentLogicalQuestionUnit = logicalQuestionUnitRef.current;
     recordManualRuntimeAction({
@@ -32737,7 +32742,27 @@ export function useMeetingAssistant() {
       observedLogicalQuestionUnitRevision:
         currentLogicalQuestionUnit?.revision,
       observedTaskId: currentRuntime.activeMeetingTask?.id,
+      ingressSource: invocation.ingressSource ?? "ui",
+      ingressReceivedAt: invocation.ingressReceivedAt,
     });
+    if (invocation.preflightRejectionReason) {
+      recordManualRuntimeAction({
+        actionId,
+        action: "regenerate",
+        stage: "terminal",
+        terminalDisposition: "rejected",
+        reason: invocation.preflightRejectionReason,
+        ingressSource: invocation.ingressSource ?? "shortcut",
+        ingressReceivedAt: invocation.ingressReceivedAt,
+      });
+      setState((previous) => ({
+        ...previous,
+        error: shortcutRejectionMessage(
+          invocation.preflightRejectionReason
+        ),
+      }));
+      return;
+    }
     const ingress = decideManualRuntimeActionIngress({
       action: "regenerate",
       busy: isManualRuntimeActionBusy(state.status),
@@ -33521,11 +33546,14 @@ export function useMeetingAssistant() {
   ]);
 
   const applyResponseAction = useCallback(
-    async (responseAction: MeetingResponseActionMode) => {
+    async (
+      responseAction: MeetingResponseActionMode,
+      invocation: ManualRuntimeActionInvocation = {}
+    ) => {
       const manualAction =
         responseAction === "speakable" ? undefined : responseAction;
       const manualActionId = manualAction
-        ? createMeetingId("manual_action")
+        ? invocation.actionId ?? createMeetingId("manual_action")
         : undefined;
       const requestedRuntime = contextManagerRef.current.getState();
       const recordResponseAction = (input: {
@@ -33553,6 +33581,8 @@ export function useMeetingAssistant() {
             input.visibleAnswerRevision,
           terminalDisposition: input.terminalDisposition,
           reason: input.reason,
+          ingressSource: invocation.ingressSource ?? "ui",
+          ingressReceivedAt: invocation.ingressReceivedAt,
         });
       };
       recordResponseAction({
@@ -33562,6 +33592,20 @@ export function useMeetingAssistant() {
           logicalQuestionUnitRef.current?.revision,
         taskId: requestedRuntime.activeMeetingTask?.id,
       });
+      if (manualAction && invocation.preflightRejectionReason) {
+        recordResponseAction({
+          stage: "terminal",
+          terminalDisposition: "rejected",
+          reason: invocation.preflightRejectionReason,
+        });
+        setState((previous) => ({
+          ...previous,
+          error: shortcutRejectionMessage(
+            invocation.preflightRejectionReason
+          ),
+        }));
+        return;
+      }
       if (manualAction) {
         const ingress = decideManualRuntimeActionIngress({
           action: manualAction,
@@ -36859,6 +36903,14 @@ function isManualRuntimeActionBusy(status: MeetingAssistantStatus) {
     status === "transcribing" ||
     status === "thinking"
   );
+}
+
+function shortcutRejectionMessage(
+  reason: "shortcut-debounced" | "editable-focus"
+) {
+  return reason === "shortcut-debounced"
+    ? "Shortcut ignored because it was pressed again too quickly."
+    : "Shortcut is unavailable while editing. Move focus out of the field and try again.";
 }
 
 function toObservedAdvisorAction(

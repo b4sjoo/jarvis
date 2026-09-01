@@ -350,6 +350,8 @@ test("compiles Regenerate Artifacts with its terminal and expected intent", () =
         stage: "requested",
         runtimeSessionId: "meeting-1",
         runtimeEpoch: 2,
+        ingressSource: "shortcut",
+        ingressReceivedAt: 99,
         observedVisibleAnswerRevision: 4,
         occurredAt: 100,
       }),
@@ -378,6 +380,8 @@ test("compiles Regenerate Artifacts with its terminal and expected intent", () =
     "completed"
   );
   assert.equal(procedure.steps[0]?.observed?.visibleAnswerRevision, 5);
+  assert.equal(procedure.steps[0]?.observed?.ingressSource, "shortcut");
+  assert.equal(procedure.steps[0]?.observed?.ingressReceivedAt, 99);
   assert.equal(
     procedure.steps[0]?.expected?.artifactIntent,
     "revise-whiteboard"

@@ -26,7 +26,19 @@ export type ManualRuntimeActionIngressRejectionReason =
   | "meeting-busy"
   | "no-meeting-context"
   | "no-visible-answer"
-  | "no-active-task";
+  | "no-active-task"
+  | "shortcut-debounced"
+  | "editable-focus";
+
+export interface ManualRuntimeActionInvocation {
+  actionId?: string;
+  ingressSource?: "ui" | "shortcut";
+  ingressReceivedAt?: number;
+  preflightRejectionReason?: Extract<
+    ManualRuntimeActionIngressRejectionReason,
+    "shortcut-debounced" | "editable-focus"
+  >;
+}
 
 export interface ManualRuntimeActionIngressDecision {
   authorized: boolean;
@@ -47,6 +59,8 @@ export interface ManualRuntimeActionEventV1 {
   runtimeEpoch: number;
   uiSurface: "meeting-response-actions";
   occurredAt: number;
+  ingressSource?: "ui" | "shortcut";
+  ingressReceivedAt?: number;
   traceId?: string;
   observedLogicalQuestionUnitId?: string;
   observedLogicalQuestionUnitRevision?: number;

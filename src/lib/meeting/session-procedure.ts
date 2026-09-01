@@ -100,6 +100,8 @@ export interface SessionProcedureStepV1 {
     taskId?: string;
     visibleAnswerRevision?: number;
     correctionDisposition?: string;
+    ingressSource?: string;
+    ingressReceivedAt?: number;
   };
   expected?: SessionProcedureExpectedContract;
   expectedEvidenceRefs: SessionProcedureExpectedEvidenceRef[];
@@ -474,6 +476,8 @@ function buildManualActionStep(
       visibleAnswerRevision:
         terminal?.observedVisibleAnswerRevision ??
         accepted?.observedVisibleAnswerRevision,
+      ingressSource: requested?.ingressSource,
+      ingressReceivedAt: requested?.ingressReceivedAt,
     },
     evidenceGaps: terminal ? [] : ["manual-action-terminal-missing"],
   });

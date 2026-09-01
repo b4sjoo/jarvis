@@ -15,11 +15,29 @@ const CUSTOM_SHORTCUT_DEBOUNCE_MS = 750;
 
 // Global callback refs
 let globalInputRef: HTMLInputElement | null = null;
-let globalCustomShortcutCallbacks: Map<string, () => void> = new Map();
+let shortcutInvocationSequence = 0;
+
+export interface GlobalShortcutInvocation {
+  invocationId: string;
+  shortcutActionId: string;
+  receivedAt: number;
+  disposition: "dispatch" | "debounced";
+}
+
+type GlobalShortcutCallback = (
+  invocation: GlobalShortcutInvocation
+) => void;
+
+let globalCustomShortcutCallbacks: Map<
+  string,
+  GlobalShortcutCallback
+> = new Map();
 
 export const useGlobalShortcuts = () => {
   const inputRef = useRef<HTMLInputElement | null>(null);
-  const customShortcutCallbacksRef = useRef<Map<string, () => void>>(new Map());
+  const customShortcutCallbacksRef = useRef<
+    Map<string, GlobalShortcutCallback>
+  >(new Map());
 
   const checkShortcutsRegistered = useCallback(async (): Promise<boolean> => {
     try {
@@ -65,7 +83,7 @@ export const useGlobalShortcuts = () => {
 
   // Register custom shortcut callback
   const registerCustomShortcutCallback = useCallback(
-    (actionId: string, callback: () => void) => {
+    (actionId: string, callback: GlobalShortcutCallback) => {
       customShortcutCallbacksRef.current.set(actionId, callback);
       globalCustomShortcutCallbacks.set(actionId, callback);
     },
@@ -126,16 +144,26 @@ export const useGlobalShortcuts = () => {
             const now = Date.now();
             const lastEventTime =
               lastCustomShortcutEventTimes.get(actionId) ?? 0;
+            const callback = globalCustomShortcutCallbacks.get(actionId);
+            const invocation: GlobalShortcutInvocation = {
+              invocationId: `shortcut_${now}_${++shortcutInvocationSequence}`,
+              shortcutActionId: actionId,
+              receivedAt: now,
+              disposition:
+                now - lastEventTime < CUSTOM_SHORTCUT_DEBOUNCE_MS
+                  ? "debounced"
+                  : "dispatch",
+            };
 
-            if (now - lastEventTime < CUSTOM_SHORTCUT_DEBOUNCE_MS) {
+            if (invocation.disposition === "debounced") {
+              callback?.(invocation);
               return;
             }
 
             lastCustomShortcutEventTimes.set(actionId, now);
 
-            const callback = globalCustomShortcutCallbacks.get(actionId);
             if (callback) {
-              callback();
+              callback(invocation);
             } else {
               console.warn(
                 `No callback registered for custom shortcut: ${actionId}`

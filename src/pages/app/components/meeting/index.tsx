@@ -14,6 +14,7 @@ import {
 } from "@/components";
 import { STORAGE_KEYS } from "@/config";
 import { useMeetingAssistant, useShortcuts, useWindowResize } from "@/hooks";
+import type { GlobalShortcutInvocation } from "@/hooks/useGlobalShortcuts";
 import type {
   ClarifyingQuestionAnswer,
   ClarifyingQuestionOption,
@@ -1342,59 +1343,82 @@ export const MeetingAssistant = ({
     meeting.status,
   ]);
 
-  const handleRegenerateShortcut = useCallback(() => {
-    if (isJarvisEditableElementFocused()) return;
-
+  const handleRegenerateShortcut = useCallback((
+    invocation: GlobalShortcutInvocation
+  ) => {
     setOpen(true);
-    void meeting.regenerateSuggestion();
+    void meeting.regenerateSuggestion(
+      manualShortcutInvocation(invocation)
+    );
   }, [meeting.regenerateSuggestion]);
 
-  const handleNextPhaseShortcut = useCallback(() => {
-    if (isJarvisEditableElementFocused()) return;
-
+  const handleNextPhaseShortcut = useCallback((
+    invocation: GlobalShortcutInvocation
+  ) => {
     setOpen(true);
-    void meeting.applyResponseAction("next-phase");
+    void meeting.applyResponseAction(
+      "next-phase",
+      manualShortcutInvocation(invocation)
+    );
   }, [meeting.applyResponseAction]);
 
-  const handleRegenerateArtifactsShortcut = useCallback(() => {
-    if (isJarvisEditableElementFocused()) return;
-
+  const handleRegenerateArtifactsShortcut = useCallback((
+    invocation: GlobalShortcutInvocation
+  ) => {
     setOpen(true);
-    void meeting.applyResponseAction("regenerate-artifacts");
+    void meeting.applyResponseAction(
+      "regenerate-artifacts",
+      manualShortcutInvocation(invocation)
+    );
   }, [meeting.applyResponseAction]);
 
   const handleScopedResponseActionShortcut = useCallback(
-    (action: "narrow-context" | "enhance-context" | "previous-phase") => {
-      if (isJarvisEditableElementFocused()) return;
-
+    (
+      action: "narrow-context" | "enhance-context" | "previous-phase",
+      invocation: GlobalShortcutInvocation
+    ) => {
       setOpen(true);
-      void meeting.applyResponseAction(action);
+      void meeting.applyResponseAction(
+        action,
+        manualShortcutInvocation(invocation)
+      );
     },
     [meeting.applyResponseAction]
   );
 
   const meetingShortcutCallbacks = useMemo(
     () => ({
-      meeting_screen_context: () => {
-        void captureScreenContextFromHotkey();
+      meeting_screen_context: (invocation) => {
+        runDispatchedShortcut(invocation, () => {
+          void captureScreenContextFromHotkey();
+        });
       },
-      meeting_focus_mode: toggleFocusMode,
-      meeting_toggle_listening: () => {
-        void handleFocusListeningShortcut();
+      meeting_focus_mode: (invocation) => {
+        runDispatchedShortcut(invocation, toggleFocusMode);
+      },
+      meeting_toggle_listening: (invocation) => {
+        runDispatchedShortcut(invocation, () => {
+          void handleFocusListeningShortcut();
+        });
       },
       meeting_regenerate: handleRegenerateShortcut,
       meeting_regenerate_artifacts: handleRegenerateArtifactsShortcut,
-      meeting_enhance_context: () => {
-        handleScopedResponseActionShortcut("enhance-context");
+      meeting_enhance_context: (invocation) => {
+        handleScopedResponseActionShortcut("enhance-context", invocation);
       },
-      meeting_narrow_context: () => {
-        handleScopedResponseActionShortcut("narrow-context");
+      meeting_narrow_context: (invocation) => {
+        handleScopedResponseActionShortcut("narrow-context", invocation);
       },
-      meeting_previous_phase: () => {
-        handleScopedResponseActionShortcut("previous-phase");
+      meeting_previous_phase: (invocation) => {
+        handleScopedResponseActionShortcut("previous-phase", invocation);
       },
       meeting_next_phase: handleNextPhaseShortcut,
-      meeting_toggle_microphone_context: meeting.toggleMicrophoneContext,
+      meeting_toggle_microphone_context: (invocation) => {
+        runDispatchedShortcut(
+          invocation,
+          meeting.toggleMicrophoneContext
+        );
+      },
     }),
     [
       captureScreenContextFromHotkey,
@@ -8838,6 +8862,29 @@ function formatCaptureCandidate(
 function formatTaskTimeout(minutes: number) {
   if (minutes >= 60) return `${minutes / 60}h`;
   return `${minutes}m`;
+}
+
+function manualShortcutInvocation(
+  invocation: GlobalShortcutInvocation
+) {
+  return {
+    actionId: invocation.invocationId,
+    ingressSource: "shortcut" as const,
+    ingressReceivedAt: invocation.receivedAt,
+    preflightRejectionReason:
+      invocation.disposition === "debounced"
+        ? ("shortcut-debounced" as const)
+        : isJarvisEditableElementFocused()
+          ? ("editable-focus" as const)
+          : undefined,
+  };
+}
+
+function runDispatchedShortcut(
+  invocation: GlobalShortcutInvocation,
+  callback: () => void
+) {
+  if (invocation.disposition === "dispatch") callback();
 }
 
 function isJarvisEditableElementFocused() {

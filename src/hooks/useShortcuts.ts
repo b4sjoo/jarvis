@@ -1,8 +1,14 @@
 import { useEffect } from "react";
-import { useGlobalShortcuts } from "./useGlobalShortcuts";
+import {
+  useGlobalShortcuts,
+  type GlobalShortcutInvocation,
+} from "./useGlobalShortcuts";
 
 interface UseShortcutsProps {
-  customShortcuts?: Record<string, () => void>;
+  customShortcuts?: Record<
+    string,
+    (invocation: GlobalShortcutInvocation) => void
+  >;
 }
 
 /**

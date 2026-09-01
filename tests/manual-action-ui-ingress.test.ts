@@ -17,6 +17,10 @@ const focusUiSource = await readFile(
   ),
   "utf8"
 );
+const globalShortcutSource = await readFile(
+  path.join(process.cwd(), "src/hooks/useGlobalShortcuts.ts"),
+  "utf8"
+);
 
 test("tracked manual controls remain observable while visually unavailable", () => {
   assert.doesNotMatch(
@@ -49,14 +53,32 @@ test("manual-action shortcuts dispatch before semantic availability checks", () 
   assert.doesNotMatch(shortcutSection, /isBusy \|\|/);
   assert.doesNotMatch(shortcutSection, /!hasSuggestion/);
   assert.doesNotMatch(shortcutSection, /!hasActiveMeetingTask/);
-  assert.match(shortcutSection, /meeting\.regenerateSuggestion\(\)/);
-  assert.match(shortcutSection, /meeting\.applyResponseAction\(action\)/);
   assert.match(
     shortcutSection,
-    /meeting\.applyResponseAction\("regenerate-artifacts"\)/
+    /meeting\.regenerateSuggestion\([\s\S]*manualShortcutInvocation\(invocation\)/
+  );
+  assert.match(
+    shortcutSection,
+    /meeting\.applyResponseAction\([\s\S]*manualShortcutInvocation\(invocation\)/
+  );
+  assert.match(
+    shortcutSection,
+    /meeting\.applyResponseAction\(\s*"regenerate-artifacts",\s*manualShortcutInvocation\(invocation\)/
   );
   assert.match(
     meetingUiSource,
     /title="Regenerate artifacts"[\s\S]*aria-disabled=/
+  );
+  assert.doesNotMatch(
+    shortcutSection,
+    /isJarvisEditableElementFocused\(\)\) return/
+  );
+  assert.match(
+    meetingUiSource,
+    /preflightRejectionReason:[\s\S]*shortcut-debounced[\s\S]*editable-focus/
+  );
+  assert.match(
+    globalShortcutSource,
+    /if \(invocation\.disposition === "debounced"\) \{[\s\S]*callback\?\.\(invocation\);[\s\S]*return;/
   );
 });

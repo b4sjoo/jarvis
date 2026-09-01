@@ -46,6 +46,26 @@ test("keeps resolved identity on terminal evidence only", () => {
   assert.equal(manualRuntimeActionEventIsReplayInput(event), false);
 });
 
+test("keeps frontend shortcut provenance on the shared manual action", () => {
+  const event = createManualRuntimeActionEvent({
+    actionId: "shortcut-1",
+    action: "regenerate-artifacts",
+    stage: "terminal",
+    runtimeSessionId: "meeting-1",
+    runtimeEpoch: 3,
+    ingressSource: "shortcut",
+    ingressReceivedAt: 250,
+    terminalDisposition: "rejected",
+    reason: "editable-focus",
+    occurredAt: 251,
+  });
+
+  assert.equal(event.actionId, "shortcut-1");
+  assert.equal(event.ingressSource, "shortcut");
+  assert.equal(event.ingressReceivedAt, 250);
+  assert.equal(event.reason, "editable-focus");
+});
+
 test("keeps presentation availability separate from runtime authorization", () => {
   assert.deepEqual(
     decideManualRuntimeActionIngress({
