@@ -15238,17 +15238,19 @@ export function useMeetingAssistant() {
         refreshAuthority: advisorJob.refreshAuthority,
         deliveryLockActive,
       });
-      const canonicalWhiteboardRejection =
+      const canonicalWhiteboardRejection:
+        | StableArtifactOnlyCommitDecision
+        | undefined =
         canonicalWhiteboardRegeneration?.required &&
         !canonicalWhiteboardRegeneration.authorized
-          ? ({
+          ? {
               disposition: "rejected",
-              reason: canonicalWhiteboardRegeneration.reason,
+              reason: canonicalWhiteboardRegeneration.rejectionReason!,
               authorizedArtifacts: [
                 ...options.artifactRegenerationTarget!.artifactFamilies,
               ],
               mutatedArtifacts: [],
-            } satisfies StableArtifactOnlyCommitDecision)
+            }
           : undefined;
       const artifactOnlyCommitDecision =
         stableAnswerCommitDecision.disposition === "committed" &&

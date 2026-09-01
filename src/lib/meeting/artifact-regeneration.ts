@@ -66,6 +66,7 @@ export interface CanonicalWhiteboardRegenerationDecision {
   required: boolean;
   authorized: boolean;
   reason: CanonicalWhiteboardRegenerationReason;
+  rejectionReason?: StableArtifactOnlyCommitReason;
   parent?: ActiveInterviewParent;
   parentRevisionBefore?: number;
   parentRevisionAfter?: number;
@@ -215,6 +216,7 @@ export function prepareCanonicalWhiteboardRegeneration(input: {
     required: true,
     authorized: false,
     reason,
+    rejectionReason: reason,
     parentRevisionBefore: currentParent?.revisions,
     whiteboardRevisionBefore: currentParent?.whiteboardArtifact?.revision,
     whiteboardRevisionCandidate: candidate?.revision,
