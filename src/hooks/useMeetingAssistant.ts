@@ -141,6 +141,10 @@ import { materializeHumanEvaluationAttemptProjectionV2 } from "@/lib/meeting/hum
 import { validateHumanEvaluationAttemptSubjectV2 } from "@/lib/meeting/human-evaluation-attempt";
 import { toHumanEvaluationCollectionProvenance } from "@/lib/meeting/session-evaluation-provenance";
 import {
+  compileSettledAdvisorPromptContext,
+  formatSettledAdvisorContextCompilationForTrace,
+} from "@/lib/meeting/settled-advisor-context";
+import {
   appendSourceOwnedSetupCandidate,
   createSourceOwnedSetupCandidate,
   formatSourceOwnedSemanticContextSelectionForTrace,
@@ -14035,6 +14039,26 @@ export function useMeetingAssistant() {
         "success"
       );
     }
+    const settledAdvisorContextCompilation = transientPersonalStatusDecision
+      ? undefined
+      : compileSettledAdvisorPromptContext({
+          baseContext: promptContext,
+          contextReadScope:
+            settledExecutionPlan?.contextReadScope ??
+            effectiveAdvisorSettlementView.contextReadScope,
+          logicalQuestionUnit: advisorJob.logicalQuestionUnit,
+          transcriptTurns:
+            contextManagerRef.current.getState().transcriptTurns,
+          recentSourceContext: advisorSourceOwnedSemanticContext,
+        });
+    if (traceId && settledAdvisorContextCompilation) {
+      traceStoreRef.current.updateMetadata(
+        traceId,
+        formatSettledAdvisorContextCompilationForTrace(
+          settledAdvisorContextCompilation
+        )
+      );
+    }
     const baseAdvisorModelPromptContext = transientPersonalStatusDecision
       ? {
           ...promptContext,
@@ -14052,7 +14076,7 @@ export function useMeetingAssistant() {
           playbookPhaseDecision: undefined,
           projectBindingDecision: undefined,
         }
-      : promptContext;
+      : settledAdvisorContextCompilation?.context ?? promptContext;
     const advisorTranscriptProjection = transientPersonalStatusDecision
       ? undefined
       : projectAdvisorTranscriptForLogicalQuestion({
