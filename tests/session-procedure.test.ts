@@ -209,6 +209,112 @@ test("does not promote action-derived observations into expected truth", () => {
   ]);
 });
 
+test("keeps scripted correction truth on the correction attempt", () => {
+  const correctionId = "type-correction-fault";
+  const originalEvent = explicitSettlementEvent(
+    "turn-original",
+    "trace-original",
+    "coding"
+  );
+  const correctionEvent = {
+    ...explicitSettlementEvent(
+      "turn-original",
+      "trace-regeneration",
+      "ai-ml-system-design"
+    ),
+    eventId: "truth-correction",
+    provenance: {
+      ...explicitSettlementEvent(
+        "turn-original",
+        "trace-regeneration",
+        "ai-ml-system-design"
+      ).provenance,
+      actionId: correctionId,
+    },
+  } satisfies HumanGroundTruthEventV2;
+  const originalProjection = projection(
+    {
+      attemptId: "trace-original",
+      sourceTurnIds: ["turn-original"],
+      traceIds: ["trace-original"],
+    },
+    originalEvent
+  );
+  const correctionProjection = projection(
+    {
+      attemptId: "trace-regeneration",
+      sourceTurnIds: ["turn-original"],
+      traceIds: [
+        "trace-original",
+        "trace-correction",
+        "trace-regeneration",
+      ],
+    },
+    correctionEvent
+  );
+  const procedure = buildSessionProcedureV1({
+    recordingSessionId: "recording-correction",
+    folderName: "session-correction",
+    sourceDigest: "digest",
+    scriptedValidation: true,
+    forcedScripted: true,
+    recordingIntegrityStatus: "complete",
+    timelineEvents: [
+      {
+        id: "timeline-original",
+        kind: "transcript-turn",
+        createdAt: 100,
+        traceId: "trace-original",
+        metadata: { turnId: "turn-original" },
+      },
+      {
+        id: "timeline-correction",
+        kind: "manual-question-type-correction",
+        createdAt: 200,
+        traceId: "trace-correction",
+        metadata: {
+          manualQuestionTypeCorrectionId: correctionId,
+          correctedQuestionType: "ai-ml-system-design",
+          regenerationTraceId: "trace-regeneration",
+        },
+      },
+    ],
+    transcriptTurns: [
+      {
+        id: "turn-original",
+        speaker: "them",
+        text: "Implement an LRU cache.",
+        startedAt: 90,
+        endedAt: 95,
+      },
+    ],
+    manualActions: [],
+    humanEvaluationProjections: [
+      originalProjection,
+      correctionProjection,
+    ],
+    generatedAt: 300,
+  });
+
+  assert.equal(procedure.steps[0]?.expected?.questionType, "coding");
+  assert.equal(
+    procedure.steps[1]?.expected?.questionType,
+    "ai-ml-system-design"
+  );
+  assert.deepEqual(procedure.steps[0]?.expectedEvidenceRefs, [
+    {
+      eventId: "truth-settlement",
+      factKind: "expected-task-settlement",
+    },
+  ]);
+  assert.deepEqual(procedure.steps[1]?.expectedEvidenceRefs, [
+    {
+      eventId: "truth-correction",
+      factKind: "expected-task-settlement",
+    },
+  ]);
+});
+
 test("fails closed when exact expected evidence conflicts", () => {
   const procedure = buildSessionProcedureV1({
     recordingSessionId: "recording-conflict",
@@ -407,7 +513,11 @@ function projectionForAction(
 }
 
 function projection(
-  subject: { sourceTurnIds: string[]; traceIds: string[] },
+  subject: {
+    attemptId?: string;
+    sourceTurnIds: string[];
+    traceIds: string[];
+  },
   event: HumanGroundTruthEventV2
 ): HumanEvaluationProjectionV2 {
   return {

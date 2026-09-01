@@ -578,6 +578,19 @@ function selectExpectedProjectionMatches(
     return { projections: actionMatches, evidenceGaps: [] as string[] };
   }
   if (step.provenance.traceIds.length) {
+    const exactAttemptMatches = projections.filter(
+      (projection) =>
+        projection.subject.attemptId &&
+        step.provenance.traceIds.includes(
+          projection.subject.attemptId
+        )
+    );
+    if (exactAttemptMatches.length) {
+      return {
+        projections: exactAttemptMatches,
+        evidenceGaps: [] as string[],
+      };
+    }
     return {
       projections: projections.filter((projection) =>
         projection.subject.traceIds.some((id) =>
