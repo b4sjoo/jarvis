@@ -2,11 +2,34 @@ import type { AdvisorContextReadScope } from "./advisor-context-read-scope.js";
 import type { LogicalQuestionUnit } from "./logical-question-unit.js";
 import type { ScreenScopeDecision } from "./screen-task-scope.js";
 import type {
+  AdvisorContextScopeSnapshot,
   AdvisorEvidencePacket,
   AdvisorPromptContext,
   AdvisorSourceOwnedSemanticContext,
   TranscriptTurn,
 } from "./types.js";
+
+export type SettledResponseActionContextSelectionReason =
+  | "no-response-action-context-receipt"
+  | "logical-question-missing"
+  | "logical-question-unit-mismatch"
+  | "logical-question-revision-mismatch"
+  | "context-scope-mode-mismatch"
+  | "current-source-missing"
+  | "authorized";
+
+export interface SettledResponseActionContextSelection {
+  requested: boolean;
+  authorized: boolean;
+  reason: SettledResponseActionContextSelectionReason;
+  contextReadScope?: Extract<
+    AdvisorContextReadScope,
+    "current-only" | "bounded-recent-history"
+  >;
+  selectedSourceTurnIds: string[];
+  operationId?: string;
+  action?: AdvisorContextScopeSnapshot["action"];
+}
 
 export interface SettledAdvisorContextCompilation {
   context: AdvisorPromptContext;
@@ -21,6 +44,84 @@ export interface SettledAdvisorContextCompilation {
     | "screen-scope-clear"
     | "context-scope-current-only"
     | "settled-screen-owner-missing";
+  responseActionContextSelectionApplied: boolean;
+  responseActionContextSelectionReason:
+    SettledResponseActionContextSelectionReason;
+}
+
+export function resolveSettledResponseActionContextSelection(input: {
+  snapshot?: AdvisorContextScopeSnapshot;
+  logicalQuestionUnit?: LogicalQuestionUnit;
+}): SettledResponseActionContextSelection {
+  const snapshot = input.snapshot;
+  if (!snapshot) {
+    return {
+      requested: false,
+      authorized: false,
+      reason: "no-response-action-context-receipt",
+      selectedSourceTurnIds: [],
+    };
+  }
+  const rejected = (
+    reason: Exclude<SettledResponseActionContextSelectionReason, "authorized">
+  ): SettledResponseActionContextSelection => ({
+    requested: true,
+    authorized: false,
+    reason,
+    selectedSourceTurnIds: [],
+    operationId: snapshot.operationId,
+    action: snapshot.action,
+  });
+  const logicalQuestionUnit = input.logicalQuestionUnit;
+  if (!logicalQuestionUnit) return rejected("logical-question-missing");
+  if (snapshot.logicalQuestionUnitId !== logicalQuestionUnit.id) {
+    return rejected("logical-question-unit-mismatch");
+  }
+  if (snapshot.logicalQuestionUnitRevision !== logicalQuestionUnit.revision) {
+    return rejected("logical-question-revision-mismatch");
+  }
+  const expectedMode =
+    snapshot.action === "narrow-context" ? "current-only" : "expanded";
+  if (snapshot.mode !== expectedMode) {
+    return rejected("context-scope-mode-mismatch");
+  }
+  const selectedSourceTurnIds = uniqueStrings(
+    snapshot.selectedContextTurnIds
+  );
+  if (
+    logicalQuestionUnit.sourceTurnIds.some(
+      (turnId) => !selectedSourceTurnIds.includes(turnId)
+    )
+  ) {
+    return rejected("current-source-missing");
+  }
+  return {
+    requested: true,
+    authorized: true,
+    reason: "authorized",
+    contextReadScope:
+      snapshot.action === "narrow-context"
+        ? "current-only"
+        : "bounded-recent-history",
+    selectedSourceTurnIds,
+    operationId: snapshot.operationId,
+    action: snapshot.action,
+  };
+}
+
+export function formatSettledResponseActionContextSelectionForTrace(
+  selection: SettledResponseActionContextSelection
+): Record<string, unknown> {
+  return {
+    settledResponseActionContextSelectionRequested: selection.requested,
+    settledResponseActionContextSelectionAuthorized: selection.authorized,
+    settledResponseActionContextSelectionReason: selection.reason,
+    settledResponseActionContextSelectionOperationId: selection.operationId,
+    settledResponseActionContextSelectionAction: selection.action,
+    settledResponseActionContextSelectionScope: selection.contextReadScope,
+    settledResponseActionContextSelectionSourceTurnIds:
+      selection.selectedSourceTurnIds,
+  };
 }
 
 export function compileSettledAdvisorPromptContext(input: {
@@ -30,19 +131,34 @@ export function compileSettledAdvisorPromptContext(input: {
   transcriptTurns: TranscriptTurn[];
   recentSourceContext?: AdvisorSourceOwnedSemanticContext;
   screenScopeDecision?: Pick<ScreenScopeDecision, "action" | "reason">;
+  responseActionContextSelection?: SettledResponseActionContextSelection;
 }): SettledAdvisorContextCompilation {
-  const scope = input.contextReadScope;
+  const responseActionContextSelection =
+    input.responseActionContextSelection ??
+    resolveSettledResponseActionContextSelection({
+      snapshot: input.baseContext.responseActionContextScope,
+      logicalQuestionUnit: input.logicalQuestionUnit,
+    });
+  const scope =
+    responseActionContextSelection.authorized &&
+    responseActionContextSelection.contextReadScope
+      ? responseActionContextSelection.contextReadScope
+      : input.contextReadScope;
   const task = input.baseContext.activeMeetingTask;
   const selectedIds = new Set(
-    input.logicalQuestionUnit?.sourceTurnIds ?? []
+    responseActionContextSelection.authorized
+      ? responseActionContextSelection.selectedSourceTurnIds
+      : input.logicalQuestionUnit?.sourceTurnIds ?? []
   );
   const ownedContextIds = new Set(
     input.logicalQuestionUnit?.contextSourceTurnIds ?? []
   );
-  for (const turnId of ownedContextIds) {
-    selectedIds.add(turnId);
+  if (!responseActionContextSelection.authorized) {
+    for (const turnId of ownedContextIds) {
+      selectedIds.add(turnId);
+    }
   }
-  if (scope !== "current-only") {
+  if (!responseActionContextSelection.authorized && scope !== "current-only") {
     for (const turnId of input.recentSourceContext?.sourceTurnIds ?? []) {
       selectedIds.add(turnId);
     }
@@ -91,9 +207,15 @@ export function compileSettledAdvisorPromptContext(input: {
       )
   );
   const authorizedRecentSourceContext =
-    scope !== "current-only" || recentSourceContextOwnedByCurrentQuestion
-      ? input.recentSourceContext
-      : undefined;
+    responseActionContextSelection.authorized
+      ? input.recentSourceContext?.sourceTurnIds.every((turnId) =>
+          selectedIds.has(turnId)
+        )
+        ? input.recentSourceContext
+        : undefined
+      : scope !== "current-only" || recentSourceContextOwnedByCurrentQuestion
+        ? input.recentSourceContext
+        : undefined;
   const advisorEvidencePacket = projectEvidencePacketForScope(
     input.baseContext.advisorEvidencePacket,
     scope,
@@ -110,6 +232,10 @@ export function compileSettledAdvisorPromptContext(input: {
       transcript !== input.baseContext.transcript,
     screenContextIncluded: screenContextDecision.included,
     screenContextReason: screenContextDecision.reason,
+    responseActionContextSelectionApplied:
+      responseActionContextSelection.authorized,
+    responseActionContextSelectionReason:
+      responseActionContextSelection.reason,
     context: {
       ...input.baseContext,
       transcript,
@@ -153,6 +279,10 @@ export function formatSettledAdvisorContextCompilationForTrace(
       compilation.screenContextIncluded,
     settledAdvisorScreenContextReason:
       compilation.screenContextReason,
+    settledAdvisorResponseActionContextSelectionApplied:
+      compilation.responseActionContextSelectionApplied,
+    settledAdvisorResponseActionContextSelectionReason:
+      compilation.responseActionContextSelectionReason,
   };
 }
 
@@ -218,4 +348,8 @@ function projectEvidencePacketForScope(
 
 function formatTurn(turn: TranscriptTurn) {
   return `${turn.speaker === "me" ? "Me (clarification)" : "Them"}: ${turn.text}`;
+}
+
+function uniqueStrings(values: readonly string[]) {
+  return Array.from(new Set(values.filter(Boolean)));
 }

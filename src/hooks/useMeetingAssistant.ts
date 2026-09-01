@@ -143,6 +143,8 @@ import { toHumanEvaluationCollectionProvenance } from "@/lib/meeting/session-eva
 import {
   compileSettledAdvisorPromptContext,
   formatSettledAdvisorContextCompilationForTrace,
+  formatSettledResponseActionContextSelectionForTrace,
+  resolveSettledResponseActionContextSelection,
 } from "@/lib/meeting/settled-advisor-context";
 import {
   appendSourceOwnedSetupCandidate,
@@ -10338,6 +10340,40 @@ export function useMeetingAssistant() {
     let advisorStepId: string | undefined;
     let effectiveRuntimeCommitToken = advisorJob.runtimeCommitToken;
     let promptContext = advisorJob.promptContextSnapshot;
+    const responseActionContextSelection =
+      resolveSettledResponseActionContextSelection({
+        snapshot: promptContext.responseActionContextScope,
+        logicalQuestionUnit: advisorJob.logicalQuestionUnit,
+      });
+    if (traceId) {
+      traceStoreRef.current.updateMetadata(
+        traceId,
+        formatSettledResponseActionContextSelectionForTrace(
+          responseActionContextSelection
+        )
+      );
+    }
+    if (
+      responseActionContextSelection.requested &&
+      !responseActionContextSelection.authorized
+    ) {
+      releaseAdvisorJob(advisorJob, "suppressed", {
+        commitAuthorized: false,
+        commitAuthorizationReason: responseActionContextSelection.reason,
+      });
+      if (traceId) {
+        traceStoreRef.current.finishTrace(
+          traceId,
+          "cancelled",
+          responseActionContextSelection.reason
+        );
+      }
+      setState((previous) => ({
+        ...previous,
+        error: "The selected context changed before execution. Try the action again.",
+      }));
+      return;
+    }
     const settlementOverride = options.currentQuestionSettlementOverride;
     const settlementIdentityQuestion = advisorJob.logicalQuestionUnit
       ? createProvisionalCurrentQuestion({
@@ -12926,7 +12962,9 @@ export function useMeetingAssistant() {
           topicDomain: advisorTopicDomain,
           projectAnchor: advisorProjectAnchor,
           contextReadScopeOverride:
-            boundedRecentHistoryDecision.authorized
+            responseActionContextSelection.authorized
+              ? responseActionContextSelection.contextReadScope
+              : boundedRecentHistoryDecision.authorized
               ? "bounded-recent-history"
               : effectiveAdvisorSettlementView.contextReadScope,
           transientPersonalStatusDecision,
@@ -14051,6 +14089,7 @@ export function useMeetingAssistant() {
             contextManagerRef.current.getState().transcriptTurns,
           recentSourceContext: advisorSourceOwnedSemanticContext,
           screenScopeDecision: advisorScreenScopeDecision,
+          responseActionContextSelection,
         });
     if (traceId && settledAdvisorContextCompilation) {
       traceStoreRef.current.updateMetadata(

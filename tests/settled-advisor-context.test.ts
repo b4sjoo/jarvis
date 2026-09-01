@@ -5,6 +5,7 @@ import type { LogicalQuestionUnit } from "../src/lib/meeting/logical-question-un
 import {
   compileSettledAdvisorPromptContext,
   formatSettledAdvisorContextCompilationForTrace,
+  resolveSettledResponseActionContextSelection,
 } from "../src/lib/meeting/settled-advisor-context.js";
 import type {
   AdvisorPromptContext,
@@ -110,6 +111,9 @@ test("active-child scope includes only current, recent, parent, and child source
       settledAdvisorRawTranscriptBypassRemoved: true,
       settledAdvisorScreenContextIncluded: false,
       settledAdvisorScreenContextReason: "settled-screen-owner-missing",
+      settledAdvisorResponseActionContextSelectionApplied: false,
+      settledAdvisorResponseActionContextSelectionReason:
+        "no-response-action-context-receipt",
     }
   );
 });
@@ -242,6 +246,91 @@ test("Screen clear authority survives the final Context compiler", () => {
   assert.equal(compilation.context.screenContext, "");
   assert.equal(compilation.screenContextIncluded, false);
   assert.equal(compilation.screenContextReason, "screen-scope-clear");
+});
+
+test("Enhance receipt owns the final transcript source IDs", () => {
+  const base = context();
+  const compilation = compileSettledAdvisorPromptContext({
+    baseContext: {
+      ...base,
+      responseActionContextScope: {
+        operationId: "scope-enhance",
+        action: "enhance-context",
+        mode: "expanded",
+        logicalQuestionUnitId: "lqu-current",
+        logicalQuestionUnitRevision: 1,
+        selectedContextSourceKinds: ["current-lqu", "recent-dialogue"],
+        selectedContextTurnIds: ["turn-old", "turn-current"],
+        selectedContextChars: 120,
+        selectionReason: "shortest-sufficient-recent-dialogue",
+        expansionBudget: 1_600,
+      },
+    },
+    contextReadScope: "active-parent-read",
+    logicalQuestionUnit: {
+      ...lqu(),
+      contextSourceTurnIds: ["turn-context"],
+    },
+    transcriptTurns: turns(),
+  });
+
+  assert.equal(compilation.scope, "bounded-recent-history");
+  assert.deepEqual(compilation.selectedSourceTurnIds, [
+    "turn-old",
+    "turn-current",
+  ]);
+  assert.doesNotMatch(compilation.context.transcript, /access control lists/i);
+  assert.doesNotMatch(compilation.context.transcript, /enterprise RAG system/i);
+  assert.equal(compilation.responseActionContextSelectionApplied, true);
+});
+
+test("Narrow receipt excludes automatic LQU-owned context", () => {
+  const compilation = compileSettledAdvisorPromptContext({
+    baseContext: {
+      ...context(),
+      responseActionContextScope: {
+        operationId: "scope-narrow",
+        action: "narrow-context",
+        mode: "current-only",
+        logicalQuestionUnitId: "lqu-current",
+        logicalQuestionUnitRevision: 1,
+        selectedContextSourceKinds: ["current-lqu"],
+        selectedContextTurnIds: ["turn-current"],
+        selectedContextChars: 40,
+        selectionReason: "current-logical-question-only",
+        expansionBudget: 1_600,
+      },
+    },
+    contextReadScope: "active-parent-read",
+    logicalQuestionUnit: lqu(),
+    transcriptTurns: turns(),
+  });
+
+  assert.equal(compilation.scope, "current-only");
+  assert.deepEqual(compilation.selectedSourceTurnIds, ["turn-current"]);
+  assert.doesNotMatch(compilation.context.transcript, /access control lists/i);
+  assert.equal(compilation.context.activeMeetingTask, undefined);
+});
+
+test("rejects a response-action receipt for another LQU revision", () => {
+  const decision = resolveSettledResponseActionContextSelection({
+    snapshot: {
+      operationId: "scope-stale",
+      action: "enhance-context",
+      mode: "expanded",
+      logicalQuestionUnitId: "lqu-current",
+      logicalQuestionUnitRevision: 1,
+      selectedContextSourceKinds: ["current-lqu"],
+      selectedContextTurnIds: ["turn-current"],
+      selectedContextChars: 40,
+      selectionReason: "current-only",
+      expansionBudget: 1_600,
+    },
+    logicalQuestionUnit: { ...lqu(), revision: 2 },
+  });
+
+  assert.equal(decision.authorized, false);
+  assert.equal(decision.reason, "logical-question-revision-mismatch");
 });
 
 function context(): AdvisorPromptContext {
