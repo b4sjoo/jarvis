@@ -49,6 +49,7 @@ export function decideAdvisorArtifactGenerationAuthority(input: {
   newParentCommitted?: boolean;
   manualPhaseCommitted?: boolean;
   automaticPhaseIdentityTransitionCommitted?: boolean;
+  codingChildCommitted?: boolean;
   manualCorrection?: boolean;
   manualArtifactRegeneration?: boolean;
 }): AdvisorArtifactGenerationAuthorityDecision {
@@ -78,6 +79,13 @@ export function decideAdvisorArtifactGenerationAuthority(input: {
       authority: "artifact-authorized",
       answerOnly: false,
       reason: "automatic-phase-identity-transition-committed",
+    };
+  }
+  if (input.codingChildCommitted) {
+    return {
+      authority: "artifact-authorized",
+      answerOnly: false,
+      reason: "coding-child-implementation-committed",
     };
   }
   if (input.newParentCommitted) {

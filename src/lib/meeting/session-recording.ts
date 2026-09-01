@@ -395,6 +395,9 @@ export interface SessionCompactTraceSummary {
   };
   playbookId?: string;
   playbookPhase?: string;
+  phaseOwnerKind?: string;
+  phaseOwnerId?: string;
+  phaseOwnerRevision?: number;
   playbookSubtype?: string;
   phaseSignal?: string;
   phaseSignalSource?: string;
@@ -2200,6 +2203,9 @@ export class SessionRecordingManager {
         activeMeetingChildId: task.child?.id,
         activeMeetingChildQuestionType: task.child?.questionType,
         activeMeetingChildIntent: task.child?.intent,
+        activeMeetingChildPlaybookId: task.child?.phaseState?.playbook.id,
+        activeMeetingChildPhase: task.child?.phaseState?.phase,
+        activeMeetingChildPhaseRevision: task.child?.phaseState?.revision,
         activeMeetingChildReturnParentId:
           task.child?.returnCapsule?.parentId,
         activeMeetingChildReturnPhase:
@@ -4884,9 +4890,36 @@ export function buildCompactTraceSummary({
       buildScreenPreflightDeadlineSummary(metadataSources),
     playbookId: readFirstString(metadataSources, "playbookId"),
     playbookPhase:
+      readFirstString(metadataSources, "effectiveAdvisorPlaybookPhase") ??
+      readFirstString(metadataSources, "activeMeetingChildPhase") ??
       readFirstString(metadataSources, "activeMeetingParentPhase") ??
       readFirstString(metadataSources, "playbookPhaseDecisionPhase") ??
       readFirstString(metadataSources, "playbookPhase"),
+    phaseOwnerKind:
+      readFirstString(metadataSources, "effectiveAdvisorPhaseOwnerKind") ??
+      (readFirstString(metadataSources, "activeMeetingChildPhase")
+        ? "child"
+        : readFirstString(metadataSources, "activeMeetingParentPhase")
+          ? "parent"
+          : undefined),
+    phaseOwnerId:
+      readFirstString(metadataSources, "effectiveAdvisorPhaseOwnerId") ??
+      (readFirstString(metadataSources, "activeMeetingChildPhase")
+        ? readFirstString(metadataSources, "activeMeetingChildId")
+        : readFirstString(metadataSources, "activeMeetingParentId")),
+    phaseOwnerRevision:
+      readFirstNumberFromMetadata(
+        metadataSources,
+        "effectiveAdvisorPhaseOwnerRevision"
+      ) ??
+      readFirstNumberFromMetadata(
+        metadataSources,
+        "activeMeetingChildPhaseRevision"
+      ) ??
+      readFirstNumberFromMetadata(
+        metadataSources,
+        "activeMeetingParentRevision"
+      ),
     playbookSubtype: readFirstString(metadataSources, "playbookSubtype"),
     phaseSignal: readFirstString(metadataSources, "phaseSignal"),
     phaseSignalSource: readFirstString(

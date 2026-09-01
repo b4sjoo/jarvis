@@ -2784,6 +2784,9 @@ export const MeetingAssistant = ({
                             evaluationTrace.metadata
                           )
                         )}
+                        detectedPhaseOwner={formatDetectedPhaseOwner(
+                          evaluationTrace.metadata
+                        )}
                         advisorTurnIntent={
                           typeof evaluationTrace.metadata?.advisorTurnIntent ===
                           "string"
@@ -5722,6 +5725,7 @@ const TraceHumanEvaluationPanel = ({
   detectedQuestionType,
   detectedPlaybook,
   detectedPlaybookPhase,
+  detectedPhaseOwner,
   advisorTurnIntent,
   advisorTurnEnforcement,
   advisorExecutionAuthorized,
@@ -5743,6 +5747,7 @@ const TraceHumanEvaluationPanel = ({
   detectedQuestionType?: string;
   detectedPlaybook?: string;
   detectedPlaybookPhase?: string;
+  detectedPhaseOwner?: string;
   advisorTurnIntent?: string;
   advisorTurnEnforcement?: string;
   advisorExecutionAuthorized?: boolean;
@@ -7355,6 +7360,12 @@ const TraceHumanEvaluationPanel = ({
                 <span className="font-mono">{detectedPlaybookPhase}</span>
               </>
             ) : null}
+            {detectedPhaseOwner ? (
+              <>
+                <span className="text-muted-foreground"> / owner: </span>
+                <span className="font-mono">{detectedPhaseOwner}</span>
+              </>
+            ) : null}
           </div>
         ) : null}
         {primaryAskDisposition ? (
@@ -8585,10 +8596,30 @@ function getTraceEffectivePlaybookPhase(
   metadata: Record<string, unknown> | undefined
 ) {
   return (
+    readStringMetadata(metadata, "effectiveAdvisorPlaybookPhase") ??
+    readStringMetadata(metadata, "activeMeetingChildPhase") ??
     readStringMetadata(metadata, "activeMeetingParentPhase") ??
     readStringMetadata(metadata, "playbookPhaseDecisionPhase") ??
     readStringMetadata(metadata, "playbookPhase")
   );
+}
+
+function formatDetectedPhaseOwner(
+  metadata: Record<string, unknown> | undefined
+) {
+  const kind =
+    readStringMetadata(metadata, "effectiveAdvisorPhaseOwnerKind") ??
+    (readStringMetadata(metadata, "activeMeetingChildPhase")
+      ? "child"
+      : readStringMetadata(metadata, "activeMeetingParentPhase")
+        ? "parent"
+        : undefined);
+  const id =
+    readStringMetadata(metadata, "effectiveAdvisorPhaseOwnerId") ??
+    (kind === "child"
+      ? readStringMetadata(metadata, "activeMeetingChildId")
+      : readStringMetadata(metadata, "activeMeetingParentId"));
+  return kind && id ? `${kind}:${id}` : undefined;
 }
 
 function readStringMetadata(

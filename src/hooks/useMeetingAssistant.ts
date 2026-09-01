@@ -8555,6 +8555,13 @@ export function useMeetingAssistant() {
         metadata: trace.metadata,
         activeMeetingTask,
       });
+      const evaluationPhaseResolution = resolveEffectiveBranchPhase(
+        contextState.taskRuntime.parent
+      );
+      const evaluationPhaseView =
+        evaluationPhaseResolution.status === "resolved"
+          ? evaluationPhaseResolution.view
+          : undefined;
 
       return {
         sessionId,
@@ -8586,13 +8593,43 @@ export function useMeetingAssistant() {
           readStringFromTraceMetadata(trace.metadata, "relationToActiveTask") ??
           readStringFromTraceMetadata(trace.metadata, "turnGateReason"),
         playbookId:
+          readStringFromTraceMetadata(
+            trace.metadata,
+            "settledExecutionPlanResponsePlaybookId"
+          ) ??
           readStringFromTraceMetadata(trace.metadata, "playbookId") ??
-          activeMeetingTask?.parent.playbook?.id,
+          evaluationPhaseView?.playbook.id,
         playbookPhase:
-          readStringFromTraceMetadata(trace.metadata, "activeMeetingParentPhase") ??
+          readStringFromTraceMetadata(
+            trace.metadata,
+            "effectiveAdvisorPlaybookPhase"
+          ) ??
+          readStringFromTraceMetadata(trace.metadata, "activeMeetingChildPhase") ??
           readStringFromTraceMetadata(trace.metadata, "playbookPhaseDecisionPhase") ??
           readStringFromTraceMetadata(trace.metadata, "playbookPhase") ??
-          activeMeetingTask?.parent.playbookPhase,
+          evaluationPhaseView?.phase,
+        phaseOwnerKind:
+          readStringFromTraceMetadata(
+            trace.metadata,
+            "effectiveAdvisorPhaseOwnerKind"
+          ) === "child"
+            ? "child"
+            : readStringFromTraceMetadata(
+                  trace.metadata,
+                  "effectiveAdvisorPhaseOwnerKind"
+                ) === "parent"
+              ? "parent"
+              : evaluationPhaseView?.ownerKind,
+        phaseOwnerId:
+          readStringFromTraceMetadata(
+            trace.metadata,
+            "effectiveAdvisorPhaseOwnerId"
+          ) ?? evaluationPhaseView?.ownerId,
+        phaseOwnerRevision:
+          readNumberFromTraceMetadata(
+            trace.metadata,
+            "effectiveAdvisorPhaseOwnerRevision"
+          ) ?? evaluationPhaseView?.branchRevision,
         projectTrajectory: {
           detectedProjectId:
             readStringFromTraceMetadata(
@@ -12115,7 +12152,7 @@ export function useMeetingAssistant() {
             "restore the forward phase recorded by deterministic playbook history",
         }
       : defaultManualPhaseDecision;
-    const playbookPhaseDecision = decideAdvisorPhaseMutation({
+    let playbookPhaseDecision = decideAdvisorPhaseMutation({
       authority: advisorJob.taskMutationAuthority,
       taskMutationAuthorized: taskMutationAuthorization.authorized,
       manualPhaseAdvance,
@@ -12249,7 +12286,7 @@ export function useMeetingAssistant() {
       }
     }
 
-    const advisorRuntimePlaybook = transientPersonalStatusDecision
+    let advisorRuntimePlaybook = transientPersonalStatusDecision
       ? undefined
       : withInterviewPlaybookPhase(
           advisorPlaybook ??
@@ -12639,6 +12676,40 @@ export function useMeetingAssistant() {
         currentQuestionSettlementRef.current =
           effectiveAdvisorSettlementView.effectiveSettlement;
       }
+    }
+    if (
+      effectiveAdvisorSettlementView.phaseOwnerKind === "child" &&
+      effectiveAdvisorSettlementView.playbook &&
+      effectiveAdvisorSettlementView.playbookPhase
+    ) {
+      advisorRuntimePlaybook = withInterviewPlaybookPhase(
+        effectiveAdvisorSettlementView.playbook,
+        effectiveAdvisorSettlementView.playbookPhase
+      );
+      const childOwnsCodingImplementation =
+        effectiveAdvisorSettlementView.questionType === "coding" &&
+        effectiveAdvisorSettlementView.playbookPhase ===
+          "implementation_validation";
+      playbookPhaseDecision = {
+        ...playbookPhaseDecision,
+        phase: effectiveAdvisorSettlementView.playbookPhase,
+        phaseFrom: effectiveAdvisorSettlementView.playbookPhase,
+        requiredArtifacts: resolvePlaybookRequiredArtifacts({
+          questionType: effectiveAdvisorSettlementView.questionType,
+          playbookId: effectiveAdvisorSettlementView.playbook.id,
+          phase: effectiveAdvisorSettlementView.playbookPhase,
+          subtaskIntent: advisorTaskSignals.subtaskIntent,
+        }),
+        flags: childOwnsCodingImplementation
+          ? ["implementation", "edge_case_validation"]
+          : playbookPhaseDecision.flags,
+        targetArtifact: childOwnsCodingImplementation
+          ? "code"
+          : playbookPhaseDecision.targetArtifact,
+        reason: childOwnsCodingImplementation
+          ? "active Coding child owns implementation validation"
+          : playbookPhaseDecision.reason,
+      };
     }
     const effectiveSettlementContextState =
       contextManagerRef.current.getState();
@@ -13135,6 +13206,13 @@ export function useMeetingAssistant() {
       sourceOwnedTransitionCommittedPhaseIdentityChange(
         sourceOwnedTransitionReceipt
       );
+    const codingChildImplementationCommitted = Boolean(
+      sourceOwnedTransitionReceipt?.runtimeTransition === "attach-child" &&
+        effectiveAdvisorSettlementView.phaseOwnerKind === "child" &&
+        effectiveAdvisorSettlementView.questionType === "coding" &&
+        effectiveAdvisorSettlementView.playbookPhase ===
+          "implementation_validation"
+    );
     const newParentArtifactAuthority = Boolean(
       taskBoundaryCommittedBeforeAdvisor ||
         sourceOwnedTransitionCommittedFreshParent(
@@ -13154,6 +13232,7 @@ export function useMeetingAssistant() {
         newParentCommitted: newParentArtifactAuthority,
         manualPhaseCommitted: manualPhaseAdvanceCommitted,
         automaticPhaseIdentityTransitionCommitted,
+        codingChildCommitted: codingChildImplementationCommitted,
         manualCorrection: advisorJob.source === "manual-correction",
         manualArtifactRegeneration: Boolean(
           options.artifactRegenerationTarget
@@ -28883,18 +28962,21 @@ export function useMeetingAssistant() {
           sourceOwnedTransitionDurableMutationApplied(
             screenSourceOwnedTransitionReceipt
           );
-        const screenCommittedParentPhase =
-          screenPostTransitionContextState.activeMeetingTask?.parent
-            .playbookPhase ??
-          screenPostTransitionContextState.taskRuntime.parent?.playbookPhase;
-        const screenCommittedParentProgress =
-          screenPostTransitionContextState.activeMeetingTask?.parent
-            .phaseProgress ??
-          screenPostTransitionContextState.taskRuntime.parent?.phaseProgress;
+        const screenEffectiveBranchPhase = resolveEffectiveBranchPhase(
+          screenPostTransitionContextState.taskRuntime.parent
+        );
+        const screenBranchPhaseView =
+          screenEffectiveBranchPhase.status === "resolved"
+            ? screenEffectiveBranchPhase.view
+            : undefined;
+        const screenCommittedPhase = screenBranchPhaseView?.phase;
+        const screenCommittedProgress =
+          screenBranchPhaseView?.phaseProgress;
         const screenPhaseInput = composeScreenPlaybookPhaseAfterLifecycle({
-          catalogPhase: screenPlaybook?.phase,
-          committedPhase: screenCommittedParentPhase,
-          committedProgress: screenCommittedParentProgress,
+          catalogPhase:
+            screenBranchPhaseView?.playbook.phase ?? screenPlaybook?.phase,
+          committedPhase: screenCommittedPhase,
+          committedProgress: screenCommittedProgress,
           transitionSeedPhase:
             screenTransitionSeedPhaseInput.currentPhase,
           transitionSeedProgress:
@@ -28904,8 +28986,34 @@ export function useMeetingAssistant() {
           taskRuntimeTransitionCommitted:
             screenTaskRuntimeTransitionCommitted,
         });
-        const screenPhaseDecision =
-          screenPhaseInput.reuseTransitionSeedDecision
+        let screenPhaseDecision =
+          screenBranchPhaseView?.ownerKind === "child"
+            ? {
+                ...screenTransitionSeedPhaseDecision,
+                phase: screenBranchPhaseView.phase,
+                phaseFrom: screenBranchPhaseView.phase,
+                requiredArtifacts: resolvePlaybookRequiredArtifacts({
+                  questionType: screenBranchPhaseView.questionType,
+                  playbookId: screenBranchPhaseView.playbook.id,
+                  phase: screenBranchPhaseView.phase,
+                  subtaskIntent: screenSubtaskIntent,
+                }),
+                flags:
+                  screenBranchPhaseView.questionType === "coding" &&
+                  screenBranchPhaseView.phase ===
+                    "implementation_validation"
+                    ? (["implementation", "edge_case_validation"] as const)
+                    : screenTransitionSeedPhaseDecision.flags,
+                targetArtifact:
+                  screenBranchPhaseView.questionType === "coding" &&
+                  screenBranchPhaseView.phase ===
+                    "implementation_validation"
+                    ? ("code" as const)
+                    : screenTransitionSeedPhaseDecision.targetArtifact,
+                reason:
+                  "active Screen child owns its committed phase",
+              }
+            : screenPhaseInput.reuseTransitionSeedDecision
             ? {
                 ...screenTransitionSeedPhaseDecision,
                 phase:
@@ -28930,8 +29038,10 @@ export function useMeetingAssistant() {
                 freshParentCreated: screenPhaseInput.freshParentCreated,
               });
         const screenRuntimePlaybook =
-          provisionalScreenTaskRelation === "child-probe"
-            ? screenPlaybook
+          screenBranchPhaseView?.ownerKind === "child"
+            ? screenBranchPhaseView.playbook
+            : provisionalScreenTaskRelation === "child-probe"
+              ? screenPlaybook
             : withInterviewPlaybookPhase(
                 screenPlaybook,
                 screenPhaseDecision.phase

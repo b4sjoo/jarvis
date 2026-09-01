@@ -47,6 +47,9 @@ export interface QuestionEvaluationIdentity {
   relation?: string;
   playbookId?: string;
   playbookPhase?: string;
+  phaseOwnerKind?: "parent" | "child";
+  phaseOwnerId?: string;
+  phaseOwnerRevision?: number;
   whiteboardArtifactId?: string;
   whiteboardArtifactRevision?: number;
   whiteboardArtifactDomainTrack?: string;
@@ -442,6 +445,18 @@ export function upsertQuestionHumanEvaluation(
       patch.detectedPlaybookPhase ??
       existing?.detectedPlaybookPhase ??
       identity.playbookPhase,
+    detectedPhaseOwnerKind:
+      patch.detectedPhaseOwnerKind ??
+      existing?.detectedPhaseOwnerKind ??
+      identity.phaseOwnerKind,
+    detectedPhaseOwnerId:
+      patch.detectedPhaseOwnerId ??
+      existing?.detectedPhaseOwnerId ??
+      identity.phaseOwnerId,
+    detectedPhaseOwnerRevision:
+      patch.detectedPhaseOwnerRevision ??
+      existing?.detectedPhaseOwnerRevision ??
+      identity.phaseOwnerRevision,
     correctedPlaybookPhase:
       patch.correctedPlaybookPhase ?? existing?.correctedPlaybookPhase,
     detectedWhiteboardArtifactId:
@@ -876,6 +891,13 @@ function normalizeQuestionHumanEvaluation(
     ),
     playbookId: readOptionalString(candidate.playbookId),
     detectedPlaybookPhase: readOptionalString(candidate.detectedPlaybookPhase),
+    detectedPhaseOwnerKind:
+      candidate.detectedPhaseOwnerKind === "child" ? "child" :
+      candidate.detectedPhaseOwnerKind === "parent" ? "parent" : undefined,
+    detectedPhaseOwnerId: readOptionalString(candidate.detectedPhaseOwnerId),
+    detectedPhaseOwnerRevision: readOptionalNumber(
+      candidate.detectedPhaseOwnerRevision
+    ),
     correctedPlaybookPhase: readOptionalString(candidate.correctedPlaybookPhase),
     detectedWhiteboardArtifactId: readOptionalString(
       candidate.detectedWhiteboardArtifactId
@@ -1799,6 +1821,12 @@ function readOptionalBoolean(value: unknown) {
 
 function readOptionalString(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readOptionalNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
 }
 
 function uniqueStrings(values: Array<string | undefined>) {

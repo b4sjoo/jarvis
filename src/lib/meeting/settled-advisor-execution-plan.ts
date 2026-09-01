@@ -217,6 +217,9 @@ export interface EffectiveAdvisorSettlementView {
   projectAnchor?: string;
   playbook?: SelectedInterviewPlaybook;
   playbookPhase?: InterviewPlaybookPhase;
+  phaseOwnerKind?: "parent" | "child";
+  phaseOwnerId?: string;
+  phaseOwnerRevision?: number;
   supportedFactAnchors: string[];
 }
 
@@ -427,10 +430,26 @@ export function buildEffectiveAdvisorSettlementView(input: {
     parent?.projectBinding?.projectName ??
     parent?.projectBinding?.projectId ??
     (currentOnly ? input.fallback.projectAnchor : undefined);
-  const playbook = parent?.playbook ??
+  const activeChildPhase =
+    relation === "child-probe" ? activeTask?.child?.phaseState : undefined;
+  const playbook = activeChildPhase?.playbook ??
+    parent?.playbook ??
     (settlement ? undefined : input.fallback.playbook);
-  const playbookPhase = parent?.playbookPhase ??
+  const playbookPhase = activeChildPhase?.phase ??
+    parent?.playbookPhase ??
     (settlement ? undefined : input.fallback.playbookPhase);
+  const phaseOwnerKind = activeChildPhase
+    ? "child"
+    : parent?.playbook
+      ? "parent"
+      : undefined;
+  const phaseOwnerId = activeChildPhase
+    ? activeTask?.child?.id
+    : parent?.playbook
+      ? parent.id
+      : undefined;
+  const phaseOwnerRevision = activeChildPhase?.revision ??
+    (parent?.playbook ? parent.revisions : undefined);
 
   return Object.freeze({
     source: settlement
@@ -455,6 +474,9 @@ export function buildEffectiveAdvisorSettlementView(input: {
     projectAnchor,
     playbook,
     playbookPhase,
+    phaseOwnerKind,
+    phaseOwnerId,
+    phaseOwnerRevision,
     supportedFactAnchors: [...(parent?.supportedFactAnchors ?? [])],
   });
 }
@@ -526,6 +548,9 @@ export function formatEffectiveAdvisorSettlementViewForTrace(
     effectiveAdvisorProjectAnchor: view.projectAnchor,
     effectiveAdvisorPlaybookId: view.playbook?.id,
     effectiveAdvisorPlaybookPhase: view.playbookPhase,
+    effectiveAdvisorPhaseOwnerKind: view.phaseOwnerKind,
+    effectiveAdvisorPhaseOwnerId: view.phaseOwnerId,
+    effectiveAdvisorPhaseOwnerRevision: view.phaseOwnerRevision,
     effectiveAdvisorSupportedFactAnchorCount:
       view.supportedFactAnchors.length,
     preSettlementProposedRelation: diagnostics?.proposedRelation,

@@ -407,6 +407,9 @@ export function getActiveMeetingTaskTraceMetadata(
     activeMeetingChildId: task.child?.id,
     activeMeetingChildQuestionType: task.child?.questionType,
     activeMeetingChildIntent: task.child?.intent,
+    activeMeetingChildPlaybookId: task.child?.phaseState?.playbook.id,
+    activeMeetingChildPhase: task.child?.phaseState?.phase,
+    activeMeetingChildPhaseRevision: task.child?.phaseState?.revision,
     activeMeetingChildReturnParentId: task.child?.returnCapsule?.parentId,
     activeMeetingChildReturnPhase: task.child?.returnCapsule?.parentPhase,
     activeMeetingChildReturnProjectBindingRevision:
@@ -458,6 +461,9 @@ export function formatActiveMeetingTaskForPrompt(
           `- Question type: ${task.child.questionType}`,
           `- Intent: ${task.child.intent}`,
           `- Question: ${task.child.question}`,
+          task.child.phaseState
+            ? `- Playbook phase: ${task.child.phaseState.phase} (revision=${task.child.phaseState.revision})`
+            : `- Playbook phase: unavailable`,
           task.child.compactSummary
             ? `- Compact summary: ${task.child.compactSummary}`
             : undefined,
@@ -587,6 +593,7 @@ export function getActiveMeetingTaskFocusSummary(
           questionType: task.child.questionType,
           intent: task.child.intent,
           question: task.child.question,
+          playbookPhase: task.child.phaseState?.phase,
         }
       : undefined,
   };

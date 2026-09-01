@@ -53,6 +53,24 @@ test("projects committed lifecycle commands to their existing response owner", (
     }).owner,
     "active-child"
   );
+  assert.equal(
+    resolvePostModelContinuityAuthority({
+      command: "set-phase",
+      lifecycleCommittedBeforeAdvisor: true,
+      activeChild: true,
+      phaseOwnerKind: "child",
+    }).owner,
+    "active-child"
+  );
+  assert.equal(
+    resolvePostModelContinuityAuthority({
+      command: "set-phase",
+      lifecycleCommittedBeforeAdvisor: true,
+      activeChild: false,
+      phaseOwnerKind: "parent",
+    }).owner,
+    "active-parent"
+  );
 });
 
 test("uses the committed runtime parent for post-model continuity", () => {

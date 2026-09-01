@@ -189,6 +189,55 @@ test("does not mutate a parent Artifact from a Field Knowledge child", () => {
   assert.equal(decision.reason, "no-regenerable-artifact");
 });
 
+test("authorizes a Coding child from the child implementation phase", () => {
+  const activeTask = task("ai-ml-system-design", "design_framing");
+  activeTask.child = {
+    id: "child-code",
+    createdAt: 2,
+    updatedAt: 2,
+    questionType: "coding",
+    relation: "child-probe",
+    intent: "implementation-probe",
+    question: "Implement the reranker.",
+    basedOnTurnIds: ["turn-code"],
+    basedOnObservationIds: [],
+    phaseState: {
+      playbook: {
+        id: "coding_algorithm",
+        label: "Coding Algorithm",
+        phase: "implementation_validation",
+        questionType: "coding",
+        confidence: 1,
+        reason: "test",
+        memoryPolicy: { id: "test" },
+        firstMove: "test",
+        clarifyingStrategy: "test",
+        outputContract: "test",
+        followUpPolicy: "test",
+      },
+      phase: "implementation_validation",
+      phaseProgress: { implementation_validation: true },
+      revision: 1,
+    },
+  };
+  const visible = stable("coding", "child-probe");
+  visible.suggestion.codeArtifactMutationAuthorized = true;
+  visible.suggestion.complexityArtifactMutationAuthorized = true;
+  const decision = resolveArtifactRegenerationTarget({
+    stableAnswer: visible,
+    activeMeetingTask: activeTask,
+    sessionId: "session-a",
+    runtimeEpoch: 2,
+  });
+
+  assert.equal(decision.authorized, true);
+  assert.equal(decision.target?.phaseOwnerKind, "child");
+  assert.equal(decision.target?.phaseOwnerId, "child-code");
+  assert.equal(decision.target?.playbookPhase, "implementation_validation");
+  assert.deepEqual(decision.target?.artifactFamilies, ["code", "complexity"]);
+  assert.equal(activeTask.parent.playbookPhase, "design_framing");
+});
+
 test("rejects a visible Answer owned by another parent", () => {
   const activeTask = task("general-system-design", "design_framing");
   activeTask.parent.id = "parent-new";

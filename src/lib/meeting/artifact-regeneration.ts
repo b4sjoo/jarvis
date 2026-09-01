@@ -36,6 +36,9 @@ export interface ArtifactRegenerationTarget {
   childId?: string;
   questionType: CanonicalQuestionType;
   playbookPhase: InterviewPlaybookPhase;
+  phaseOwnerKind: "parent" | "child";
+  phaseOwnerId: string;
+  phaseOwnerRevision: number;
   artifactFamilies: ArtifactOnlyAnswerSection[];
 }
 
@@ -123,7 +126,10 @@ export function resolveArtifactRegenerationTarget(input: {
       settlementSnapshot.relation === "child-probe" &&
       stable.suggestion.codeArtifactMutationAuthorized === true &&
       stable.suggestion.complexityArtifactMutationAuthorized === true;
-    if (visibleAnswerOwnsCodingChild) {
+    if (
+      visibleAnswerOwnsCodingChild &&
+      activeChild.phaseState?.phase === "implementation_validation"
+    ) {
       artifactFamilies = ["code", "complexity"];
     } else {
       return reject("no-regenerable-artifact");
@@ -157,7 +163,16 @@ export function resolveArtifactRegenerationTarget(input: {
       parentRevision: activeTask.parent.revisions ?? 0,
       childId: activeChild?.id,
       questionType,
-      playbookPhase: activeTask.parent.playbookPhase,
+      playbookPhase:
+        activeChild?.phaseState?.phase ?? activeTask.parent.playbookPhase,
+      phaseOwnerKind: activeChild?.phaseState ? "child" : "parent",
+      phaseOwnerId: activeChild?.phaseState
+        ? activeChild.id
+        : activeTask.parent.id,
+      phaseOwnerRevision:
+        activeChild?.phaseState?.revision ??
+        activeTask.parent.revisions ??
+        0,
       artifactFamilies,
     },
   };
@@ -182,6 +197,10 @@ export function formatArtifactRegenerationTargetForTrace(
     artifactRegenerationChildId: decision.target?.childId,
     artifactRegenerationQuestionType: decision.target?.questionType,
     artifactRegenerationPlaybookPhase: decision.target?.playbookPhase,
+    artifactRegenerationPhaseOwnerKind: decision.target?.phaseOwnerKind,
+    artifactRegenerationPhaseOwnerId: decision.target?.phaseOwnerId,
+    artifactRegenerationPhaseOwnerRevision:
+      decision.target?.phaseOwnerRevision,
     artifactRegenerationRequestedArtifacts:
       decision.target?.artifactFamilies,
   };
@@ -197,6 +216,16 @@ export function prepareCanonicalWhiteboardRegeneration(input: {
       required: false,
       authorized: true,
       reason: "not-required",
+    };
+  }
+  if (
+    input.target.phaseOwnerKind !== "parent" ||
+    input.target.phaseOwnerId !== input.target.parentId
+  ) {
+    return {
+      required: true,
+      authorized: false,
+      reason: "canonical-parent-phase-mismatch",
     };
   }
 

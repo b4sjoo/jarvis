@@ -2002,6 +2002,9 @@ export interface QuestionHumanEvaluation {
   clarifyingOptionsVerdict?: "correct" | "misleading" | "missing";
   playbookId?: string;
   detectedPlaybookPhase?: string;
+  detectedPhaseOwnerKind?: "parent" | "child";
+  detectedPhaseOwnerId?: string;
+  detectedPhaseOwnerRevision?: number;
   correctedPlaybookPhase?: string;
   detectedWhiteboardArtifactId?: string;
   detectedWhiteboardArtifactRevision?: number;

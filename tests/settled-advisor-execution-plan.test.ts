@@ -622,6 +622,50 @@ test("uses a matching concrete child type without replacing child identity", () 
   assert.equal(effectiveSettlementAuthorizesSourceTransition(view), false);
 });
 
+test("projects a Coding child as the effective phase owner", () => {
+  const codingPlaybook = playbook("coding");
+  const task: ActiveMeetingTask = {
+    ...activeTask("ai-ml-system-design"),
+    child: {
+      id: "child-code",
+      createdAt: 30,
+      updatedAt: 30,
+      questionType: "coding",
+      relation: "child-probe",
+      intent: "implementation-probe",
+      question: "Implement the reranker.",
+      basedOnTurnIds: ["turn-code"],
+      basedOnObservationIds: [],
+      phaseState: {
+        playbook: {
+          ...codingPlaybook,
+          phase: "implementation_validation",
+        },
+        phase: "implementation_validation",
+        phaseProgress: { implementation_validation: true },
+        revision: 1,
+      },
+    },
+  };
+  const view = buildEffectiveAdvisorSettlementView({
+    settlement: settlement({
+      questionType: "coding",
+      relation: "child-probe",
+      parentMutationAuthorized: false,
+    }),
+    activeMeetingTask: task,
+    taskRuntimeRevision: 9,
+    fallback: { questionType: "coding", relation: "child-probe" },
+  });
+
+  assert.equal(view.playbook?.id, "coding_algorithm");
+  assert.equal(view.playbookPhase, "implementation_validation");
+  assert.equal(view.phaseOwnerKind, "child");
+  assert.equal(view.phaseOwnerId, "child-code");
+  assert.equal(view.phaseOwnerRevision, 1);
+  assert.equal(task.parent.playbookPhase, "requirement_clarification");
+});
+
 test("does not reinterpret one effective settlement after the active branch changes", () => {
   const originalTask = activeTask("general-system-design");
   const first = buildEffectiveAdvisorSettlementView({
