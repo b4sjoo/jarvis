@@ -3783,10 +3783,10 @@ export function useMeetingAssistant() {
   }, []);
 
   const refreshHumanEvaluationObservedProjectionForTrace = useCallback(
-    (trace: MeetingTrace) => {
+    (trace: MeetingTrace, traces: MeetingTrace[]) => {
       const result = materializeHumanEvaluationAttemptProjectionV2({
         trace,
-        traces: traceStoreRef.current.getTraces(),
+        traces,
         currentSessionId: contextManagerRef.current.getState().sessionId,
         events: humanGroundTruthEventsV2Ref.current,
         projections: humanEvaluationProjectionsV2Ref.current,
@@ -3806,14 +3806,16 @@ export function useMeetingAssistant() {
 
   const refreshRecordedCompletedTrace = useCallback((traceId?: string) => {
     if (!traceId) return;
-    const completedTrace = traceStoreRef.current
-      .getTraces()
-      .find(
-        (candidate) =>
-          candidate.id === traceId && candidate.status !== "running"
-      );
+    const traces = traceStoreRef.current.getTraces();
+    const completedTrace = traces.find(
+      (candidate) =>
+        candidate.id === traceId && candidate.status !== "running"
+    );
     if (completedTrace) {
-      refreshHumanEvaluationObservedProjectionForTrace(completedTrace);
+      refreshHumanEvaluationObservedProjectionForTrace(
+        completedTrace,
+        traces
+      );
       sessionRecordingManagerRef.current?.refreshRecordedTrace(
         completedTrace,
         getAutoExportTrigger(completedTrace)
@@ -9204,7 +9206,7 @@ export function useMeetingAssistant() {
           manager.recordTrace(trace, getAutoExportTrigger(trace));
         }
       }
-      refreshHumanEvaluationObservedProjectionForTrace(trace);
+      refreshHumanEvaluationObservedProjectionForTrace(trace, traces);
     }
   }, [refreshHumanEvaluationObservedProjectionForTrace]);
 
