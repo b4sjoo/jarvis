@@ -5,7 +5,7 @@ export const ANSWER_RECOVERY_ADJUDICATION_SCHEMA_VERSION = 2;
 export const ANSWER_RESOLUTION_PROMPT_VERSION =
   "answer-resolution-adjudication-v1";
 export const EVIDENCE_REQUIREMENT_PROMPT_VERSION =
-  "visual-evidence-check-v2-question-only";
+  "visual-evidence-check-v3-existing-artifact";
 export const ANSWER_RECOVERY_MAX_OUTPUT_CHARS = 2_048;
 export const ANSWER_RECOVERY_MAX_QUESTION_CHARS = 1_200;
 export const ANSWER_RECOVERY_MAX_ANSWER_CHARS = 1_800;
@@ -258,11 +258,13 @@ export function buildAnswerRecoveryAdjudicationPrompts(
   };
   return buildRuntimeInferenceModelInput({
     systemPrompt: [
-      "Decide one thing only: whether questionText requires visible evidence and whether the supplied bounded visual evidence covers it.",
+      "Decide one thing only: whether questionText explicitly depends on an already-existing visible artifact and whether the supplied bounded visual evidence covers it.",
       "Do not inspect, predict, or evaluate any model answer.",
-      "Use visual-missing when the question requires code lines, a diagram, screenshot content, a visible error, cursor focus, or UI state and the supplied evidence does not cover it.",
+      "Use visual-missing only when the question refers to already-existing code lines, a diagram, screenshot content, a visible error, cursor focus, or UI state and the supplied evidence does not cover that reference.",
       "Use visual-sufficient only when screenQuestion, screenEvidenceSummary, or codeArtifactSummary directly covers the requested visible evidence.",
-      "Use not-visual for conceptual, requirement, business-fact, interviewer-choice, or personal-fact questions that visible evidence would not directly answer.",
+      "Use not-visual for requests to create or implement new code from textual requirements, design an algorithm or system, write pseudocode, or answer conceptual, requirement, business-fact, interviewer-choice, or personal-fact questions.",
+      "A generic noun such as function, code, system, or diagram does not establish an existing-artifact dependency by itself.",
+      "For visual-missing, questionEvidenceSpans must quote the exact clause that points to the already-existing artifact; if no such clause exists, do not use visual-missing.",
       "For visual-sufficient, return one questionEvidenceSpans item and one visualEvidenceSpans item.",
       "For visual-missing or not-visual, return one questionEvidenceSpans item and an empty visualEvidenceSpans array.",
       "Schema: {schemaVersion:2,decision:'visual-sufficient'|'visual-missing'|'not-visual'|'unclear',questionEvidenceSpans:string[],visualEvidenceSpans:string[],ambiguityReason?:string}.",

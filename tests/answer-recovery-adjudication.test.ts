@@ -56,7 +56,7 @@ test("keeps post-answer resolution separate from question-only visual evidence",
   const evidencePrompt = buildAnswerRecoveryAdjudicationPrompts(evidence);
   assert.match(resolutionPrompt.systemPrompt, /resolves the substantive request/);
   assert.doesNotMatch(resolutionPrompt.systemPrompt, /visual-required/);
-  assert.match(evidencePrompt.systemPrompt, /requires visible evidence/);
+  assert.match(evidencePrompt.systemPrompt, /already-existing visible artifact/);
   assert.doesNotMatch(evidencePrompt.userMessage, /don.t have those lines/i);
   assert.doesNotMatch(evidencePrompt.systemPrompt, /resolved'\|'unresolved/);
   const resolutionInput = JSON.parse(resolutionPrompt.userMessage) as Record<
@@ -71,6 +71,26 @@ test("keeps post-answer resolution separate from question-only visual evidence",
   assert.equal("logicalQuestionUnitId" in resolutionInput, false);
   assert.equal("answerRevision" in resolutionInput, false);
   assert.equal("sourceHash" in resolutionInput, false);
+});
+
+test("distinguishes existing visual artifacts from new code implementation", () => {
+  const implementation = buildVisualEvidenceCheckRequest({
+    logicalQuestionUnitId: "lqu-implementation",
+    logicalQuestionUnitRevision: 1,
+    questionSourceHash: "question-source-implementation",
+    questionText:
+      "Within this RAG system, implement the access-aware retrieval merge function in Python.",
+  });
+  assert.ok(implementation);
+  const prompt = buildAnswerRecoveryAdjudicationPrompts(implementation);
+
+  assert.match(prompt.systemPrompt, /already-existing visible artifact/i);
+  assert.match(prompt.systemPrompt, /create or implement new code/i);
+  assert.match(prompt.systemPrompt, /generic noun such as function/i);
+  assert.deepEqual(JSON.parse(prompt.userMessage), {
+    questionText:
+      "Within this RAG system, implement the access-aware retrieval merge function in Python.",
+  });
 });
 
 test("parses an unresolved answer with grounded paraphrase evidence", () => {
