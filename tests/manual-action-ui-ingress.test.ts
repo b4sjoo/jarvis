@@ -92,9 +92,12 @@ test("global shortcuts use one shared cleanup-safe listener subscription", () =>
     shortcutHookSource.match(/useGlobalShortcuts\(\)/g)?.length,
     1
   );
-  assert.match(globalShortcutSource, /globalEventListenerSubscribers \+= 1/);
-  assert.match(globalShortcutSource, /globalEventListenerSubscribers - 1/);
-  assert.match(globalShortcutSource, /cleanupGlobalEventListeners\(\)/);
-  assert.match(globalShortcutSource, /Object\.values\(installed\)/);
-  assert.match(globalShortcutSource, /unlisten\?\.\(\)/);
+  assert.match(
+    globalShortcutSource,
+    /createSharedAsyncListenerLifecycle\(/
+  );
+  assert.match(
+    globalShortcutSource,
+    /return globalEventListenerLifecycle\.acquire\(\)/
+  );
 });

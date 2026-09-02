@@ -1,16 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
-import { listen, UnlistenFn } from "@tauri-apps/api/event";
+import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useRef } from "react";
 import { getShortcutsConfig } from "@/lib";
-
-// Global singleton to prevent multiple event listeners in StrictMode
-let globalEventListeners: {
-  focus?: UnlistenFn;
-  customShortcut?: UnlistenFn;
-  registrationError?: UnlistenFn;
-} = {};
-let globalEventListenerSubscribers = 0;
-let globalEventListenerSetup: Promise<void> | null = null;
+import {
+  createSharedAsyncListenerLifecycle,
+  type AsyncListenerCleanup,
+} from "./shared-async-listener-lifecycle";
 
 let lastCustomShortcutEventTimes: Map<string, number> = new Map();
 const CUSTOM_SHORTCUT_DEBOUNCE_MS = 750;
@@ -35,37 +30,18 @@ let globalCustomShortcutCallbacks: Map<
   GlobalShortcutCallback
 > = new Map();
 
-function cleanupGlobalEventListeners() {
-  for (const [label, unlisten] of Object.entries(globalEventListeners)) {
-    if (!unlisten) continue;
-    try {
-      unlisten();
-    } catch (error) {
-      console.warn(`Error cleaning up ${label} listener:`, error);
-    }
-  }
-  globalEventListeners = {};
-}
-
-function ensureGlobalEventListeners() {
-  if (globalEventListenerSetup) return globalEventListenerSetup;
-  if (
-    globalEventListeners.focus &&
-    globalEventListeners.customShortcut &&
-    globalEventListeners.registrationError
-  ) {
-    return Promise.resolve();
-  }
-
-  globalEventListenerSetup = (async () => {
-    const installed: typeof globalEventListeners = {};
-    try {
-      installed.focus = await listen("focus-text-input", () => {
+async function setupGlobalEventListeners() {
+  const installed: AsyncListenerCleanup[] = [];
+  try {
+    installed.push(
+      await listen("focus-text-input", () => {
         setTimeout(() => {
           if (globalInputRef) globalInputRef.focus();
         }, 100);
-      });
-      installed.customShortcut = await listen<{ action: string }>(
+      })
+    );
+    installed.push(
+      await listen<{ action: string }>(
         "custom-shortcut-triggered",
         (event) => {
           const actionId = event.payload.action;
@@ -97,37 +73,43 @@ function ensureGlobalEventListeners() {
             );
           }
         }
-      );
-      installed.registrationError = await listen<
-        Array<[string, string, string]>
-      >("shortcut-registration-error", (event) => {
-        window.dispatchEvent(
-          new CustomEvent("shortcutRegistrationError", {
-            detail: event.payload,
-          })
-        );
-      });
-
-      if (globalEventListenerSubscribers === 0) {
-        for (const unlisten of Object.values(installed)) unlisten?.();
-        return;
-      }
-      globalEventListeners = installed;
-    } catch (error) {
-      for (const unlisten of Object.values(installed)) {
-        try {
-          unlisten?.();
-        } catch {
-          // Preserve the original listener setup error.
+      )
+    );
+    installed.push(
+      await listen<Array<[string, string, string]>>(
+        "shortcut-registration-error",
+        (event) => {
+          window.dispatchEvent(
+            new CustomEvent("shortcutRegistrationError", {
+              detail: event.payload,
+            })
+          );
         }
+      )
+    );
+    return installed;
+  } catch (error) {
+    for (const unlisten of installed) {
+      try {
+        unlisten();
+      } catch (cleanupError) {
+        console.warn(
+          "Error cleaning up partially installed shortcut listener:",
+          cleanupError
+        );
       }
-      console.error("Failed to setup event listeners:", error);
-    } finally {
-      globalEventListenerSetup = null;
     }
-  })();
-  return globalEventListenerSetup;
+    throw error;
+  }
 }
+
+const globalEventListenerLifecycle = createSharedAsyncListenerLifecycle({
+  setup: setupGlobalEventListeners,
+  onSetupError: (error) =>
+    console.error("Failed to setup event listeners:", error),
+  onCleanupError: (error) =>
+    console.warn("Error cleaning up global shortcut listener:", error),
+});
 
 export const useGlobalShortcuts = () => {
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -193,17 +175,7 @@ export const useGlobalShortcuts = () => {
   }, []);
 
   useEffect(() => {
-    globalEventListenerSubscribers += 1;
-    void ensureGlobalEventListeners();
-    return () => {
-      globalEventListenerSubscribers = Math.max(
-        0,
-        globalEventListenerSubscribers - 1
-      );
-      if (globalEventListenerSubscribers === 0) {
-        cleanupGlobalEventListeners();
-      }
-    };
+    return globalEventListenerLifecycle.acquire();
   }, []);
 
   return {
