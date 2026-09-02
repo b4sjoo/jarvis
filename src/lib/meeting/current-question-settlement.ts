@@ -16,11 +16,13 @@ import {
 import type { InterviewTaskRelation } from "./types.js";
 import {
   resolveCurrentQuestionSourceKind,
+  resolveSettlementOwnedQuestionSource,
   type CurrentQuestionSourceKind,
 } from "./current-question-source.js";
 
 export {
   resolveCurrentQuestionSourceKind,
+  resolveSettlementOwnedQuestionSource,
   type CurrentQuestionSourceKind,
 } from "./current-question-source.js";
 

@@ -637,6 +637,7 @@ import {
   createTaskBoundaryCandidate,
   createProvisionalCurrentQuestion,
   resolveCurrentQuestionSourceKind,
+  resolveSettlementOwnedQuestionSource,
   CurrentQuestionSettlementProposal,
   ProvisionalCurrentQuestion,
   createSourceOwnedTransitionCandidate,
@@ -10388,17 +10389,21 @@ export function useMeetingAssistant() {
       return;
     }
     const settlementOverride = options.currentQuestionSettlementOverride;
+    const settlementIdentitySource = resolveSettlementOwnedQuestionSource({
+      settlement: settlementOverride,
+      fallbackSourceKind: promptContext.activeMeetingTask?.screen
+        ? "mixed"
+        : "voice",
+      fallbackSourceObservationIds: promptContext.activeMeetingTask?.screen
+        ? [promptContext.activeMeetingTask.screen.observationId]
+        : [],
+    });
     const settlementIdentityQuestion = advisorJob.logicalQuestionUnit
       ? createProvisionalCurrentQuestion({
           logicalQuestionUnit: advisorJob.logicalQuestionUnit,
-          sourceKind:
-            settlementOverride?.sourceKind ??
-            (promptContext.activeMeetingTask?.screen
-              ? "mixed"
-              : "voice"),
-          sourceObservationIds: promptContext.activeMeetingTask?.screen
-            ? [promptContext.activeMeetingTask.screen.observationId]
-            : [],
+          sourceKind: settlementIdentitySource.sourceKind,
+          sourceObservationIds:
+            settlementIdentitySource.sourceObservationIds,
         })
       : undefined;
     const settlementOverrideIdentityValidation = settlementOverride

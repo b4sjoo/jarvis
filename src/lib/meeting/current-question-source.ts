@@ -1,5 +1,25 @@
 export type CurrentQuestionSourceKind = "voice" | "screen" | "mixed";
 
+export function resolveSettlementOwnedQuestionSource(input: {
+  settlement?: {
+    sourceKind: CurrentQuestionSourceKind;
+    sourceObservationIds: readonly string[];
+  };
+  fallbackSourceKind: CurrentQuestionSourceKind;
+  fallbackSourceObservationIds?: readonly string[];
+}) {
+  if (input.settlement) {
+    return {
+      sourceKind: input.settlement.sourceKind,
+      sourceObservationIds: [...input.settlement.sourceObservationIds],
+    };
+  }
+  return {
+    sourceKind: input.fallbackSourceKind,
+    sourceObservationIds: [...(input.fallbackSourceObservationIds ?? [])],
+  };
+}
+
 export function resolveCurrentQuestionSourceKind(input: {
   sourceTurnIds?: readonly string[];
   sourceObservationIds?: readonly string[];

@@ -9,6 +9,7 @@ import {
   formatCurrentQuestionTerminalNoAnswerForTrace,
   formatProvisionalCurrentQuestionForTrace,
   resolveCurrentQuestionSourceKind,
+  resolveSettlementOwnedQuestionSource,
   resolveCurrentQuestionSettlementDisposition,
   settlementAuthorizesFollowupParentScope,
   settlementAuthorizesTaskTransition,
@@ -254,6 +255,81 @@ test("derives source kind from owned evidence before compatibility fallback", ()
     sourceKind: "screen",
   });
   assert.equal(voiceQuestion.sourceKind, "voice");
+});
+
+test("keeps settlement-owned source identity intact over active-screen fallback", () => {
+  const voiceSource = resolveSettlementOwnedQuestionSource({
+    settlement: {
+      sourceKind: "voice",
+      sourceObservationIds: [],
+    },
+    fallbackSourceKind: "mixed",
+    fallbackSourceObservationIds: ["active-screen"],
+  });
+  assert.deepEqual(voiceSource, {
+    sourceKind: "voice",
+    sourceObservationIds: [],
+  });
+
+  const boundScreenSource = resolveSettlementOwnedQuestionSource({
+    settlement: {
+      sourceKind: "mixed",
+      sourceObservationIds: ["bound-screen"],
+    },
+    fallbackSourceKind: "mixed",
+    fallbackSourceObservationIds: ["newer-active-screen"],
+  });
+  assert.deepEqual(boundScreenSource, {
+    sourceKind: "mixed",
+    sourceObservationIds: ["bound-screen"],
+  });
+
+  const fallbackSource = resolveSettlementOwnedQuestionSource({
+    fallbackSourceKind: "mixed",
+    fallbackSourceObservationIds: ["active-screen"],
+  });
+  assert.deepEqual(fallbackSource, {
+    sourceKind: "mixed",
+    sourceObservationIds: ["active-screen"],
+  });
+});
+
+test("validates a voice settlement while an active-screen fallback exists", () => {
+  const logicalQuestionUnit = logicalQuestion();
+  const source = resolveSettlementOwnedQuestionSource({
+    settlement: {
+      sourceKind: "voice",
+      sourceObservationIds: [],
+    },
+    fallbackSourceKind: "mixed",
+    fallbackSourceObservationIds: ["active-screen"],
+  });
+  const currentQuestion = createProvisionalCurrentQuestion({
+    logicalQuestionUnit,
+    ...source,
+  });
+  const settlement = settleCurrentQuestion({
+    currentQuestion,
+    deterministicProposal: proposal("deterministic-fast-path", {
+      sourceHash: currentQuestion.sourceHash,
+    }),
+    manualCorrectionRevision: 0,
+    policy: {
+      runtimeMutationAuthorized: true,
+      questionComplete: true,
+      commitParent: true,
+    },
+  });
+
+  assert.deepEqual(
+    validateCurrentQuestionSettlementIdentity({
+      settlement,
+      currentQuestion,
+    }),
+    { authorized: true, reasons: [] }
+  );
+  assert.equal(currentQuestion.sourceKind, "voice");
+  assert.deepEqual(currentQuestion.sourceObservationIds, []);
 });
 
 test("authorizes active-parent scope only for a bound settled follow-up", () => {
