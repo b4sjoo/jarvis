@@ -32790,13 +32790,19 @@ export function useMeetingAssistant() {
             now: Date.now(),
             expiresAt: getActiveScreenTaskExpiresAt(state.settings),
           });
+          const preserveExistingParentOrigin =
+            !correctionTargetOwnsActiveParent;
           const parentAfter = {
             ...parentTransition.parent,
-            canonicalQuestionSourceTurnIds: [
-              ...correctionLogicalQuestionUnit.sourceTurnIds,
-            ],
-            sourceQuestionUnitId: correctionLogicalQuestionUnit.id,
-            sourceQuestionRevision: correctionLogicalQuestionUnit.revision,
+            canonicalQuestionSourceTurnIds: preserveExistingParentOrigin
+              ? parentTransition.parent.canonicalQuestionSourceTurnIds
+              : [...correctionLogicalQuestionUnit.sourceTurnIds],
+            sourceQuestionUnitId: preserveExistingParentOrigin
+              ? parentTransition.parent.sourceQuestionUnitId
+              : correctionLogicalQuestionUnit.id,
+            sourceQuestionRevision: preserveExistingParentOrigin
+              ? parentTransition.parent.sourceQuestionRevision
+              : correctionLogicalQuestionUnit.revision,
             settlementId: correctionCurrentQuestionSettlement.settlementId,
           };
           const screenAfter = contextState.taskRuntime.screenAttachment
@@ -32890,6 +32896,8 @@ export function useMeetingAssistant() {
               normalizeCanonicalQuestionType(parentBefore.stableKind) ??
               "unknown",
             correctionOwnedParentAfterType: correctedType,
+            correctionPreservedExistingParentOrigin:
+              preserveExistingParentOrigin,
           };
           traceStoreRef.current.updateMetadata(
             correctionTrace.id,

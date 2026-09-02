@@ -19,6 +19,7 @@ import type {
 import { isCurrentQuestionLineage } from "./question-lineage.js";
 import {
   areCompatibleParentContinuityTypes,
+  canParentQuestionTypeOwnChild,
   isParentCanonicalQuestionType,
   normalizeCanonicalQuestionType,
   type CanonicalQuestionType,
@@ -504,6 +505,26 @@ export function decideManualCorrectionScope({
       ...base,
       scope: "same-question-retype",
       reason: "current-question-is-active-parent-origin",
+    };
+  }
+
+  const correctedTypeReclassifiesRelatedParent = Boolean(
+    task &&
+      !task.child &&
+      decision.target === "parent" &&
+      decision.correctedType !== decision.parentType &&
+      isParentCanonicalQuestionType(decision.correctedType) &&
+      !canParentQuestionTypeOwnChild(
+        decision.parentType,
+        decision.correctedType
+      ) &&
+      currentQuestionRelation === "followup-parent"
+  );
+  if (correctedTypeReclassifiesRelatedParent) {
+    return {
+      ...base,
+      scope: "same-question-retype",
+      reason: "related-corrected-type-reclassifies-active-parent",
     };
   }
 

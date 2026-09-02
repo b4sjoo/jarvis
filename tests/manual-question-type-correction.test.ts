@@ -816,6 +816,67 @@ test("keeps standalone correction current-only without relation authority", () =
   );
 });
 
+test("retypes a related parent when the corrected type cannot be its child", () => {
+  const task = makeActiveTask({ questionType: "general-system-design" });
+  task.parent.topic = "How would you design the indexing and serving path?";
+  task.parent.startTurnId = "turn_indexing";
+  const decision = decideManualQuestionTypeCorrection(
+    task,
+    "ai-ml-system-design"
+  );
+  const scope = decideManualCorrectionScope({
+    task,
+    decision,
+    lineage: makeLineage("turn_analytics"),
+    latestQuestionText:
+      "A future team may use a separate analytics store.",
+    parentQuestionText: task.parent.topic,
+    currentQuestionRelation: "followup-parent",
+    currentQuestionSource: "voice",
+  });
+
+  assert.equal(scope.currentQuestionIsParentOrigin, false);
+  assert.equal(scope.scope, "same-question-retype");
+  assert.equal(
+    scope.reason,
+    "related-corrected-type-reclassifies-active-parent"
+  );
+
+  const parent = makeInterviewParent({
+    id: "parent_indexing",
+    stableKind: "general-system-design",
+    topic: task.parent.topic,
+    startTurnId: "turn_indexing",
+    whiteboardArtifact: makeWhiteboard("general_sd"),
+  });
+  const transition = buildManualCorrectionParentTransition({
+    parent,
+    decision,
+    scopeDecision: scope,
+    correctedPlaybook: makePlaybook(
+      "ai-ml-system-design",
+      "requirement_clarification"
+    ),
+    latestQuestionText:
+      "A future team may use a separate analytics store.",
+    lineage: makeLineage("turn_analytics"),
+    transcriptTurns: [
+      makeTurn("turn_indexing", task.parent.topic),
+      makeTurn(
+        "turn_analytics",
+        "A future team may use a separate analytics store."
+      ),
+    ],
+    newParentId: "unused-parent",
+  });
+
+  assert.equal(transition.startedNewParent, false);
+  assert.equal(transition.parent.id, "parent_indexing");
+  assert.equal(transition.parent.stableKind, "ai-ml-system-design");
+  assert.equal(transition.parent.topic, task.parent.topic);
+  assert.equal(transition.parent.whiteboardArtifact, undefined);
+});
+
 test("uses an authorized new-parent settlement instead of retyping a stale parent", () => {
   const task = makeActiveTask({ questionType: "coding" });
   task.parent.topic = "Implement a multiset data structure";
