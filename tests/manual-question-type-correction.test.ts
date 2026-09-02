@@ -125,6 +125,11 @@ test("reauthorizes correction-owned parent retypes without changing relation", (
 
   assert.equal(relatedProjected.relation, "followup-parent");
   assert.equal(relatedProjected.parentMutationAuthorized, true);
+  assert.equal(
+    relatedProjected.reasons.includes("relation-does-not-create-parent"),
+    false
+  );
+  assert.ok(relatedProjected.reasons.includes("parent-mutation-authorized"));
   assert.ok(
     relatedProjected.reasons.includes(
       "manual-correction-same-question-retype-authorized"

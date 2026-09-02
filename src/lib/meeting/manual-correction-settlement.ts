@@ -46,12 +46,12 @@ export function authorizeManualCorrectionLifecycle(input: {
   const activeParentType = normalizeCanonicalQuestionType(
     input.activeParentType
   );
-  const relationOwnsRetype =
+  const relationSupportsCorrectionRetype =
     input.settlement.relation === "new-parent" ||
     input.settlement.relation === "followup-parent";
   if (
     input.scope !== "same-question-retype" ||
-    !relationOwnsRetype ||
+    !relationSupportsCorrectionRetype ||
     !input.activeParentId ||
     input.settlement.activeParentId !== input.activeParentId ||
     !correctedType ||
@@ -66,7 +66,10 @@ export function authorizeManualCorrectionLifecycle(input: {
     parentMutationAuthorized: true,
     reasons: Array.from(
       new Set([
-        ...input.settlement.reasons,
+        ...input.settlement.reasons.filter(
+          (reason) => reason !== "relation-does-not-create-parent"
+        ),
+        "parent-mutation-authorized",
         "manual-correction-same-question-retype-authorized",
       ])
     ),
