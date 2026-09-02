@@ -14355,17 +14355,18 @@ export function useMeetingAssistant() {
       }
     }
     const authorizedImageAttached = Boolean(advisorScreenSourceRead.image);
+    const visualEvidenceCandidate = visualEvidenceCheckOutcome?.leaseAuthorized
+      ? visualEvidenceCheckOutcome.candidate
+      : undefined;
     const shouldRequestAdditionalVisualEvidence = Boolean(
-      visualEvidenceCheckOutcome?.leaseAuthorized &&
-        shouldRequestAdditionalVisualEvidenceBeforeAdvisor({
-          decision: visualEvidenceCheckOutcome.candidate?.decision,
-          authorizedImageAttached,
-        })
+      shouldRequestAdditionalVisualEvidenceBeforeAdvisor({
+        decision: visualEvidenceCandidate?.decision,
+        authorizedImageAttached,
+      })
     );
     if (
       traceId &&
-      visualEvidenceCheckOutcome?.leaseAuthorized &&
-      visualEvidenceCheckOutcome.candidate?.decision === "visual-missing" &&
+      visualEvidenceCandidate?.decision === "visual-missing" &&
       authorizedImageAttached
     ) {
       traceStoreRef.current.updateMetadata(traceId, {
@@ -14377,6 +14378,7 @@ export function useMeetingAssistant() {
     }
     if (
       shouldRequestAdditionalVisualEvidence &&
+      visualEvidenceCandidate &&
       advisorJob.logicalQuestionUnit &&
       visualEvidenceQuestion
     ) {
@@ -14393,8 +14395,8 @@ export function useMeetingAssistant() {
           state: "awaiting-evidence",
           awaitingVisualEvidence: true,
           evidence: [
-            ...visualEvidenceCheckOutcome.candidate.questionEvidenceSpans,
-            ...visualEvidenceCheckOutcome.candidate.visualEvidenceSpans,
+            ...visualEvidenceCandidate.questionEvidenceSpans,
+            ...visualEvidenceCandidate.visualEvidenceSpans,
           ],
         },
         sessionId: visualContext.sessionId,
