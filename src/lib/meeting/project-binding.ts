@@ -432,19 +432,27 @@ export function buildProjectTopicEvidence({
   candidates: ProjectBindingCandidate[];
 }): ProjectTopicEvidence {
   const text = [sourceText, projectAnchor].filter(Boolean).join(" ").trim();
-  const explicitMatches = candidates
+  const projectMatches = candidates
     .map((candidate) => ({
       candidate,
-      alias: findExplicitProjectAlias(sourceText, candidate),
+      canonicalIdentity: findExplicitCanonicalProjectIdentity(
+        sourceText,
+        candidate
+      ),
+      alias: findProjectIdentityAlias(sourceText, candidate),
     }))
     .filter(
       (
         item
       ): item is {
         candidate: ProjectBindingCandidate;
-        alias: string;
-      } => Boolean(item.alias)
+        canonicalIdentity: string | undefined;
+        alias: string | undefined;
+      } => Boolean(item.canonicalIdentity || item.alias)
     );
+  const explicitMatches = projectMatches.filter((item) =>
+    Boolean(item.canonicalIdentity)
+  );
   const deicticReference =
     explicitMatches.length === 0 &&
     isDeicticProjectReference(sourceText);
@@ -464,7 +472,9 @@ export function buildProjectTopicEvidence({
       ...explicitMatches.map(({ candidate }) => candidate.projectName),
       ...(unmatchedExplicitProject ? [unmatchedExplicitProject] : []),
     ],
-    explicitProjectAliases: explicitMatches.map(({ alias }) => alias),
+    explicitProjectAliases: projectMatches
+      .map(({ alias, canonicalIdentity }) => alias ?? canonicalIdentity)
+      .filter((alias): alias is string => Boolean(alias)),
     featureTerms: terms.filter((term) =>
       PROJECT_FEATURE_TERMS.has(term)
     ),
@@ -503,7 +513,7 @@ export function deriveExplicitProjectSelectionFromSource({
   now?: number;
 }): ExplicitProjectSelection | undefined {
   const matches = candidates.filter((candidate) =>
-    Boolean(findExplicitProjectAlias(sourceText, candidate))
+    Boolean(findExplicitCanonicalProjectIdentity(sourceText, candidate))
   );
   if (matches.length > 1) return undefined;
   const match = matches[0];
@@ -727,6 +737,19 @@ function findExplicitProjectAlias(
     "projectId" | "projectName" | "identityAliases"
   >
 ) {
+  return (
+    findExplicitCanonicalProjectIdentity(sourceText, candidate) ??
+    findProjectIdentityAlias(sourceText, candidate)
+  );
+}
+
+function findExplicitCanonicalProjectIdentity(
+  sourceText: string | undefined,
+  candidate: Pick<
+    ProjectBindingCandidate,
+    "projectId" | "projectName"
+  >
+) {
   const sourceTokens = tokenizeProjectEvidence(sourceText);
   if (!sourceTokens.length) return undefined;
   const identities = [candidate.projectName, candidate.projectId].filter(
@@ -740,8 +763,17 @@ function findExplicitProjectAlias(
     if (!identityTokens.length) return false;
     return identityTokens.every((token) => sourceTokens.includes(token));
   });
-  if (identityMatch) return normalizeProjectAlias(identityMatch);
+  return identityMatch
+    ? normalizeProjectAlias(identityMatch)
+    : undefined;
+}
 
+function findProjectIdentityAlias(
+  sourceText: string | undefined,
+  candidate: Pick<ProjectBindingCandidate, "identityAliases">
+) {
+  const sourceTokens = tokenizeProjectEvidence(sourceText);
+  if (!sourceTokens.length) return undefined;
   const normalizedSource = ` ${sourceTokens.join(" ")} `;
   return candidate.identityAliases?.find((alias) =>
     normalizedSource.includes(` ${normalizeProjectAlias(alias)} `)

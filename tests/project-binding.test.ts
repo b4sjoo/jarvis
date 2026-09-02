@@ -292,7 +292,7 @@ test("keeps an independently named project switch authoritative", () => {
   assert.equal(decision.topicEvidence?.deicticReference, false);
 });
 
-test("a named feature alias binds its canonical evidence project", () => {
+test("a named feature alias remains a non-authoritative project proposal", () => {
   const decision = resolveProjectBinding({
     questionType: "project-deep-dive",
     relation: "new-parent",
@@ -323,12 +323,9 @@ test("a named feature alias binds its canonical evidence project", () => {
     ]),
   });
 
-  assert.equal(decision.action, "bind");
-  assert.equal(
-    decision.binding?.projectId,
-    "ml_commons_platform_small_features"
-  );
-  assert.equal(decision.sourceAuthority, "interviewer-explicit");
+  assert.equal(decision.action, "needs-selection");
+  assert.equal(decision.binding, undefined);
+  assert.equal(decision.sourceAuthority, "memory-candidate");
   assert.deepEqual(decision.topicEvidence?.explicitProjectAliases, [
     "custom model lifecycle",
   ]);
@@ -337,6 +334,36 @@ test("a named feature alias binds its canonical evidence project", () => {
       .projectBindingExplicitAliases,
     ["custom model lifecycle"]
   );
+});
+
+test("a generic feature alias cannot bind a project in a non-project task", () => {
+  const decision = resolveProjectBinding({
+    questionType: "ai-ml-system-design",
+    relation: "followup-parent",
+    currentSourceText:
+      "The corpus is multi-tenant, and every tenant has a separate access control list.",
+    sourceTurnIds: ["turn_acl_context"],
+    memoryContext: makeMemoryResult([
+      makeRetrieved(
+        makeEntry({
+          id: "mem_agentic_memory_security_reliability",
+          type: "project_context",
+          title: "Agentic Memory security and reliability",
+          projectId: "agentic_memory",
+          projectName: "Agentic Memory",
+          keywords: ["access control"],
+        })
+      ),
+    ]),
+  });
+
+  assert.equal(decision.action, "not-applicable");
+  assert.equal(decision.binding, undefined);
+  assert.equal(decision.sourceAuthority, "memory-candidate");
+  assert.deepEqual(decision.topicEvidence?.explicitProjectNames, []);
+  assert.deepEqual(decision.topicEvidence?.explicitProjectAliases, [
+    "access control",
+  ]);
 });
 
 test("structured user selection remains authoritative without raw microphone context", () => {
