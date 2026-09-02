@@ -518,6 +518,8 @@ export function settleCurrentQuestion(input: {
   operationId?: string;
   deterministicProposal?: CurrentQuestionSettlementProposal;
   llmProposal?: CurrentQuestionSettlementProposal;
+  runtimeTypeProposal?: CurrentQuestionSettlementProposal;
+  runtimeRelationProposal?: CurrentQuestionSettlementProposal;
   manualProposal?: CurrentQuestionSettlementProposal;
   activeParentId?: string;
   activeParentRevision?: number;
@@ -552,8 +554,32 @@ export function settleCurrentQuestion(input: {
     manualCorrectionRevision: input.manualCorrectionRevision,
     policy: input.policy,
   });
+  const validRuntimeType = validateSettlementProposal({
+    proposal: input.runtimeTypeProposal,
+    expectedSource: "runtime-adjudication",
+    currentQuestion: input.currentQuestion,
+    activeParentId: input.activeParentId,
+    activeParentRevision: input.activeParentRevision,
+    manualCorrectionRevision: input.manualCorrectionRevision,
+    policy: input.policy,
+  });
+  const validRuntimeRelation = validateSettlementProposal({
+    proposal: input.runtimeRelationProposal,
+    expectedSource: "runtime-adjudication",
+    currentQuestion: input.currentQuestion,
+    activeParentId: input.activeParentId,
+    activeParentRevision: input.activeParentRevision,
+    manualCorrectionRevision: input.manualCorrectionRevision,
+    policy: input.policy,
+  });
 
-  for (const validation of [validManual, validDeterministic, validLlm]) {
+  for (const validation of [
+    validManual,
+    validDeterministic,
+    validLlm,
+    validRuntimeType,
+    validRuntimeRelation,
+  ]) {
     if (validation.rejection) {
       rejectedProposals.push(validation.rejection);
     }
@@ -562,28 +588,31 @@ export function settleCurrentQuestion(input: {
   const typeSelection = selectQuestionType({
     manual: validManual.proposal,
     deterministic: validDeterministic.proposal,
-    llm: validLlm.proposal,
+    llm: validRuntimeType.proposal ?? validLlm.proposal,
     policy: input.policy,
     rejectedProposals,
   });
   const relationSelection = selectQuestionRelation({
     manual: validManual.proposal,
     deterministic: validDeterministic.proposal,
-    llm: validLlm.proposal,
+    llm: validRuntimeRelation.proposal ?? validLlm.proposal,
     policy: input.policy,
     rejectedProposals,
   });
   const actionSelection = selectQuestionAction({
     manual: validManual.proposal,
     deterministic: validDeterministic.proposal,
-    llm: validLlm.proposal,
+    llm: validRuntimeType.proposal ?? validLlm.proposal,
     policy: input.policy,
     rejectedProposals,
   });
   const evidenceModeSelection = selectEvidenceMode({
     manual: validManual.proposal,
     deterministic: validDeterministic.proposal,
-    llm: validLlm.proposal,
+    llm:
+      validRuntimeType.proposal ??
+      validRuntimeRelation.proposal ??
+      validLlm.proposal,
     questionType: typeSelection.value,
   });
   const authoritySource = proposalSourceToAuthoritySource(

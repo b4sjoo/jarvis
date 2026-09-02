@@ -335,6 +335,64 @@ test("authorizes active-parent scope only for a bound settled follow-up", () => 
   );
 });
 
+test("keeps runtime Type and Relation confidence independent", () => {
+  const currentQuestion = createProvisionalCurrentQuestion({
+    logicalQuestionUnit: logicalQuestion(),
+    sourceKind: "voice",
+  });
+  const identity = {
+    sessionId: currentQuestion.sessionId,
+    runtimeEpoch: currentQuestion.runtimeEpoch,
+    logicalQuestionUnitId: currentQuestion.logicalQuestionUnitId,
+    revision: currentQuestion.revision,
+    sourceHash: currentQuestion.sourceHash,
+    expectedParentId: "parent-a",
+    expectedParentRevision: 3,
+  };
+  const settlement = settleCurrentQuestion({
+    currentQuestion,
+    runtimeTypeProposal: {
+      ...identity,
+      source: "runtime-adjudication",
+      questionType: "coding",
+      relation: "unknown",
+      action: "answer",
+      confidence: 0.9,
+      typeEvidenceAuthorized: true,
+      relationEvidenceAuthorized: false,
+      actionEvidenceAuthorized: true,
+    },
+    runtimeRelationProposal: {
+      ...identity,
+      source: "runtime-adjudication",
+      relation: "child-probe",
+      confidence: 0.95,
+      typeEvidenceAuthorized: false,
+      relationEvidenceAuthorized: true,
+      actionEvidenceAuthorized: false,
+    },
+    activeParentId: "parent-a",
+    activeParentRevision: 3,
+    manualCorrectionRevision: 0,
+    policy: {
+      allowRuntimeTypeAdjudication: true,
+      allowLlmRelationRepair: true,
+      allowLlmActionRepair: true,
+      runtimeTypeAdjudicationMinConfidence: 0,
+      llmRelationRepairMinConfidence: 0.95,
+      runtimeMutationAuthorized: true,
+      questionComplete: true,
+      commitParent: true,
+    },
+  });
+
+  assert.equal(settlement.questionType, "coding");
+  assert.equal(settlement.relation, "child-probe");
+  assert.equal(settlement.typeMutationAuthorized, true);
+  assert.equal(settlement.relationMutationAuthorized, true);
+  assert.equal(settlement.rejectedProposals.length, 0);
+});
+
 test("combines an LLM type with a deterministic first-parent relation", () => {
   const currentQuestion = createProvisionalCurrentQuestion({
     logicalQuestionUnit: logicalQuestion(),

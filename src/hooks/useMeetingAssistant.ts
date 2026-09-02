@@ -22465,7 +22465,7 @@ export function useMeetingAssistant() {
                 expectedParentRevision: latestParent.revisions,
               })
             : undefined;
-        const authoritativeTypeRelationProposal:
+        const authoritativeTypeProposal:
           | CurrentQuestionSettlementProposal
           | undefined = authoritativeTypeSettlement
           ? {
@@ -22477,27 +22477,11 @@ export function useMeetingAssistant() {
               revision: currentQuestion.revision,
               sourceHash: currentQuestion.sourceHash,
               questionType: authoritativeTypeSettlement.questionType,
-              relation:
-                relationCandidate?.relation ??
-                (orderedRelation?.stage ===
-                  "source-topology-null-hypothesis" &&
-                orderedRelation.relation
-                  ? orderedRelation.relation
-                  : "unknown"),
+              relation: "unknown",
               action: "answer",
-              confidence: Math.min(
-                authoritativeTypeSettlement.confidence,
-                relationCandidate?.confidence ??
-                  orderedRelation?.confidence ??
-                  authoritativeTypeSettlement.confidence
-              ),
+              confidence: authoritativeTypeSettlement.confidence,
               typeEvidenceAuthorized: true,
-              relationEvidenceAuthorized: Boolean(
-                relationCandidate ||
-                  (orderedRelation?.stage ===
-                    "source-topology-null-hypothesis" &&
-                    orderedRelation.relation)
-              ),
+              relationEvidenceAuthorized: false,
               actionEvidenceAuthorized: true,
               expectedParentId: latestParent?.id,
               expectedParentRevision: latestParent?.revisions,
@@ -22526,8 +22510,8 @@ export function useMeetingAssistant() {
           deterministicProposal: authoritativeTypeSettlement
             ? deterministicOrderedRelationProposal
             : localProposal,
-          llmProposal:
-            authoritativeTypeRelationProposal ?? relationProposal,
+          runtimeTypeProposal: authoritativeTypeProposal,
+          runtimeRelationProposal: relationProposal,
           activeParentId: latestParent?.id,
           activeParentRevision: latestParent?.revisions,
           manualCorrectionRevision:
