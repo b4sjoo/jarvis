@@ -50,6 +50,12 @@ export function shouldRequestAdditionalVisualEvidenceBeforeAdvisor(input: {
   );
 }
 
+export function shouldAwaitQuestionOnlyVisualEvidenceCheckBeforeAdvisor(input: {
+  authorizedImageAttached: boolean;
+}) {
+  return !input.authorizedImageAttached;
+}
+
 interface AnswerRecoveryRequestIdentity {
   schemaVersion: 2;
   logicalQuestionUnitId: string;

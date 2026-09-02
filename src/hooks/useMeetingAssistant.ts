@@ -66,6 +66,7 @@ import {
   type AnswerRecoveryAdjudicationRequest,
   type AnswerResolutionAdjudication,
   type EvidenceRequirementAdjudication,
+  shouldAwaitQuestionOnlyVisualEvidenceCheckBeforeAdvisor,
   shouldRequestAdditionalVisualEvidenceBeforeAdvisor,
   shouldRunQuestionOnlyVisualEvidenceCheck,
 } from "@/lib/meeting/answer-recovery-adjudication";
@@ -7072,7 +7073,7 @@ export function useMeetingAssistant() {
                 durationMs: settlement.durationMs,
                 queueWaitMs: settlement.queueWaitMs,
               }),
-              visualEvidenceCheckCompletedBeforeAdvisor: true,
+              visualEvidenceCheckSettledAt: Date.now(),
               visualEvidenceCheckParseDisposition:
                 result?.parseDisposition,
             };
@@ -14320,10 +14321,15 @@ export function useMeetingAssistant() {
       }
     }
 
+    const authorizedImageAttached = Boolean(advisorScreenSourceRead.image);
+    const shouldAwaitVisualEvidenceCheck =
+      shouldAwaitQuestionOnlyVisualEvidenceCheckBeforeAdvisor({
+        authorizedImageAttached,
+      });
     let visualEvidenceCheckOutcome:
       | VisualEvidenceCheckRuntimeOutcome
       | undefined;
-    if (visualEvidenceCheckPromise) {
+    if (visualEvidenceCheckPromise && shouldAwaitVisualEvidenceCheck) {
       const elapsedMs = Math.max(
         0,
         Date.now() - visualEvidenceCheckStartedAt
@@ -14339,10 +14345,23 @@ export function useMeetingAssistant() {
             remainingMs,
             "Question-only visual evidence check deadline expired."
           );
+          if (traceId) {
+            traceStoreRef.current.updateMetadata(traceId, {
+              visualEvidenceCheckCompletedBeforeAdvisor: true,
+              visualEvidenceCheckForegroundWaitDisposition: "completed",
+              visualEvidenceCheckWaitMs: Math.max(
+                0,
+                Date.now() - visualEvidenceCheckStartedAt
+              ),
+            });
+          }
         } catch (error) {
           if (traceId) {
             traceStoreRef.current.updateMetadata(traceId, {
               visualEvidenceCheckDisposition: "deadline-expired",
+              visualEvidenceCheckCompletedBeforeAdvisor: false,
+              visualEvidenceCheckForegroundWaitDisposition:
+                "deadline-expired",
               visualEvidenceCheckWaitMs: Math.max(
                 0,
                 Date.now() - visualEvidenceCheckStartedAt
@@ -14352,9 +14371,30 @@ export function useMeetingAssistant() {
             });
           }
         }
+      } else if (traceId) {
+        traceStoreRef.current.updateMetadata(traceId, {
+          visualEvidenceCheckCompletedBeforeAdvisor: false,
+          visualEvidenceCheckForegroundWaitDisposition:
+            "deadline-elapsed-before-wait",
+          visualEvidenceCheckWaitMs: elapsedMs,
+        });
       }
     }
-    const authorizedImageAttached = Boolean(advisorScreenSourceRead.image);
+    if (
+      traceId &&
+      visualEvidenceCheckPromise &&
+      !shouldAwaitVisualEvidenceCheck
+    ) {
+      traceStoreRef.current.updateMetadata(traceId, {
+        visualEvidenceCheckAppliedToRuntime: false,
+        visualEvidenceCheckAuthorizedImageAttempt: true,
+        visualEvidenceCheckForegroundWaitDisposition:
+          "skipped-authorized-image",
+        visualEvidenceCheckWaitMs: 0,
+        visualEvidenceCheckApplicationReason:
+          "authorized-image-receives-advisor-attempt",
+      });
+    }
     const visualEvidenceCandidate = visualEvidenceCheckOutcome?.leaseAuthorized
       ? visualEvidenceCheckOutcome.candidate
       : undefined;
@@ -14364,18 +14404,6 @@ export function useMeetingAssistant() {
         authorizedImageAttached,
       })
     );
-    if (
-      traceId &&
-      visualEvidenceCandidate?.decision === "visual-missing" &&
-      authorizedImageAttached
-    ) {
-      traceStoreRef.current.updateMetadata(traceId, {
-        visualEvidenceCheckAppliedToRuntime: false,
-        visualEvidenceCheckAuthorizedImageAttempt: true,
-        visualEvidenceCheckApplicationReason:
-          "authorized-image-receives-advisor-attempt",
-      });
-    }
     if (
       shouldRequestAdditionalVisualEvidence &&
       visualEvidenceCandidate &&
