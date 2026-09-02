@@ -171,9 +171,12 @@ import {
 import {
   coordinateOrderedSettlement,
   createOrderedSettlementDeadline,
+  createOrderedSettlementReleaseGate,
   formatOrderedSettlementCoordinatorForTrace,
+  formatOrderedSettlementReleaseForTrace,
   readOrderedSettlementRemainingMs,
   type OrderedSettlementDeadline,
+  type OrderedSettlementReleaseSource,
 } from "@/lib/meeting/ordered-settlement-coordinator";
 import {
   applyEffectiveCurrentQuestionContext,
@@ -22366,10 +22369,12 @@ export function useMeetingAssistant() {
         startedAt: waitStartedAt,
         budgetMs: foregroundWaitBudgetMs,
       });
+      const foregroundReleaseGate = createOrderedSettlementReleaseGate(
+        foregroundDeadline
+      );
       const logicalQuestionLease = createLogicalQuestionUnitLease(
         input.logicalQuestionUnit
       );
-      let advisorReleased = false;
       let waitTimer: number | undefined;
       const resolveOrderedQuestionType = (
         outcome: QuestionTypeAdjudicationRuntimeOutcome | undefined
@@ -22392,10 +22397,16 @@ export function useMeetingAssistant() {
         orderedRelation:
           | OrderedTaskRelationResolutionDecision
           | undefined,
-        waitDisposition: string
+        waitDisposition: string,
+        releaseSource: OrderedSettlementReleaseSource
       ) => {
-        if (advisorReleased) return;
-        advisorReleased = true;
+        const releaseDecision = foregroundReleaseGate.tryRelease({
+          source: releaseSource,
+        });
+        traceStoreRef.current.updateMetadata(input.traceId, {
+          ...formatOrderedSettlementReleaseForTrace(releaseDecision),
+        });
+        if (!releaseDecision.accepted) return;
         if (waitTimer !== undefined) window.clearTimeout(waitTimer);
 
         const leaseAuthorization = authorizeLogicalQuestionUnitLease(
@@ -22804,7 +22815,7 @@ export function useMeetingAssistant() {
       };
 
       const releaseWhenSettled = () => {
-        if (advisorReleased || !typeSettled) return;
+        if (foregroundReleaseGate.isReleased() || !typeSettled) return;
         startRelationResolution();
         const firstParentNeedsCommittedOutputRequest =
           !contextManagerRef.current.getState().activeMeetingTask?.parent;
@@ -22822,37 +22833,39 @@ export function useMeetingAssistant() {
             ? "type-and-ordered-relation-settled-before-deadline"
             : relationWindowRequested
               ? "ordered-relation-settled-before-deadline"
-              : "type-settled-and-released-before-deadline"
+              : "type-settled-and-released-before-deadline",
+          "settled"
         );
       };
 
-      if (foregroundWaitBudgetMs > 0 && !advisorReleased) {
+      if (foregroundWaitBudgetMs > 0 && !foregroundReleaseGate.isReleased()) {
         waitTimer = window.setTimeout(() => {
-        const fallbackType = resolveOrderedQuestionType(
-          settledTypeOutcome
-        ).questionType;
-        const coordinated = coordinateOrderedSettlement({
-          sourceKind: taskRelationHandle?.sourceKind ?? "voice",
-          currentQuestionType: fallbackType,
-          activeMeetingTask:
-            contextManagerRef.current.getState().activeMeetingTask,
-          orderedRelation: settledOrderedRelation,
-        });
-        traceStoreRef.current.updateMetadata(input.traceId, {
-          ...formatOrderedSettlementCoordinatorForTrace(coordinated),
-        });
-        dispatchAdvisor(
-          settledTypeOutcome,
-          coordinated.relation,
-          "deadline-expired-fail-open"
-        );
+          const fallbackType = resolveOrderedQuestionType(
+            settledTypeOutcome
+          ).questionType;
+          const coordinated = coordinateOrderedSettlement({
+            sourceKind: taskRelationHandle?.sourceKind ?? "voice",
+            currentQuestionType: fallbackType,
+            activeMeetingTask:
+              contextManagerRef.current.getState().activeMeetingTask,
+            orderedRelation: settledOrderedRelation,
+          });
+          traceStoreRef.current.updateMetadata(input.traceId, {
+            ...formatOrderedSettlementCoordinatorForTrace(coordinated),
+          });
+          dispatchAdvisor(
+            settledTypeOutcome,
+            coordinated.relation,
+            "deadline-expired-fail-open",
+            "deadline"
+          );
         }, readOrderedSettlementRemainingMs(foregroundDeadline));
       }
 
       if (questionTypeHandle && questionTypeWindowRequested) {
         void questionTypeHandle.outcome.then(
         (outcome) => {
-          if (!advisorReleased) {
+          if (!foregroundReleaseGate.isReleased()) {
             settledTypeOutcome = outcome;
             typeSettled = true;
             releaseWhenSettled();
@@ -22918,7 +22931,7 @@ export function useMeetingAssistant() {
       if (relationWindowRequested && taskRelationHandle) {
         void taskRelationHandle.outcome.then(
           (outcome) => {
-            if (!advisorReleased) return;
+            if (!foregroundReleaseGate.isReleased()) return;
 
             const metadata = {
               taskRelationAdjudicationAppliedToRuntime: false,
@@ -22957,7 +22970,7 @@ export function useMeetingAssistant() {
           )
           .then((gate) => {
             responseOpportunitySettled = true;
-            if (!advisorReleased) {
+            if (!foregroundReleaseGate.isReleased()) {
               traceStoreRef.current.updateMetadata(input.traceId, {
                 ...formatResponseOpportunityGenerationGateForTrace(gate),
                 questionTypeAdjudicationWaitedForResponseOpportunity:

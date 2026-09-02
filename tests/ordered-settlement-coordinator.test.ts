@@ -4,6 +4,7 @@ import type { ActiveMeetingTask } from "../src/lib/meeting/active-meeting-task.j
 import {
   coordinateOrderedSettlement,
   createOrderedSettlementDeadline,
+  createOrderedSettlementReleaseGate,
   readOrderedSettlementRemainingMs,
 } from "../src/lib/meeting/ordered-settlement-coordinator.js";
 import { decideOrderedTaskRelationResolution } from "../src/lib/meeting/task-relation-split-shadow.js";
@@ -34,6 +35,69 @@ test("shares one absolute deadline across ordered settlement stages", () => {
   });
   assert.equal(readOrderedSettlementRemainingMs(deadline, 2_200), 2_800);
   assert.equal(readOrderedSettlementRemainingMs(deadline, 5_100), 0);
+});
+
+test("releases one canonical child result before the shared deadline", () => {
+  const deadline = createOrderedSettlementDeadline({
+    startedAt: 1_000,
+    budgetMs: 4_000,
+  });
+  const gate = createOrderedSettlementReleaseGate(deadline);
+  const canonical = decideOrderedTaskRelationResolution({
+    sourceKind: "voice",
+    currentQuestionType: "coding",
+    activeParentQuestionType: "ai-ml-system-design",
+    hasActiveChild: false,
+    canonical: {
+      schemaVersion: 3,
+      relation: "child-probe",
+      confidence: 0.95,
+      currentQuestionEvidenceSpans: ["implement the merge function"],
+      parentEvidenceSpans: ["enterprise RAG system"],
+    },
+  });
+
+  const canonicalRelease = gate.tryRelease({
+    source: "settled",
+    at: 4_400,
+  });
+  const deadlineRelease = gate.tryRelease({
+    source: "deadline",
+    at: 5_000,
+  });
+
+  assert.equal(canonical.relation, "child-probe");
+  assert.equal(canonicalRelease.accepted, true);
+  assert.equal(deadlineRelease.accepted, false);
+  assert.equal(deadlineRelease.reason, "already-released");
+  assert.equal(gate.readReceipt()?.source, "settled");
+});
+
+test("rejects a late canonical result and releases the deadline fallback once", () => {
+  const deadline = createOrderedSettlementDeadline({
+    startedAt: 1_000,
+    budgetMs: 4_000,
+  });
+  const gate = createOrderedSettlementReleaseGate(deadline);
+
+  const lateCanonical = gate.tryRelease({
+    source: "settled",
+    at: 5_100,
+  });
+  const fallback = gate.tryRelease({
+    source: "deadline",
+    at: 5_100,
+  });
+  const duplicate = gate.tryRelease({
+    source: "settled",
+    at: 5_200,
+  });
+
+  assert.equal(lateCanonical.accepted, false);
+  assert.equal(lateCanonical.reason, "settled-after-deadline");
+  assert.equal(fallback.accepted, true);
+  assert.equal(duplicate.accepted, false);
+  assert.equal(gate.readReceipt()?.source, "deadline");
 });
 
 test("projects a non-parent type to the no-parent null hypothesis", () => {

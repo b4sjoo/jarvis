@@ -22,6 +22,27 @@ export interface OrderedSettlementDeadline {
   budgetMs: number;
 }
 
+export type OrderedSettlementReleaseSource = "settled" | "deadline";
+
+export interface OrderedSettlementReleaseDecision {
+  accepted: boolean;
+  source: OrderedSettlementReleaseSource;
+  at: number;
+  reason:
+    | "released"
+    | "already-released"
+    | "settled-after-deadline";
+}
+
+export interface OrderedSettlementReleaseGate {
+  tryRelease(input: {
+    source: OrderedSettlementReleaseSource;
+    at?: number;
+  }): OrderedSettlementReleaseDecision;
+  isReleased(): boolean;
+  readReceipt(): OrderedSettlementReleaseDecision | undefined;
+}
+
 export function createOrderedSettlementDeadline(input: {
   startedAt: number;
   budgetMs: number;
@@ -39,6 +60,63 @@ export function readOrderedSettlementRemainingMs(
   now = Date.now()
 ) {
   return Math.max(0, deadline.deadlineAt - now);
+}
+
+export function createOrderedSettlementReleaseGate(
+  deadline: OrderedSettlementDeadline
+): OrderedSettlementReleaseGate {
+  let receipt: OrderedSettlementReleaseDecision | undefined;
+  return {
+    tryRelease(input) {
+      const at = input.at ?? Date.now();
+      if (receipt) {
+        return {
+          accepted: false,
+          source: input.source,
+          at,
+          reason: "already-released",
+        };
+      }
+      if (
+        input.source === "settled" &&
+        deadline.budgetMs > 0 &&
+        at > deadline.deadlineAt
+      ) {
+        return {
+          accepted: false,
+          source: input.source,
+          at,
+          reason: "settled-after-deadline",
+        };
+      }
+      receipt = {
+        accepted: true,
+        source: input.source,
+        at,
+        reason: "released",
+      };
+      return { ...receipt };
+    },
+    isReleased() {
+      return Boolean(receipt);
+    },
+    readReceipt() {
+      return receipt ? { ...receipt } : undefined;
+    },
+  };
+}
+
+export function formatOrderedSettlementReleaseForTrace(
+  decision: OrderedSettlementReleaseDecision | undefined
+) {
+  return decision
+    ? {
+        orderedSettlementReleaseAccepted: decision.accepted,
+        orderedSettlementReleaseSource: decision.source,
+        orderedSettlementReleaseAt: decision.at,
+        orderedSettlementReleaseReason: decision.reason,
+      }
+    : {};
 }
 
 export function coordinateOrderedSettlement(input: {
