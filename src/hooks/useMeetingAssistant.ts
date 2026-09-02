@@ -10468,6 +10468,10 @@ export function useMeetingAssistant() {
           latestManualCorrectionTargetRef.current?.logicalQuestionUnit,
         responseRecoveryTarget:
           latestForceAdviseTargetRef.current?.logicalQuestionUnit,
+        responseActionTarget:
+          advisorJob.source === "response-action"
+            ? advisorJob.logicalQuestionUnit
+            : undefined,
         artifactRegenerationTarget:
           advisorJob.source === "artifact-regeneration"
             ? advisorJob.logicalQuestionUnit

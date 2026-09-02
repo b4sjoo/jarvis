@@ -119,4 +119,8 @@ test("first-time phase navigation shares one trace with its manual action", () =
     genericAction,
     /logicalQuestionUnit: responseActionLogicalQuestionUnit/
   );
+  assert.match(
+    source,
+    /responseActionTarget:\s*advisorJob\.source === "response-action"\s*\? advisorJob\.logicalQuestionUnit/
+  );
 });

@@ -197,6 +197,43 @@ test("force advise owns answer authority without inheriting an automatic gate", 
   );
 });
 
+test("response actions authorize the LQU frozen by the explicit action", () => {
+  const responseActionQuestion = {
+    id: "screen-question-a",
+    revision: 2,
+    sessionId: "session-a",
+    runtimeEpoch: 1,
+    currentTurnId: "screen:observation-a",
+    sourceTurnIds: [],
+    sources: [
+      {
+        turnId: "screen:observation-a",
+        text: "Implement an LRU cache",
+        startedAt: 10,
+        endedAt: 20,
+      },
+    ],
+    normalizedText: "Implement an LRU cache",
+    startedAt: 10,
+    updatedAt: 20,
+    compositionReasons: ["visible-screen-question"],
+    boundaryReason: "visible-screen-question" as const,
+    truncated: false,
+  };
+
+  assert.deepEqual(
+    resolveAdvisorLogicalQuestionAuthorizationTarget({
+      jobSource: "response-action",
+      runtimeCurrent: undefined,
+      responseActionTarget: responseActionQuestion,
+    }),
+    {
+      source: "response-action-target",
+      logicalQuestionUnit: responseActionQuestion,
+    }
+  );
+});
+
 test("manual type correction regenerates under its corrected human authority", () => {
   const job = createAdvisorTriggerJob({
     source: "manual-correction",
