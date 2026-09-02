@@ -652,14 +652,12 @@ export const MeetingAssistant = ({
       activeParentTaskId,
       activeParentQuestionType: activeTaskKind,
       artifact: meeting.activeMeetingTask?.parent.whiteboardArtifact,
-      sourceParentTaskId: displayedSuggestionParentTaskId,
-      sourceParentQuestionType: displayedSuggestionParentQuestionType,
+      sourceParentTaskId: activeParentTaskId,
+      sourceParentQuestionType: activeTaskKind,
     });
   }, [
     activeParentTaskId,
     activeTaskKind,
-    displayedSuggestionParentTaskId,
-    displayedSuggestionParentQuestionType,
     meeting.activeMeetingTask?.parent.whiteboardArtifact,
   ]);
   const displaySuggestionSections = useMemo(
