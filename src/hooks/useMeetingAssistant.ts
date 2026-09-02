@@ -32862,8 +32862,8 @@ export function useMeetingAssistant() {
             contextReadScopeOverride: "active-parent-read",
             explicitTaskMutationCommand: {
               kind: "replace-parent",
-              type: correctedType,
-              topic: correctionQuestionText,
+              type: parentAfter.stableKind,
+              topic: parentAfter.topic,
             },
             taskMutationCommittedBeforeAdvisor: true,
           });

@@ -14,6 +14,7 @@ import {
   createTaskLifecycleTransaction,
   reduceTaskLifecycleTransaction,
 } from "../src/lib/meeting/task-lifecycle-reducer.js";
+import { normalizeCanonicalQuestionType } from "../src/lib/meeting/task-taxonomy.js";
 import type {
   ActiveInterviewParent,
   ActiveScreenTask,
@@ -135,9 +136,16 @@ function meetingTask(
 function correctionPlan(input: {
   before: ActiveMeetingTask;
   after: ActiveMeetingTask;
+  settlementOverrides?: Partial<CurrentQuestionSettlementDecision>;
+  sourceQuestion?: string;
 }) {
+  const correctedSettlement = settlement(input.settlementOverrides);
+  const correctedType = normalizeCanonicalQuestionType(
+    input.after.parent.questionType
+  );
+  assert.ok(correctedType && correctedType !== "unknown");
   return buildSettledAdvisorExecutionPlan({
-    settlement: settlement(),
+    settlement: correctedSettlement,
     activeMeetingTask: input.after,
     expectedActiveMeetingTask: input.before,
     preBoundaryQuestionType: input.before.parent.questionType,
@@ -149,11 +157,11 @@ function correctionPlan(input: {
     askFrame: "direct-answer",
     topicDomain: "backend",
     subtaskIntent: "implementation-probe",
-    sourceQuestion: "Implement Merge Sort",
+    sourceQuestion: input.sourceQuestion ?? "Implement Merge Sort",
     explicitTaskMutationCommand: {
       kind: "replace-parent",
-      type: "coding",
-      topic: "Implement Merge Sort",
+      type: correctedType,
+      topic: input.after.parent.topic,
     },
     createdAt: 100,
   });
@@ -234,6 +242,69 @@ test("atomically replaces a corrected parent under one settled plan", () => {
     currentActiveMeetingTask: reduction.activeMeetingTask,
   });
   assert.equal(postAuthorization.authorized, true);
+});
+
+test("commits a related parent retype while preserving the parent topic", () => {
+  const beforeParent = parent("general-system-design", {
+    topic: "Design the indexing and serving path",
+  });
+  const afterParent = parent("coding", {
+    topic: beforeParent.topic,
+    playbook: playbook(),
+    playbookPhase: "implementation_validation",
+    phaseProgress: { implementation_validation: true },
+    sourceQuestionUnitId: "question-parent-origin",
+    sourceQuestionRevision: 1,
+    settlementId: "settlement-related-correction",
+    revisions: 4,
+  });
+  const before = meetingTask(beforeParent);
+  const after = meetingTask(afterParent, undefined, 4);
+  const correctedSettlement = settlement({
+    settlementId: "settlement-related-correction",
+    logicalQuestionUnitId: "question-followup",
+    sourceTurnIds: ["turn-followup"],
+    sourceHash: "source-followup",
+    relation: "followup-parent",
+    activeParentId: beforeParent.id,
+    activeParentRevision: beforeParent.revisions,
+  });
+  const plan = correctionPlan({
+    before,
+    after,
+    settlementOverrides: correctedSettlement,
+    sourceQuestion: "A future team may use a separate analytics store.",
+  });
+
+  assert.equal(plan.taskMutationPolicy.kind, "replace-parent");
+  assert.equal(
+    plan.taskMutationPolicy.kind === "replace-parent"
+      ? plan.taskMutationPolicy.topic
+      : undefined,
+    beforeParent.topic
+  );
+
+  const reduction = reduceTaskLifecycleTransaction({
+    transaction: createTaskLifecycleTransaction({
+      plan,
+      manualCorrectionRevision: 1,
+      proposedActiveInterviewTask: afterParent,
+    }),
+    currentSessionId: "session-a",
+    currentRuntimeEpoch: 4,
+    currentLogicalQuestionUnitId: "question-followup",
+    currentLogicalQuestionRevision: 2,
+    currentManualCorrectionRevision: 1,
+    currentTaskRuntimeRevision: 3,
+    currentActiveInterviewTask: beforeParent,
+  });
+
+  assert.equal(reduction.authorized, true);
+  assert.equal(reduction.mutationApplied, true);
+  assert.equal(reduction.reason, "committed");
+  assert.equal(reduction.parentAfterId, beforeParent.id);
+  assert.equal(reduction.parentAfterType, "coding");
+  assert.equal(reduction.parent?.topic, beforeParent.topic);
 });
 
 test("consumes a settled follow-up as one same-parent context update", () => {
