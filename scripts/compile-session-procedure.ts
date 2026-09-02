@@ -108,8 +108,9 @@ async function main() {
   const manualActions = parseJsonLines<ManualRuntimeActionEventV1>(
     manualActionText
   );
-  const runtimeRegressionSteps = parseJsonLines<RuntimeRegressionStepEventV1>(
-    runtimeStepText
+  const runtimeRegressionSteps = await enrichRuntimeRegressionStepText(
+    sessionDirectory,
+    parseJsonLines<RuntimeRegressionStepEventV1>(runtimeStepText)
   );
   const projections = projectionText
     ? ((JSON.parse(projectionText) as {
@@ -127,6 +128,7 @@ async function main() {
     .update(transcriptText)
     .update(manualActionText)
     .update(runtimeStepText)
+    .update(JSON.stringify(runtimeRegressionSteps))
     .update(projectionText)
     .update(traceSummaryText)
     .update(JSON.stringify(termCorrectionRecords))
@@ -194,6 +196,47 @@ async function main() {
       null,
       2
     )}\n`
+  );
+}
+
+async function enrichRuntimeRegressionStepText(
+  sessionDirectory: string,
+  events: RuntimeRegressionStepEventV1[]
+) {
+  return Promise.all(
+    events.map(async (event) => {
+      if (
+        event.event !== "injected" ||
+        event.inputKind !== "them-text" ||
+        event.text?.trim() ||
+        !event.traceId
+      ) {
+        return event;
+      }
+      const traceText = await readOptionalText(
+        path.join(sessionDirectory, "traces", `${event.traceId}.json`)
+      );
+      if (!traceText) return event;
+      const traceFile = JSON.parse(traceText) as {
+        trace?: {
+          inputs?: Array<{
+            label?: string;
+            value?: unknown;
+            metadata?: Record<string, unknown>;
+          }>;
+        };
+      };
+      const input = traceFile.trace?.inputs?.find(
+        (candidate) =>
+          candidate.label === "runtime regression text input" &&
+          candidate.metadata?.scenarioStepId === event.scenarioStepId &&
+          candidate.metadata?.ordinal === event.ordinal &&
+          typeof candidate.value === "string"
+      );
+      return input && typeof input.value === "string" && input.value.trim()
+        ? { ...event, text: input.value.trim() }
+        : event;
+    })
   );
 }
 
