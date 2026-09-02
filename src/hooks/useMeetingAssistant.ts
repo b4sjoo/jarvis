@@ -22485,7 +22485,7 @@ export function useMeetingAssistant() {
               actionEvidenceAuthorized: true,
               expectedParentId: latestParent?.id,
               expectedParentRevision: latestParent?.revisions,
-              reasons: ["ordered-relation-runtime-adjudication-input"],
+              reasons: ["ordered-question-type-runtime-adjudication-input"],
             }
           : undefined;
         const deterministicOrderedRelationProposal =
