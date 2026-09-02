@@ -66,6 +66,7 @@ import {
   type AnswerRecoveryAdjudicationRequest,
   type AnswerResolutionAdjudication,
   type EvidenceRequirementAdjudication,
+  shouldRequestAdditionalVisualEvidenceBeforeAdvisor,
   shouldRunQuestionOnlyVisualEvidenceCheck,
 } from "@/lib/meeting/answer-recovery-adjudication";
 import {
@@ -14352,9 +14353,29 @@ export function useMeetingAssistant() {
         }
       }
     }
+    const authorizedImageAttached = Boolean(advisorScreenSourceRead.image);
+    const shouldRequestAdditionalVisualEvidence = Boolean(
+      visualEvidenceCheckOutcome?.leaseAuthorized &&
+        shouldRequestAdditionalVisualEvidenceBeforeAdvisor({
+          decision: visualEvidenceCheckOutcome.candidate?.decision,
+          authorizedImageAttached,
+        })
+    );
     if (
+      traceId &&
       visualEvidenceCheckOutcome?.leaseAuthorized &&
       visualEvidenceCheckOutcome.candidate?.decision === "visual-missing" &&
+      authorizedImageAttached
+    ) {
+      traceStoreRef.current.updateMetadata(traceId, {
+        visualEvidenceCheckAppliedToRuntime: false,
+        visualEvidenceCheckAuthorizedImageAttempt: true,
+        visualEvidenceCheckApplicationReason:
+          "authorized-image-receives-advisor-attempt",
+      });
+    }
+    if (
+      shouldRequestAdditionalVisualEvidence &&
       advisorJob.logicalQuestionUnit &&
       visualEvidenceQuestion
     ) {

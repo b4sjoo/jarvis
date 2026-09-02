@@ -9,6 +9,7 @@ import {
   decideAnswerRecoveryLedgerTransition,
   isAnswerRecoveryOutputTruncated,
   parseAnswerRecoveryAdjudicationOutput,
+  shouldRequestAdditionalVisualEvidenceBeforeAdvisor,
   shouldRunQuestionOnlyVisualEvidenceCheck,
 } from "../src/lib/meeting/answer-recovery-adjudication.js";
 
@@ -31,6 +32,30 @@ test("runs the question-only visual lease for automatic and manual recovery sour
   ] as const) {
     assert.equal(shouldRunQuestionOnlyVisualEvidenceCheck(source), false);
   }
+});
+
+test("gives an authorized image one Advisor attempt before requesting another", () => {
+  assert.equal(
+    shouldRequestAdditionalVisualEvidenceBeforeAdvisor({
+      decision: "visual-missing",
+      authorizedImageAttached: false,
+    }),
+    true
+  );
+  assert.equal(
+    shouldRequestAdditionalVisualEvidenceBeforeAdvisor({
+      decision: "visual-missing",
+      authorizedImageAttached: true,
+    }),
+    false
+  );
+  assert.equal(
+    shouldRequestAdditionalVisualEvidenceBeforeAdvisor({
+      decision: "visual-sufficient",
+      authorizedImageAttached: false,
+    }),
+    false
+  );
 });
 
 test("keeps post-answer resolution separate from question-only visual evidence", () => {
