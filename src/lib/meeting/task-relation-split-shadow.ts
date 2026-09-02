@@ -5,11 +5,12 @@ import {
 } from "./runtime-inference.js";
 import type { RuntimeInferenceRuntimeJob } from "./runtime-inference-runtime.js";
 import { parseRuntimeJsonObject } from "./runtime-json-object.js";
-import type {
-  LlmTaskRelationAdjudication,
-  RuntimeTaskRelation,
-  TaskRelationAdjudicationRequest,
-  TaskRelationSourceEvidenceRole,
+import {
+  getTaskRelationCurrentQuestionSourceTexts,
+  type LlmTaskRelationAdjudication,
+  type RuntimeTaskRelation,
+  type TaskRelationAdjudicationRequest,
+  type TaskRelationSourceEvidenceRole,
 } from "./task-relation-adjudication.js";
 import {
   areCompatibleParentContinuityTypes,
@@ -733,9 +734,7 @@ export function buildTaskRelationAffinityRequests(input: {
     input.runtimeEpoch
   );
   const currentQuestion = {
-    sourceTexts: input.request.currentQuestion.sourceTurns.map(
-      (source) => source.text
-    ),
+    sourceTexts: getTaskRelationCurrentQuestionSourceTexts(input.request),
   };
   const parentPayload: ParentAffinitySemanticPayload = {
     currentQuestion,
@@ -968,9 +967,7 @@ export function buildTaskRelationCanonicalShadowRequest(input: {
 }): TaskRelationCanonicalShadowRequest {
   const semanticPayload: CanonicalRelationSemanticPayload = {
     currentQuestion: {
-      sourceTexts: input.request.currentQuestion.sourceTurns.map(
-        (source) => source.text
-      ),
+      sourceTexts: getTaskRelationCurrentQuestionSourceTexts(input.request),
     },
     activeParent: {
       topic: input.request.activeParent.topic,

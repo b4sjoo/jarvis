@@ -193,6 +193,7 @@ export interface TaskRelationAdjudicationRequest {
   sourceSettlementId: string;
   sourceHash: string;
   currentQuestion: TaxonomyAdjudicationProjection;
+  currentQuestionEvidenceTexts?: string[];
   activeParent: TaskRelationParentCapsule;
   activeChild?: TaskRelationChildCapsule;
   recentSourceEvidence: TaskRelationSourceEvidence[];
@@ -433,6 +434,7 @@ export function buildTaskRelationAdjudicationRequest(input: {
   recentTurns?: TranscriptTurn[];
   ownerEvidenceSelection?: TaskRelationOwnerEvidenceSelectionInput;
   recentSourceContext?: AdvisorSourceOwnedSemanticContext;
+  currentQuestionEvidenceTexts?: string[];
 }): TaskRelationAdjudicationRequest {
   const parent = input.activeMeetingTask.parent;
   const child = input.activeMeetingTask.child;
@@ -598,6 +600,11 @@ export function buildTaskRelationAdjudicationRequest(input: {
     currentQuestion: projectLogicalQuestionForAdjudication(
       input.logicalQuestionUnit
     ),
+    currentQuestionEvidenceTexts: uniqueStrings(
+      (input.currentQuestionEvidenceTexts ?? []).map((text) =>
+        boundText(text, TASK_RELATION_ADJUDICATION_MAX_SOURCE_EVIDENCE_CHARS)
+      )
+    ),
     activeParent,
     activeChild: child
         ? {
@@ -618,6 +625,18 @@ export function buildTaskRelationAdjudicationRequest(input: {
         }
       : undefined,
   };
+}
+
+export function getTaskRelationCurrentQuestionSourceTexts(
+  request: Pick<
+    TaskRelationAdjudicationRequest,
+    "currentQuestion" | "currentQuestionEvidenceTexts"
+  >
+) {
+  return uniqueStrings([
+    ...request.currentQuestion.sourceTurns.map((source) => source.text),
+    ...(request.currentQuestionEvidenceTexts ?? []),
+  ]);
 }
 
 export function decideTaskRelationAdjudicationEligibility(input: {
@@ -1123,9 +1142,7 @@ export function buildTaskRelationAdjudicationPrompts(
 ) {
   const semanticPayload: TaskRelationSemanticPayload = {
     currentQuestion: {
-      sourceTexts: request.currentQuestion.sourceTurns.map(
-        (source) => source.text
-      ),
+      sourceTexts: getTaskRelationCurrentQuestionSourceTexts(request),
     },
     activeParent: {
       topic: request.activeParent.topic,
@@ -1285,9 +1302,8 @@ export function parseTaskRelationAdjudicationOutput(
   const parentEvidenceSpans = normalizedParentEvidence.value.map((span) =>
     span.trim()
   );
-  const currentEvidenceCorpus = request.currentQuestion.sourceTurns
-    .map((source) => source.text)
-    .join("\n");
+  const currentEvidenceCorpus =
+    getTaskRelationCurrentQuestionSourceTexts(request).join("\n");
   const parentEvidenceCorpus = buildParentEvidenceCorpus(request);
   if (
     !allSpansGrounded(
@@ -1395,9 +1411,8 @@ function parseDirectTaskRelationAdjudication(
   const parentEvidenceSpans = (
     candidate.parentEvidenceSpans as string[]
   ).map((span) => span.trim());
-  const currentEvidenceCorpus = request.currentQuestion.sourceTurns
-    .map((source) => source.text)
-    .join("\n");
+  const currentEvidenceCorpus =
+    getTaskRelationCurrentQuestionSourceTexts(request).join("\n");
   if (
     !allSpansGrounded(
       currentQuestionEvidenceSpans,
@@ -1546,6 +1561,13 @@ export function formatTaskRelationAdjudicationForTrace(input: {
     taskRelationAdjudicationSourceHash: input.request?.sourceHash,
     taskRelationAdjudicationInputChars:
       input.request?.currentQuestion.projectedChars,
+    taskRelationAdjudicationCurrentQuestionEvidenceCount:
+      input.request?.currentQuestionEvidenceTexts?.length ?? 0,
+    taskRelationAdjudicationCurrentQuestionEvidenceChars:
+      input.request?.currentQuestionEvidenceTexts?.reduce(
+        (total, text) => total + text.length,
+        0
+      ) ?? 0,
     taskRelationAdjudicationOriginalChars:
       input.request?.currentQuestion.originalChars,
     taskRelationAdjudicationParentId:

@@ -4,6 +4,7 @@ import path from "node:path";
 import test from "node:test";
 import type { ActiveMeetingTask } from "../src/lib/meeting/active-meeting-task.js";
 import {
+  buildTaskRelationAdjudicationPrompts,
   buildTaskRelationAdjudicationRequest,
 } from "../src/lib/meeting/task-relation-adjudication.js";
 import {
@@ -154,6 +155,48 @@ test("builds clean child and parent affinity prompts", () => {
   assert.match(parentPrompt.systemPrompt, /shorter identifying clause/i);
   assert.match(childPrompt.systemPrompt, /"d":"r\|n\|u"/i);
   assert.match(parentPrompt.systemPrompt, /"d":"r\|i\|u"/i);
+});
+
+test("shares bounded screen focus evidence across relation prompts without changing source identity", () => {
+  const baseline = buildTaskRelationAdjudicationRequest({
+    logicalQuestionUnit: unit("Implement LRU cache"),
+    activeMeetingTask: task(),
+  });
+  const base = buildTaskRelationAdjudicationRequest({
+    logicalQuestionUnit: unit("Implement LRU cache"),
+    activeMeetingTask: task(),
+    currentQuestionEvidenceTexts: [
+      "LRUCache.put method lines 40-45 updating existing key in cache",
+    ],
+  });
+  const split = buildTaskRelationAffinityRequests({
+    request: base,
+    sessionId: "session-a",
+    runtimeEpoch: 4,
+    manualCorrectionRevision: 2,
+  });
+  const parentPrompt = buildTaskRelationAffinityPrompts(split.parent);
+  const directPrompt = buildTaskRelationAdjudicationPrompts(base);
+  const canonical = buildTaskRelationCanonicalShadowRequest({
+    request: base,
+    sessionId: "session-a",
+    runtimeEpoch: 4,
+    manualCorrectionRevision: 2,
+  });
+  const canonicalPrompt = buildTaskRelationCanonicalShadowPrompts(canonical);
+
+  assert.match(parentPrompt.userMessage, /LRUCache\.put method lines 40-45/);
+  assert.match(directPrompt.userMessage, /LRUCache\.put method lines 40-45/);
+  assert.match(canonicalPrompt.userMessage, /LRUCache\.put method lines 40-45/);
+  assert.equal(base.currentQuestion.text.includes("LRUCache.put"), false);
+  assert.equal(base.sourceHash, baseline.sourceHash);
+});
+
+test("wires committed screen focus evidence into the relation scheduler", () => {
+  assert.match(
+    meetingHookSource,
+    /currentQuestionEvidenceTexts:\s*screenSourcePacket\.visualEvidence\s*\.focusedEvidenceSummary/
+  );
 });
 
 test("parses grounded affinity decisions with operation-specific evidence", () => {

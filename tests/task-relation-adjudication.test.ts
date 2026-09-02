@@ -521,6 +521,30 @@ test("parses one direct canonical relation without requiring atomic facets", () 
   );
 });
 
+test("accepts grounded current-question evidence from a screen focus summary", () => {
+  const request = buildTaskRelationAdjudicationRequest({
+    logicalQuestionUnit: unit("Review the current retrieval implementation"),
+    activeMeetingTask: activeTask(),
+    currentQuestionEvidenceTexts: [
+      "retrieval merge lines 40-45 update an existing document entry",
+    ],
+  });
+  const parsed = parseTaskRelationAdjudicationOutput(
+    JSON.stringify(
+      directOutput({
+        currentQuestionEvidenceSpans: ["retrieval merge lines 40-45"],
+      })
+    ),
+    request
+  );
+
+  assert.equal(parsed.ok, true);
+  assert.deepEqual(
+    parsed.ok ? parsed.value.currentQuestionEvidenceSpans : undefined,
+    ["retrieval merge lines 40-45"]
+  );
+});
+
 test("normalizes only the known singular parent evidence alias and records it", () => {
   const request = buildTaskRelationAdjudicationRequest({
     logicalQuestionUnit: unit(

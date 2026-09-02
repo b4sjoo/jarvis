@@ -20142,6 +20142,7 @@ export function useMeetingAssistant() {
       deterministicProposal,
       narrowScreenRelease,
       manualCorrectionOwned = false,
+      currentQuestionEvidenceTexts,
     }: {
       turn: Pick<TranscriptTurn, "speaker"> &
         Partial<Pick<TranscriptTurn, "text">>;
@@ -20154,6 +20155,7 @@ export function useMeetingAssistant() {
       deterministicProposal?: CurrentQuestionSettlementProposal;
       narrowScreenRelease?: NarrowScreenRelationReleaseInput;
       manualCorrectionOwned?: boolean;
+      currentQuestionEvidenceTexts?: string[];
     }): TaskRelationAdjudicationScheduleHandle | undefined => {
       if (!logicalQuestionUnit) return;
       const contextState = contextManagerRef.current.getState();
@@ -20245,6 +20247,7 @@ export function useMeetingAssistant() {
         recentTurns: contextState.transcriptTurns,
         ownerEvidenceSelection,
         recentSourceContext: recentSourceContextSelection.context,
+        currentQuestionEvidenceTexts,
       });
       const splitHandle = scheduleTaskRelationSplitRuntime({
         traceId,
@@ -28655,6 +28658,13 @@ export function useMeetingAssistant() {
                 deterministicProposal:
                   screenDeterministicSettlementProposal,
                 narrowScreenRelease: narrowScreenReleaseInput,
+                currentQuestionEvidenceTexts: screenSourcePacket.visualEvidence
+                  .focusedEvidenceSummary
+                  ? [
+                      screenSourcePacket.visualEvidence
+                        .focusedEvidenceSummary,
+                    ]
+                  : undefined,
               });
           }
         }
