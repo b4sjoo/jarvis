@@ -170,7 +170,10 @@ import {
 } from "@/lib/meeting/logical-question-effective-projection";
 import {
   coordinateOrderedSettlement,
+  createOrderedSettlementDeadline,
   formatOrderedSettlementCoordinatorForTrace,
+  readOrderedSettlementRemainingMs,
+  type OrderedSettlementDeadline,
 } from "@/lib/meeting/ordered-settlement-coordinator";
 import {
   applyEffectiveCurrentQuestionContext,
@@ -20973,13 +20976,20 @@ export function useMeetingAssistant() {
       screenBoundaryPrior?: boolean;
       screenTypeEvidenceAuthorized?: boolean;
       waitBudgetMs: number;
+      deadline?: OrderedSettlementDeadline;
     }) => {
       const startedAt = Date.now();
+      const deadline =
+        input.deadline ??
+        createOrderedSettlementDeadline({
+          startedAt,
+          budgetMs: input.waitBudgetMs,
+        });
       let affinityOutcome: TaskRelationSplitAffinityOutcome | undefined;
       let canonicalOutcome: TaskRelationSplitCanonicalResult | undefined;
       let waitDisposition = "affinity-unavailable";
       const readRemainingBudget = () =>
-        Math.max(0, input.waitBudgetMs - (Date.now() - startedAt));
+        readOrderedSettlementRemainingMs(deadline);
       if (input.handle.affinityOutcome) {
         try {
           affinityOutcome = await withTimeout(
@@ -21073,7 +21083,10 @@ export function useMeetingAssistant() {
       );
       const metadata = {
         ...formatOrderedTaskRelationResolutionForTrace(decision),
-        taskRelationOrderedResolutionWaitBudgetMs: input.waitBudgetMs,
+        taskRelationOrderedResolutionWaitBudgetMs: deadline.budgetMs,
+        taskRelationOrderedResolutionDeadlineAt: deadline.deadlineAt,
+        taskRelationOrderedResolutionRemainingMs:
+          readOrderedSettlementRemainingMs(deadline),
         taskRelationOrderedResolutionSourceKind: input.sourceKind,
         taskRelationOrderedResolutionWaitMs: Math.max(
           0,
@@ -22349,6 +22362,10 @@ export function useMeetingAssistant() {
         );
 
       const waitStartedAt = Date.now();
+      const foregroundDeadline = createOrderedSettlementDeadline({
+        startedAt: waitStartedAt,
+        budgetMs: foregroundWaitBudgetMs,
+      });
       const logicalQuestionLease = createLogicalQuestionUnitLease(
         input.logicalQuestionUnit
       );
@@ -22720,6 +22737,10 @@ export function useMeetingAssistant() {
         questionTypeAdjudicationFirstParentBudgetApplied:
           questionTypeBudget.firstParentBudgetApplied,
         questionTypeAdjudicationWaitDisposition: "pending",
+        orderedSettlementForegroundDeadlineAt:
+          foregroundDeadline.deadlineAt,
+        orderedSettlementForegroundBudgetMs:
+          foregroundDeadline.budgetMs,
       });
       let settledTypeOutcome:
         | QuestionTypeAdjudicationRuntimeOutcome
@@ -22766,6 +22787,7 @@ export function useMeetingAssistant() {
           activeMeetingTask:
             contextManagerRef.current.getState().activeMeetingTask,
           waitBudgetMs: VOICE_ORDERED_RELATION_FOREGROUND_BUDGET_MS,
+          deadline: foregroundDeadline,
         }).then(
           (resolution) => {
             settledOrderedRelation = resolution.decision;
@@ -22840,7 +22862,7 @@ export function useMeetingAssistant() {
           coordinated.relation,
           "deadline-expired-fail-open"
         );
-        }, foregroundWaitBudgetMs);
+        }, readOrderedSettlementRemainingMs(foregroundDeadline));
       }
 
       if (questionTypeHandle && questionTypeWindowRequested) {

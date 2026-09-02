@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ActiveMeetingTask } from "../src/lib/meeting/active-meeting-task.js";
-import { coordinateOrderedSettlement } from "../src/lib/meeting/ordered-settlement-coordinator.js";
+import {
+  coordinateOrderedSettlement,
+  createOrderedSettlementDeadline,
+  readOrderedSettlementRemainingMs,
+} from "../src/lib/meeting/ordered-settlement-coordinator.js";
 import { decideOrderedTaskRelationResolution } from "../src/lib/meeting/task-relation-split-shadow.js";
 
 test("runs the existing matrix without a Relation handle for a first parent", () => {
@@ -15,6 +19,21 @@ test("runs the existing matrix without a Relation handle for a first parent", ()
   assert.equal(decision.relation.stage, "runtime-matrix");
   assert.equal(decision.relation.relation, "new-parent");
   assert.equal("responseOnly" in decision.relation, false);
+});
+
+test("shares one absolute deadline across ordered settlement stages", () => {
+  const deadline = createOrderedSettlementDeadline({
+    startedAt: 1_000,
+    budgetMs: 4_000,
+  });
+
+  assert.deepEqual(deadline, {
+    startedAt: 1_000,
+    deadlineAt: 5_000,
+    budgetMs: 4_000,
+  });
+  assert.equal(readOrderedSettlementRemainingMs(deadline, 2_200), 2_800);
+  assert.equal(readOrderedSettlementRemainingMs(deadline, 5_100), 0);
 });
 
 test("projects a non-parent type to the no-parent null hypothesis", () => {

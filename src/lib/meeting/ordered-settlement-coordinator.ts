@@ -16,6 +16,31 @@ export interface OrderedSettlementCoordinatorDecision {
   reason: string;
 }
 
+export interface OrderedSettlementDeadline {
+  startedAt: number;
+  deadlineAt: number;
+  budgetMs: number;
+}
+
+export function createOrderedSettlementDeadline(input: {
+  startedAt: number;
+  budgetMs: number;
+}): OrderedSettlementDeadline {
+  const budgetMs = Math.max(0, input.budgetMs);
+  return {
+    startedAt: input.startedAt,
+    deadlineAt: input.startedAt + budgetMs,
+    budgetMs,
+  };
+}
+
+export function readOrderedSettlementRemainingMs(
+  deadline: Pick<OrderedSettlementDeadline, "deadlineAt">,
+  now = Date.now()
+) {
+  return Math.max(0, deadline.deadlineAt - now);
+}
+
 export function coordinateOrderedSettlement(input: {
   sourceKind: "voice" | "screen" | "mixed";
   currentQuestionType: unknown;

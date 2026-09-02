@@ -655,6 +655,11 @@ test("wires provider faults to finalization while stale source ownership fails c
   assert.match(resolver, /canonical-deadline-expired/);
   assert.match(resolver, /finalizeWithNullHypothesis:\s*true/);
   assert.match(resolver, /cancelForegroundWork\?\.\(\)/);
+  assert.match(meetingHookSource, /deadline:\s*foregroundDeadline/);
+  assert.match(
+    meetingHookSource,
+    /readOrderedSettlementRemainingMs\(foregroundDeadline\)/
+  );
   assert.match(meetingHookSource, /ordered-chain-error-unresolved/);
   assert.match(
     meetingHookSource,
