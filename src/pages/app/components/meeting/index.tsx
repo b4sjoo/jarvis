@@ -83,6 +83,7 @@ import type {
   AnswerDeliveryPresentation,
   RuntimeRegressionRunnerPresentation,
 } from "@/lib/meeting";
+import { buildHumanEvaluationAttemptEvidenceV2 } from "@/lib/meeting/human-evaluation-attempt-projection";
 import {
   MEETING_FOCUS_ACTION_EVENT,
   MEETING_FOCUS_SNAPSHOT_EVENT,
@@ -92,7 +93,6 @@ import {
   getActiveMeetingTaskId,
   hasManualQuestionTypeCorrectionPresentationTarget,
   buildMeetingAnswerDisplayModel,
-  buildHumanEvaluationObservedSnapshotV2,
   decideForceAdviseEligibility,
   evaluateTaskSettlementTupleCompatibilityV2,
   findQuestionHumanEvaluationForTrace,
@@ -2791,6 +2791,7 @@ export const MeetingAssistant = ({
                     <>
                       <TraceHumanEvaluationPanel
                         trace={evaluationTrace}
+                        traces={meeting.traces}
                         detectedQuestionType={formatDetectedQuestionType(
                           evaluationTrace.metadata?.questionType
                         )}
@@ -5740,6 +5741,7 @@ function formatEvaluationTaskRelation(
 
 const TraceHumanEvaluationPanel = ({
   trace,
+  traces,
   detectedQuestionType,
   detectedPlaybook,
   detectedPlaybookPhase,
@@ -5762,6 +5764,7 @@ const TraceHumanEvaluationPanel = ({
   onUpdatePreparationArtifactEvaluation,
 }: {
   trace: MeetingTrace;
+  traces: MeetingTrace[];
   detectedQuestionType?: string;
   detectedPlaybook?: string;
   detectedPlaybookPhase?: string;
@@ -5907,7 +5910,10 @@ const TraceHumanEvaluationPanel = ({
     "boolean"
       ? trace.metadata.currentQuestionSettlementParentMutationAuthorized
       : undefined;
-  const observedSnapshotV2 = buildHumanEvaluationObservedSnapshotV2(trace);
+  const observedSnapshotV2 = buildHumanEvaluationAttemptEvidenceV2({
+    trace,
+    traces,
+  }).observed;
   const questionTypeObservation = projectQuestionTypeObservation({
     metadata: trace.metadata,
     fallbackCurrentQuestionType: detectedQuestionType,

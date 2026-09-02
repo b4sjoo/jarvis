@@ -82,6 +82,14 @@ export function projectObservedParentAction(input: {
   const lifecycleCommand = input.lifecycleCommand;
   if (lifecycleCommand === "create-parent") return "create";
   if (lifecycleCommand === "replace-parent") {
+    if (
+      !input.parentBeforeId ||
+      !input.parentAfterId ||
+      !normalizeComparableType(input.parentBeforeType) ||
+      !normalizeComparableType(input.parentAfterType)
+    ) {
+      return undefined;
+    }
     return isSameParentRetype(input) ? "retype" : "create";
   }
   if (lifecycleCommand === "attach-child") return "attach-child";

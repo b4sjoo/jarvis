@@ -139,7 +139,10 @@ import {
   createCodingChildPhaseState,
   preserveOrCreateCodingChildPhaseState,
 } from "@/lib/meeting/coding-child-phase";
-import { materializeHumanEvaluationAttemptProjectionV2 } from "@/lib/meeting/human-evaluation-attempt-projection";
+import {
+  buildHumanEvaluationAttemptEvidenceV2,
+  materializeHumanEvaluationAttemptProjectionV2,
+} from "@/lib/meeting/human-evaluation-attempt-projection";
 import { validateHumanEvaluationAttemptSubjectV2 } from "@/lib/meeting/human-evaluation-attempt";
 import { toHumanEvaluationCollectionProvenance } from "@/lib/meeting/session-evaluation-provenance";
 import {
@@ -781,7 +784,6 @@ import {
   upsertTraceHumanEvaluation,
   upsertQuestionHumanEvaluation,
   appendHumanGroundTruthEventV2,
-  buildHumanEvaluationObservedSnapshotV2,
   buildHumanGroundTruthSubjectV2,
   resolveObservedQuestionSourceKind,
   createHumanGroundTruthEventV2,
@@ -3784,6 +3786,7 @@ export function useMeetingAssistant() {
     (trace: MeetingTrace) => {
       const result = materializeHumanEvaluationAttemptProjectionV2({
         trace,
+        traces: traceStoreRef.current.getTraces(),
         currentSessionId: contextManagerRef.current.getState().sessionId,
         events: humanGroundTruthEventsV2Ref.current,
         projections: humanEvaluationProjectionsV2Ref.current,
@@ -8965,12 +8968,16 @@ export function useMeetingAssistant() {
         questionEvaluationsRef.current.find(
           (candidate) => candidate.traceIds.includes(traceId)
         );
+      const attemptEvidence = buildHumanEvaluationAttemptEvidenceV2({
+        trace,
+        traces: traceStoreRef.current.getTraces(),
+      });
       const derivedSubject = buildHumanGroundTruthSubjectV2({
         trace,
         evaluation,
       });
       const frozenTarget = options.evaluationTarget;
-      const subject = frozenTarget
+      const baseSubject = frozenTarget
         ? {
             attemptId:
               frozenTarget.attemptId ??
@@ -8990,13 +8997,22 @@ export function useMeetingAssistant() {
             sourceTurnIds: [...frozenTarget.sourceTurnIds],
           }
         : derivedSubject;
+      const subject = {
+        ...baseSubject,
+        traceIds: Array.from(
+          new Set([
+            ...baseSubject.traceIds,
+            ...attemptEvidence.traceIds,
+          ])
+        ),
+      };
       commitHumanGroundTruthV2({
         sessionId,
         subject,
         fact,
         options,
         sourceTraceId: traceId,
-        observed: buildHumanEvaluationObservedSnapshotV2(trace),
+        observed: attemptEvidence.observed,
         legacyEvaluation: evaluation,
       });
     },

@@ -1026,6 +1026,12 @@ test("projects only a same-parent cross-type replacement as retype", () => {
     buildHumanEvaluationObservedSnapshotV2(trace).parentAction,
     "create"
   );
+
+  delete trace.metadata.taskLifecycleParentBeforeType;
+  assert.equal(
+    buildHumanEvaluationObservedSnapshotV2(trace).parentAction,
+    undefined
+  );
 });
 
 test("prefers a committed source transition over provisional parent authorization", () => {
@@ -1270,6 +1276,101 @@ test("delays attempt materialization until an effective settlement exists", () =
   assert.equal(result.changed, false);
   assert.equal(result.reason, "settlement-incomplete");
   assert.equal(result.projection, undefined);
+});
+
+test("joins explicit correction lifecycle evidence into the terminal attempt projection", () => {
+  const regeneration = buildSettledAttemptTrace({
+    id: "trace_correction_regeneration",
+    status: "success",
+    questionType: "ai-ml-system-design",
+  });
+  regeneration.metadata = {
+    ...regeneration.metadata,
+    settledExecutionPlanTaskMutationCommand: "replace-parent",
+    parentCorrectionTraceId: "trace_correction_lifecycle",
+    manualQuestionTypeCorrectionId: "correction_1",
+    effectiveCurrentQuestionSettlementSourceHash: "source-correction",
+    currentQuestionSettlementSourceHash: "source-correction",
+    effectiveCurrentQuestionSettlementRuntimeEpoch: 4,
+    currentQuestionSettlementRuntimeEpoch: 4,
+  };
+  const correction = buildSettledAttemptTrace({
+    id: "trace_correction_lifecycle",
+    status: "success",
+    questionType: "ai-ml-system-design",
+  });
+  correction.metadata = {
+    ...correction.metadata,
+    manualQuestionTypeCorrectionId: "correction_1",
+    effectiveCurrentQuestionSettlementSourceHash: "source-correction",
+    currentQuestionSettlementSourceHash: "source-correction",
+    effectiveCurrentQuestionSettlementRuntimeEpoch: 4,
+    currentQuestionSettlementRuntimeEpoch: 4,
+    taskLifecycleAuthorized: true,
+    taskLifecycleMutationApplied: true,
+    settledExecutionPlanTaskMutationCommand: "replace-parent",
+    taskLifecycleParentBeforeId: "parent-design",
+    taskLifecycleParentAfterId: "parent-design",
+    taskLifecycleParentBeforeType: "general-system-design",
+    taskLifecycleParentAfterType: "ai-ml-system-design",
+  };
+
+  const result = materializeHumanEvaluationAttemptProjectionV2({
+    trace: regeneration,
+    traces: [regeneration, correction],
+    currentSessionId: "session_retry",
+    events: [],
+    projections: [],
+  });
+
+  assert.equal(result.projection?.observed?.parentAction, "retype");
+  assert.deepEqual(result.projection?.subject.traceIds, [
+    "trace_correction_regeneration",
+    "trace_correction_lifecycle",
+  ]);
+});
+
+test("does not guess a replacement action from an incoherent correction trace", () => {
+  const regeneration = buildSettledAttemptTrace({
+    id: "trace_invalid_correction_regeneration",
+    status: "success",
+    questionType: "ai-ml-system-design",
+  });
+  regeneration.metadata = {
+    ...regeneration.metadata,
+    settledExecutionPlanTaskMutationCommand: "replace-parent",
+    parentCorrectionTraceId: "trace_invalid_correction_lifecycle",
+    manualQuestionTypeCorrectionId: "correction_2",
+  };
+  const correction = buildSettledAttemptTrace({
+    id: "trace_invalid_correction_lifecycle",
+    status: "success",
+    questionType: "ai-ml-system-design",
+  });
+  correction.metadata = {
+    ...correction.metadata,
+    manualQuestionTypeCorrectionId: "different-correction",
+    taskLifecycleAuthorized: true,
+    taskLifecycleMutationApplied: true,
+    settledExecutionPlanTaskMutationCommand: "replace-parent",
+    taskLifecycleParentBeforeId: "parent-design",
+    taskLifecycleParentAfterId: "parent-design",
+    taskLifecycleParentBeforeType: "general-system-design",
+    taskLifecycleParentAfterType: "ai-ml-system-design",
+  };
+
+  const result = materializeHumanEvaluationAttemptProjectionV2({
+    trace: regeneration,
+    traces: [regeneration, correction],
+    currentSessionId: "session_retry",
+    events: [],
+    projections: [],
+  });
+
+  assert.equal(result.projection?.observed?.parentAction, undefined);
+  assert.deepEqual(result.projection?.subject.traceIds, [
+    "trace_invalid_correction_regeneration",
+  ]);
 });
 
 test("projects committed screen response-only scope and code mutation", () => {
