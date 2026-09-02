@@ -256,7 +256,7 @@ export function selectSourceOwnedSemanticContext(input: {
       source.endedAt <= currentStartedAt
   );
   if (!eligibleSources.length) {
-    return { reason: "candidate-is-current-source", consumeCandidate: true };
+    return { reason: "candidate-is-current-source", consumeCandidate: false };
   }
   const latestContextSource = eligibleSources.at(-1);
   if (

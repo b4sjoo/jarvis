@@ -152,7 +152,7 @@ test("rejects cross-parent or intervening substantive setup context", () => {
   );
 });
 
-test("consumes a setup candidate already owned by the current LQU", () => {
+test("retains a setup candidate while its own LQU is current", () => {
   const setup = turn("turn-setup", "The cache is write heavy.", 100, 200);
   const candidate = createSourceOwnedSetupCandidate({
     turn: setup,
@@ -171,7 +171,7 @@ test("consumes a setup candidate already owned by the current LQU", () => {
   });
 
   assert.equal(selection.reason, "candidate-is-current-source");
-  assert.equal(selection.consumeCandidate, true);
+  assert.equal(selection.consumeCandidate, false);
 });
 
 test("groups multiple no-parent informative turns across a long question", () => {
