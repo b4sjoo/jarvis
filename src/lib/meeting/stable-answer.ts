@@ -600,6 +600,7 @@ export function formatStableAnswerCommitForTrace(input: {
     requestedArtifacts: requested,
     authorizedArtifacts: input.authorizedArtifacts,
     candidateMutatedArtifacts: candidateMutations,
+    committedArtifacts: input.stable ? candidateMutations : [],
     lifecycleResetArtifacts: input.lifecycleResetArtifacts ?? [],
     artifactMutationRejectedReasons: candidateMutations
       .filter(

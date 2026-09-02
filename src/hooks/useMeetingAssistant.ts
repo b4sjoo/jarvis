@@ -31409,9 +31409,6 @@ export function useMeetingAssistant() {
           parentAuthorizedArtifacts: screenParentAuthorizedArtifacts,
           screenAuthorizedArtifacts:
             screenPresentationAuthorizedArtifacts,
-          committedArtifacts: nextStableAnswer
-            ? screenPresentationAuthorizedArtifacts
-            : [],
           previousCodeRevision:
             previousStableAnswer?.sections.code.revision,
           nextCodeRevision:

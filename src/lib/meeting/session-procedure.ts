@@ -113,6 +113,7 @@ export interface SessionProcedureStepV1 {
     relation?: string;
     contextReadScope?: string;
     settlementDisposition?: string;
+    taskMutationCommand?: string;
     taskMutationDisposition?: string;
     requestedArtifacts?: string[];
     stableAnswerCommitDisposition?: string;
@@ -707,6 +708,10 @@ function attachRuntimeTraceSummary(
   const settlement = readRecord(summary.currentQuestionSettlement);
   const plan = readRecord(summary.settledExecutionPlan);
   const taskBoundary = readRecord(summary.taskBoundary);
+  const taskMutationCommand = readString(plan?.taskMutationCommand);
+  const taskMutationCommittedBeforeAdvisor = readBoolean(
+    plan?.taskMutationCommittedBeforeAdvisor
+  );
   return {
     ...step,
     observed: removeUndefined({
@@ -752,7 +757,11 @@ function attachRuntimeTraceSummary(
         readString(plan?.contextReadScope) ??
         readString(settlement?.contextReadScope),
       settlementDisposition: readString(settlement?.disposition),
-      taskMutationDisposition: readString(taskBoundary?.mutationDisposition),
+      taskMutationCommand,
+      taskMutationDisposition:
+        taskMutationCommand && taskMutationCommittedBeforeAdvisor
+          ? "commit-before-advisor"
+          : readString(taskBoundary?.mutationDisposition),
       requestedArtifacts: readStringArray(summary.requestedArtifacts),
       stableAnswerCommitDisposition: readString(
         summary.stableAnswerCommitDisposition

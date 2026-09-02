@@ -284,6 +284,8 @@ test("projects exact runtime source and publication evidence without changing re
         },
         settledExecutionPlan: {
           contextReadScope: "active-child-read",
+          taskMutationCommand: "attach-child",
+          taskMutationCommittedBeforeAdvisor: true,
         },
         taskBoundary: { mutationDisposition: "commit-before-advisor" },
         requestedArtifacts: ["answer", "code", "complexity"],
@@ -320,6 +322,7 @@ test("projects exact runtime source and publication evidence without changing re
     relation: "child-probe",
     contextReadScope: "active-child-read",
     settlementDisposition: "committed-child",
+    taskMutationCommand: "attach-child",
     taskMutationDisposition: "commit-before-advisor",
     requestedArtifacts: ["answer", "code", "complexity"],
     stableAnswerCommitDisposition: "committed",

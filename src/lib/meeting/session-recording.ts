@@ -639,6 +639,8 @@ export interface SessionCompactTraceSummary {
     contextReadScope?: string;
     artifactIntent?: string;
     responseOwnerSource?: string;
+    taskMutationCommand?: string;
+    taskMutationCommittedBeforeAdvisor?: boolean;
     modelRoute?: string;
     providerId?: string;
     playbookId?: string;
@@ -5739,6 +5741,14 @@ export function buildCompactTraceSummary({
       responseOwnerSource: readFirstString(
         metadataSources,
         "settledExecutionPlanResponseOwnerSource"
+      ),
+      taskMutationCommand: readFirstString(
+        metadataSources,
+        "settledExecutionPlanTaskMutationCommand"
+      ),
+      taskMutationCommittedBeforeAdvisor: readFirstBoolean(
+        metadataSources,
+        "settledExecutionPlanTaskMutationCommittedBeforeAdvisor"
       ),
       modelRoute: readFirstString(
         metadataSources,

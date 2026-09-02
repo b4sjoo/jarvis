@@ -2823,6 +2823,7 @@ test("records compact current-question settlement and execution-plan evidence", 
       settledExecutionPlanContextReadScope: "active-parent-read",
       settledExecutionPlanArtifactIntent: "revise-whiteboard",
       settledExecutionPlanTaskMutationCommand: "create-parent",
+      settledExecutionPlanTaskMutationCommittedBeforeAdvisor: true,
       settledExecutionPlanResponseOwnerSource: "committed-parent",
       settledExecutionPlanModelRoute: "main",
       settledExecutionPlanProviderId: "main-provider",
@@ -2979,6 +2980,16 @@ test("records compact current-question settlement and execution-plan evidence", 
     (summary.settledExecutionPlan as Record<string, unknown>)
       .contextReadScope,
     "active-parent-read"
+  );
+  assert.equal(
+    (summary.settledExecutionPlan as Record<string, unknown>)
+      .taskMutationCommand,
+    "create-parent"
+  );
+  assert.equal(
+    (summary.settledExecutionPlan as Record<string, unknown>)
+      .taskMutationCommittedBeforeAdvisor,
+    true
   );
   assert.deepEqual(summary.modelGeneration, {
     telemetryVersion: 1,

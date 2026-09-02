@@ -331,7 +331,36 @@ test("does not report a stable commit when publication produced no stable or pen
   assert.equal(trace.stableAnswerCommitDisposition, "rejected");
   assert.equal(trace.stableAnswerCommitReason, "candidate-not-published");
   assert.deepEqual(trace.candidateMutatedArtifacts, ["answer"]);
+  assert.deepEqual(trace.committedArtifacts, []);
   assert.deepEqual(trace.lifecycleResetArtifacts, ["code", "complexity"]);
+});
+
+test("reports only section deltas from a published stable answer as committed artifacts", () => {
+  const stable = commitStableAnswerRevision({
+    candidate: suggestion(
+      "coding-visible",
+      "Answer: Implement it.\nCode:\n```python\nprint(1)\n```\nComplexity: O(1)"
+    ),
+    authorizedArtifacts: ["answer", "code", "complexity"],
+    taskId: "coding-parent",
+    logicalQuestionUnitId: "coding-question",
+    logicalQuestionRevision: 1,
+  });
+  assert.ok(stable);
+
+  const trace = formatStableAnswerCommitForTrace({
+    stable,
+    decision: { disposition: "committed", reason: "authorized" },
+    authorizedArtifacts: ["answer", "code", "complexity"],
+    requestedArtifacts: ["answer", "code", "complexity"],
+    candidateMutatedArtifacts: ["answer", "code", "complexity"],
+  });
+
+  assert.deepEqual(trace.committedArtifacts, [
+    "answer",
+    "code",
+    "complexity",
+  ]);
 });
 
 test("locks delivery after a sufficiently long overlapping me turn", () => {
