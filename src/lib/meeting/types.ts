@@ -709,6 +709,7 @@ export interface ActiveInterviewChild {
   artifactId?: string;
   basedOnTurnIds: string[];
   basedOnObservationIds: string[];
+  latestScreenObservationId?: string;
   returnCapsule?: ParentReturnCapsule;
   phaseState?: ActiveBranchPhaseState;
 }
@@ -846,6 +847,7 @@ export interface ActiveInterviewParent {
   originQuestionId?: string;
   startTurnId?: string;
   startObservationId?: string;
+  latestScreenObservationId?: string;
   promptTranscriptStartTurnId?: string;
   canonicalQuestionSourceTurnIds?: string[];
   sourceQuestionUnitId?: string;

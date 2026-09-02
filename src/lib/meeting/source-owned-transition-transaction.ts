@@ -111,6 +111,10 @@ export interface SourceOwnedTransitionPreparationResult {
   parentAfterRevision?: number;
   childBeforeId?: string;
   childAfterId?: string;
+  screenEvidenceParentBeforeObservationId?: string;
+  screenEvidenceParentAfterObservationId?: string;
+  screenEvidenceChildBeforeObservationId?: string;
+  screenEvidenceChildAfterObservationId?: string;
   phaseBefore?: string;
   phaseAfter?: string;
   progressBefore: Record<string, boolean>;
@@ -321,6 +325,14 @@ export function formatSourceOwnedTransitionForTrace(
       commitResult?.parentAfterRevision,
     sourceTransitionChildBeforeId: commitResult?.childBeforeId,
     sourceTransitionChildAfterId: commitResult?.childAfterId,
+    sourceTransitionScreenEvidenceParentBeforeObservationId:
+      commitResult?.screenEvidenceParentBeforeObservationId,
+    sourceTransitionScreenEvidenceParentAfterObservationId:
+      commitResult?.screenEvidenceParentAfterObservationId,
+    sourceTransitionScreenEvidenceChildBeforeObservationId:
+      commitResult?.screenEvidenceChildBeforeObservationId,
+    sourceTransitionScreenEvidenceChildAfterObservationId:
+      commitResult?.screenEvidenceChildAfterObservationId,
     sourceTransitionReturnCapsuleParentId:
       commitResult?.task?.child?.returnCapsule?.parentId,
     sourceTransitionReturnCapsulePhase:
@@ -474,6 +486,10 @@ function applyTransition(
         originQuestionId: candidate.questionInstanceId,
         startTurnId: candidate.sourceTurnIds[0],
         startObservationId: candidate.sourceObservationIds[0],
+        latestScreenObservationId:
+          candidate.source === "screen"
+            ? candidate.sourceObservationIds.at(-1)
+            : undefined,
         promptTranscriptStartTurnId: candidate.sourceTurnIds[0],
         canonicalQuestionSourceTurnIds: [...candidate.sourceTurnIds],
         admission: createParentAdmissionRecord({
@@ -538,6 +554,10 @@ function applyTransition(
         originQuestionId: candidate.questionInstanceId,
         startTurnId: candidate.sourceTurnIds[0],
         startObservationId: candidate.sourceObservationIds[0],
+        latestScreenObservationId:
+          candidate.source === "screen"
+            ? candidate.sourceObservationIds.at(-1)
+            : undefined,
         promptTranscriptStartTurnId: candidate.sourceTurnIds[0],
         canonicalQuestionSourceTurnIds: [...candidate.sourceTurnIds],
         parentContextHandoff: undefined,
@@ -590,6 +610,11 @@ function applyTransition(
             basedOnObservationIds: [
               ...candidate.sourceObservationIds,
             ],
+            latestScreenObservationId:
+              candidate.source === "screen"
+                ? candidate.sourceObservationIds.at(-1) ??
+                  currentTask.child.latestScreenObservationId
+                : currentTask.child.latestScreenObservationId,
             phaseState: preserveOrCreateCodingChildPhaseState({
               questionType: candidate.questionType,
               existing: currentTask.child.phaseState,
@@ -647,6 +672,10 @@ function applyTransition(
           basedOnObservationIds: [
             ...candidate.sourceObservationIds,
           ],
+          latestScreenObservationId:
+            candidate.source === "screen"
+              ? candidate.sourceObservationIds.at(-1)
+              : undefined,
           returnCapsule: createParentReturnCapsule(currentTask, now),
           phaseState,
         },
@@ -692,6 +721,11 @@ function applyTransition(
           ? [...capsule.allowedFactAnchorIds]
           : currentTask.supportedFactAnchors,
         child: undefined,
+        latestScreenObservationId:
+          candidate.source === "screen"
+            ? candidate.sourceObservationIds.at(-1) ??
+              currentTask.latestScreenObservationId
+            : currentTask.latestScreenObservationId,
         updatedAt: now,
         expiresAt: candidate.expiresAt,
         revisions: currentTask.revisions + 1,
@@ -710,9 +744,15 @@ function applyTransition(
     candidate.phaseDecision,
     currentTask.playbookPhase
   );
+  const nextScreenObservationId =
+    candidate.source === "screen"
+      ? candidate.sourceObservationIds.at(-1) ??
+        currentTask.latestScreenObservationId
+      : currentTask.latestScreenObservationId;
   if (
     nextPhase === currentTask.playbookPhase &&
-    sameProgress(nextProgress, currentTask.phaseProgress)
+    sameProgress(nextProgress, currentTask.phaseProgress) &&
+    nextScreenObservationId === currentTask.latestScreenObservationId
   ) {
     return {
       task: currentTask,
@@ -730,6 +770,7 @@ function applyTransition(
       ),
       playbookPhase: nextPhase,
       phaseProgress: nextProgress,
+      latestScreenObservationId: nextScreenObservationId,
       updatedAt: now,
       expiresAt: candidate.expiresAt,
       revisions: currentTask.revisions + 1,
@@ -858,6 +899,8 @@ function snapshotTask(task: ActiveInterviewParent | undefined) {
     parentType: task?.stableKind,
     parentRevision: task?.revisions,
     childId: task?.child?.id,
+    parentScreenObservationId: task?.latestScreenObservationId,
+    childScreenObservationId: task?.child?.latestScreenObservationId,
     phase: task?.playbookPhase,
     progress: { ...(task?.phaseProgress ?? {}) },
   };
@@ -876,6 +919,14 @@ function formatBeforeAfter(
     parentAfterRevision: after.parentRevision,
     childBeforeId: before.childId,
     childAfterId: after.childId,
+    screenEvidenceParentBeforeObservationId:
+      before.parentScreenObservationId,
+    screenEvidenceParentAfterObservationId:
+      after.parentScreenObservationId,
+    screenEvidenceChildBeforeObservationId:
+      before.childScreenObservationId,
+    screenEvidenceChildAfterObservationId:
+      after.childScreenObservationId,
     phaseBefore: before.phase,
     phaseAfter: after.phase,
     progressBefore: before.progress,

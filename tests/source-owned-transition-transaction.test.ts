@@ -615,6 +615,7 @@ test("creates a screen parent before its model produces an answer", () => {
   assert.equal(result.task?.source, "screen");
   assert.equal(result.task?.stableKind, "general-system-design");
   assert.equal(result.task?.startObservationId, "screen-a");
+  assert.equal(result.task?.latestScreenObservationId, "screen-a");
   assert.equal(result.task?.latestUsefulAnswer, undefined);
   assert.equal(result.task?.admission?.durability, "durable");
   assert.equal(result.task?.admission?.action, "create-parent");
@@ -732,6 +733,10 @@ test("keeps a screen child committed when the model is cancelled", () => {
   assert.deepEqual(
     result.task?.child?.basedOnObservationIds,
     ["screen-child"]
+  );
+  assert.equal(
+    result.task?.child?.latestScreenObservationId,
+    "screen-child"
   );
   assert.equal(
     sourceOwnedTransitionSurvivesModelOutcome(result, "cancelled"),

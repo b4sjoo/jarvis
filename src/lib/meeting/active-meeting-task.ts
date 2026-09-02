@@ -56,6 +56,7 @@ export interface ActiveMeetingParent {
   originQuestionId?: string;
   startTurnId?: string;
   startObservationId?: string;
+  latestScreenObservationId?: string;
   promptTranscriptStartTurnId?: string;
   canonicalQuestionSourceTurnIds?: string[];
   sourceQuestionUnitId?: string;
@@ -77,6 +78,7 @@ export interface ActiveMeetingChild {
   artifactId?: string;
   basedOnTurnIds: string[];
   basedOnObservationIds: string[];
+  latestScreenObservationId?: string;
   returnCapsule?: ParentReturnCapsule;
   phaseState?: ActiveBranchPhaseState;
 }
@@ -263,7 +265,9 @@ export function buildActiveMeetingTask(input: {
 
   const screen = screenAttachment
     ? buildScreenContext(screenAttachment, latestObservation)
-    : undefined;
+    : interviewParent
+      ? buildCanonicalScreenContext(interviewParent, latestObservation)
+      : undefined;
 
   const parent = interviewParent
     ? buildParentFromInterviewTask(interviewParent)
@@ -273,7 +277,11 @@ export function buildActiveMeetingTask(input: {
 
   if (!parent) return undefined;
 
-  const source = computeTaskSource(screenAttachment, interviewParent);
+  const source = computeTaskSource(
+    screenAttachment,
+    interviewParent,
+    Boolean(screen)
+  );
   const child = interviewParent?.child
     ? buildChild(interviewParent.child)
     : undefined;
@@ -627,6 +635,7 @@ function buildParentFromInterviewTask(
     originQuestionId: task.originQuestionId,
     startTurnId: task.startTurnId,
     startObservationId: task.startObservationId,
+    latestScreenObservationId: task.latestScreenObservationId,
     promptTranscriptStartTurnId: task.promptTranscriptStartTurnId,
     canonicalQuestionSourceTurnIds: task.canonicalQuestionSourceTurnIds
       ? [...task.canonicalQuestionSourceTurnIds]
@@ -711,6 +720,7 @@ function buildParentFromScreenTask(task: ActiveScreenTask): ActiveMeetingParent 
     updatedAt: task.updatedAt,
     expiresAt: task.expiresAt,
     startObservationId: task.basedOnObservationId,
+    latestScreenObservationId: task.basedOnObservationId,
     revisions: 0,
   };
 }
@@ -720,6 +730,7 @@ function buildChild(task: RuntimeActiveInterviewChild): ActiveMeetingChild {
     ...task,
     basedOnTurnIds: [...task.basedOnTurnIds],
     basedOnObservationIds: [...task.basedOnObservationIds],
+    latestScreenObservationId: task.latestScreenObservationId,
     returnCapsule: cloneParentReturnCapsule(task.returnCapsule),
     phaseState: cloneBranchPhaseState(task.phaseState),
   };
@@ -770,15 +781,37 @@ function buildScreenContext(
   };
 }
 
+function buildCanonicalScreenContext(
+  task: ActiveInterviewParent,
+  observation: ScreenObservation | undefined
+): ActiveMeetingScreenContext | undefined {
+  const observationId =
+    task.child?.latestScreenObservationId ??
+    task.latestScreenObservationId;
+  if (!observationId || observation?.id !== observationId) return undefined;
+
+  return {
+    activeScreenTaskId: `canonical-screen:${observationId}`,
+    observationId,
+    basedOnObservationId: observationId,
+    captureTarget: observation.captureTarget,
+    question: task.child?.question ?? task.topic,
+  };
+}
+
 function computeTaskSource(
   activeScreenTask: ActiveScreenTask | undefined,
-  activeInterviewTask: ActiveInterviewParent | undefined
+  activeInterviewTask: ActiveInterviewParent | undefined,
+  hasCanonicalScreen: boolean
 ): ActiveMeetingTaskSource {
   if (activeScreenTask && activeInterviewTask) {
     if (activeInterviewTask.source === "voice") return "mixed";
     return activeScreenTask.basedOnTurnIds.length ? "mixed" : "screen";
   }
   if (activeScreenTask) return "screen";
+  if (hasCanonicalScreen && activeInterviewTask) {
+    return activeInterviewTask.source === "screen" ? "screen" : "mixed";
+  }
   return "voice";
 }
 

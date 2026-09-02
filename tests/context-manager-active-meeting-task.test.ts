@@ -5,6 +5,7 @@ import { buildSpeechBiasContext } from "../src/lib/meeting/speech-bias.js";
 import type {
   ActiveInterviewParent,
   ActiveScreenTask,
+  ScreenObservation,
 } from "../src/lib/meeting/types.js";
 import {
   clearTestTaskRuntime,
@@ -51,6 +52,70 @@ test("context manager exposes parent task as canonical id for mixed state", () =
   assert.equal(state.activeMeetingTask?.source, "mixed");
   assert.equal(state.activeMeetingTask?.parent.id, "parent_1");
   assert.equal(state.activeMeetingTask?.screen?.activeScreenTaskId, "screen_task_1");
+});
+
+test("projects the latest authorized screen from the active branch", () => {
+  const manager = new MeetingContextManager();
+  manager.addScreenObservation(
+    makeObservation("parent-screen", "PARENT_SCREEN_TEXT")
+  );
+  manager.addScreenObservation(
+    makeObservation("child-screen", "CHILD_SCREEN_TEXT")
+  );
+  manager.addScreenObservation(
+    makeObservation("unrelated-screen", "UNRELATED_SCREEN_TEXT")
+  );
+  const resumedManager = new MeetingContextManager();
+  resumedManager.addScreenObservation(
+    makeObservation("parent-screen", "PARENT_SCREEN_TEXT")
+  );
+  resumedManager.addScreenObservation(
+    makeObservation("child-screen", "CHILD_SCREEN_TEXT")
+  );
+  setTestTaskRuntime(manager, {
+    parent: makeInterviewTask({
+      source: "screen",
+      stableKind: "ai-ml-system-design",
+      startObservationId: "parent-screen",
+      latestScreenObservationId: "parent-screen",
+      child: {
+        id: "child-coding",
+        createdAt: now,
+        updatedAt: now + 1,
+        questionType: "coding",
+        relation: "child-probe",
+        intent: "implementation-probe",
+        question: "Implement the retrieval merge.",
+        basedOnTurnIds: [],
+        basedOnObservationIds: ["child-screen"],
+        latestScreenObservationId: "child-screen",
+      },
+    }),
+  });
+
+  const childState = manager.getState();
+  assert.equal(
+    childState.activeMeetingTask?.screen?.observationId,
+    "child-screen"
+  );
+  const childPrompt = manager.buildAdvisorPromptContext();
+  assert.match(childPrompt.screenContext, /CHILD_SCREEN_TEXT/);
+  assert.doesNotMatch(childPrompt.screenContext, /PARENT_SCREEN_TEXT/);
+  assert.doesNotMatch(childPrompt.screenContext, /UNRELATED_SCREEN_TEXT/);
+
+  setTestTaskRuntime(resumedManager, {
+    parent: makeInterviewTask({
+      source: "screen",
+      stableKind: "ai-ml-system-design",
+      startObservationId: "parent-screen",
+      latestScreenObservationId: "parent-screen",
+    }),
+  });
+  const resumedParentState = resumedManager.getState();
+  assert.equal(
+    resumedParentState.activeMeetingTask?.screen?.observationId,
+    "parent-screen"
+  );
 });
 
 test("context manager clears the canonical task runtime", () => {
@@ -285,5 +350,18 @@ function makeTurn(id: string, text: string) {
     endedAt: now + 1,
     isFinal: true,
     source: "system-audio" as const,
+  };
+}
+
+function makeObservation(
+  id: string,
+  visualSummary?: string
+): ScreenObservation {
+  return {
+    id,
+    capturedAt: now,
+    source: "hotkey",
+    changed: true,
+    visualSummary,
   };
 }

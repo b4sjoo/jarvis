@@ -10388,11 +10388,11 @@ export function useMeetingAssistant() {
           logicalQuestionUnit: advisorJob.logicalQuestionUnit,
           sourceKind:
             settlementOverride?.sourceKind ??
-            (promptContext.taskRuntime.screenAttachment
+            (promptContext.activeMeetingTask?.screen
               ? "mixed"
               : "voice"),
-          sourceObservationIds: promptContext.taskRuntime.screenAttachment
-            ? [promptContext.taskRuntime.screenAttachment.observationId]
+          sourceObservationIds: promptContext.activeMeetingTask?.screen
+            ? [promptContext.activeMeetingTask.screen.observationId]
             : [],
         })
       : undefined;
@@ -11352,7 +11352,7 @@ export function useMeetingAssistant() {
     const advisorScreenScopeDecision = decideAdvisorScreenScope({
       triggerSource: advisorJob.source,
       relation: advisorTaskSignals.taskRelation,
-      hasActiveScreenTask: Boolean(promptContext.taskRuntime.screenAttachment),
+      hasActiveScreenTask: Boolean(promptContext.activeMeetingTask?.screen),
       taskMutationAuthorized: taskMutationAuthorization.authorized,
     });
     promptContext = applyAdvisorScreenScopeToPromptContext(
@@ -11535,14 +11535,14 @@ export function useMeetingAssistant() {
     const currentQuestionSourceKind =
       currentQuestionSettlement?.sourceKind ??
       (advisorJob.source === "live-turn"
-        ? promptContext.taskRuntime.screenAttachment
+        ? promptContext.activeMeetingTask?.screen
           ? "mixed"
           : "voice"
         : "screen");
     const currentQuestionSourceObservationIds =
       currentQuestionSettlement?.sourceObservationIds ??
-      (promptContext.taskRuntime.screenAttachment
-        ? [promptContext.taskRuntime.screenAttachment.observationId]
+      (promptContext.activeMeetingTask?.screen
+        ? [promptContext.activeMeetingTask.screen.observationId]
         : []);
     let provisionalCurrentQuestion:
       | ReturnType<typeof createProvisionalCurrentQuestion>
@@ -12471,7 +12471,7 @@ export function useMeetingAssistant() {
           logicalQuestionUnit: advisorJob.logicalQuestionUnit,
           source: resolveAdvisorTaskEvidenceSource({
             triggerSource: advisorJob.source,
-            hasActiveScreenTask: Boolean(promptContext.taskRuntime.screenAttachment),
+            hasActiveScreenTask: Boolean(promptContext.activeMeetingTask?.screen),
           }),
           questionInstanceId: questionLineage?.questionInstanceId,
           playbook: advisorRuntimePlaybook,
@@ -13218,6 +13218,9 @@ export function useMeetingAssistant() {
         advisorJob.expectedParentId,
       activeMeetingTask: originalPromptContext.activeMeetingTask,
       screenObservations: advisorSourceReadContext.screenObservations,
+      preferredObservationIds:
+        settledExecutionPlan?.sourceObservationIds ??
+        currentQuestionSettlement?.sourceObservationIds,
       sourceVoiceTurnIds:
         advisorJob.logicalQuestionUnit?.sourceTurnIds ??
         promptContext.advisorPromptSourceTurnIds,
@@ -15166,7 +15169,7 @@ export function useMeetingAssistant() {
           : undefined);
       const advisorEvidenceSource = resolveAdvisorTaskEvidenceSource({
         triggerSource: advisorJob.source,
-        hasActiveScreenTask: Boolean(promptContext.taskRuntime.screenAttachment),
+        hasActiveScreenTask: Boolean(promptContext.activeMeetingTask?.screen),
       });
       const precommittedLifecycleCommand =
         settledExecutionPlan?.taskMutationCommittedBeforeAdvisor
@@ -38648,6 +38651,9 @@ function updateInterviewTaskContinuityForAnswer({
                 ...generatedChild.basedOnObservationIds,
               ])
             ),
+            latestScreenObservationId:
+              generatedChild.latestScreenObservationId ??
+              existingTask.child.latestScreenObservationId,
           }
         : generatedChild;
     const whiteboardArtifact = whiteboardMutationAuthorized
@@ -38692,8 +38698,22 @@ function updateInterviewTaskContinuityForAnswer({
   }
 
   if (continuityDecision.branch === "preserve") {
+    const latestScreenObservationId =
+      source === "screen" && observationId
+        ? observationId
+        : existingTask?.latestScreenObservationId;
     return {
-      task: existingTask,
+      task:
+        existingTask &&
+        latestScreenObservationId !== existingTask.latestScreenObservationId
+          ? {
+              ...existingTask,
+              latestScreenObservationId,
+              updatedAt: now,
+              expiresAt,
+              revisions: existingTask.revisions + 1,
+            }
+          : existingTask,
       startedNewParent: false,
       clearedParent: false,
     };
@@ -38762,6 +38782,8 @@ function updateInterviewTaskContinuityForAnswer({
         startTurnId:
           canonicalQuestionSourceTurnIds?.[0] ?? latestTurn?.id,
         startObservationId: observationId,
+        latestScreenObservationId:
+          source === "screen" ? observationId : undefined,
         promptTranscriptStartTurnId:
           canonicalQuestionSourceTurnIds?.[0] ?? latestTurn?.id,
         canonicalQuestionSourceTurnIds:
@@ -38842,6 +38864,10 @@ function updateInterviewTaskContinuityForAnswer({
           ? summaryDecision.text
           : existingTask.latestUsefulAnswer,
       child: relation === "resume-parent" ? undefined : existingTask.child,
+      latestScreenObservationId:
+        source === "screen" && observationId
+          ? observationId
+          : existingTask.latestScreenObservationId,
       revisions: existingTask.revisions + 1,
     },
     startedNewParent: false,
@@ -38885,6 +38911,7 @@ function buildInterviewParentFromScreenTask(
     updatedAt: task.updatedAt,
     expiresAt: task.expiresAt,
     startObservationId: task.basedOnObservationId,
+    latestScreenObservationId: task.basedOnObservationId,
     revisions: 1,
   };
 }
@@ -38923,6 +38950,7 @@ function buildCorrectionParentFromActiveMeetingTask(
     originQuestionId: task.parent.originQuestionId,
     startTurnId: task.parent.startTurnId,
     startObservationId: task.parent.startObservationId,
+    latestScreenObservationId: task.parent.latestScreenObservationId,
     promptTranscriptStartTurnId: task.parent.promptTranscriptStartTurnId,
     canonicalQuestionSourceTurnIds:
       task.parent.canonicalQuestionSourceTurnIds
@@ -38993,6 +39021,9 @@ function buildCorrectionParentFromProvisionalQuestion({
         ? [...logicalQuestionUnit.sourceTurnIds]
         : undefined,
     startObservationId: suggestion?.basedOnObservationIds[
+      suggestion.basedOnObservationIds.length - 1
+    ],
+    latestScreenObservationId: suggestion?.basedOnObservationIds[
       suggestion.basedOnObservationIds.length - 1
     ],
     revisions: 0,
@@ -39338,6 +39369,7 @@ function buildActiveInterviewChild({
     }),
     basedOnTurnIds: latestTurn ? [latestTurn.id] : [],
     basedOnObservationIds: observationId ? [observationId] : [],
+    latestScreenObservationId: observationId,
     phaseState: createCodingChildPhaseState({
       questionType,
       playbook,

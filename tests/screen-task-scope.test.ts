@@ -253,10 +253,65 @@ test("attaches only the full screenshot bound to the same parent and runtime", (
   assert.deepEqual(formatAdvisorScreenSourceReadForTrace(decision), {
     sourceScreenObservationId: "observation-1",
     sourceScreenParentId: "parent-1",
+    sourceScreenSelectionSource: "active-branch",
     sourceVoiceTurnIds: ["turn-58-63"],
     sourceReadDisposition: "attached",
     sourceScreenImageAttached: true,
   });
+});
+
+test("prefers an exact settlement observation over the active branch screen", () => {
+  const decision = resolveAdvisorScreenSourceRead({
+    mode: "screen-anchored",
+    expectedSessionId: "session-1",
+    currentSessionId: "session-1",
+    expectedRuntimeEpoch: 4,
+    currentRuntimeEpoch: 4,
+    expectedParentId: "parent-1",
+    activeMeetingTask: {
+      id: "task-1",
+      runtimeRevision: 1,
+      source: "screen",
+      parent: {
+        id: "parent-1",
+        questionType: "coding",
+        topic: "Explain the highlighted lines",
+        playbookPhase: "implementation_validation",
+        phaseProgress: {},
+        supportedFactAnchors: [],
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      screen: {
+        activeScreenTaskId: "canonical-screen:branch-screen",
+        observationId: "branch-screen",
+        basedOnObservationId: "branch-screen",
+      },
+    },
+    screenObservations: [
+      {
+        id: "recovery-screen",
+        capturedAt: 1,
+        source: "hotkey",
+        imageBase64: "recovery-image",
+        changed: true,
+      },
+      {
+        id: "branch-screen",
+        capturedAt: 2,
+        source: "hotkey",
+        imageBase64: "branch-image",
+        changed: true,
+      },
+    ],
+    preferredObservationIds: ["recovery-screen"],
+    providerSupportsImages: true,
+  });
+
+  assert.equal(decision.disposition, "attached");
+  assert.equal(decision.sourceScreenObservationId, "recovery-screen");
+  assert.equal(decision.selectionSource, "settlement");
+  assert.equal(decision.image?.base64, "recovery-image");
 });
 
 test("does not attach a screenshot across parent or runtime boundaries", () => {

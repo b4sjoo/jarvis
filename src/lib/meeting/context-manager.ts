@@ -423,10 +423,17 @@ export class MeetingContextManager {
   }
 
   private buildActiveMeetingTask() {
+    const screenObservationId =
+      this.taskRuntimeState.screenAttachment?.observationId ??
+      this.taskRuntimeState.parent?.child?.latestScreenObservationId ??
+      this.taskRuntimeState.parent?.latestScreenObservationId;
     return projectActiveMeetingTask({
       state: this.taskRuntimeState,
-      latestObservation:
-        this.state.screenObservations[this.state.screenObservations.length - 1],
+      latestObservation: screenObservationId
+        ? this.state.screenObservations.find(
+            (observation) => observation.id === screenObservationId
+          )
+        : undefined,
     });
   }
 
@@ -500,13 +507,15 @@ export class MeetingContextManager {
           .join("\n")
       : "";
 
-    const observationContext = this.state.screenObservations
-      .map((observation) => {
-        const text = observation.visualSummary || observation.ocrText || "";
-        return text.trim();
-      })
-      .filter(Boolean)
-      .join("\n\n");
+    const activeObservation = activeMeetingTask?.screen?.observationId
+      ? this.state.screenObservations.find(
+          (observation) =>
+            observation.id === activeMeetingTask.screen?.observationId
+        )
+      : undefined;
+    const observationContext = (
+      activeObservation?.visualSummary || activeObservation?.ocrText || ""
+    ).trim();
 
     return [activeTaskContext, observationContext].filter(Boolean).join("\n\n");
   }

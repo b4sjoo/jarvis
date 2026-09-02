@@ -65,6 +65,7 @@ export interface AdvisorScreenSourceReadDecision {
   disposition: AdvisorScreenSourceReadDisposition;
   sourceScreenObservationId?: string;
   sourceScreenParentId?: string;
+  selectionSource?: "settlement" | "active-branch";
   sourceVoiceTurnIds: string[];
   image?: {
     base64: string;
@@ -449,6 +450,7 @@ export function resolveAdvisorScreenSourceRead<
   expectedParentId?: string;
   activeMeetingTask?: T;
   screenObservations: ScreenObservation[];
+  preferredObservationIds?: string[];
   sourceVoiceTurnIds?: string[];
   providerSupportsImages: boolean;
 }): AdvisorScreenSourceReadDecision {
@@ -480,35 +482,52 @@ export function resolveAdvisorScreenSourceRead<
       sourceScreenParentId: task.parent.id,
     });
   }
-  if (!task.screen?.observationId) {
+  const preferredObservationId = input.preferredObservationIds
+    ?.slice()
+    .reverse()
+    .find((observationId) =>
+      input.screenObservations.some(
+        (observation) => observation.id === observationId
+      )
+    );
+  const sourceObservationId =
+    preferredObservationId ?? task.screen?.observationId;
+  const selectionSource = preferredObservationId
+    ? ("settlement" as const)
+    : ("active-branch" as const);
+  if (!sourceObservationId) {
     return result("no-screen-binding", {
       sourceScreenParentId: task.parent.id,
     });
   }
   const observation = input.screenObservations.find(
-    (candidate) => candidate.id === task.screen?.observationId
+    (candidate) => candidate.id === sourceObservationId
   );
   if (!observation) {
     return result("observation-not-found", {
-      sourceScreenObservationId: task.screen.observationId,
+      sourceScreenObservationId: sourceObservationId,
       sourceScreenParentId: task.parent.id,
+      selectionSource,
     });
   }
   if (!observation.imageBase64) {
     return result("image-unavailable", {
       sourceScreenObservationId: observation.id,
       sourceScreenParentId: task.parent.id,
+      selectionSource,
     });
   }
   if (!input.providerSupportsImages) {
     return result("provider-image-unsupported", {
       sourceScreenObservationId: observation.id,
       sourceScreenParentId: task.parent.id,
+      selectionSource,
     });
   }
   return result("attached", {
     sourceScreenObservationId: observation.id,
     sourceScreenParentId: task.parent.id,
+    selectionSource,
     image: {
       base64: observation.imageBase64,
       mediaType: observation.imageMediaType ?? "image/jpeg",
@@ -522,6 +541,7 @@ export function formatAdvisorScreenSourceReadForTrace(
   return {
     sourceScreenObservationId: decision.sourceScreenObservationId,
     sourceScreenParentId: decision.sourceScreenParentId,
+    sourceScreenSelectionSource: decision.selectionSource,
     sourceVoiceTurnIds: decision.sourceVoiceTurnIds,
     sourceReadDisposition: decision.disposition,
     sourceScreenImageAttached: Boolean(decision.image),
