@@ -202,6 +202,58 @@ export function resolveGeneralMemoryEligibility({
   };
 }
 
+export function resolveProjectScopedFactMemoryEligibility({
+  entry,
+  query,
+  projectId,
+  projectAnchor,
+}: {
+  entry: MemoryEntry;
+  query: string;
+  projectId?: string;
+  projectAnchor?: string;
+}): MemoryGeneralEligibilityDecision {
+  if (!isProjectScopedEntry(entry)) {
+    return { applies: false, eligible: true, evidence: [] };
+  }
+
+  const projectIdentity = projectId ?? projectAnchor;
+  if (
+    hasProjectAssociation(entry) &&
+    isMemoryProjectIdentityMatch(entry, projectIdentity)
+  ) {
+    return {
+      applies: true,
+      eligible: true,
+      scopePath: "project-compatible",
+      evidence: ["canonical-project-identity-match"],
+    };
+  }
+
+  const relevance = resolveStrongCurrentQuestionRelevance(
+    entry,
+    query,
+    true
+  );
+  if (relevance.strong) {
+    return {
+      applies: true,
+      eligible: true,
+      scopePath: "strong-current-question",
+      evidence: relevance.evidence,
+      projectScopeEvidence: relevance.projectScopeEvidence,
+    };
+  }
+
+  return {
+    applies: true,
+    eligible: false,
+    rejectReason: "general-without-positive-scope",
+    evidence: relevance.evidence,
+    projectScopeEvidence: relevance.projectScopeEvidence,
+  };
+}
+
 export function createGeneralMemoryEligibilityRecorder() {
   const decisions: Array<{
     entryId: string;

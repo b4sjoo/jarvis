@@ -43,6 +43,7 @@ import {
   createGeneralMemoryEligibilityRecorder,
   resolveGeneralMemoryEligibility,
   resolveMemoryEligibilityQuery,
+  resolveProjectScopedFactMemoryEligibility,
 } from "./general-eligibility.js";
 import { scoreCurrentQuestionRelevance } from "./current-question-ranking.js";
 
@@ -638,14 +639,25 @@ function getEntryEligibilityDecision(
     };
   }
 
-  const generalEligibilityDecision = resolveGeneralMemoryEligibility({
-    entry,
-    familyDecision: familyGateDecision.resolution,
-    query,
-    useCase,
-    projectId,
-    projectAnchor: memoryPolicy?.strictProjectAnchor ?? projectAnchor,
-  });
+  const runtimeRole = classifyRuntimeMemoryRole(entry);
+  const effectiveProjectAnchor =
+    memoryPolicy?.strictProjectAnchor ?? projectAnchor;
+  const generalEligibilityDecision =
+    runtimeRole.role === "fact-evidence"
+      ? resolveProjectScopedFactMemoryEligibility({
+          entry,
+          query,
+          projectId,
+          projectAnchor: effectiveProjectAnchor,
+        })
+      : resolveGeneralMemoryEligibility({
+          entry,
+          familyDecision: familyGateDecision.resolution,
+          query,
+          useCase,
+          projectId,
+          projectAnchor: effectiveProjectAnchor,
+        });
   if (!generalEligibilityDecision.eligible) {
     return {
       eligible: false as const,

@@ -4,6 +4,7 @@ import {
   createGeneralMemoryEligibilityRecorder,
   resolveGeneralMemoryEligibility,
   resolveMemoryEligibilityQuery,
+  resolveProjectScopedFactMemoryEligibility,
 } from "../src/lib/memory/general-eligibility.js";
 import { resolveMemoryInterviewFamilies } from "../src/lib/memory/interview-family.js";
 import type { MemoryEntry } from "../src/lib/memory/types.js";
@@ -116,6 +117,68 @@ test("rejects Oasis NDJSON memory for an unrelated LRU coding question", () => {
   assert.ok(
     (decision.projectScopeEvidence?.genericContentMatchCount ?? 0) > 0
   );
+});
+
+test("rejects specialized-family project facts for a generic monitoring question", () => {
+  const entry = makeEntry({
+    id: "mem_throttling_in_memory_update",
+    type: "implementation_note",
+    title: "In-memory throttling updates with cluster-wide broadcast",
+    content: "Nodes receive updated throttling settings through broadcast.",
+    scope: "project",
+    projectId: "throttling",
+    projectName: "Distributed Inference Throttling",
+    tags: ["cache", "consistency", "distributed-system"],
+    keywords: ["in-memory update", "broadcast"],
+  });
+
+  const decision = resolveProjectScopedFactMemoryEligibility({
+    entry,
+    query: "What would you monitor in production?",
+  });
+
+  assert.equal(decision.eligible, false);
+  assert.equal(decision.rejectReason, "general-without-positive-scope");
+});
+
+test("allows project facts through a compatible canonical binding", () => {
+  const entry = makeEntry({
+    id: "mem_throttling",
+    type: "project_context",
+    scope: "project",
+    projectId: "throttling",
+    projectName: "Distributed Inference Throttling",
+  });
+
+  const decision = resolveProjectScopedFactMemoryEligibility({
+    entry,
+    query: "What would you monitor in production?",
+    projectId: "throttling",
+  });
+
+  assert.equal(decision.eligible, true);
+  assert.equal(decision.scopePath, "project-compatible");
+});
+
+test("allows project facts through discriminative current-question evidence", () => {
+  const entry = makeEntry({
+    id: "mem_oasis_ndjson",
+    type: "project_context",
+    title: "Oasis NDJSON Bulk API implementation",
+    scope: "project",
+    projectId: "oasis",
+    projectName: "Oasis",
+    tags: ["ndjson", "bulk-api"],
+    keywords: ["NDJSON", "Bulk API"],
+  });
+
+  const decision = resolveProjectScopedFactMemoryEligibility({
+    entry,
+    query: "Why did Oasis use NDJSON for the Bulk API?",
+  });
+
+  assert.equal(decision.eligible, true);
+  assert.equal(decision.scopePath, "strong-current-question");
 });
 
 test("uses only the current question for project-scoped eligibility", () => {
