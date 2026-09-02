@@ -4,7 +4,19 @@ import {
   buildActiveMeetingTask,
   type ActiveMeetingTask,
 } from "../src/lib/meeting/active-meeting-task.js";
-import type { CurrentQuestionSettlementDecision } from "../src/lib/meeting/current-question-settlement.js";
+import {
+  createProvisionalCurrentQuestion,
+  type CurrentQuestionSettlementDecision,
+} from "../src/lib/meeting/current-question-settlement.js";
+import {
+  authorizeManualCorrectionLifecycle,
+  settleManualQuestionTypeCorrection,
+} from "../src/lib/meeting/manual-correction-settlement.js";
+import {
+  buildManualCorrectionParentTransition,
+  decideManualCorrectionScope,
+  decideManualQuestionTypeCorrection,
+} from "../src/lib/meeting/manual-question-type-correction.js";
 import type { MeetingModelProviderSnapshot } from "../src/lib/meeting/meeting-model-route.js";
 import {
   authorizeSettledAdvisorExecutionPlan,
@@ -15,6 +27,11 @@ import {
   reduceTaskLifecycleTransaction,
 } from "../src/lib/meeting/task-lifecycle-reducer.js";
 import { normalizeCanonicalQuestionType } from "../src/lib/meeting/task-taxonomy.js";
+import {
+  evaluateTaskSettlementTupleCompatibilityV2,
+  projectObservedParentAction,
+} from "../src/lib/meeting/task-settlement-tuple.js";
+import type { LogicalQuestionUnit } from "../src/lib/meeting/logical-question-unit.js";
 import type {
   ActiveInterviewParent,
   ActiveScreenTask,
@@ -118,6 +135,21 @@ function playbook(): SelectedInterviewPlaybook {
     clarifyingStrategy: "Clarify only missing constraints.",
     outputContract: "Return code and complexity.",
     followUpPolicy: "Preserve the coding artifact.",
+  };
+}
+
+function aiMlPlaybook(): SelectedInterviewPlaybook {
+  return {
+    ...playbook(),
+    id: "aiml_system_design",
+    label: "AI/ML System Design",
+    phase: "requirement_clarification",
+    questionType: "ai-ml-system-design",
+    memoryPolicy: {
+      id: "aiml-system-design",
+      allowedFamilies: ["ai-ml-system-design"],
+    },
+    outputContract: "Return a system-design answer and whiteboard.",
   };
 }
 
@@ -244,67 +276,172 @@ test("atomically replaces a corrected parent under one settled plan", () => {
   assert.equal(postAuthorization.authorized, true);
 });
 
-test("commits a related parent retype while preserving the parent topic", () => {
+test("composes a related Human Type correction through settlement, lifecycle, and evaluation", () => {
+  const parentQuestion = "How would you design the indexing and serving path?";
+  const followupQuestion =
+    "A future team may use a separate analytics store.";
   const beforeParent = parent("general-system-design", {
-    topic: "Design the indexing and serving path",
-  });
-  const afterParent = parent("coding", {
-    topic: beforeParent.topic,
-    playbook: playbook(),
-    playbookPhase: "implementation_validation",
-    phaseProgress: { implementation_validation: true },
+    id: "parent-indexing",
+    topic: parentQuestion,
+    startTurnId: "turn-parent-origin",
+    canonicalQuestionSourceTurnIds: ["turn-parent-origin"],
     sourceQuestionUnitId: "question-parent-origin",
     sourceQuestionRevision: 1,
-    settlementId: "settlement-related-correction",
-    revisions: 4,
+    settlementId: "settlement-parent-origin",
   });
   const before = meetingTask(beforeParent);
-  const after = meetingTask(afterParent, undefined, 4);
-  const correctedSettlement = settlement({
-    settlementId: "settlement-related-correction",
-    logicalQuestionUnitId: "question-followup",
-    sourceTurnIds: ["turn-followup"],
-    sourceHash: "source-followup",
-    relation: "followup-parent",
+  const logicalQuestionUnit: LogicalQuestionUnit = {
+    id: "question-analytics-followup",
+    revision: 1,
+    sessionId: "session-a",
+    runtimeEpoch: 4,
+    currentTurnId: "turn-analytics-followup",
+    sourceTurnIds: ["turn-analytics-followup"],
+    sources: [
+      {
+        turnId: "turn-analytics-followup",
+        text: followupQuestion,
+        startedAt: 30,
+        endedAt: 31,
+      },
+    ],
+    normalizedText: followupQuestion,
+    startedAt: 30,
+    updatedAt: 31,
+    compositionReasons: ["fresh-substantive-turn"],
+    boundaryReason: "fresh-substantive-turn",
+    truncated: false,
+  };
+  const provisionalQuestion = createProvisionalCurrentQuestion({
+    logicalQuestionUnit,
+    sourceKind: "voice",
+  });
+  const lineage = {
+    questionInstanceId: "lqu:question-analytics-followup",
+    questionOriginTraceId: "trace-analytics-followup",
+    sourceSuggestionId: "suggestion-analytics-followup",
+    triggerTurnId: "turn-analytics-followup",
+    sessionId: "session-a",
+    runtimeEpoch: 4,
+    identityState: "canonical" as const,
+  };
+  const correctionDecision = decideManualQuestionTypeCorrection(
+    before,
+    "ai-ml-system-design"
+  );
+  const settlementResult = settleManualQuestionTypeCorrection({
+    operationId: "correction-related-transaction",
+    currentQuestion: provisionalQuestion,
+    correctedType: "ai-ml-system-design",
     activeParentId: beforeParent.id,
     activeParentRevision: beforeParent.revisions,
+    manualCorrectionRevision: 2,
+    relationCandidate: {
+      schemaVersion: 3,
+      relation: "followup-parent",
+      confidence: 0.98,
+      currentQuestionEvidenceSpans: ["analytics store"],
+      parentEvidenceSpans: ["indexing and serving"],
+    },
+    relationOperationLeaseAuthorized: true,
   });
-  const plan = correctionPlan({
-    before,
-    after,
-    settlementOverrides: correctedSettlement,
-    sourceQuestion: "A future team may use a separate analytics store.",
+  const scope = decideManualCorrectionScope({
+    task: before,
+    decision: correctionDecision,
+    lineage,
+    latestQuestionText: followupQuestion,
+    parentQuestionText: parentQuestion,
+    currentQuestionRelation: settlementResult.settlement.relation,
+    currentQuestionSource: "voice",
   });
-
-  assert.equal(plan.taskMutationPolicy.kind, "replace-parent");
-  assert.equal(
-    plan.taskMutationPolicy.kind === "replace-parent"
-      ? plan.taskMutationPolicy.topic
-      : undefined,
-    beforeParent.topic
-  );
-
+  const authorizedSettlement = authorizeManualCorrectionLifecycle({
+    settlement: settlementResult.settlement,
+    scope: scope.scope,
+    activeParentId: beforeParent.id,
+    activeParentType: beforeParent.stableKind,
+  });
+  const correctedPlaybook = aiMlPlaybook();
+  const transition = buildManualCorrectionParentTransition({
+    parent: beforeParent,
+    decision: correctionDecision,
+    scopeDecision: scope,
+    correctedPlaybook,
+    latestQuestionText: followupQuestion,
+    lineage,
+    transcriptTurns: [],
+    newParentId: "unused-parent-id",
+    now: 40,
+  });
+  const afterParent: ActiveInterviewParent = {
+    ...transition.parent,
+    settlementId: authorizedSettlement.settlementId,
+  };
+  const after = meetingTask(afterParent, undefined, 4);
+  const plan = buildSettledAdvisorExecutionPlan({
+    settlement: authorizedSettlement,
+    activeMeetingTask: after,
+    expectedActiveMeetingTask: before,
+    preBoundaryQuestionType: before.parent.questionType,
+    taskBoundaryCommitted: true,
+    childOwnsResponse: false,
+    providerSnapshot: providers,
+    playbook: correctedPlaybook,
+    memoryUseCase: "aiml_system_design_interview",
+    askFrame: "hypothetical-design",
+    topicDomain: "ai-ml-infra",
+    sourceQuestion: followupQuestion,
+    contextReadScopeOverride: "active-parent-read",
+    explicitTaskMutationCommand: {
+      kind: "replace-parent",
+      type: afterParent.stableKind,
+      topic: afterParent.topic,
+    },
+    taskMutationCommittedBeforeAdvisor: true,
+    createdAt: 50,
+  });
   const reduction = reduceTaskLifecycleTransaction({
     transaction: createTaskLifecycleTransaction({
       plan,
-      manualCorrectionRevision: 1,
+      manualCorrectionRevision: 2,
       proposedActiveInterviewTask: afterParent,
     }),
     currentSessionId: "session-a",
     currentRuntimeEpoch: 4,
-    currentLogicalQuestionUnitId: "question-followup",
-    currentLogicalQuestionRevision: 2,
-    currentManualCorrectionRevision: 1,
-    currentTaskRuntimeRevision: 3,
+    currentLogicalQuestionUnitId: logicalQuestionUnit.id,
+    currentLogicalQuestionRevision: logicalQuestionUnit.revision,
+    currentManualCorrectionRevision: 2,
+    currentTaskRuntimeRevision: before.runtimeRevision,
     currentActiveInterviewTask: beforeParent,
   });
+  assert.equal(authorizedSettlement.relation, "followup-parent");
+  const observedParentAction = projectObservedParentAction({
+    relation: "followup-parent",
+    mutationAuthorized: authorizedSettlement.parentMutationAuthorized,
+    lifecycleCommand: plan.taskMutationPolicy.kind,
+    currentOnly: false,
+    parentBeforeId: reduction.parentBeforeId,
+    parentAfterId: reduction.parentAfterId,
+    parentBeforeType: reduction.parentBeforeType,
+    parentAfterType: reduction.parentAfterType,
+  });
 
+  assert.equal(scope.scope, "same-question-retype");
+  assert.equal(authorizedSettlement.parentMutationAuthorized, true);
+  assert.equal(transition.startedNewParent, false);
+  assert.equal(afterParent.id, beforeParent.id);
+  assert.equal(afterParent.topic, beforeParent.topic);
+  assert.equal(afterParent.stableKind, "ai-ml-system-design");
   assert.equal(reduction.authorized, true);
   assert.equal(reduction.mutationApplied, true);
   assert.equal(reduction.reason, "committed");
-  assert.equal(reduction.parentAfterId, beforeParent.id);
-  assert.equal(reduction.parentAfterType, "coding");
-  assert.equal(reduction.parent?.topic, beforeParent.topic);
+  assert.equal(observedParentAction, "retype");
+  assert.equal(
+    evaluateTaskSettlementTupleCompatibilityV2({
+      relation: "followup-parent",
+      parentAction: observedParentAction,
+    }).compatible,
+    true
+  );
 });
 
 test("consumes a settled follow-up as one same-parent context update", () => {

@@ -158,6 +158,10 @@ test("shares one correction lifecycle commit boundary across correction paths", 
   );
   assert.match(
     source,
+    /correctionScopeDecision\.scope === "same-question-retype"[\s\S]*explicitTaskMutationCommand:\s*\{\s*kind: "replace-parent",\s*type: parentAfter\.stableKind,\s*topic: parentAfter\.topic/
+  );
+  assert.match(
+    source,
     /correctionOwnedResettlement\?\.parentMutationAuthorized[\s\S]*commitCorrectionLifecycleWithManager\(/
   );
 });
