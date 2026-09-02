@@ -9,6 +9,8 @@ let globalEventListeners: {
   customShortcut?: UnlistenFn;
   registrationError?: UnlistenFn;
 } = {};
+let globalEventListenerSubscribers = 0;
+let globalEventListenerSetup: Promise<void> | null = null;
 
 let lastCustomShortcutEventTimes: Map<string, number> = new Map();
 const CUSTOM_SHORTCUT_DEBOUNCE_MS = 750;
@@ -32,6 +34,100 @@ let globalCustomShortcutCallbacks: Map<
   string,
   GlobalShortcutCallback
 > = new Map();
+
+function cleanupGlobalEventListeners() {
+  for (const [label, unlisten] of Object.entries(globalEventListeners)) {
+    if (!unlisten) continue;
+    try {
+      unlisten();
+    } catch (error) {
+      console.warn(`Error cleaning up ${label} listener:`, error);
+    }
+  }
+  globalEventListeners = {};
+}
+
+function ensureGlobalEventListeners() {
+  if (globalEventListenerSetup) return globalEventListenerSetup;
+  if (
+    globalEventListeners.focus &&
+    globalEventListeners.customShortcut &&
+    globalEventListeners.registrationError
+  ) {
+    return Promise.resolve();
+  }
+
+  globalEventListenerSetup = (async () => {
+    const installed: typeof globalEventListeners = {};
+    try {
+      installed.focus = await listen("focus-text-input", () => {
+        setTimeout(() => {
+          if (globalInputRef) globalInputRef.focus();
+        }, 100);
+      });
+      installed.customShortcut = await listen<{ action: string }>(
+        "custom-shortcut-triggered",
+        (event) => {
+          const actionId = event.payload.action;
+          const now = Date.now();
+          const lastEventTime =
+            lastCustomShortcutEventTimes.get(actionId) ?? 0;
+          const callback = globalCustomShortcutCallbacks.get(actionId);
+          const invocation: GlobalShortcutInvocation = {
+            invocationId: `shortcut_${now}_${++shortcutInvocationSequence}`,
+            shortcutActionId: actionId,
+            receivedAt: now,
+            disposition:
+              now - lastEventTime < CUSTOM_SHORTCUT_DEBOUNCE_MS
+                ? "debounced"
+                : "dispatch",
+          };
+
+          if (invocation.disposition === "debounced") {
+            callback?.(invocation);
+            return;
+          }
+
+          lastCustomShortcutEventTimes.set(actionId, now);
+          if (callback) {
+            callback(invocation);
+          } else {
+            console.warn(
+              `No callback registered for custom shortcut: ${actionId}`
+            );
+          }
+        }
+      );
+      installed.registrationError = await listen<
+        Array<[string, string, string]>
+      >("shortcut-registration-error", (event) => {
+        window.dispatchEvent(
+          new CustomEvent("shortcutRegistrationError", {
+            detail: event.payload,
+          })
+        );
+      });
+
+      if (globalEventListenerSubscribers === 0) {
+        for (const unlisten of Object.values(installed)) unlisten?.();
+        return;
+      }
+      globalEventListeners = installed;
+    } catch (error) {
+      for (const unlisten of Object.values(installed)) {
+        try {
+          unlisten?.();
+        } catch {
+          // Preserve the original listener setup error.
+        }
+      }
+      console.error("Failed to setup event listeners:", error);
+    } finally {
+      globalEventListenerSetup = null;
+    }
+  })();
+  return globalEventListenerSetup;
+}
 
 export const useGlobalShortcuts = () => {
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -96,99 +192,18 @@ export const useGlobalShortcuts = () => {
     globalCustomShortcutCallbacks.delete(actionId);
   }, []);
 
-  // Setup event listeners using global singleton
   useEffect(() => {
-    const setupEventListeners = async () => {
-      try {
-        // Clean up any existing global listeners first
-        if (globalEventListeners.focus) {
-          try {
-            globalEventListeners.focus();
-          } catch (error) {
-            console.warn("Error cleaning up focus listener:", error);
-          }
-        }
-        if (globalEventListeners.customShortcut) {
-          try {
-            globalEventListeners.customShortcut();
-          } catch (error) {
-            console.warn("Error cleaning up custom shortcut listener:", error);
-          }
-        }
-        if (globalEventListeners.registrationError) {
-          try {
-            globalEventListeners.registrationError();
-          } catch (error) {
-            console.warn(
-              "Error cleaning up shortcut registration error listener:",
-              error
-            );
-          }
-        }
-
-        // Listen for focus text input event
-        const unlistenFocus = await listen("focus-text-input", () => {
-          setTimeout(() => {
-            if (globalInputRef) {
-              globalInputRef.focus();
-            }
-          }, 100);
-        });
-        globalEventListeners.focus = unlistenFocus;
-
-        // Listen for custom shortcut events
-        const unlistenCustomShortcut = await listen<{ action: string }>(
-          "custom-shortcut-triggered",
-          (event) => {
-            const actionId = event.payload.action;
-            const now = Date.now();
-            const lastEventTime =
-              lastCustomShortcutEventTimes.get(actionId) ?? 0;
-            const callback = globalCustomShortcutCallbacks.get(actionId);
-            const invocation: GlobalShortcutInvocation = {
-              invocationId: `shortcut_${now}_${++shortcutInvocationSequence}`,
-              shortcutActionId: actionId,
-              receivedAt: now,
-              disposition:
-                now - lastEventTime < CUSTOM_SHORTCUT_DEBOUNCE_MS
-                  ? "debounced"
-                  : "dispatch",
-            };
-
-            if (invocation.disposition === "debounced") {
-              callback?.(invocation);
-              return;
-            }
-
-            lastCustomShortcutEventTimes.set(actionId, now);
-
-            if (callback) {
-              callback(invocation);
-            } else {
-              console.warn(
-                `No callback registered for custom shortcut: ${actionId}`
-              );
-            }
-          }
-        );
-        globalEventListeners.customShortcut = unlistenCustomShortcut;
-
-        const unlistenRegistrationError = await listen<
-          Array<[string, string, string]>
-        >("shortcut-registration-error", (event) => {
-          window.dispatchEvent(
-            new CustomEvent("shortcutRegistrationError", {
-              detail: event.payload,
-            })
-          );
-        });
-        globalEventListeners.registrationError = unlistenRegistrationError;
-      } catch (error) {
-        console.error("Failed to setup event listeners:", error);
+    globalEventListenerSubscribers += 1;
+    void ensureGlobalEventListeners();
+    return () => {
+      globalEventListenerSubscribers = Math.max(
+        0,
+        globalEventListenerSubscribers - 1
+      );
+      if (globalEventListenerSubscribers === 0) {
+        cleanupGlobalEventListeners();
       }
     };
-
-    setupEventListeners();
   }, []);
 
   return {

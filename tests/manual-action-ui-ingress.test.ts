@@ -21,6 +21,10 @@ const globalShortcutSource = await readFile(
   path.join(process.cwd(), "src/hooks/useGlobalShortcuts.ts"),
   "utf8"
 );
+const shortcutHookSource = await readFile(
+  path.join(process.cwd(), "src/hooks/useShortcuts.ts"),
+  "utf8"
+);
 
 test("tracked manual controls remain observable while visually unavailable", () => {
   assert.doesNotMatch(
@@ -81,4 +85,16 @@ test("manual-action shortcuts dispatch before semantic availability checks", () 
     globalShortcutSource,
     /if \(invocation\.disposition === "debounced"\) \{[\s\S]*callback\?\.\(invocation\);[\s\S]*return;/
   );
+});
+
+test("global shortcuts use one shared cleanup-safe listener subscription", () => {
+  assert.equal(
+    shortcutHookSource.match(/useGlobalShortcuts\(\)/g)?.length,
+    1
+  );
+  assert.match(globalShortcutSource, /globalEventListenerSubscribers \+= 1/);
+  assert.match(globalShortcutSource, /globalEventListenerSubscribers - 1/);
+  assert.match(globalShortcutSource, /cleanupGlobalEventListeners\(\)/);
+  assert.match(globalShortcutSource, /Object\.values\(installed\)/);
+  assert.match(globalShortcutSource, /unlisten\?\.\(\)/);
 });

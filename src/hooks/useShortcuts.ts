@@ -18,10 +18,11 @@ interface UseShortcutsProps {
 export const useShortcuts = ({
   customShortcuts = {},
 }: UseShortcutsProps = {}) => {
+  const globalShortcuts = useGlobalShortcuts();
   const {
     registerCustomShortcutCallback,
     unregisterCustomShortcutCallback,
-  } = useGlobalShortcuts();
+  } = globalShortcuts;
 
   // Register custom shortcut callbacks
   useEffect(() => {
@@ -41,5 +42,5 @@ export const useShortcuts = ({
     unregisterCustomShortcutCallback,
   ]);
 
-  return useGlobalShortcuts();
+  return globalShortcuts;
 };
