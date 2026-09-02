@@ -98,6 +98,10 @@ test("projects the latest authorized screen from the active branch", () => {
     childState.activeMeetingTask?.screen?.observationId,
     "child-screen"
   );
+  assert.equal(
+    childState.activeMeetingTask?.screen?.question,
+    "Implement the retrieval merge."
+  );
   const childPrompt = manager.buildAdvisorPromptContext();
   assert.match(childPrompt.screenContext, /CHILD_SCREEN_TEXT/);
   assert.doesNotMatch(childPrompt.screenContext, /PARENT_SCREEN_TEXT/);
@@ -115,6 +119,43 @@ test("projects the latest authorized screen from the active branch", () => {
   assert.equal(
     resumedParentState.activeMeetingTask?.screen?.observationId,
     "parent-screen"
+  );
+
+  const inheritedManager = new MeetingContextManager();
+  inheritedManager.addScreenObservation(
+    makeObservation("parent-screen", "PARENT_SCREEN_TEXT")
+  );
+  setTestTaskRuntime(inheritedManager, {
+    parent: makeInterviewTask({
+      source: "screen",
+      stableKind: "ai-ml-system-design",
+      topic: "Design the RAG architecture.",
+      latestScreenObservationId: "parent-screen",
+      child: {
+        id: "child-knowledge",
+        createdAt: now,
+        updatedAt: now + 1,
+        questionType: "field-knowledge",
+        relation: "child-probe",
+        intent: "concept-probe",
+        question: "Explain HNSW.",
+        basedOnTurnIds: ["turn-hnsw"],
+        basedOnObservationIds: [],
+      },
+    }),
+  });
+  const inheritedState = inheritedManager.getState();
+  assert.equal(
+    inheritedState.activeMeetingTask?.screen?.observationId,
+    "parent-screen"
+  );
+  assert.equal(
+    inheritedState.activeMeetingTask?.screen?.question,
+    "Design the RAG architecture."
+  );
+  assert.notEqual(
+    inheritedState.activeMeetingTask?.screen?.question,
+    inheritedState.activeMeetingTask?.child?.question
   );
 });
 

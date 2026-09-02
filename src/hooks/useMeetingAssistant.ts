@@ -638,6 +638,7 @@ import {
   CurrentQuestionSettlementProposal,
   ProvisionalCurrentQuestion,
   createSourceOwnedTransitionCandidate,
+  resolveLatestScreenObservationId,
   createTaskLifecycleTransaction,
   createRuntimeCommitToken,
   decideAdvisorPhaseMutation,
@@ -38695,10 +38696,11 @@ function updateInterviewTaskContinuityForAnswer({
   }
 
   if (continuityDecision.branch === "preserve") {
-    const latestScreenObservationId =
-      source === "screen" && observationId
-        ? observationId
-        : existingTask?.latestScreenObservationId;
+    const latestScreenObservationId = resolveLatestScreenObservationId({
+      source,
+      sourceObservationIds: observationId ? [observationId] : [],
+      current: existingTask?.latestScreenObservationId,
+    });
     return {
       task:
         existingTask &&
@@ -38779,8 +38781,10 @@ function updateInterviewTaskContinuityForAnswer({
         startTurnId:
           canonicalQuestionSourceTurnIds?.[0] ?? latestTurn?.id,
         startObservationId: observationId,
-        latestScreenObservationId:
-          source === "screen" ? observationId : undefined,
+        latestScreenObservationId: resolveLatestScreenObservationId({
+          source,
+          sourceObservationIds: observationId ? [observationId] : [],
+        }),
         promptTranscriptStartTurnId:
           canonicalQuestionSourceTurnIds?.[0] ?? latestTurn?.id,
         canonicalQuestionSourceTurnIds:
@@ -38861,10 +38865,11 @@ function updateInterviewTaskContinuityForAnswer({
           ? summaryDecision.text
           : existingTask.latestUsefulAnswer,
       child: relation === "resume-parent" ? undefined : existingTask.child,
-      latestScreenObservationId:
-        source === "screen" && observationId
-          ? observationId
-          : existingTask.latestScreenObservationId,
+      latestScreenObservationId: resolveLatestScreenObservationId({
+        source,
+        sourceObservationIds: observationId ? [observationId] : [],
+        current: existingTask.latestScreenObservationId,
+      }),
       revisions: existingTask.revisions + 1,
     },
     startedNewParent: false,

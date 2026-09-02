@@ -98,6 +98,16 @@ export interface CommitSourceOwnedTransitionInput {
   now?: number;
 }
 
+export function resolveLatestScreenObservationId(input: {
+  source: "voice" | "screen";
+  sourceObservationIds: readonly string[];
+  current?: string;
+}) {
+  return input.source === "screen"
+    ? input.sourceObservationIds.at(-1) ?? input.current
+    : input.current;
+}
+
 export interface SourceOwnedTransitionPreparationResult {
   candidate: SourceOwnedTransitionCandidate;
   task?: ActiveInterviewParent;
@@ -486,10 +496,10 @@ function applyTransition(
         originQuestionId: candidate.questionInstanceId,
         startTurnId: candidate.sourceTurnIds[0],
         startObservationId: candidate.sourceObservationIds[0],
-        latestScreenObservationId:
-          candidate.source === "screen"
-            ? candidate.sourceObservationIds.at(-1)
-            : undefined,
+        latestScreenObservationId: resolveLatestScreenObservationId({
+          source: candidate.source,
+          sourceObservationIds: candidate.sourceObservationIds,
+        }),
         promptTranscriptStartTurnId: candidate.sourceTurnIds[0],
         canonicalQuestionSourceTurnIds: [...candidate.sourceTurnIds],
         admission: createParentAdmissionRecord({
@@ -554,10 +564,10 @@ function applyTransition(
         originQuestionId: candidate.questionInstanceId,
         startTurnId: candidate.sourceTurnIds[0],
         startObservationId: candidate.sourceObservationIds[0],
-        latestScreenObservationId:
-          candidate.source === "screen"
-            ? candidate.sourceObservationIds.at(-1)
-            : undefined,
+        latestScreenObservationId: resolveLatestScreenObservationId({
+          source: candidate.source,
+          sourceObservationIds: candidate.sourceObservationIds,
+        }),
         promptTranscriptStartTurnId: candidate.sourceTurnIds[0],
         canonicalQuestionSourceTurnIds: [...candidate.sourceTurnIds],
         parentContextHandoff: undefined,
@@ -610,11 +620,11 @@ function applyTransition(
             basedOnObservationIds: [
               ...candidate.sourceObservationIds,
             ],
-            latestScreenObservationId:
-              candidate.source === "screen"
-                ? candidate.sourceObservationIds.at(-1) ??
-                  currentTask.child.latestScreenObservationId
-                : currentTask.child.latestScreenObservationId,
+            latestScreenObservationId: resolveLatestScreenObservationId({
+              source: candidate.source,
+              sourceObservationIds: candidate.sourceObservationIds,
+              current: currentTask.child.latestScreenObservationId,
+            }),
             phaseState: preserveOrCreateCodingChildPhaseState({
               questionType: candidate.questionType,
               existing: currentTask.child.phaseState,
@@ -672,10 +682,10 @@ function applyTransition(
           basedOnObservationIds: [
             ...candidate.sourceObservationIds,
           ],
-          latestScreenObservationId:
-            candidate.source === "screen"
-              ? candidate.sourceObservationIds.at(-1)
-              : undefined,
+          latestScreenObservationId: resolveLatestScreenObservationId({
+            source: candidate.source,
+            sourceObservationIds: candidate.sourceObservationIds,
+          }),
           returnCapsule: createParentReturnCapsule(currentTask, now),
           phaseState,
         },
@@ -721,11 +731,11 @@ function applyTransition(
           ? [...capsule.allowedFactAnchorIds]
           : currentTask.supportedFactAnchors,
         child: undefined,
-        latestScreenObservationId:
-          candidate.source === "screen"
-            ? candidate.sourceObservationIds.at(-1) ??
-              currentTask.latestScreenObservationId
-            : currentTask.latestScreenObservationId,
+        latestScreenObservationId: resolveLatestScreenObservationId({
+          source: candidate.source,
+          sourceObservationIds: candidate.sourceObservationIds,
+          current: currentTask.latestScreenObservationId,
+        }),
         updatedAt: now,
         expiresAt: candidate.expiresAt,
         revisions: currentTask.revisions + 1,
@@ -744,11 +754,11 @@ function applyTransition(
     candidate.phaseDecision,
     currentTask.playbookPhase
   );
-  const nextScreenObservationId =
-    candidate.source === "screen"
-      ? candidate.sourceObservationIds.at(-1) ??
-        currentTask.latestScreenObservationId
-      : currentTask.latestScreenObservationId;
+  const nextScreenObservationId = resolveLatestScreenObservationId({
+    source: candidate.source,
+    sourceObservationIds: candidate.sourceObservationIds,
+    current: currentTask.latestScreenObservationId,
+  });
   if (
     nextPhase === currentTask.playbookPhase &&
     sameProgress(nextProgress, currentTask.phaseProgress) &&

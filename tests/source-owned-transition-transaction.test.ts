@@ -4,6 +4,7 @@ import {
   prepareSourceOwnedTransition,
   createSourceOwnedTransitionCandidate,
   sourceOwnedTransitionSurvivesModelOutcome,
+  resolveLatestScreenObservationId,
 } from "../src/lib/meeting/source-owned-transition-transaction.js";
 import {
   decideInterviewerAssumptionAuthorization,
@@ -622,6 +623,33 @@ test("creates a screen parent before its model produces an answer", () => {
   assert.equal(
     sourceOwnedTransitionSurvivesModelOutcome(result, "empty-output"),
     true
+  );
+});
+
+test("uses one screen pointer policy for replacement and preservation", () => {
+  assert.equal(
+    resolveLatestScreenObservationId({
+      source: "screen",
+      sourceObservationIds: ["screen-s2"],
+      current: "screen-s1",
+    }),
+    "screen-s2"
+  );
+  assert.equal(
+    resolveLatestScreenObservationId({
+      source: "screen",
+      sourceObservationIds: [],
+      current: "screen-s1",
+    }),
+    "screen-s1"
+  );
+  assert.equal(
+    resolveLatestScreenObservationId({
+      source: "voice",
+      sourceObservationIds: ["screen-untrusted"],
+      current: "screen-s1",
+    }),
+    "screen-s1"
   );
 });
 

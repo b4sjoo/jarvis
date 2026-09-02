@@ -785,9 +785,8 @@ function buildCanonicalScreenContext(
   task: ActiveInterviewParent,
   observation: ScreenObservation | undefined
 ): ActiveMeetingScreenContext | undefined {
-  const observationId =
-    task.child?.latestScreenObservationId ??
-    task.latestScreenObservationId;
+  const childObservationId = task.child?.latestScreenObservationId;
+  const observationId = childObservationId ?? task.latestScreenObservationId;
   if (!observationId || observation?.id !== observationId) return undefined;
 
   return {
@@ -795,7 +794,7 @@ function buildCanonicalScreenContext(
     observationId,
     basedOnObservationId: observationId,
     captureTarget: observation.captureTarget,
-    question: task.child?.question ?? task.topic,
+    question: childObservationId ? task.child!.question : task.topic,
   };
 }
 
