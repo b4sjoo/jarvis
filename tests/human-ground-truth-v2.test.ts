@@ -1387,6 +1387,23 @@ test("does not guess a replacement action from an incoherent correction trace", 
   assert.deepEqual(result.projection?.subject.traceIds, [
     "trace_invalid_correction_regeneration",
   ]);
+
+  correction.metadata.manualQuestionTypeCorrectionId = "correction_2";
+  correction.metadata.effectiveCurrentQuestionSettlementSessionId =
+    "different-session";
+  correction.metadata.currentQuestionSettlementSessionId =
+    "different-session";
+  const crossSessionResult = materializeHumanEvaluationAttemptProjectionV2({
+    trace: regeneration,
+    traces: [regeneration, correction],
+    currentSessionId: "session_retry",
+    events: [],
+    projections: [],
+  });
+  assert.equal(
+    crossSessionResult.projection?.observed?.parentAction,
+    undefined
+  );
 });
 
 test("projects committed screen response-only scope and code mutation", () => {
