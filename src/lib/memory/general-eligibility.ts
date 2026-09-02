@@ -165,23 +165,18 @@ export function resolveGeneralMemoryEligibility({
     };
   }
 
-  const projectIdentity = projectId ?? projectAnchor;
-  if (
-    hasProjectAssociation(entry) &&
-    isMemoryProjectIdentityMatch(entry, projectIdentity)
-  ) {
-    return {
-      applies: true,
-      eligible: true,
-      scopePath: "project-compatible",
-      evidence: ["canonical-project-identity-match"],
-    };
+  if (isProjectScopedEntry(entry)) {
+    return resolveProjectScopeEligibility({
+      entry,
+      query,
+      projectIdentity: projectId ?? projectAnchor,
+    });
   }
 
   const relevance = resolveStrongCurrentQuestionRelevance(
     entry,
     query,
-    isProjectScopedEntry(entry)
+    false
   );
   if (relevance.strong) {
     return {
@@ -217,7 +212,22 @@ export function resolveProjectScopedFactMemoryEligibility({
     return { applies: false, eligible: true, evidence: [] };
   }
 
-  const projectIdentity = projectId ?? projectAnchor;
+  return resolveProjectScopeEligibility({
+    entry,
+    query,
+    projectIdentity: projectId ?? projectAnchor,
+  });
+}
+
+function resolveProjectScopeEligibility({
+  entry,
+  query,
+  projectIdentity,
+}: {
+  entry: MemoryEntry;
+  query: string;
+  projectIdentity?: string;
+}): MemoryGeneralEligibilityDecision {
   if (
     hasProjectAssociation(entry) &&
     isMemoryProjectIdentityMatch(entry, projectIdentity)
@@ -230,11 +240,7 @@ export function resolveProjectScopedFactMemoryEligibility({
     };
   }
 
-  const relevance = resolveStrongCurrentQuestionRelevance(
-    entry,
-    query,
-    true
-  );
+  const relevance = resolveStrongCurrentQuestionRelevance(entry, query, true);
   if (relevance.strong) {
     return {
       applies: true,
