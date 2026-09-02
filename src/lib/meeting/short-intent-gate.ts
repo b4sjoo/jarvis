@@ -1,5 +1,6 @@
 import type { AdvisorTurnIntentDecision } from "./advisor-turn-intent.js";
 import type { LogicalQuestionUnit } from "./logical-question-unit.js";
+import { parseRuntimeJsonObject } from "./runtime-json-object.js";
 import {
   RESPONSE_OPPORTUNITY_COMPACT_OUTPUT_WORST_CASE,
   RESPONSE_OPPORTUNITY_MAX_OUTPUT_CHARS,
@@ -307,22 +308,11 @@ export function parseResponseOpportunityOutput(
   rawOutput: string,
   request: ResponseOpportunityRequest
 ): ResponseOpportunityParseResult {
-  const trimmed = stripJsonFence(rawOutput.trim());
-  if (!trimmed) return parseFailure("empty-output", "parse");
-  if (trimmed.length > RESPONSE_OPPORTUNITY_MAX_OUTPUT_CHARS) {
-    return parseFailure("output-too-large", "parse");
-  }
-
-  let decoded: unknown;
-  try {
-    decoded = JSON.parse(trimmed);
-  } catch {
-    return parseFailure("invalid-json", "parse");
-  }
-  if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) {
-    return parseFailure("output-is-not-object", "schema");
-  }
-  const candidate = decoded as Record<string, unknown>;
+  const parsed = parseRuntimeJsonObject(rawOutput, {
+    maxChars: RESPONSE_OPPORTUNITY_MAX_OUTPUT_CHARS,
+  });
+  if (!parsed.ok) return parseFailure(parsed.reason, parsed.errorKind);
+  const candidate = parsed.value;
   const allowedKeys = new Set(["v", "d", "c", "e", "r"]);
   if (Object.keys(candidate).some((key) => !allowedKeys.has(key))) {
     return parseFailure("non-opportunity-field-present", "schema");
@@ -622,11 +612,6 @@ function isShortConfirmationResponse(text: string) {
   return /^(?:yes|yeah|yep|no|nope|correct|right|是|对|不是|不对)[.!。！]?$/iu.test(
     text.trim()
   );
-}
-
-function stripJsonFence(value: string) {
-  const match = /^```(?:json)?\s*([\s\S]*?)\s*```$/iu.exec(value);
-  return match?.[1]?.trim() ?? value;
 }
 
 function parseFailure(

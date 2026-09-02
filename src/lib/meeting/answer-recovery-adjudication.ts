@@ -1,5 +1,9 @@
 import type { RuntimeInferenceRuntimeJob } from "./runtime-inference-runtime.js";
 import { buildRuntimeInferenceModelInput } from "./runtime-inference.js";
+import {
+  isRuntimeJsonObjectTruncated,
+  parseRuntimeJsonObject,
+} from "./runtime-json-object.js";
 
 export const ANSWER_RECOVERY_ADJUDICATION_SCHEMA_VERSION = 2;
 export const ANSWER_RESOLUTION_PROMPT_VERSION =
@@ -278,20 +282,11 @@ export function parseAnswerRecoveryAdjudicationOutput(
   rawOutput: string,
   request: AnswerRecoveryAdjudicationRequest
 ): AnswerRecoveryAdjudicationParseResult {
-  const trimmed = stripJsonFence(rawOutput.trim());
-  if (!trimmed) return parseFailure("empty-output", "parse");
-  if (trimmed.length > ANSWER_RECOVERY_MAX_OUTPUT_CHARS) {
-    return parseFailure("output-too-large", "parse");
-  }
-  let decoded: unknown;
-  try {
-    decoded = JSON.parse(trimmed);
-  } catch {
-    return parseFailure("invalid-json", "parse");
-  }
-  if (!isRecord(decoded)) {
-    return parseFailure("output-is-not-object", "schema");
-  }
+  const parsed = parseRuntimeJsonObject(rawOutput, {
+    maxChars: ANSWER_RECOVERY_MAX_OUTPUT_CHARS,
+  });
+  if (!parsed.ok) return parseFailure(parsed.reason, parsed.errorKind);
+  const decoded = parsed.value;
   const evidenceField =
     request.operationKind === "answer-resolution"
       ? "answerEvidenceSpans"
@@ -434,10 +429,7 @@ export function decideAnswerRecoveryLedgerTransition(input: {
 }
 
 export function isAnswerRecoveryOutputTruncated(rawOutput: string) {
-  const trimmed = rawOutput.trim();
-  if (!trimmed) return false;
-  if (trimmed.startsWith("```") && !trimmed.endsWith("```")) return true;
-  return trimmed.startsWith("{") && !trimmed.endsWith("}");
+  return isRuntimeJsonObjectTruncated(rawOutput);
 }
 
 export function createAnswerRecoveryAdjudicationLease(input: {
@@ -556,15 +548,6 @@ function parseFailure(
   errorKind: "parse" | "schema" | "evidence" | "provider"
 ): AnswerRecoveryAdjudicationParseResult {
   return { ok: false, reason, errorKind, evidenceSpansValid: false };
-}
-
-function stripJsonFence(value: string) {
-  const fenced = value.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
-  return fenced?.[1]?.trim() ?? value;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function isEvidenceSpanArray(value: unknown): value is string[] {

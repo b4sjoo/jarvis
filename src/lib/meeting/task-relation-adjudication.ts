@@ -13,6 +13,7 @@ import {
 } from "./logical-question-unit.js";
 import type { RuntimeInferenceRuntimeJob } from "./runtime-inference-runtime.js";
 import { buildRuntimeInferenceModelInput } from "./runtime-inference.js";
+import { parseRuntimeJsonObject } from "./runtime-json-object.js";
 import { projectPrimaryAsk } from "./primary-ask-projection.js";
 import {
   hashTaxonomySourceTurnIds,
@@ -1176,22 +1177,11 @@ export function parseTaskRelationAdjudicationOutput(
   rawOutput: string,
   request: TaskRelationAdjudicationRequest
 ): TaskRelationAdjudicationParseResult {
-  const trimmed = stripJsonFence(rawOutput.trim());
-  if (!trimmed) return parseFailure("empty-output", "parse");
-  if (trimmed.length > TASK_RELATION_ADJUDICATION_MAX_OUTPUT_CHARS) {
-    return parseFailure("output-too-large", "parse");
-  }
-
-  let decoded: unknown;
-  try {
-    decoded = JSON.parse(trimmed);
-  } catch {
-    return parseFailure("invalid-json", "parse");
-  }
-  if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) {
-    return parseFailure("output-is-not-object", "schema");
-  }
-  const candidate = decoded as Record<string, unknown>;
+  const parsed = parseRuntimeJsonObject(rawOutput, {
+    maxChars: TASK_RELATION_ADJUDICATION_MAX_OUTPUT_CHARS,
+  });
+  if (!parsed.ok) return parseFailure(parsed.reason, parsed.errorKind);
+  const candidate = parsed.value;
   if (
     candidate.schemaVersion ===
     TASK_RELATION_ADJUDICATION_SCHEMA_VERSION
@@ -1988,11 +1978,6 @@ function parseFailure(
     errorKind,
     evidenceSpansValid: false,
   };
-}
-
-function stripJsonFence(value: string) {
-  const match = /^```(?:json)?\s*([\s\S]*?)\s*```$/iu.exec(value);
-  return match?.[1]?.trim() ?? value;
 }
 
 function boundText(value: string, maxChars: number) {

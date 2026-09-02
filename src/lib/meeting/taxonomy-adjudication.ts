@@ -1,5 +1,6 @@
 import { createMeetingId } from "./context-manager.js";
 import type { LogicalQuestionUnit } from "./logical-question-unit.js";
+import { parseRuntimeJsonObject } from "./runtime-json-object.js";
 import type {
   HybridQuestionTypeDecision,
   SemanticTaxonomyDecision,
@@ -1262,18 +1263,17 @@ function decodeTaxonomyAdjudicationEnvelope(
       ok: false;
       reason: "malformed-json" | "truncated-json" | "invalid-output-wrapper";
     } {
-  const fenced = stripJsonFence(rawOutput);
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(fenced.value);
-  } catch {
+  const parsedEnvelope = parseRuntimeJsonObject(rawOutput);
+  if (!parsedEnvelope.ok) {
     return {
       ok: false,
-      reason: looksLikeTruncatedJson(rawOutput, fenced.value)
-        ? "truncated-json"
-        : "malformed-json",
+      reason:
+        parsedEnvelope.reason === "truncated-json"
+          ? "truncated-json"
+          : "malformed-json",
     };
   }
+  const parsed = parsedEnvelope.value;
   if (
     parsed &&
     typeof parsed === "object" &&
@@ -1283,17 +1283,10 @@ function decodeTaxonomyAdjudicationEnvelope(
     return {
       ok: true,
       value: parsed,
-      envelope: fenced.wasFenced ? "json-code-fence" : "direct",
+      envelope: parsedEnvelope.fenceStripped ? "json-code-fence" : "direct",
     };
   }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return {
-      ok: true,
-      value: parsed,
-      envelope: fenced.wasFenced ? "json-code-fence" : "direct",
-    };
-  }
-  const wrapper = parsed as Record<string, unknown>;
+  const wrapper = parsed;
   for (const key of ["result", "output", "response"] as const) {
     if (!(key in wrapper)) continue;
     const nested = decodeNestedTaxonomyAdjudicationValue(wrapper[key]);
@@ -1307,15 +1300,6 @@ function decodeTaxonomyAdjudicationEnvelope(
   return { ok: false, reason: "invalid-output-wrapper" };
 }
 
-function looksLikeTruncatedJson(rawOutput: string, strippedValue: string) {
-  const raw = rawOutput.trim();
-  const value = strippedValue.trim();
-  if (/^```(?:json)?\s*/iu.test(raw) && !/```\s*$/u.test(raw)) return true;
-  if (value.startsWith("{") && !value.endsWith("}")) return true;
-  if (value.startsWith("[") && !value.endsWith("]")) return true;
-  return false;
-}
-
 function decodeNestedTaxonomyAdjudicationValue(
   value: unknown
 ): { ok: true; value: unknown } | { ok: false; reason: "invalid-output-wrapper" } {
@@ -1325,15 +1309,10 @@ function decodeNestedTaxonomyAdjudicationValue(
   if (typeof value !== "string") {
     return { ok: false, reason: "invalid-output-wrapper" };
   }
-  try {
-    const fenced = stripJsonFence(value);
-    const parsed = JSON.parse(fenced.value);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? { ok: true, value: parsed }
-      : { ok: false, reason: "invalid-output-wrapper" };
-  } catch {
-    return { ok: false, reason: "invalid-output-wrapper" };
-  }
+  const parsed = parseRuntimeJsonObject(value);
+  return parsed.ok
+    ? { ok: true, value: parsed.value }
+    : { ok: false, reason: "invalid-output-wrapper" };
 }
 
 function parseFailure(
@@ -1342,15 +1321,6 @@ function parseFailure(
   evidenceSpansValid = false
 ): TaxonomyAdjudicationParseResult {
   return { ok: false, reason, errorKind, evidenceSpansValid };
-}
-
-function stripJsonFence(value: string) {
-  const trimmed = value.trim();
-  const match = /^```(?:json)?\s*([\s\S]*?)\s*```$/iu.exec(trimmed);
-  return {
-    value: match?.[1]?.trim() ?? trimmed,
-    wasFenced: Boolean(match),
-  };
 }
 
 function splitSentences(value: string) {

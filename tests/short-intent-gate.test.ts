@@ -392,7 +392,7 @@ test("accepts fenced compact provider output and rejects truncation", () => {
     request
   );
   assert.equal(truncated.ok, false);
-  if (!truncated.ok) assert.equal(truncated.reason, "invalid-json");
+  if (!truncated.ok) assert.equal(truncated.reason, "truncated-json");
 });
 
 test("response-opportunity lease is independent of parent and type state", () => {

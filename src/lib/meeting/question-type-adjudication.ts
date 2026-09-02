@@ -16,6 +16,7 @@ export {
 } from "./current-question-settlement.js";
 import type { RuntimeInferenceRuntimeJob } from "./runtime-inference-runtime.js";
 import { buildRuntimeInferenceModelInput } from "./runtime-inference.js";
+import { parseRuntimeJsonObject } from "./runtime-json-object.js";
 import type { RuntimeAxisConflictDecision } from "./runtime-axis-conflict.js";
 import type { TaxonomyAdjudicationLease } from "./taxonomy-adjudication.js";
 import type { MeetingQuestionTypeAdjudicationMode } from "./types.js";
@@ -658,22 +659,11 @@ export function parseQuestionTypeAdjudicationOutput(
   rawOutput: string,
   request: QuestionTypeAdjudicationRequest
 ): QuestionTypeAdjudicationParseResult {
-  const trimmed = stripJsonFence(rawOutput.trim());
-  if (!trimmed) return parseFailure("empty-output", "parse");
-  if (trimmed.length > QUESTION_TYPE_ADJUDICATION_MAX_OUTPUT_CHARS) {
-    return parseFailure("output-too-large", "parse");
-  }
-
-  let decoded: unknown;
-  try {
-    decoded = JSON.parse(trimmed);
-  } catch {
-    return parseFailure("invalid-json", "parse");
-  }
-  if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) {
-    return parseFailure("output-is-not-object", "schema");
-  }
-  const candidate = decoded as Record<string, unknown>;
+  const parsed = parseRuntimeJsonObject(rawOutput, {
+    maxChars: QUESTION_TYPE_ADJUDICATION_MAX_OUTPUT_CHARS,
+  });
+  if (!parsed.ok) return parseFailure(parsed.reason, parsed.errorKind);
+  const candidate = parsed.value;
   if (request.reviewScope === "field-vs-coding") {
     return parseFieldCodingScoreOutput(candidate, request);
   }
@@ -1016,11 +1006,6 @@ function parseFieldCodingScoreOutput(
       },
     },
   };
-}
-
-function stripJsonFence(value: string) {
-  const match = /^```(?:json)?\s*([\s\S]*?)\s*```$/iu.exec(value);
-  return match?.[1]?.trim() ?? value;
 }
 
 function estimateWordEquivalents(value: string) {

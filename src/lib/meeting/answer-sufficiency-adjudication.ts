@@ -6,6 +6,7 @@ import type {
 } from "./answer-sufficiency.js";
 import { createMeetingId } from "./context-manager.js";
 import { buildRuntimeInferenceModelInput } from "./runtime-inference.js";
+import { parseRuntimeJsonObject } from "./runtime-json-object.js";
 
 export const ANSWER_SUFFICIENCY_ADJUDICATION_SCHEMA_VERSION = 1;
 export const ANSWER_SUFFICIENCY_ADJUDICATION_PROMPT_VERSION =
@@ -182,19 +183,11 @@ export function parseAnswerSufficiencyAdjudicationOutput(
   rawOutput: string,
   request: AnswerSufficiencyAdjudicationRequest
 ): AnswerSufficiencyAdjudicationParseResult {
-  if (!rawOutput.trim()) {
-    return { ok: false, reason: "empty-output", evidenceSpansValid: false };
+  const parsed = parseRuntimeJsonObject(rawOutput);
+  if (!parsed.ok) {
+    return { ok: false, reason: parsed.reason, evidenceSpansValid: false };
   }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(stripJsonFence(rawOutput));
-  } catch {
-    return { ok: false, reason: "malformed-json", evidenceSpansValid: false };
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return { ok: false, reason: "output-is-not-object", evidenceSpansValid: false };
-  }
-  const candidate = parsed as Record<string, unknown>;
+  const candidate = parsed.value;
   if (
     candidate.schemaVersion !==
     ANSWER_SUFFICIENCY_ADJUDICATION_SCHEMA_VERSION
@@ -412,12 +405,6 @@ function clip(value: string, maxChars: number) {
   const normalized = normalize(value);
   if (normalized.length <= maxChars) return normalized;
   return `${normalized.slice(0, Math.max(0, maxChars - 3)).trimEnd()}...`;
-}
-
-function stripJsonFence(value: string) {
-  const trimmed = value.trim();
-  const match = /^```(?:json)?\s*([\s\S]*?)\s*```$/iu.exec(trimmed);
-  return match?.[1]?.trim() ?? trimmed;
 }
 
 function normalize(value: string) {

@@ -5,6 +5,7 @@ import {
 import type { RuntimeInferenceRuntimeJob } from "./runtime-inference-runtime.js";
 import type { AIResponseTerminalOutcome } from "../functions/ai-response-events.js";
 import { buildRuntimeInferenceModelInput } from "./runtime-inference.js";
+import { parseRuntimeJsonObject } from "./runtime-json-object.js";
 
 export const WHITEBOARD_SYNTAX_REPAIR_PROMPT_VERSION =
   "whiteboard-syntax-repair-v2";
@@ -36,7 +37,9 @@ export interface WhiteboardSyntaxRepairOutput {
 export type WhiteboardSyntaxRepairParseFailure =
   | "empty-output"
   | "non-json-output"
-  | "invalid-json"
+  | "truncated-json"
+  | "malformed-json"
+  | "output-is-not-object"
   | "unexpected-schema"
   | "missing-mermaid"
   | "missing-ascii-fallback"
@@ -212,15 +215,13 @@ export function parseWhiteboardSyntaxRepairOutput(
     };
   }
 
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(trimmed);
-  } catch {
-    return { ok: false, reason: "invalid-json" };
+  const parsedResult = parseRuntimeJsonObject(trimmed, {
+    maxChars: WHITEBOARD_SYNTAX_REPAIR_MAX_RAW_OUTPUT_CHARS,
+  });
+  if (!parsedResult.ok) {
+    return { ok: false, reason: parsedResult.reason };
   }
-  if (!isRecord(parsed)) {
-    return { ok: false, reason: "unexpected-schema" };
-  }
+  const parsed = parsedResult.value;
   const keys = Object.keys(parsed).sort();
   if (
     keys.length !== 3 ||
@@ -521,10 +522,6 @@ function denied(
   >
 ): WhiteboardSyntaxRepairAuthorization {
   return { authorized: false, reason };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function arraysEqual(left: string[], right: string[]) {

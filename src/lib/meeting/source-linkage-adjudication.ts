@@ -1,5 +1,6 @@
 import type { RuntimeInferenceRuntimeJob } from "./runtime-inference-runtime.js";
 import { buildRuntimeInferenceModelInput } from "./runtime-inference.js";
+import { parseRuntimeJsonObject } from "./runtime-json-object.js";
 import {
   formatRuntimeInferenceValidationForTrace,
   getRuntimeInferenceValidationDefinition,
@@ -159,20 +160,11 @@ export function parseSourceLinkageAdjudicationOutput(
   rawOutput: string,
   request: SourceLinkageAdjudicationRequest
 ): SourceLinkageAdjudicationParseResult {
-  const trimmed = stripJsonFence(rawOutput.trim());
-  if (!trimmed) return parseFailure("empty-output", "parse");
-  if (trimmed.length > SOURCE_LINKAGE_MAX_OUTPUT_CHARS) {
-    return parseFailure("output-too-large", "parse");
-  }
-  let decoded: unknown;
-  try {
-    decoded = JSON.parse(trimmed);
-  } catch {
-    return parseFailure("invalid-json", "parse");
-  }
-  if (!isRecord(decoded)) {
-    return parseFailure("output-is-not-object", "schema");
-  }
+  const parsed = parseRuntimeJsonObject(rawOutput, {
+    maxChars: SOURCE_LINKAGE_MAX_OUTPUT_CHARS,
+  });
+  if (!parsed.ok) return parseFailure(parsed.reason, parsed.errorKind);
+  const decoded = parsed.value;
   const allowedKeys = new Set([
     "schemaVersion",
     "decision",
@@ -387,15 +379,6 @@ function parseFailure(
   errorKind: "parse" | "schema" | "evidence" | "provider"
 ): SourceLinkageAdjudicationParseResult {
   return { ok: false, reason, errorKind, evidenceSpansValid: false };
-}
-
-function stripJsonFence(value: string) {
-  const fenced = value.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
-  return fenced?.[1]?.trim() ?? value;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function isEvidenceSpanArray(value: unknown): value is string[] {

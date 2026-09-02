@@ -4,6 +4,7 @@ import {
   type RuntimeInferenceOperationKind,
 } from "./runtime-inference.js";
 import type { RuntimeInferenceRuntimeJob } from "./runtime-inference-runtime.js";
+import { parseRuntimeJsonObject } from "./runtime-json-object.js";
 import type {
   LlmTaskRelationAdjudication,
   RuntimeTaskRelation,
@@ -1482,19 +1483,12 @@ function parseJsonObject(rawOutput: string):
       errorKind: "parse" | "schema" | "evidence" | "provider";
       evidenceSpansValid: false;
     } {
-  const trimmed = stripJsonFence(rawOutput.trim());
-  if (!trimmed) return parseFailure("empty-output", "parse");
-  if (trimmed.length > TASK_RELATION_SPLIT_MAX_OUTPUT_CHARS) {
-    return parseFailure("output-too-large", "parse");
-  }
-  try {
-    const value = JSON.parse(trimmed) as unknown;
-    return value && typeof value === "object" && !Array.isArray(value)
-      ? { ok: true, value: value as Record<string, unknown> }
-      : parseFailure("output-is-not-object", "schema");
-  } catch {
-    return parseFailure("invalid-json", "parse");
-  }
+  const parsed = parseRuntimeJsonObject(rawOutput, {
+    maxChars: TASK_RELATION_SPLIT_MAX_OUTPUT_CHARS,
+  });
+  return parsed.ok
+    ? { ok: true, value: parsed.value }
+    : parseFailure(parsed.reason, parsed.errorKind);
 }
 
 function parseFailure(
@@ -1547,10 +1541,6 @@ function isRuntimeRelation(value: unknown): value is RuntimeTaskRelation {
 
 function allSpansGrounded(spans: string[], corpus: string) {
   return spans.every((span) => corpus.includes(span));
-}
-
-function stripJsonFence(value: string) {
-  return value.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/iu)?.[1]?.trim() ?? value;
 }
 
 export function isTaskRelationSplitOperationKind(
