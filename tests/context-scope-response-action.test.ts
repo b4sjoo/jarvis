@@ -6,6 +6,7 @@ import {
   CONTEXT_SCOPE_MAX_RECENT_THEM_TURNS,
   composeCurrentOnlyAdvisorPromptContext,
   composeExpandedAdvisorPromptContext,
+  formatContextScopeResponseActionForTrace,
 } from "../src/lib/meeting/context-scope-response-action.js";
 import {
   compileSettledAdvisorPromptContext,
@@ -421,6 +422,29 @@ test("explicit Enhance selects the best bounded source when automatic sufficienc
     "manual-best-available-recent-dialogue"
   );
   assert.match(result.promptContext.transcript, /separate analytics store/);
+  assert.deepEqual(formatContextScopeResponseActionForTrace(result), {
+    responseActionContextCandidateCount: 2,
+    responseActionContextCandidates: [
+      {
+        kind: "current-lqu",
+        turnIds: ["turn_current"],
+        chars: result.candidates[0].chars,
+        score: 1,
+        selected: true,
+        reason: "required-current-logical-question",
+        rejectedReason: undefined,
+      },
+      {
+        kind: "recent-dialogue",
+        turnIds: ["turn_prior"],
+        chars: result.candidates[1].chars,
+        score: result.candidates[1].score,
+        selected: true,
+        reason: "recent-dialogue-lexical-evidence",
+        rejectedReason: undefined,
+      },
+    ],
+  });
 });
 
 test("Enhance enforces recent-window and capsule character budgets", () => {

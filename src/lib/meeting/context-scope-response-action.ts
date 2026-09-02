@@ -83,6 +83,23 @@ export function composeContextScopeAdvisorPromptContext(
     : composeExpandedAdvisorPromptContext(request);
 }
 
+export function formatContextScopeResponseActionForTrace(
+  result: ContextScopeResponseActionResult
+) {
+  return {
+    responseActionContextCandidateCount: result.candidates.length,
+    responseActionContextCandidates: result.candidates.map((candidate) => ({
+      kind: candidate.kind,
+      turnIds: [...candidate.turnIds],
+      chars: candidate.chars,
+      score: candidate.score,
+      selected: candidate.selected,
+      reason: candidate.reason,
+      rejectedReason: candidate.rejectedReason,
+    })),
+  };
+}
+
 export function composeCurrentOnlyAdvisorPromptContext(
   input: ContextScopeCompositionInput
 ): ContextScopeResponseActionResult {

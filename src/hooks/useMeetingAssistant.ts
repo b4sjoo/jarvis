@@ -705,6 +705,7 @@ import {
   decideShortConfirmationAdmission,
   reconcilePrimaryAskTurnDecision,
   composeContextScopeAdvisorPromptContext,
+  formatContextScopeResponseActionForTrace,
   evaluateAnswerContextResolvabilityShadow,
   scoreAnswerSufficiencySemanticEmbedding,
   createPlaybookPhaseHistoryState,
@@ -35006,6 +35007,7 @@ export function useMeetingAssistant() {
           ...formatVisibleAnswerResponseActionTargetForTrace(
             targetDecision
           ),
+          ...formatContextScopeResponseActionForTrace(selection),
           responseActionResolvedSettlementId:
             committedSettlement?.settlementId,
           responseActionResolvedSettlementSourceHash:
