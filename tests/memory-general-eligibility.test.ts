@@ -181,6 +181,30 @@ test("allows project facts through discriminative current-question evidence", ()
   assert.equal(decision.scopePath, "strong-current-question");
 });
 
+test("leaves non-project fact evidence on the existing general eligibility path", () => {
+  const entry = makeEntry({
+    id: "global-resume-fact",
+    type: "resume_fact",
+    scope: "global",
+    useCases: ["meeting_assistant"],
+  });
+
+  const projectDecision = resolveProjectScopedFactMemoryEligibility({
+    entry,
+    query: "Tell me about the candidate.",
+  });
+  const generalDecision = resolveGeneralMemoryEligibility({
+    entry,
+    familyDecision: resolveMemoryInterviewFamilies(entry),
+    query: "Tell me about the candidate.",
+    useCase: "meeting_assistant",
+  });
+
+  assert.equal(projectDecision.applies, false);
+  assert.equal(generalDecision.applies, true);
+  assert.equal(generalDecision.scopePath, "explicit-reusable");
+});
+
 test("uses only the current question for project-scoped eligibility", () => {
   const entry = makeEntry({
     id: "mem_oasis_ndjson_bulk_requirement",

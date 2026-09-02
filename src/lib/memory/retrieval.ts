@@ -642,7 +642,7 @@ function getEntryEligibilityDecision(
   const runtimeRole = classifyRuntimeMemoryRole(entry);
   const effectiveProjectAnchor =
     memoryPolicy?.strictProjectAnchor ?? projectAnchor;
-  const generalEligibilityDecision =
+  const projectFactEligibilityDecision =
     runtimeRole.role === "fact-evidence"
       ? resolveProjectScopedFactMemoryEligibility({
           entry,
@@ -650,6 +650,10 @@ function getEntryEligibilityDecision(
           projectId,
           projectAnchor: effectiveProjectAnchor,
         })
+      : undefined;
+  const generalEligibilityDecision =
+    projectFactEligibilityDecision?.applies
+      ? projectFactEligibilityDecision
       : resolveGeneralMemoryEligibility({
           entry,
           familyDecision: familyGateDecision.resolution,
