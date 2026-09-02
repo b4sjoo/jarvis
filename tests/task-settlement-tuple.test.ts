@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  evaluateTaskSettlementTupleCompatibilityV2,
   projectObservedParentAction,
   type CommittedLifecycleEvidence,
 } from "../src/lib/meeting/task-settlement-tuple.js";
@@ -53,5 +54,21 @@ test("projects a different child attachment as attach-child", () => {
       authority: "source-transition-durable-receipt",
     }),
     "attach-child"
+  );
+});
+
+test("accepts a same-parent retype for a related follow-up", () => {
+  assert.deepEqual(
+    evaluateTaskSettlementTupleCompatibilityV2({
+      relation: "followup-parent",
+      parentAction: "retype",
+    }),
+    {
+      compatible: true,
+      relation: "followup-parent",
+      parentAction: "retype",
+      recommendedParentAction: "preserve",
+      reason: undefined,
+    }
   );
 });

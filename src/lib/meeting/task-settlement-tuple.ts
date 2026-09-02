@@ -178,6 +178,9 @@ function allowedParentActionsForRelation(
   if (relation === "child-probe") {
     return ["attach-child", "preserve"];
   }
+  if (relation === "followup-parent") {
+    return ["preserve", "retype"];
+  }
   return [recommendedParentActionForRelation(relation)];
 }
 

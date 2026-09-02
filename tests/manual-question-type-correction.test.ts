@@ -68,7 +68,7 @@ test("settles manual type authority and relation authority in one correction tra
   assert.equal(result.settlement.parentMutationAuthorized, true);
 });
 
-test("reauthorizes only a parent-origin cross-type lifecycle", () => {
+test("reauthorizes correction-owned parent retypes without changing relation", () => {
   const unit = makeLogicalQuestion(
     "question-retype",
     "turn-retype",
@@ -96,6 +96,37 @@ test("reauthorizes only a parent-origin cross-type lifecycle", () => {
   assert.equal(projected.parentMutationAuthorized, true);
   assert.ok(
     projected.reasons.includes(
+      "manual-correction-same-question-retype-authorized"
+    )
+  );
+
+  const relatedFollowup = settleManualQuestionTypeCorrection({
+    operationId: "correction-related-followup",
+    currentQuestion: createProvisionalCurrentQuestion({
+      logicalQuestionUnit: makeLogicalQuestion(
+        "question-followup",
+        "turn-followup",
+        "A future team may use a separate analytics store."
+      ),
+      sourceKind: "voice",
+    }),
+    correctedType: "ai-ml-system-design",
+    activeParentId: "parent-design",
+    activeParentRevision: 2,
+    manualCorrectionRevision: 2,
+    revisionStableRelation: "followup-parent",
+  }).settlement;
+  const relatedProjected = authorizeManualCorrectionLifecycle({
+    settlement: relatedFollowup,
+    scope: "same-question-retype",
+    activeParentId: "parent-design",
+    activeParentType: "general-system-design",
+  });
+
+  assert.equal(relatedProjected.relation, "followup-parent");
+  assert.equal(relatedProjected.parentMutationAuthorized, true);
+  assert.ok(
+    relatedProjected.reasons.includes(
       "manual-correction-same-question-retype-authorized"
     )
   );

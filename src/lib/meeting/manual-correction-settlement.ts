@@ -46,9 +46,12 @@ export function authorizeManualCorrectionLifecycle(input: {
   const activeParentType = normalizeCanonicalQuestionType(
     input.activeParentType
   );
+  const relationOwnsRetype =
+    input.settlement.relation === "new-parent" ||
+    input.settlement.relation === "followup-parent";
   if (
     input.scope !== "same-question-retype" ||
-    input.settlement.relation !== "new-parent" ||
+    !relationOwnsRetype ||
     !input.activeParentId ||
     input.settlement.activeParentId !== input.activeParentId ||
     !correctedType ||

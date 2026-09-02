@@ -522,6 +522,20 @@ test("validates relation and parent-action tuples before ground truth is saved",
     }
   );
 
+  assert.deepEqual(
+    evaluateTaskSettlementTupleCompatibilityV2({
+      relation: "followup-parent",
+      parentAction: "retype",
+    }),
+    {
+      compatible: true,
+      relation: "followup-parent",
+      parentAction: "retype",
+      recommendedParentAction: "preserve",
+      reason: undefined,
+    }
+  );
+
   for (const parentAction of ["preserve", "retype"] as const) {
     assert.deepEqual(
       evaluateTaskSettlementTupleCompatibilityV2({
