@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   authorizeAnswerRecoveryAdjudicationLease,
@@ -68,6 +69,22 @@ test("gives an authorized image one Advisor attempt before requesting another", 
       authorizedImageAttached: false,
     }),
     false
+  );
+});
+
+test("refreshes a completed trace after background visual evidence settles", () => {
+  const source = readFileSync("src/hooks/useMeetingAssistant.ts", "utf8");
+  const start = source.indexOf(
+    "const scheduleQuestionOnlyVisualEvidenceCheck"
+  );
+  const end = source.indexOf(
+    "const scheduleAnswerRecoveryAdjudications",
+    start
+  );
+  assert.ok(start >= 0 && end > start);
+  assert.match(
+    source.slice(start, end),
+    /refreshRecordedCompletedTrace\(input\.traceId\)/
   );
 });
 

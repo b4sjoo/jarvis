@@ -7100,6 +7100,7 @@ export function useMeetingAssistant() {
                   settlement.error
                 );
               }
+              refreshRecordedCompletedTrace(input.traceId);
             }
             resolve({
               disposition,
@@ -7112,7 +7113,7 @@ export function useMeetingAssistant() {
         });
       });
     },
-    []
+    [refreshRecordedCompletedTrace]
   );
 
   const scheduleAnswerRecoveryAdjudications = useCallback(
