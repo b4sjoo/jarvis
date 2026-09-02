@@ -214,7 +214,13 @@ function projectCommittedLifecycleParentAction(
     }
     return isSameParentRetype(evidence) ? "retype" : "create";
   }
-  if (evidence.command === "attach-child") return "attach-child";
+  if (evidence.command === "attach-child") {
+    return evidence.childBeforeId &&
+      evidence.childAfterId &&
+      evidence.childBeforeId === evidence.childAfterId
+      ? "preserve"
+      : "attach-child";
+  }
   if (evidence.command === "resume-parent") return "resume";
   return "preserve";
 }
