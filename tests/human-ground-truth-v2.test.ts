@@ -1328,6 +1328,22 @@ test("joins explicit correction lifecycle evidence into the terminal attempt pro
     "trace_correction_regeneration",
     "trace_correction_lifecycle",
   ]);
+
+  for (const status of ["running", "error", "cancelled"] as const) {
+    correction.status = status;
+    const nonSuccessResult = materializeHumanEvaluationAttemptProjectionV2({
+      trace: regeneration,
+      traces: [regeneration, correction],
+      currentSessionId: "session_retry",
+      events: [],
+      projections: [],
+    });
+    assert.equal(
+      nonSuccessResult.projection?.observed?.parentAction,
+      "retype",
+      `durable lifecycle receipt should survive ${status} trace status`
+    );
+  }
 });
 
 test("does not guess a replacement action from an incoherent correction trace", () => {

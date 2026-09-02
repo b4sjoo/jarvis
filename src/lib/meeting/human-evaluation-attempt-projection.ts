@@ -141,7 +141,6 @@ function resolveLinkedCorrectionLifecycleTrace(input: {
   const correctionMetadata = correctionTrace?.metadata ?? {};
   if (
     !correctionTrace ||
-    correctionTrace.status !== "success" ||
     readString(correctionMetadata.manualQuestionTypeCorrectionId) !==
       correctionId ||
     correctionMetadata.taskLifecycleAuthorized !== true ||
