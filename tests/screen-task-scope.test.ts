@@ -18,7 +18,18 @@ import {
   selectManualScreenVoiceQuestionCapsule,
 } from "../src/lib/meeting/screen-task-scope.js";
 import { buildManualScreenLogicalQuestionUnit } from "../src/lib/meeting/manual-screen-question-source.js";
+import {
+  createProvisionalCurrentQuestion,
+  resolveSettlementOwnedQuestionSource,
+  settleCurrentQuestion,
+  validateCurrentQuestionSettlementIdentity,
+} from "../src/lib/meeting/current-question-settlement.js";
+import {
+  authorizeRuntimeTypeAdjudicationOutputAuthority,
+  createRuntimeTypeAdjudicationOutputAuthority,
+} from "../src/lib/meeting/answer-generation-lease.js";
 import { MeetingContextManager } from "../src/lib/meeting/context-manager.js";
+import type { LogicalQuestionUnit } from "../src/lib/meeting/logical-question-unit.js";
 import type {
   ActiveInterviewParent,
   ActiveScreenTask,
@@ -258,6 +269,132 @@ test("attaches only the full screenshot bound to the same parent and runtime", (
     sourceReadDisposition: "attached",
     sourceScreenImageAttached: true,
   });
+});
+
+test("keeps Voice settlement authority while reading an active-branch Screen", () => {
+  const logicalQuestionUnit: LogicalQuestionUnit = {
+    id: "voice-over-screen-lqu",
+    revision: 1,
+    sessionId: "session-1",
+    runtimeEpoch: 4,
+    currentTurnId: "turn-highlight",
+    sourceTurnIds: ["turn-highlight"],
+    sources: [
+      {
+        turnId: "turn-highlight",
+        text: "What does the currently highlighted code do?",
+        startedAt: 1,
+        endedAt: 2,
+      },
+    ],
+    normalizedText: "What does the currently highlighted code do?",
+    startedAt: 1,
+    updatedAt: 2,
+    compositionReasons: ["no-previous-logical-question"],
+    boundaryReason: "no-previous-logical-question",
+    truncated: false,
+  };
+  const committedQuestion = createProvisionalCurrentQuestion({
+    logicalQuestionUnit,
+    sourceKind: "voice",
+  });
+  const settlement = settleCurrentQuestion({
+    currentQuestion: committedQuestion,
+    llmProposal: {
+      source: "runtime-adjudication",
+      sessionId: "session-1",
+      runtimeEpoch: 4,
+      logicalQuestionUnitId: logicalQuestionUnit.id,
+      revision: logicalQuestionUnit.revision,
+      sourceHash: committedQuestion.sourceHash,
+      questionType: "coding",
+      relation: "followup-parent",
+      action: "answer",
+      evidenceMode: "factual-explanation",
+      confidence: 0.95,
+      typeEvidenceAuthorized: true,
+      relationEvidenceAuthorized: true,
+      actionEvidenceAuthorized: true,
+      expectedParentId: "parent-1",
+      expectedParentRevision: 2,
+      reasons: ["runtime-type-and-relation"],
+    },
+    activeParentId: "parent-1",
+    activeParentRevision: 2,
+    manualCorrectionRevision: 0,
+    policy: {
+      allowRuntimeTypeAdjudication: true,
+      allowLlmRelationRepair: true,
+      allowLlmActionRepair: true,
+      runtimeMutationAuthorized: true,
+      questionComplete: true,
+      commitParent: false,
+    },
+  });
+  const consumerSource = resolveSettlementOwnedQuestionSource({
+    settlement,
+    fallbackSourceKind: "mixed",
+    fallbackSourceObservationIds: ["screen-a"],
+  });
+  const consumerQuestion = createProvisionalCurrentQuestion({
+    logicalQuestionUnit,
+    ...consumerSource,
+  });
+  const authority = createRuntimeTypeAdjudicationOutputAuthority({
+    operationId: "voice-over-screen-operation",
+    settlement,
+    manualCorrectionRevision: 0,
+  });
+
+  assert.deepEqual(
+    validateCurrentQuestionSettlementIdentity({
+      settlement,
+      currentQuestion: consumerQuestion,
+    }),
+    { authorized: true, reasons: [] }
+  );
+  assert.ok(authority);
+  assert.deepEqual(
+    authorizeRuntimeTypeAdjudicationOutputAuthority(authority, {
+      settlementId: settlement.settlementId,
+      sessionId: "session-1",
+      runtimeEpoch: 4,
+      logicalQuestionUnitId: logicalQuestionUnit.id,
+      logicalQuestionRevision: logicalQuestionUnit.revision,
+      manualCorrectionRevision: 0,
+    }),
+    { authorized: true, reason: "authorized" }
+  );
+
+  const screenRead = resolveAdvisorScreenSourceRead({
+    mode: "screen-anchored",
+    expectedSessionId: "session-1",
+    currentSessionId: "session-1",
+    expectedRuntimeEpoch: 4,
+    currentRuntimeEpoch: 4,
+    expectedParentId: "parent-1",
+    activeMeetingTask: {
+      parent: { id: "parent-1" },
+      screen: { observationId: "screen-a" },
+    },
+    screenObservations: [
+      {
+        id: "screen-a",
+        capturedAt: 1,
+        source: "hotkey",
+        imageBase64: "screen-image",
+        changed: true,
+      },
+    ],
+    preferredObservationIds: settlement.sourceObservationIds,
+    sourceVoiceTurnIds: logicalQuestionUnit.sourceTurnIds,
+    providerSupportsImages: true,
+  });
+  assert.equal(consumerQuestion.sourceKind, "voice");
+  assert.deepEqual(consumerQuestion.sourceObservationIds, []);
+  assert.equal(screenRead.disposition, "attached");
+  assert.equal(screenRead.selectionSource, "active-branch");
+  assert.equal(screenRead.sourceScreenObservationId, "screen-a");
 });
 
 test("prefers an exact settlement observation over the active branch screen", () => {
