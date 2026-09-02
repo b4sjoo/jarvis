@@ -3,6 +3,7 @@ import type {
   HumanGroundTruthEventV2,
 } from "./human-ground-truth-v2.js";
 import type { ManualRuntimeActionEventV1 } from "./manual-runtime-action.js";
+import type { RuntimeRegressionStepEventV1 } from "./runtime-regression.js";
 
 export const SESSION_PROCEDURE_SCHEMA_VERSION = 1 as const;
 
@@ -167,6 +168,7 @@ export function buildSessionProcedureV1(input: {
   recordingIntegrityStatus?: string;
   timelineEvents: SessionProcedureTimelineEvent[];
   transcriptTurns: SessionProcedureTranscriptTurn[];
+  runtimeRegressionSteps?: RuntimeRegressionStepEventV1[];
   manualActions: ManualRuntimeActionEventV1[];
   humanEvaluationProjections: HumanEvaluationProjectionV2[];
   traceSummaries?: SessionProcedureTraceSummary[];
@@ -179,6 +181,12 @@ export function buildSessionProcedureV1(input: {
   const ingressTraceIdsByTurnId = collectIngressTraceIdsByTurnId(
     input.timelineEvents
   );
+  const ingressTurnIdsByTraceId = new Map<string, string>();
+  for (const [turnId, traceIds] of ingressTraceIdsByTurnId) {
+    for (const traceId of traceIds) {
+      ingressTurnIdsByTraceId.set(traceId, turnId);
+    }
+  }
   const traceSummariesById = new Map(
     (input.traceSummaries ?? []).map((summary) => [summary.traceId, summary])
   );
@@ -187,6 +195,24 @@ export function buildSessionProcedureV1(input: {
   const representedTurnIds = new Set<string>();
   const representedActionIds = new Set<string>();
   const representedSpecializedEventIds = new Set<string>();
+  const runtimeStepTraceIds = new Set<string>();
+
+  for (const step of buildRuntimeRegressionTextSteps({
+    events: input.runtimeRegressionSteps ?? [],
+    traceSummariesById,
+    traceSummaryProjectionEnabled,
+    projections: input.humanEvaluationProjections,
+    turnsById,
+    ingressTurnIdsByTraceId,
+  })) {
+    steps.push(step);
+    for (const traceId of step.provenance.traceIds) {
+      runtimeStepTraceIds.add(traceId);
+    }
+    for (const turnId of step.provenance.sourceTurnIds) {
+      representedTurnIds.add(turnId);
+    }
+  }
 
   for (const event of input.timelineEvents) {
     const specializedIdentity = timelineSpecializedIdentity(event);
@@ -206,6 +232,17 @@ export function buildSessionProcedureV1(input: {
       projections: input.humanEvaluationProjections,
     });
     if (!step) continue;
+    if (
+      step.kind === "them-text" &&
+      step.provenance.traceIds.some((traceId) =>
+        runtimeStepTraceIds.has(traceId)
+      )
+    ) {
+      for (const turnId of step.provenance.sourceTurnIds) {
+        representedTurnIds.add(turnId);
+      }
+      continue;
+    }
     if (specializedIdentity) {
       representedSpecializedEventIds.add(specializedIdentity);
     }
@@ -303,6 +340,81 @@ export function buildSessionProcedureV1(input: {
     evidenceGaps,
     steps: numberedSteps,
   };
+}
+
+function buildRuntimeRegressionTextSteps(input: {
+  events: RuntimeRegressionStepEventV1[];
+  traceSummariesById: Map<string, SessionProcedureTraceSummary>;
+  traceSummaryProjectionEnabled: boolean;
+  projections: HumanEvaluationProjectionV2[];
+  turnsById: Map<string, SessionProcedureTranscriptTurn>;
+  ingressTurnIdsByTraceId: Map<string, string>;
+}) {
+  const eventsByStepId = new Map<string, RuntimeRegressionStepEventV1[]>();
+  for (const event of input.events) {
+    const events = eventsByStepId.get(event.scenarioStepId) ?? [];
+    events.push(event);
+    eventsByStepId.set(event.scenarioStepId, events);
+  }
+  return Array.from(eventsByStepId.values())
+    .map((events) => {
+      const injected = events.find(
+        (event) => event.event === "injected" && event.inputKind === "them-text"
+      );
+      if (!injected) return undefined;
+      const terminal = events.find((event) => event.event === "terminal");
+      const traceIds = uniqueStrings(
+        events.map((event) => event.traceId).filter(isString)
+      );
+      const sourceTurnId = injected.traceId
+        ? input.ingressTurnIdsByTraceId.get(injected.traceId)
+        : undefined;
+      const transcriptText = sourceTurnId
+        ? input.turnsById.get(sourceTurnId)?.text.trim()
+        : undefined;
+      const text = injected.text?.trim() || transcriptText;
+      const timelineEvent: SessionProcedureTimelineEvent = {
+        id: `runtime-regression-step:${injected.scenarioRunId}:${injected.scenarioStepId}`,
+        kind: "runtime-regression-step",
+        createdAt: injected.occurredAt,
+        traceId: injected.traceId,
+      };
+      let step = baseStep({
+        event: timelineEvent,
+        kind: "them-text",
+        replaySupport: text ? "ready" : "capture-only",
+        input: text ? { text } : {},
+        traceIds,
+        sourceTurnIds: sourceTurnId ? [sourceTurnId] : [],
+        sourceTransport: "manual-text",
+        observed: {
+          traceIds,
+          terminalDisposition: terminal?.terminalDisposition,
+          terminalReason: terminal?.reason,
+          logicalQuestionUnitId: terminal?.logicalQuestionUnitId,
+          taskId: undefined,
+          visibleAnswerRevision: terminal?.visibleAnswerRevision,
+        },
+        evidenceGaps: [
+          ...(text ? [] : ["runtime-regression-input-text-missing"]),
+          ...(terminal ? [] : ["runtime-regression-terminal-missing"]),
+        ],
+      });
+      step = attachRuntimeTraceSummary(step, input.traceSummariesById, {
+        enabled: input.traceSummaryProjectionEnabled,
+      });
+      if (step.observed?.primarySourceTurnIds?.length) {
+        step = {
+          ...step,
+          provenance: {
+            ...step.provenance,
+            sourceTurnIds: [...step.observed.primarySourceTurnIds],
+          },
+        };
+      }
+      return attachExpectedContract(step, input.projections);
+    })
+    .filter((step): step is SessionProcedureStepV1 => Boolean(step));
 }
 
 function buildTimelineStep(input: {

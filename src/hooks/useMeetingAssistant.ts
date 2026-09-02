@@ -25403,6 +25403,7 @@ export function useMeetingAssistant() {
           inputKind: "them-text",
           runtimeSessionId: run.runtimeSessionId,
           traceId: trace.id,
+          text,
           textChars: text.length,
           sourceHash,
           occurredAt: startedAt,

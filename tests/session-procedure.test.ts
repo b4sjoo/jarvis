@@ -9,6 +9,7 @@ import {
   type SessionProcedureTimelineEvent,
 } from "../src/lib/meeting/session-procedure.js";
 import { createManualRuntimeActionEvent } from "../src/lib/meeting/manual-runtime-action.js";
+import { createRuntimeRegressionStepEvent } from "../src/lib/meeting/runtime-regression.js";
 
 test("compiles ordered source and action steps without injecting resolved targets", () => {
   const manualActions = [
@@ -162,6 +163,58 @@ test("compiles ordered source and action steps without injecting resolved target
     procedure.steps[3]?.provenance.sourceObservationIds,
     ["screen-1"]
   );
+});
+
+test("keeps suppressed scripted text as a replayable procedure step", () => {
+  const procedure = buildSessionProcedureV1({
+    recordingSessionId: "recording-scripted",
+    folderName: "session-scripted",
+    sourceDigest: "digest-scripted",
+    scriptedValidation: true,
+    forcedScripted: true,
+    recordingIntegrityStatus: "complete",
+    timelineEvents: [],
+    transcriptTurns: [],
+    runtimeRegressionSteps: [
+      createRuntimeRegressionStepEvent({
+        scenarioRunId: "scenario-a",
+        scenarioStepId: "step-4",
+        ordinal: 4,
+        event: "injected",
+        inputKind: "them-text",
+        runtimeSessionId: "meeting-a",
+        traceId: "trace-filler",
+        text: "Mm, okay.",
+        textChars: 9,
+        sourceHash: "filler-hash",
+        occurredAt: 100,
+      }),
+      createRuntimeRegressionStepEvent({
+        scenarioRunId: "scenario-a",
+        scenarioStepId: "step-4",
+        ordinal: 4,
+        event: "terminal",
+        inputKind: "them-text",
+        runtimeSessionId: "meeting-a",
+        traceId: "trace-filler",
+        sourceHash: "filler-hash",
+        terminalDisposition: "suppressed",
+        occurredAt: 110,
+      }),
+    ],
+    manualActions: [],
+    humanEvaluationProjections: [],
+    generatedAt: 200,
+  });
+
+  assert.equal(procedure.steps.length, 1);
+  assert.equal(procedure.steps[0]?.kind, "them-text");
+  assert.equal(procedure.steps[0]?.input.text, "Mm, okay.");
+  assert.equal(
+    procedure.steps[0]?.observed?.terminalDisposition,
+    "suppressed"
+  );
+  assert.equal(procedure.steps[0]?.replaySupport, "ready");
 });
 
 test("projects exact runtime source and publication evidence without changing replay input", () => {

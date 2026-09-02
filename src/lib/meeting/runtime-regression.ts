@@ -41,6 +41,7 @@ export interface RuntimeRegressionStepEventV1 {
   settlementId?: string;
   executionPlanId?: string;
   visibleAnswerRevision?: number;
+  text?: string;
   textChars?: number;
   sourceHash?: string;
   terminalDisposition?: RuntimeRegressionStepTerminalDisposition;

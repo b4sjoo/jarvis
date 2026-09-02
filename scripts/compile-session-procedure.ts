@@ -4,6 +4,7 @@ import path from "node:path";
 import process from "node:process";
 import type { HumanEvaluationProjectionV2 } from "../src/lib/meeting/human-ground-truth-v2.js";
 import type { ManualRuntimeActionEventV1 } from "../src/lib/meeting/manual-runtime-action.js";
+import type { RuntimeRegressionStepEventV1 } from "../src/lib/meeting/runtime-regression.js";
 import {
   buildSessionProcedureV1,
   type SessionProcedureFileRef,
@@ -51,6 +52,11 @@ async function main() {
       "runtime-regression",
       "manual-actions.v1.jsonl"
     ),
+    runtimeSteps: path.join(
+      sessionDirectory,
+      "runtime-regression",
+      "steps.v1.jsonl"
+    ),
     projections: path.join(
       sessionDirectory,
       "human-evaluation",
@@ -66,12 +72,14 @@ async function main() {
     timelineText,
     transcriptText,
     manualActionText,
+    runtimeStepText,
     projectionText,
     traceSummaryText,
   ] = await Promise.all([
     readOptionalText(sourcePaths.timeline),
     readOptionalText(sourcePaths.transcripts),
     readOptionalText(sourcePaths.manualActions),
+    readOptionalText(sourcePaths.runtimeSteps),
     readOptionalText(sourcePaths.projections),
     readOptionalText(sourcePaths.traceSummaries),
   ]);
@@ -100,6 +108,9 @@ async function main() {
   const manualActions = parseJsonLines<ManualRuntimeActionEventV1>(
     manualActionText
   );
+  const runtimeRegressionSteps = parseJsonLines<RuntimeRegressionStepEventV1>(
+    runtimeStepText
+  );
   const projections = projectionText
     ? ((JSON.parse(projectionText) as {
         projections?: HumanEvaluationProjectionV2[];
@@ -115,6 +126,7 @@ async function main() {
     .update(timelineText)
     .update(transcriptText)
     .update(manualActionText)
+    .update(runtimeStepText)
     .update(projectionText)
     .update(traceSummaryText)
     .update(JSON.stringify(termCorrectionRecords))
@@ -138,6 +150,7 @@ async function main() {
   const generatedAt = Math.max(
     manifest.endedAt ?? 0,
     ...timelineEvents.map((event) => event.createdAt),
+    ...runtimeRegressionSteps.map((event) => event.occurredAt),
     ...manualActions.map((event) => event.occurredAt),
     ...projections.map((projection) => projection.computedAt)
   );
@@ -150,6 +163,7 @@ async function main() {
     recordingIntegrityStatus: manifest.recordingIntegrity?.status,
     timelineEvents,
     transcriptTurns,
+    runtimeRegressionSteps,
     manualActions,
     humanEvaluationProjections: projections,
     traceSummaries,
