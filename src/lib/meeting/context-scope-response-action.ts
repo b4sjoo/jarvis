@@ -147,7 +147,11 @@ export function composeExpandedAdvisorPromptContext(
       budgets.maxExpansionChars
     );
     if (selectedExpansions.length === 1) {
-      selectionReason = `shortest-sufficient-${selectedExpansions[0].kind}`;
+      selectionReason =
+        selectedExpansions[0].score >=
+        resolveContextSufficiencyThreshold(relation)
+          ? `shortest-sufficient-${selectedExpansions[0].kind}`
+          : `manual-best-available-${selectedExpansions[0].kind}`;
     } else if (selectedExpansions.length > 1) {
       selectionReason = "combined-bounded-context";
     }
@@ -443,8 +447,7 @@ function selectShortestSufficientCandidates(
   relation: ContextScopeQuestionRelation,
   maxExpansionChars: number
 ) {
-  const sufficientThreshold =
-    relation === "referential-follow-up" ? 0.54 : 0.6;
+  const sufficientThreshold = resolveContextSufficiencyThreshold(relation);
   const sufficientCandidates = candidates.filter(
       (candidate) =>
         candidate.score >= sufficientThreshold &&
@@ -483,10 +486,27 @@ function selectShortestSufficientCandidates(
     return combinable;
   }
 
+  const bestAvailable = candidates
+    .filter((candidate) => candidate.chars <= maxExpansionChars)
+    .sort(
+      (left, right) =>
+        right.score - left.score || left.chars - right.chars
+    )[0];
+  if (bestAvailable) {
+    bestAvailable.selected = true;
+    return [bestAvailable];
+  }
+
   for (const candidate of candidates) {
-    candidate.rejectedReason = "below-context-sufficiency-threshold";
+    candidate.rejectedReason = "context-candidate-over-budget";
   }
   return [];
+}
+
+function resolveContextSufficiencyThreshold(
+  relation: ContextScopeQuestionRelation
+) {
+  return relation === "referential-follow-up" ? 0.54 : 0.6;
 }
 
 function buildSafePromptContext(input: {

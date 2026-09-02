@@ -387,6 +387,42 @@ test("Enhance rejects stale parent and recent context for an independent questio
   }
 });
 
+test("explicit Enhance selects the best bounded source when automatic sufficiency is low", () => {
+  const prior = turn(
+    "turn_prior",
+    "A future team may use a separate analytics store.",
+    1_000
+  );
+  const current = turn(
+    "turn_current",
+    "What would you monitor in production?",
+    5_000
+  );
+  const unit = logicalQuestion(
+    "logical_monitoring",
+    1,
+    current,
+    current.text
+  );
+
+  const result = composeExpandedAdvisorPromptContext({
+    baseContext: baseContext(),
+    logicalQuestionUnit: unit,
+    meetingContext: meetingContext([prior, current]),
+    questionRelation: "continuation",
+  });
+
+  assert.deepEqual(result.selectedKinds, [
+    "current-lqu",
+    "recent-dialogue",
+  ]);
+  assert.equal(
+    result.selectionReason,
+    "manual-best-available-recent-dialogue"
+  );
+  assert.match(result.promptContext.transcript, /separate analytics store/);
+});
+
 test("Enhance enforces recent-window and capsule character budgets", () => {
   const priorThem = Array.from({ length: 8 }, (_, index) =>
     turn(
