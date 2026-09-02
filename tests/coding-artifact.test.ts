@@ -19,7 +19,7 @@ test("preserves a coding artifact across child follow-ups under one parent", () 
     cache: null,
     sections: codingSections,
     sourceParentTaskId: "parent_coding",
-    sourceParentQuestionType: "coding",
+    sourceQuestionType: "coding",
     sourceSuggestionId: "suggestion_1",
     updatedAt: 100,
   });
@@ -34,7 +34,7 @@ test("preserves a coding artifact across child follow-ups under one parent", () 
     cache,
     sections: followUpSections,
     sourceParentTaskId: "parent_coding",
-    sourceParentQuestionType: "coding",
+    sourceQuestionType: "coding",
   });
 
   const projected = projectArtifacts(followUpSections, display);
@@ -62,7 +62,7 @@ test("drops the previous coding artifact at a new parent boundary", () => {
     cache: oldCache,
     sections: behavioralSections,
     sourceParentTaskId: "parent_behavioral",
-    sourceParentQuestionType: "behavioral",
+    sourceQuestionType: "behavioral",
     sourceSuggestionId: "suggestion_new",
     updatedAt: 200,
   });
@@ -72,7 +72,7 @@ test("drops the previous coding artifact at a new parent boundary", () => {
     cache: oldCache,
     sections: behavioralSections,
     sourceParentTaskId: "parent_behavioral",
-    sourceParentQuestionType: "behavioral",
+    sourceQuestionType: "behavioral",
   });
 
   assert.equal(nextCache, null);
@@ -100,7 +100,7 @@ test("rejects a stale completed suggestion from the previous parent", () => {
     cache: oldCache,
     sections: staleSections,
     sourceParentTaskId: "parent_coding",
-    sourceParentQuestionType: "coding",
+    sourceQuestionType: "coding",
     sourceSuggestionId: "suggestion_old",
     updatedAt: 200,
   });
@@ -110,7 +110,7 @@ test("rejects a stale completed suggestion from the previous parent", () => {
     cache: oldCache,
     sections: staleSections,
     sourceParentTaskId: "parent_coding",
-    sourceParentQuestionType: "coding",
+    sourceQuestionType: "coding",
   });
 
   assert.equal(nextCache, null);
@@ -138,7 +138,7 @@ test("updates complexity without replacing code for an explicit child improvemen
     cache,
     sections: improvementSections,
     sourceParentTaskId: "parent_coding",
-    sourceParentQuestionType: "coding",
+    sourceQuestionType: "coding",
     sourceCodeMutationAuthorized: false,
     sourceComplexityMutationAuthorized: true,
     sourceSuggestionId: "suggestion_2",
@@ -168,7 +168,7 @@ test("updates code without replacing complexity when only code is authorized", (
     cache,
     sections: implementationSections,
     sourceParentTaskId: "parent_coding",
-    sourceParentQuestionType: "coding",
+    sourceQuestionType: "coding",
     sourceCodeMutationAuthorized: true,
     sourceComplexityMutationAuthorized: false,
     sourceSuggestionId: "suggestion_3",
@@ -198,7 +198,7 @@ test("drops coding artifacts when a parent is retyped in place", () => {
     cache,
     sections: staleCodingSections,
     sourceParentTaskId: "parent_shared",
-    sourceParentQuestionType: "coding",
+    sourceQuestionType: "coding",
     sourceSuggestionId: "suggestion_before_retype",
     updatedAt: 200,
   });
@@ -208,7 +208,7 @@ test("drops coding artifacts when a parent is retyped in place", () => {
     cache,
     sections: staleCodingSections,
     sourceParentTaskId: "parent_shared",
-    sourceParentQuestionType: "coding",
+    sourceQuestionType: "coding",
   });
 
   assert.equal(nextCache, null);
@@ -225,10 +225,15 @@ test("preserves a coding child artifact while its system-design parent is stable
   const cache = updateCodingArtifactCache({
     activeParentTaskId: "parent_aiml",
     activeParentQuestionType: "ai-ml-system-design",
+    activeChildTaskId: "child_coding",
+    activeChildQuestionType: "coding",
     cache: null,
     sections: codingChildSections,
     sourceParentTaskId: "parent_aiml",
-    sourceParentQuestionType: "ai-ml-system-design",
+    sourceChildTaskId: "child_coding",
+    sourceQuestionType: "coding",
+    sourceCodeMutationAuthorized: true,
+    sourceComplexityMutationAuthorized: true,
     sourceSuggestionId: "suggestion_coding_child",
     updatedAt: 100,
   });
@@ -237,12 +242,15 @@ test("preserves a coding child artifact while its system-design parent is stable
   const display = resolveCodingArtifactDisplay({
     activeParentTaskId: "parent_aiml",
     activeParentQuestionType: "ai-ml-system-design",
+    activeChildTaskId: "child_coding",
+    activeChildQuestionType: "coding",
     cache,
     sections: sections(
       "Question: Why cross entropy?\nAnswer: It matches the likelihood objective."
     ),
     sourceParentTaskId: "parent_aiml",
-    sourceParentQuestionType: "ai-ml-system-design",
+    sourceChildTaskId: "child_coding",
+    sourceQuestionType: "coding",
   });
 
   const projected = projectArtifacts(
@@ -254,6 +262,17 @@ test("preserves a coding child artifact while its system-design parent is stable
   assert.equal(projected.code, "def loss(): pass");
   assert.equal(projected.complexity, "O(n)");
   assert.equal(display.isCached, true);
+
+  const resumedParentDisplay = resolveCodingArtifactDisplay({
+    activeParentTaskId: "parent_aiml",
+    activeParentQuestionType: "ai-ml-system-design",
+    cache,
+    sections: sections("Answer: Back to the RAG architecture."),
+    sourceParentTaskId: "parent_aiml",
+    sourceQuestionType: "ai-ml-system-design",
+  });
+  assert.equal(projectArtifacts(sections("Answer: resumed"), resumedParentDisplay).code, "");
+  assert.equal(resumedParentDisplay.isCached, false);
 });
 
 test("does not persist code from an artifact-unauthorized response", () => {
@@ -272,7 +291,7 @@ test("does not persist code from an artifact-unauthorized response", () => {
       "Answer: unrelated\nCode:\n```python\ndef polluted(): pass\n```"
     ),
     sourceParentTaskId: "parent_project",
-    sourceParentQuestionType: "project-deep-dive",
+    sourceQuestionType: "project-deep-dive",
     sourceCodeMutationAuthorized: false,
     sourceSuggestionId: "suggestion_wrong_domain",
     updatedAt: 200,
@@ -328,7 +347,7 @@ test("keeps the latest screen artifact across a later parent transition", () => 
     cache: screenCache,
     sections: behavioral,
     sourceParentTaskId: "parent_behavioral",
-    sourceParentQuestionType: "behavioral",
+    sourceQuestionType: "behavioral",
     sourceSuggestionId: "behavioral_answer",
     updatedAt: 200,
   });
@@ -338,7 +357,7 @@ test("keeps the latest screen artifact across a later parent transition", () => 
     cache: next,
     sections: behavioral,
     sourceParentTaskId: "parent_behavioral",
-    sourceParentQuestionType: "behavioral",
+    sourceQuestionType: "behavioral",
   });
 
   assert.equal(next, screenCache);

@@ -10,12 +10,17 @@ import {
 } from "./task-taxonomy.js";
 import type { ScreenPresentationArtifactAuthoritySource } from "./screen-artifact-authority.js";
 
-export type CodingArtifactCacheScope = "parent" | "session-screen";
+export type CodingArtifactCacheScope =
+  | "parent"
+  | "child"
+  | "session-screen";
 
 export interface CodingArtifactCache {
   scope?: CodingArtifactCacheScope;
   parentTaskId: string;
   parentQuestionType: CanonicalQuestionType;
+  childTaskId?: string;
+  ownerQuestionType?: CanonicalQuestionType;
   code: string;
   complexity: string;
   revision?: number;
@@ -34,18 +39,24 @@ export interface CodingArtifactDisplay {
 interface CodingArtifactScope {
   activeParentTaskId: string;
   activeParentQuestionType?: string;
+  activeChildTaskId?: string;
+  activeChildQuestionType?: string;
   sourceParentTaskId?: string;
-  sourceParentQuestionType?: string;
+  sourceChildTaskId?: string;
+  sourceQuestionType?: string;
   sourcePresentationArtifactAuthority?: ScreenPresentationArtifactAuthoritySource;
 }
 
 export function updateCodingArtifactCache({
   activeParentTaskId,
   activeParentQuestionType,
+  activeChildTaskId,
+  activeChildQuestionType,
   cache,
   sections,
   sourceParentTaskId,
-  sourceParentQuestionType,
+  sourceChildTaskId,
+  sourceQuestionType,
   sourceCodeMutationAuthorized,
   sourceComplexityMutationAuthorized,
   sourcePresentationArtifactAuthority,
@@ -79,7 +90,9 @@ export function updateCodingArtifactCache({
   const scopedCache = getScopedCodingArtifactCache(
     cache,
     activeParentTaskId,
-    canonicalParentQuestionType
+    canonicalParentQuestionType,
+    activeChildTaskId,
+    activeChildQuestionType
   );
   if (
     sourceCodeMutationAuthorized === false &&
@@ -90,11 +103,14 @@ export function updateCodingArtifactCache({
 
   if (
     !manualScreenAuthority &&
-    !doesArtifactSourceBelongToParent({
+    !doesArtifactSourceBelongToActiveBranch({
       activeParentTaskId,
       activeParentQuestionType: canonicalParentQuestionType,
+      activeChildTaskId,
+      activeChildQuestionType,
       sourceParentTaskId,
-      sourceParentQuestionType,
+      sourceChildTaskId,
+      sourceQuestionType,
     })
   ) {
     return scopedCache;
@@ -103,7 +119,11 @@ export function updateCodingArtifactCache({
   const artifactPatch = readCodingArtifactPatch({
     activeTaskKind: manualScreenAuthority
       ? "coding"
-      : canonicalParentQuestionType,
+      : normalizeCanonicalQuestionType(
+          sourceChildTaskId
+            ? activeChildQuestionType
+            : canonicalParentQuestionType
+        ),
     hasExistingCache: Boolean(scopedCache),
     sections,
   });
@@ -137,12 +157,26 @@ export function updateCodingArtifactCache({
   const artifactChanged = codeChanged || complexityChanged;
 
   return {
-    scope: manualScreenAuthority ? "session-screen" : "parent",
+    scope: manualScreenAuthority
+      ? "session-screen"
+      : sourceChildTaskId
+        ? "child"
+        : "parent",
+    ...(sourceChildTaskId
+      ? {
+          childTaskId: sourceChildTaskId,
+          ownerQuestionType:
+            normalizeCanonicalQuestionType(activeChildQuestionType) ??
+            normalizeCanonicalQuestionType(sourceQuestionType),
+        }
+      : {
+          ownerQuestionType: canonicalParentQuestionType,
+        }),
     parentTaskId:
       activeParentTaskId || sourceParentTaskId || "manual-screen-session",
     parentQuestionType:
       canonicalParentQuestionType ??
-      normalizeCanonicalQuestionType(sourceParentQuestionType) ??
+      normalizeCanonicalQuestionType(sourceQuestionType) ??
       "coding",
     code: nextCode,
     complexity: nextComplexity,
@@ -172,10 +206,13 @@ export function updateCodingArtifactCache({
 export function resolveCodingArtifactDisplay({
   activeParentTaskId,
   activeParentQuestionType,
+  activeChildTaskId,
+  activeChildQuestionType,
   cache,
   sections,
   sourceParentTaskId,
-  sourceParentQuestionType,
+  sourceChildTaskId,
+  sourceQuestionType,
   sourcePresentationArtifactAuthority,
 }: CodingArtifactScope & {
   cache: CodingArtifactCache | null;
@@ -188,24 +225,33 @@ export function resolveCodingArtifactDisplay({
   const scopedCache = getScopedCodingArtifactCache(
     cache,
     activeParentTaskId,
-    canonicalParentQuestionType
+    canonicalParentQuestionType,
+    activeChildTaskId,
+    activeChildQuestionType
   );
   const manualScreenAuthority =
     sourcePresentationArtifactAuthority === "manual-screen";
   const sourceMatchesParent =
     manualScreenAuthority ||
     (Boolean(activeParentTaskId && canonicalParentQuestionType) &&
-      doesArtifactSourceBelongToParent({
+      doesArtifactSourceBelongToActiveBranch({
         activeParentTaskId,
         activeParentQuestionType: canonicalParentQuestionType,
+        activeChildTaskId,
+        activeChildQuestionType,
         sourceParentTaskId,
-        sourceParentQuestionType,
+        sourceChildTaskId,
+        sourceQuestionType,
       }));
   const artifactPatch = sourceMatchesParent
     ? readCodingArtifactPatch({
         activeTaskKind: manualScreenAuthority
           ? "coding"
-          : canonicalParentQuestionType,
+          : normalizeCanonicalQuestionType(
+              sourceChildTaskId
+                ? activeChildQuestionType
+                : canonicalParentQuestionType
+            ),
         hasExistingCache: Boolean(scopedCache),
         sections,
       })
@@ -239,32 +285,59 @@ export function resolveCodingArtifactDisplay({
 function getScopedCodingArtifactCache(
   cache: CodingArtifactCache | null,
   activeParentTaskId: string,
-  activeParentQuestionType: CanonicalQuestionType | undefined
+  activeParentQuestionType: CanonicalQuestionType | undefined,
+  activeChildTaskId?: string,
+  activeChildQuestionType?: string
 ) {
   if (cache?.scope === "session-screen") return cache;
   if (!activeParentTaskId || !activeParentQuestionType) return null;
-  return cache?.parentTaskId === activeParentTaskId &&
-    areCompatibleParentContinuityTypes(
+  if (
+    cache?.parentTaskId !== activeParentTaskId ||
+    !areCompatibleParentContinuityTypes(
       cache.parentQuestionType,
       activeParentQuestionType
     )
+  ) {
+    return null;
+  }
+  if (cache.scope !== "child") return cache;
+  const canonicalActiveChildType = normalizeCanonicalQuestionType(
+    activeChildQuestionType
+  );
+  return cache.childTaskId === activeChildTaskId &&
+    Boolean(cache.ownerQuestionType && canonicalActiveChildType) &&
+    cache.ownerQuestionType === canonicalActiveChildType
     ? cache
     : null;
 }
 
-function doesArtifactSourceBelongToParent({
+function doesArtifactSourceBelongToActiveBranch({
   activeParentTaskId,
   activeParentQuestionType,
+  activeChildTaskId,
+  activeChildQuestionType,
   sourceParentTaskId,
-  sourceParentQuestionType,
+  sourceChildTaskId,
+  sourceQuestionType,
 }: CodingArtifactScope) {
   if (sourceParentTaskId && sourceParentTaskId !== activeParentTaskId) {
     return false;
   }
 
   const canonicalSourceQuestionType = normalizeCanonicalQuestionType(
-    sourceParentQuestionType
+    sourceQuestionType
   );
+  if (sourceChildTaskId) {
+    const canonicalActiveChildQuestionType = normalizeCanonicalQuestionType(
+      activeChildQuestionType
+    );
+    return (
+      sourceParentTaskId === activeParentTaskId &&
+      sourceChildTaskId === activeChildTaskId &&
+      Boolean(canonicalSourceQuestionType) &&
+      canonicalSourceQuestionType === canonicalActiveChildQuestionType
+    );
+  }
   return (
     sourceParentTaskId === activeParentTaskId &&
     Boolean(canonicalSourceQuestionType) &&

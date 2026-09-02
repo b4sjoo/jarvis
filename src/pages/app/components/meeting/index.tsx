@@ -537,16 +537,24 @@ export const MeetingAssistant = ({
   const activeTaskKind = getActiveMeetingParentQuestionType(
     meeting.activeMeetingTask
   );
+  const activeChildTaskId = meeting.activeMeetingTask?.child?.id;
+  const activeChildQuestionType =
+    meeting.activeMeetingTask?.child?.questionType;
   const completedSuggestionParentTaskId =
     meeting.latestSuggestion?.parentTaskId ?? meeting.latestSuggestion?.taskId;
-  const completedSuggestionParentQuestionType =
+  const completedSuggestionChildTaskId =
+    meeting.latestSuggestion?.childTaskId;
+  const completedSuggestionQuestionType =
     meeting.latestSuggestion?.questionType;
   const displayedSuggestionParentTaskId = meeting.partialSuggestion
     ? activeParentTaskId
     : completedSuggestionParentTaskId;
-  const displayedSuggestionParentQuestionType = meeting.partialSuggestion
-    ? activeTaskKind
-    : completedSuggestionParentQuestionType;
+  const displayedSuggestionChildTaskId = meeting.partialSuggestion
+    ? activeChildTaskId
+    : completedSuggestionChildTaskId;
+  const displayedSuggestionQuestionType = meeting.partialSuggestion
+    ? activeChildQuestionType ?? activeTaskKind
+    : completedSuggestionQuestionType;
   useEffect(() => {
     if (meeting.partialSuggestion) return;
 
@@ -554,10 +562,13 @@ export const MeetingAssistant = ({
       return updateCodingArtifactCache({
         activeParentTaskId,
         activeParentQuestionType: activeTaskKind,
+        activeChildTaskId,
+        activeChildQuestionType,
         cache: previous,
         sections: suggestionSections,
         sourceParentTaskId: completedSuggestionParentTaskId,
-        sourceParentQuestionType: completedSuggestionParentQuestionType,
+        sourceChildTaskId: completedSuggestionChildTaskId,
+        sourceQuestionType: completedSuggestionQuestionType,
         sourceCodeMutationAuthorized:
           meeting.latestSuggestion?.codeArtifactMutationAuthorized,
         sourceComplexityMutationAuthorized:
@@ -575,8 +586,11 @@ export const MeetingAssistant = ({
   }, [
     activeParentTaskId,
     activeTaskKind,
+    activeChildTaskId,
+    activeChildQuestionType,
+    completedSuggestionChildTaskId,
     completedSuggestionParentTaskId,
-    completedSuggestionParentQuestionType,
+    completedSuggestionQuestionType,
     meeting.latestSuggestion?.codeArtifactMutationAuthorized,
     meeting.latestSuggestion?.complexityArtifactMutationAuthorized,
     meeting.latestSuggestion?.presentationArtifactAuthority,
@@ -605,10 +619,13 @@ export const MeetingAssistant = ({
     return resolveCodingArtifactDisplay({
       activeParentTaskId,
       activeParentQuestionType: activeTaskKind,
+      activeChildTaskId,
+      activeChildQuestionType,
       cache: codingArtifactCache,
       sections: suggestionSections,
       sourceParentTaskId: displayedSuggestionParentTaskId,
-      sourceParentQuestionType: displayedSuggestionParentQuestionType,
+      sourceChildTaskId: displayedSuggestionChildTaskId,
+      sourceQuestionType: displayedSuggestionQuestionType,
       sourcePresentationArtifactAuthority:
         meeting.partialSuggestion
           ? undefined
@@ -617,9 +634,12 @@ export const MeetingAssistant = ({
   }, [
     activeParentTaskId,
     activeTaskKind,
+    activeChildTaskId,
+    activeChildQuestionType,
     codingArtifactCache,
+    displayedSuggestionChildTaskId,
     displayedSuggestionParentTaskId,
-    displayedSuggestionParentQuestionType,
+    displayedSuggestionQuestionType,
     meeting.latestSuggestion?.presentationArtifactAuthority,
     suggestionSections.primaryAnswer,
     suggestionSections.approach,
