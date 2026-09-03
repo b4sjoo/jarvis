@@ -166,6 +166,27 @@ test("shares one correction lifecycle commit boundary across correction paths", 
   );
 });
 
+test("hands a no-parent Screen correction to Advisor from its committed source", () => {
+  const source = readFileSync("src/hooks/useMeetingAssistant.ts", "utf8");
+  assert.match(
+    source,
+    /advisorJob\.source === "manual-correction"[\s\S]*authorizeSettlementOwnedQuestionContext\(\{[\s\S]*sourceKind: settlementIdentitySource\.sourceKind[\s\S]*screenObservations:/
+  );
+  assert.match(
+    source,
+    /promptContext\.screenContext\.trim\(\) \|\|\s*advisorJob\.logicalQuestionUnit\?\.normalizedText\.trim\(\)/
+  );
+  assert.match(
+    source,
+    /const correctionRegenerationMode: AdvisorRequestMode =[\s\S]*correctionCurrentQuestionSourceKind === "voice"[\s\S]*"screen-anchored";/
+  );
+  assert.match(source, /mode: correctionRegenerationMode,/);
+  assert.match(
+    source,
+    /const advisorSourceReadTask = settledExecutionPlan\s*\?\.taskMutationCommittedBeforeAdvisor[\s\S]*advisorSourceReadContext\.activeMeetingTask/
+  );
+});
+
 test("keeps the current parent when correction-owned relation adjudication abstains", () => {
   const unit = makeLogicalQuestion(
     "question-followup",

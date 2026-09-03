@@ -639,6 +639,8 @@ import {
   createCurrentQuestionSourceSettlementId,
   createTaskBoundaryCandidate,
   createProvisionalCurrentQuestion,
+  authorizeSettlementOwnedQuestionContext,
+  formatSettlementOwnedQuestionContextForTrace,
   resolveCurrentQuestionSourceKind,
   resolveSettlementOwnedQuestionSource,
   CurrentQuestionSettlementProposal,
@@ -10435,6 +10437,48 @@ export function useMeetingAssistant() {
             reasons: ["logical-question-unit-mismatch" as const],
           }
       : undefined;
+    const settlementOwnedQuestionContext =
+      advisorJob.source === "manual-correction" &&
+      settlementOverride &&
+      advisorJob.logicalQuestionUnit
+        ? authorizeSettlementOwnedQuestionContext({
+            sourceKind: settlementIdentitySource.sourceKind,
+            sourceObservationIds:
+              settlementIdentitySource.sourceObservationIds,
+            logicalQuestionText: advisorJob.logicalQuestionUnit.normalizedText,
+            screenObservations:
+              contextManagerRef.current.getState().screenObservations,
+          })
+        : undefined;
+    if (traceId && settlementOwnedQuestionContext) {
+      traceStoreRef.current.updateMetadata(
+        traceId,
+        formatSettlementOwnedQuestionContextForTrace(
+          settlementOwnedQuestionContext
+        )
+      );
+    }
+    if (
+      settlementOwnedQuestionContext &&
+      !settlementOwnedQuestionContext.authorized
+    ) {
+      const reason = settlementOwnedQuestionContext.reason;
+      releaseAdvisorJob(advisorJob, "error", {
+        commitAuthorized: false,
+        commitAuthorizationReason: reason,
+      });
+      if (traceId) {
+        traceStoreRef.current.finishTrace(traceId, "error", reason);
+      }
+      setState((previous) => ({
+        ...previous,
+        error:
+          reason === "logical-question-empty"
+            ? "The corrected question has no source text to regenerate from."
+            : "The corrected Screen source is no longer available. Capture the question again.",
+      }));
+      return;
+    }
     let currentQuestionSettlement =
       settlementOverrideIdentityValidation?.authorized === false
         ? undefined
@@ -10904,7 +10948,8 @@ export function useMeetingAssistant() {
     const hasContext = Boolean(
       promptContext.latestTurn ||
         promptContext.transcript.trim() ||
-        promptContext.screenContext.trim()
+        promptContext.screenContext.trim() ||
+        advisorJob.logicalQuestionUnit?.normalizedText.trim()
     );
 
     if (force && !hasContext && !options.currentSuggestion?.trim()) {
@@ -13240,6 +13285,11 @@ export function useMeetingAssistant() {
     const advisorModelRequestOptions =
       getMeetingModelRequestOptions(advisorModelRoute);
     const advisorSourceReadContext = contextManagerRef.current.getState();
+    const advisorSourceReadTask = settledExecutionPlan
+      ?.taskMutationCommittedBeforeAdvisor
+      ? advisorSourceReadContext.activeMeetingTask ??
+        settledExecutionPlan.taskSnapshot
+      : originalPromptContext.activeMeetingTask;
     const advisorScreenSourceRead = resolveAdvisorScreenSourceRead({
       mode: advisorPromptMode,
       expectedSessionId: advisorJob.expectedSessionId,
@@ -13247,9 +13297,9 @@ export function useMeetingAssistant() {
       expectedRuntimeEpoch: advisorJob.runtimeCommitToken.runtimeEpoch,
       currentRuntimeEpoch: runtimeEpochRef.current,
       expectedParentId:
-        originalPromptContext.activeMeetingTask?.parent.id ??
+        advisorSourceReadTask?.parent.id ??
         advisorJob.expectedParentId,
-      activeMeetingTask: originalPromptContext.activeMeetingTask,
+      activeMeetingTask: advisorSourceReadTask,
       screenObservations: advisorSourceReadContext.screenObservations,
       preferredObservationIds:
         settledExecutionPlan?.sourceObservationIds ??
@@ -32999,6 +33049,10 @@ export function useMeetingAssistant() {
         }
         const correctedContextState = contextManagerRef.current.getState();
         const correctedActiveTask = correctedContextState.activeMeetingTask;
+        const correctionRegenerationMode: AdvisorRequestMode =
+          correctionCurrentQuestionSourceKind === "voice"
+            ? "live"
+            : "screen-anchored";
         mutationApplied = true;
         correctionLifecycleToken = createRuntimeCommitToken({
           operationId: eventId,
@@ -33085,9 +33139,7 @@ export function useMeetingAssistant() {
         const visibleAnswerRevisionBeforeRegeneration =
           visibleAnswerRevisionRef.current;
         const regenerationTrace = traceStoreRef.current.startTrace(
-          correctedActiveTask?.screen ||
-            state.latestSuggestion?.taskSource === "screen" ||
-            state.latestSuggestion?.taskSource === "mixed"
+          correctionRegenerationMode === "screen-anchored"
             ? "screen"
             : "voice",
           {
@@ -33146,10 +33198,9 @@ export function useMeetingAssistant() {
             childTaskId: activeTask?.child?.id,
             taskSource:
               correctedActiveTask?.source ??
-              (state.latestSuggestion?.taskSource === "screen" ||
-              state.latestSuggestion?.taskSource === "mixed"
-                ? "screen"
-                : "voice"),
+              (correctionCurrentQuestionSourceKind === "voice"
+                ? "voice"
+                : "screen"),
             questionType: toHumanEvalQuestionType(decision.detectedType),
             relation: correctionEvaluationRelation,
             playbookId: correctedPlaybook?.id,
@@ -33261,12 +33312,7 @@ export function useMeetingAssistant() {
 
         await runAdvisor({
           force: true,
-          mode:
-            correctedActiveTask?.screen ||
-            state.latestSuggestion?.taskSource === "screen" ||
-            state.latestSuggestion?.taskSource === "mixed"
-              ? "screen-anchored"
-              : "live",
+          mode: correctionRegenerationMode,
           traceId: regenerationTrace.id,
           manualQuestionTypeCorrection: correction,
           advisorJobSource: "manual-correction",

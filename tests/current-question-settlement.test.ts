@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  authorizeSettlementOwnedQuestionContext,
   createProvisionalCurrentQuestion,
   decideCurrentQuestionMutationAuthority,
   formatCurrentQuestionMutationAuthorityForTrace,
@@ -292,6 +293,41 @@ test("keeps settlement-owned source identity intact over active-screen fallback"
     sourceKind: "mixed",
     sourceObservationIds: ["active-screen"],
   });
+});
+
+test("authorizes exact settlement-owned Screen context without an active parent", () => {
+  assert.deepEqual(
+    authorizeSettlementOwnedQuestionContext({
+      sourceKind: "screen",
+      sourceObservationIds: ["screen-1"],
+      logicalQuestionText: "Implement an LRU cache",
+      screenObservations: [{ id: "screen-1", imageBase64: "image" }],
+    }),
+    {
+      authorized: true,
+      reason: "authorized",
+      sourceKind: "screen",
+      sourceObservationIds: ["screen-1"],
+      preferredObservationId: "screen-1",
+    }
+  );
+
+  assert.equal(
+    authorizeSettlementOwnedQuestionContext({
+      sourceKind: "screen",
+      sourceObservationIds: ["missing"],
+      logicalQuestionText: "Implement an LRU cache",
+      screenObservations: [],
+    }).reason,
+    "source-observation-not-found"
+  );
+  assert.equal(
+    authorizeSettlementOwnedQuestionContext({
+      sourceKind: "voice",
+      logicalQuestionText: "Implement an LRU cache",
+    }).authorized,
+    true
+  );
 });
 
 test("validates a voice settlement while an active-screen fallback exists", () => {

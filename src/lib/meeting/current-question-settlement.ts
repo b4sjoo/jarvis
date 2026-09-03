@@ -20,9 +20,13 @@ import {
 } from "./current-question-source.js";
 
 export {
+  authorizeSettlementOwnedQuestionContext,
+  formatSettlementOwnedQuestionContextForTrace,
   resolveCurrentQuestionSourceKind,
   resolveSettlementOwnedQuestionSource,
   type CurrentQuestionSourceKind,
+  type SettlementOwnedQuestionContextDecision,
+  type SettlementOwnedQuestionContextReason,
 } from "./current-question-source.js";
 
 export type CurrentQuestionAuthority =
