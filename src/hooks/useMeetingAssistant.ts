@@ -26729,10 +26729,6 @@ export function useMeetingAssistant() {
             ? pendingVoiceCandidate
             : activeVoiceCandidate ?? pendingVoiceCandidate;
       const visibleAnswerAtScreenRequest = stableAnswerRevisionRef.current;
-      const unresolvedManualCorrectionTarget =
-        latestManualCorrectionTargetRef.current?.resolvedAt
-          ? undefined
-          : latestManualCorrectionTargetRef.current?.logicalQuestionUnit;
       let screenVoiceQuestionBinding =
         decideManualScreenVoiceQuestionBinding({
           candidate: screenVoiceQuestionCandidate,
@@ -26754,11 +26750,12 @@ export function useMeetingAssistant() {
                     pendingVoiceCandidate.logicalQuestionRevision,
                 }
               : undefined,
-          explicitRecoveryTarget: unresolvedManualCorrectionTarget
+          awaitingVisualEvidenceTarget: selectedVisualRecovery.fact
             ? {
-                logicalQuestionUnitId: unresolvedManualCorrectionTarget.id,
+                logicalQuestionUnitId:
+                  selectedVisualRecovery.fact.logicalQuestionUnitId,
                 logicalQuestionRevision:
-                  unresolvedManualCorrectionTarget.revision,
+                  selectedVisualRecovery.fact.logicalQuestionRevision,
               }
             : undefined,
           visibleAnswer: visibleAnswerAtScreenRequest
@@ -27892,11 +27889,12 @@ export function useMeetingAssistant() {
                       pendingVoiceCandidate.logicalQuestionRevision,
                   }
                 : undefined,
-            explicitRecoveryTarget: unresolvedManualCorrectionTarget
+            awaitingVisualEvidenceTarget: selectedVisualRecovery.fact
               ? {
-                  logicalQuestionUnitId: unresolvedManualCorrectionTarget.id,
+                  logicalQuestionUnitId:
+                    selectedVisualRecovery.fact.logicalQuestionUnitId,
                   logicalQuestionRevision:
-                    unresolvedManualCorrectionTarget.revision,
+                    selectedVisualRecovery.fact.logicalQuestionRevision,
                 }
               : undefined,
             visibleAnswer: visibleAnswerAtScreenRequest

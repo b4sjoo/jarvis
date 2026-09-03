@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   applyAdvisorScreenScopeToPromptContext,
@@ -721,6 +722,23 @@ test("gives exact visual recovery continuity authority", () => {
     confidence: 1,
     relationEvidenceAuthorized: true,
   });
+});
+
+test("wires only the task-bound visual recovery fact into Screen binding", () => {
+  const hook = readFileSync("src/hooks/useMeetingAssistant.ts", "utf8");
+  const capture = hook.slice(
+    hook.indexOf("  const captureScreenContext = useCallback"),
+    hook.indexOf("  const correctActiveQuestionType = useCallback")
+  );
+
+  assert.equal(
+    capture.match(
+      /awaitingVisualEvidenceTarget: selectedVisualRecovery\.fact/g
+    )?.length,
+    2
+  );
+  assert.doesNotMatch(capture, /unresolvedManualCorrectionTarget/);
+  assert.doesNotMatch(capture, /explicitRecoveryTarget:/);
 });
 
 test("keeps project and correction continuity matches non-authoritative", () => {
