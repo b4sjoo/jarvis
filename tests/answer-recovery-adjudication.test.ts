@@ -297,6 +297,67 @@ test("projects only definite current pairs to recovery ledger mutations", () => 
   );
 });
 
+test("makes visual recovery independent of result arrival order", () => {
+  const events = ["answer", "evidence", "visible"] as const;
+  const permutations = [
+    events,
+    ["answer", "visible", "evidence"] as const,
+    ["evidence", "answer", "visible"] as const,
+    ["evidence", "visible", "answer"] as const,
+    ["visible", "answer", "evidence"] as const,
+    ["visible", "evidence", "answer"] as const,
+  ];
+
+  for (const order of permutations) {
+    let answerResolution: "unresolved" | undefined;
+    let evidenceRequirement: "visual-missing" | undefined;
+    let visibleAnswerRevision: number | undefined;
+    const transitions = [];
+    for (const event of order) {
+      if (event === "answer") answerResolution = "unresolved";
+      if (event === "evidence") evidenceRequirement = "visual-missing";
+      if (event === "visible") visibleAnswerRevision = 2;
+      if (
+        answerResolution &&
+        evidenceRequirement &&
+        visibleAnswerRevision !== undefined
+      ) {
+        transitions.push(
+          decideAnswerRecoveryLedgerTransition({
+            revisionAuthorized: true,
+            answerResolution,
+            evidenceRequirement,
+          })
+        );
+      }
+    }
+    assert.deepEqual(transitions, [
+      { action: "create", reason: "definite-visual-recovery" },
+    ]);
+  }
+
+  const hook = readFileSync("src/hooks/useMeetingAssistant.ts", "utf8");
+  const finalizer = hook.slice(
+    hook.indexOf("const finalizeAnswerRecoveryAdjudication"),
+    hook.indexOf("const scheduleAdvisorResponseConsistencyShadow")
+  );
+  assert.match(finalizer, /!candidate\.answerResolutionSettled/);
+  assert.match(finalizer, /!candidate\.evidenceRequirementSettled/);
+  assert.match(finalizer, /candidate\.visibleAnswerRevision === undefined/);
+  assert.match(
+    hook,
+    /visualEvidenceCheckPromise\.then\([\s\S]*finalizeAnswerRecoveryAdjudication\(traceId\)/
+  );
+  assert.match(
+    hook,
+    /pending\.answerResolutionSettled = true;[\s\S]*finalizeAnswerRecoveryAdjudication\(traceId\)/
+  );
+  assert.match(
+    hook,
+    /answerResolutionCandidate\.visibleAnswerRevision = stable\.revision;[\s\S]*finalizeAnswerRecoveryAdjudication\(sourceTraceId\)/
+  );
+});
+
 test("recognizes a structurally truncated provider response", () => {
   assert.equal(
     isAnswerRecoveryOutputTruncated(
