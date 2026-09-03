@@ -18,6 +18,15 @@ test("keeps Screen Coding output subordinate to the committed phase", () => {
   );
 });
 
+test("limits Screen visual claims to evidence supplied in the request", () => {
+  assert.match(SCREEN_TASK_SYSTEM_PROMPT, /Authorized Evidence/);
+  assert.match(
+    SCREEN_TASK_SYSTEM_PROMPT,
+    /never claim to see specific visual content/
+  );
+  assert.match(SCREEN_TASK_SYSTEM_PROMPT, /answer any supported non-visual part/);
+});
+
 test("grants Screen Type authority only to a raw model type", () => {
   const parsed = resolveScreenPreflightQuestionTypeAuthority({
     rawQuestionType: "general-system-design",

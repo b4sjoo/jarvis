@@ -61,13 +61,12 @@ import {
   buildAnswerRecoveryAdjudicationRequest,
   buildVisualEvidenceCheckRequest,
   createAnswerRecoveryAdjudicationLease,
+  decideAnswerRecoveryLedgerTransition,
   formatAnswerRecoveryAdjudicationForTrace,
   type AnswerRecoveryAdjudicationJob,
   type AnswerRecoveryAdjudicationRequest,
   type AnswerResolutionAdjudication,
   type EvidenceRequirementAdjudication,
-  shouldAwaitQuestionOnlyVisualEvidenceCheckBeforeAdvisor,
-  shouldRequestAdditionalVisualEvidenceBeforeAdvisor,
   shouldRunQuestionOnlyVisualEvidenceCheck,
 } from "@/lib/meeting/answer-recovery-adjudication";
 import {
@@ -660,7 +659,6 @@ import {
   formatCrossDomainParentTransitionForTrace,
   formatRuntimeCommitAuthorizationForTrace,
   formatRuntimeInferenceOperationForTrace,
-  getRuntimeInferenceOperationDefinition,
   formatCurrentQuestionSettlementForTrace,
   formatCurrentQuestionSettlementIdentityValidationForTrace,
   settlementAuthorizesTaskTransition,
@@ -936,8 +934,6 @@ const ADVISOR_DEBOUNCE_MS = 750;
 const STT_TIMEOUT_MS = 30_000;
 const SCREEN_PREFLIGHT_TIMEOUT_MS = 10_000;
 const SCREEN_ANALYSIS_TIMEOUT_MS = 45_000;
-const VISUAL_EVIDENCE_CHECK_WAIT_MS =
-  getRuntimeInferenceOperationDefinition("evidence-requirement").timeoutMs;
 const CODING_MODEL_REQUEST_TIMEOUT_MS = 120_000;
 const CODING_MODEL_MAX_OUTPUT_TOKENS = 16_384;
 const DEFAULT_ACTIVE_SCREEN_TASK_TIMEOUT_MINUTES = 30;
@@ -2467,12 +2463,20 @@ interface PendingAnswerResolutionCommitCandidate {
   parentRevision?: number;
   preCommitParentRevision?: number;
   sourceHash?: string;
+  sourceSettlementId?: string;
   adjudicationSourceHash?: string;
   sourceTurnIds: string[];
+  ownerKind: "parent" | "child" | "current-question";
+  ownerBranchId: string;
+  questionType: CanonicalQuestionType;
+  questionText: string;
   manualCorrectionRevision: number;
   localResolution: ReturnType<typeof projectAnswerResolution>;
   answerResolution?: AnswerResolutionAdjudication;
   answerResolutionSettled: boolean;
+  evidenceRequirement?: EvidenceRequirementAdjudication;
+  evidenceRequirementSettled: boolean;
+  evidenceRequirementDisposition?: string;
   visibleAnswerRevision?: number;
   visibleCommittedAt?: number;
 }
@@ -3957,6 +3961,7 @@ export function useMeetingAssistant() {
       if (
         !candidate ||
         !candidate.answerResolutionSettled ||
+        !candidate.evidenceRequirementSettled ||
         candidate.visibleAnswerRevision === undefined
       ) {
         return;
@@ -3987,6 +3992,71 @@ export function useMeetingAssistant() {
         parentRevision: candidate.parentRevision,
         currentParentRevision: activeParent?.revisions,
       });
+      const ledgerTransition = decideAnswerRecoveryLedgerTransition({
+        revisionAuthorized: revisionAuthorization.authorized,
+        answerResolution: answerResolution?.decision,
+        evidenceRequirement: candidate.evidenceRequirement?.decision,
+      });
+      let recovery: AwaitingVisualEvidenceRecoveryFact | undefined;
+      if (ledgerTransition.action === "create") {
+        recovery = createAwaitingVisualEvidenceRecoveryFact({
+          resolution: {
+            state: "awaiting-evidence",
+            awaitingVisualEvidence: true,
+            evidence: [
+              ...(answerResolution?.questionEvidenceSpans ?? []),
+              ...(answerResolution?.answerEvidenceSpans ?? []),
+              ...(candidate.evidenceRequirement?.questionEvidenceSpans ?? []),
+              ...(candidate.evidenceRequirement?.visualEvidenceSpans ?? []),
+            ],
+          },
+          sessionId: candidate.sessionId,
+          runtimeEpoch: candidate.runtimeEpoch,
+          logicalQuestionUnitId: candidate.logicalQuestionUnitId,
+          logicalQuestionRevision: candidate.logicalQuestionRevision,
+          answerRevision: candidate.answerRevision,
+          visibleAnswerRevision: candidate.visibleAnswerRevision,
+          parentTaskId: candidate.parentTaskId,
+          parentRevision: candidate.parentRevision,
+          ownerKind: candidate.ownerKind,
+          ownerBranchId: candidate.ownerBranchId,
+          questionType: candidate.questionType,
+          questionText: candidate.questionText,
+          sourceHash: candidate.sourceHash,
+          sourceSettlementId: candidate.sourceSettlementId,
+          sourceTurnIds: candidate.sourceTurnIds,
+          manualCorrectionRevision: candidate.manualCorrectionRevision,
+        });
+        if (recovery) {
+          awaitingVisualEvidenceRecoveryRef.current =
+            upsertVisualRecoveryOpportunity(
+              awaitingVisualEvidenceRecoveryRef.current,
+              recovery
+            );
+          sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+            stage: "awaiting-visual-evidence-created",
+            traceId,
+            taskId: recovery.parentTaskId,
+            ...formatAwaitingVisualEvidenceRecoveryForTrace(recovery, {
+              stage: "created",
+              reason: ledgerTransition.reason,
+            }),
+          });
+        }
+      } else if (ledgerTransition.action === "cancel") {
+        const existing =
+          awaitingVisualEvidenceRecoveryRef.current.get(
+            candidate.ownerBranchId
+          );
+        if (existing) {
+          settleAwaitingVisualEvidenceRecovery(
+            "cancelled",
+            ledgerTransition.reason,
+            traceId,
+            existing.id
+          );
+        }
+      }
       traceStoreRef.current.updateMetadata(traceId, {
         answerResolutionObservationSettled: true,
         answerResolutionObservationRevisionAuthorized:
@@ -3994,15 +4064,36 @@ export function useMeetingAssistant() {
         answerResolutionObservationRevisionAuthorizationReason:
           revisionAuthorization.reason,
         answerResolutionObservationDecision: answerResolution?.decision,
-        answerResolutionObservationAppliedToRuntime: false,
+        answerResolutionObservationAppliedToRuntime:
+          ledgerTransition.action !== "preserve",
+        answerRecoveryAppliedToRuntime:
+          ledgerTransition.action !== "preserve",
+        visualEvidenceCheckAppliedToRuntime:
+          ledgerTransition.action !== "preserve",
+        answerRecoveryEvidenceRequirementSettled:
+          candidate.evidenceRequirementSettled,
+        answerRecoveryEvidenceRequirementDisposition:
+          candidate.evidenceRequirementDisposition,
+        answerRecoveryEvidenceRequirementDecision:
+          candidate.evidenceRequirement?.decision,
+        answerRecoveryLedgerAction: ledgerTransition.action,
+        answerRecoveryLedgerReason: ledgerTransition.reason,
+        answerRecoveryFactCreated: Boolean(recovery),
+        ...(recovery
+          ? formatAwaitingVisualEvidenceRecoveryForTrace(recovery, {
+              stage: "created",
+              reason: ledgerTransition.reason,
+            })
+          : {}),
         answerRecoveryLocalDetectorDecision:
           candidate.localResolution.state,
         answerRecoveryLocalDetectorVisual:
           candidate.localResolution.awaitingVisualEvidence,
       });
       pendingAnswerResolutionCommitByTraceRef.current.delete(traceId);
+      refreshRecordedCompletedTrace(traceId);
     },
-    []
+    [refreshRecordedCompletedTrace, settleAwaitingVisualEvidenceRecovery]
   );
 
   const scheduleAdvisorResponseConsistencyShadow = useCallback(
@@ -11014,7 +11105,9 @@ export function useMeetingAssistant() {
             : [],
         })
       : undefined;
-    const visualEvidenceCheckStartedAt = Date.now();
+    let visualEvidenceCheckOutcome:
+      | VisualEvidenceCheckRuntimeOutcome
+      | undefined;
     const visualEvidenceCheckPromise =
       shouldRunQuestionOnlyVisualEvidenceCheck(advisorJob.source) &&
       advisorJob.logicalQuestionUnit &&
@@ -11036,6 +11129,32 @@ export function useMeetingAssistant() {
                 : undefined,
           })
         : undefined;
+    if (visualEvidenceCheckPromise) {
+      void visualEvidenceCheckPromise.then((outcome) => {
+        visualEvidenceCheckOutcome = outcome;
+        if (!traceId) return;
+        const pending =
+          pendingAnswerResolutionCommitByTraceRef.current.get(traceId);
+        if (!pending) return;
+        const request = outcome.request;
+        const identityMatches = Boolean(
+          request &&
+            request.logicalQuestionUnitId ===
+              pending.logicalQuestionUnitId &&
+            request.logicalQuestionUnitRevision ===
+              pending.logicalQuestionRevision
+        );
+        pending.evidenceRequirement =
+          identityMatches && outcome.leaseAuthorized
+            ? outcome.candidate
+            : undefined;
+        pending.evidenceRequirementSettled = true;
+        pending.evidenceRequirementDisposition = identityMatches
+          ? outcome.disposition
+          : "identity-mismatch";
+        finalizeAnswerRecoveryAdjudication(traceId);
+      });
+    }
     const advisorTaskFallbackQuery =
       advisorQuestionSemanticEvidenceText ||
       (promptContext.latestTurn?.speaker === "them"
@@ -14287,12 +14406,6 @@ export function useMeetingAssistant() {
     let advisorResponseCandidate:
       | Readonly<MeetingAIResponseCandidate>
       | undefined;
-    let localAdvisorOutput:
-      | {
-          kind: "question-only-visual-evidence-request";
-          content: string;
-        }
-      | undefined;
     let advisorModelPromptText = "";
     let advisorModelRequestStartedAt: number | undefined;
     let advisorModelFirstContentAt: number | undefined;
@@ -14401,193 +14514,20 @@ export function useMeetingAssistant() {
     }
 
     const authorizedImageAttached = Boolean(advisorScreenSourceRead.image);
-    const shouldAwaitVisualEvidenceCheck =
-      shouldAwaitQuestionOnlyVisualEvidenceCheckBeforeAdvisor({
-        authorizedImageAttached,
-      });
-    let visualEvidenceCheckOutcome:
-      | VisualEvidenceCheckRuntimeOutcome
-      | undefined;
-    if (visualEvidenceCheckPromise && shouldAwaitVisualEvidenceCheck) {
-      const elapsedMs = Math.max(
-        0,
-        Date.now() - visualEvidenceCheckStartedAt
-      );
-      const remainingMs = Math.max(
-        0,
-        VISUAL_EVIDENCE_CHECK_WAIT_MS - elapsedMs
-      );
-      if (remainingMs > 0) {
-        try {
-          visualEvidenceCheckOutcome = await withTimeout(
-            visualEvidenceCheckPromise,
-            remainingMs,
-            "Question-only visual evidence check deadline expired."
-          );
-          if (traceId) {
-            traceStoreRef.current.updateMetadata(traceId, {
-              visualEvidenceCheckCompletedBeforeAdvisor: true,
-              visualEvidenceCheckForegroundWaitDisposition: "completed",
-              visualEvidenceCheckWaitMs: Math.max(
-                0,
-                Date.now() - visualEvidenceCheckStartedAt
-              ),
-            });
-          }
-        } catch (error) {
-          if (traceId) {
-            traceStoreRef.current.updateMetadata(traceId, {
-              visualEvidenceCheckDisposition: "deadline-expired",
-              visualEvidenceCheckCompletedBeforeAdvisor: false,
-              visualEvidenceCheckForegroundWaitDisposition:
-                "deadline-expired",
-              visualEvidenceCheckWaitMs: Math.max(
-                0,
-                Date.now() - visualEvidenceCheckStartedAt
-              ),
-              visualEvidenceCheckError:
-                error instanceof Error ? error.message : String(error),
-            });
-          }
-        }
-      } else if (traceId) {
-        traceStoreRef.current.updateMetadata(traceId, {
-          visualEvidenceCheckCompletedBeforeAdvisor: false,
-          visualEvidenceCheckForegroundWaitDisposition:
-            "deadline-elapsed-before-wait",
-          visualEvidenceCheckWaitMs: elapsedMs,
-        });
-      }
-    }
-    if (
-      traceId &&
-      visualEvidenceCheckPromise &&
-      !shouldAwaitVisualEvidenceCheck
-    ) {
+    if (traceId && visualEvidenceCheckPromise) {
       traceStoreRef.current.updateMetadata(traceId, {
         visualEvidenceCheckAppliedToRuntime: false,
-        visualEvidenceCheckAuthorizedImageAttempt: true,
+        visualEvidenceCheckAuthorizedImageAttempt: authorizedImageAttached,
         visualEvidenceCheckForegroundWaitDisposition:
-          "skipped-authorized-image",
+          "parallel-advisor-attempt",
         visualEvidenceCheckWaitMs: 0,
         visualEvidenceCheckApplicationReason:
-          "authorized-image-receives-advisor-attempt",
+          "advisor-owns-foreground-response",
       });
-    }
-    const visualEvidenceCandidate = visualEvidenceCheckOutcome?.leaseAuthorized
-      ? visualEvidenceCheckOutcome.candidate
-      : undefined;
-    const shouldRequestAdditionalVisualEvidence = Boolean(
-      shouldRequestAdditionalVisualEvidenceBeforeAdvisor({
-        decision: visualEvidenceCandidate?.decision,
-        authorizedImageAttached,
-      })
-    );
-    if (
-      shouldRequestAdditionalVisualEvidence &&
-      visualEvidenceCandidate &&
-      advisorJob.logicalQuestionUnit &&
-      visualEvidenceQuestion
-    ) {
-      const visualContext = contextManagerRef.current.getState();
-      const visualParent = visualContext.activeMeetingTask?.parent;
-      const visualChild = visualContext.activeMeetingTask?.child;
-      const visualOwnerKind = visualChild
-        ? ("child" as const)
-        : visualParent
-          ? ("parent" as const)
-          : ("current-question" as const);
-      const recovery = createAwaitingVisualEvidenceRecoveryFact({
-        resolution: {
-          state: "awaiting-evidence",
-          awaitingVisualEvidence: true,
-          evidence: [
-            ...visualEvidenceCandidate.questionEvidenceSpans,
-            ...visualEvidenceCandidate.visualEvidenceSpans,
-          ],
-        },
-        sessionId: visualContext.sessionId,
-        runtimeEpoch: runtimeEpochRef.current,
-        logicalQuestionUnitId: advisorJob.logicalQuestionUnit.id,
-        logicalQuestionRevision: advisorJob.logicalQuestionUnit.revision,
-        answerRevision: 0,
-        visibleAnswerRevision:
-          stableAnswerRevisionRef.current?.revision ??
-          visibleAnswerRevisionRef.current,
-        parentTaskId: visualParent?.id,
-        parentRevision: visualParent?.revisions,
-        ownerKind: visualOwnerKind,
-        ownerBranchId:
-          visualChild?.id ??
-          visualParent?.id ??
-          advisorJob.logicalQuestionUnit.id,
-        questionType:
-          currentQuestionSettlement?.questionType ??
-          visualChild?.questionType ??
-          visualParent?.questionType,
-        questionText:
-          advisorQuestionAnswerFocusText ||
-          advisorJob.logicalQuestionUnit.normalizedText,
-        sourceHash: visualEvidenceQuestion.sourceHash,
-        sourceSettlementId: currentQuestionSettlement?.settlementId,
-        sourceTurnIds: advisorJob.logicalQuestionUnit.sourceTurnIds,
-        manualCorrectionRevision:
-          manualCorrectionRevisionRef.current,
-      });
-      if (recovery) {
-        awaitingVisualEvidenceRecoveryRef.current =
-          upsertVisualRecoveryOpportunity(
-            awaitingVisualEvidenceRecoveryRef.current,
-            recovery
-          );
-      }
-      const localContent = [
-        "中文思路:",
-        "- 当前问题依赖尚未提供的屏幕证据。先请求对应截图或代码行，避免猜测。",
-        "",
-        "Answer:",
-        "Please share the relevant screenshot or code lines so I can answer this precisely.",
-      ].join("\n");
-      finalContent = localContent;
-      localAdvisorOutput = {
-        kind: "question-only-visual-evidence-request",
-        content: localContent,
-      };
-      if (traceId) {
-        const metadata = {
-          ...formatAwaitingVisualEvidenceRecoveryForTrace(recovery, {
-            stage: "created",
-            reason: "question-only-visual-missing",
-          }),
-          visualEvidenceCheckWaitMs: Math.max(
-            0,
-            Date.now() - visualEvidenceCheckStartedAt
-          ),
-          visualEvidenceCheckAppliedToRuntime: Boolean(recovery),
-          advisorModelStarted: false,
-          advisorOutputCommittedToUi: false,
-          advisorOutputCandidateKind:
-            "question-only-visual-evidence-request",
-        };
-        traceStoreRef.current.updateMetadata(traceId, metadata);
-        traceStoreRef.current.recordOutput(
-          traceId,
-          "question-only visual evidence request",
-          localContent,
-          metadata
-        );
-        sessionRecordingManagerRef.current?.recordCaptureLifecycle({
-          stage: "question-only-visual-evidence-request",
-          traceId,
-          taskId: visualParent?.id,
-          ...metadata,
-        });
-      }
     }
 
     try {
-      if (!localAdvisorOutput) {
-        for await (const event of advisorEngineRef.current.streamSuggestion({
+      for await (const event of advisorEngineRef.current.streamSuggestion({
         requestId,
         mode: advisorPromptMode,
         promptContext: advisorModelPromptContext,
@@ -14863,7 +14803,6 @@ export function useMeetingAssistant() {
               partialSuggestion: stagedPartialContent,
             }));
           }
-        }
       }
 
       if (mode === "response-action") {
@@ -15193,8 +15132,24 @@ export function useMeetingAssistant() {
             questionText: advisorQuestionAnswerFocusText,
             answerText: recoveryAnswerText,
           });
+        const recoveryActiveTask =
+          sufficiencyMeetingContext.activeMeetingTask;
+        const recoveryOwnerKind = recoveryActiveTask?.child
+          ? ("child" as const)
+          : recoveryActiveTask?.parent
+            ? ("parent" as const)
+            : ("current-question" as const);
+        const visualEvidenceOutcomeMatches = Boolean(
+          visualEvidenceCheckOutcome?.request &&
+            visualEvidenceCheckOutcome.request.logicalQuestionUnitId ===
+              advisorJob.logicalQuestionUnit.id &&
+            visualEvidenceCheckOutcome.request
+              .logicalQuestionUnitRevision ===
+              advisorJob.logicalQuestionUnit.revision
+        );
         const pendingRecoveryCandidate: PendingAnswerResolutionCommitCandidate = {
-          sourceKind: "voice",
+          sourceKind:
+            currentQuestionSourceKind === "voice" ? "voice" : "screen",
           traceId,
           sessionId: sufficiencyMeetingContext.sessionId,
           runtimeEpoch: runtimeEpochRef.current,
@@ -15210,11 +15165,36 @@ export function useMeetingAssistant() {
           sourceHash:
             settledExecutionPlan?.sourceHash ??
             currentQuestionSettlement?.sourceHash,
+          sourceSettlementId:
+            settledExecutionPlan?.settlementId ??
+            currentQuestionSettlement?.settlementId,
           sourceTurnIds: [...advisorJob.logicalQuestionUnit.sourceTurnIds],
+          ownerKind: recoveryOwnerKind,
+          ownerBranchId:
+            recoveryActiveTask?.child?.id ??
+            recoveryActiveTask?.parent.id ??
+            advisorJob.logicalQuestionUnit.id,
+          questionType:
+            normalizeCanonicalQuestionType(canonicalAdvisorQuestionType) ??
+            "unknown",
+          questionText: advisorQuestionAnswerFocusText,
           manualCorrectionRevision: manualCorrectionRevisionRef.current,
           localResolution,
           adjudicationSourceHash: answerResolutionRequest?.sourceHash,
           answerResolutionSettled: !answerResolutionRequest,
+          evidenceRequirement:
+            visualEvidenceOutcomeMatches &&
+            visualEvidenceCheckOutcome?.leaseAuthorized
+              ? visualEvidenceCheckOutcome.candidate
+              : undefined,
+          evidenceRequirementSettled:
+            !visualEvidenceCheckPromise ||
+            Boolean(visualEvidenceCheckOutcome),
+          evidenceRequirementDisposition: visualEvidenceOutcomeMatches
+            ? visualEvidenceCheckOutcome?.disposition
+            : visualEvidenceCheckOutcome
+              ? "identity-mismatch"
+              : undefined,
         };
         pendingAnswerResolutionCommitByTraceRef.current.set(
           traceId,
@@ -15990,7 +15970,7 @@ export function useMeetingAssistant() {
             currentTaskRuntimeRevision:
               advisorCommitTaskRuntimeState.revision,
             candidateAccepted: Boolean(
-              advisorResponseCandidate || localAdvisorOutput
+              advisorResponseCandidate
             ),
             visibleAnswerRevision: candidateStableAnswer.revision,
             transition: preparedAdvisorTransition.transition

@@ -48,6 +48,8 @@ export function buildAdvisorSystemPrompt() {
     "When the situation is unclear, provide a safe clarifying question.",
     "When a technical term or acronym matters, briefly explain it in simple Chinese.",
     "Do not invent colleagues, speakers, questions, intentions, or meeting dialogue that are not present in the transcript or screen context.",
+    "Only images supplied in the current request, explicitly included Code artifacts, and bounded visual summaries in the prompt are Authorized Evidence for specific code lines, cursor position, diagrams, screenshots, errors, or UI state.",
+    "When that Authorized Evidence is absent, answer any non-visual part that the available text or verified facts support, but never claim to see specific visual content. State the exact evidence gap when the requested detail cannot be answered safely.",
     "Treat memory context as user-provided background only. Visible screen content, latest transcript, and active task constraints have higher priority than memory.",
     "Within memory context, only entries in runtime_role=fact-evidence with anchor_eligible=true may support first-person professional facts. Guidance, template, and overlay entries may shape explanation, wording, or diagrams but cannot prove that the user performed a project or achieved an outcome.",
     "When a project binding is present, it is the exclusive project identity for first-person facts in the current parent task. Do not silently replace it with a different retrieved project.",

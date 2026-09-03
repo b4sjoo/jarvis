@@ -10,8 +10,6 @@ import {
   decideAnswerRecoveryLedgerTransition,
   isAnswerRecoveryOutputTruncated,
   parseAnswerRecoveryAdjudicationOutput,
-  shouldAwaitQuestionOnlyVisualEvidenceCheckBeforeAdvisor,
-  shouldRequestAdditionalVisualEvidenceBeforeAdvisor,
   shouldRunQuestionOnlyVisualEvidenceCheck,
 } from "../src/lib/meeting/answer-recovery-adjudication.js";
 
@@ -34,42 +32,6 @@ test("runs the question-only visual lease for automatic and manual recovery sour
   ] as const) {
     assert.equal(shouldRunQuestionOnlyVisualEvidenceCheck(source), false);
   }
-});
-
-test("gives an authorized image one Advisor attempt before requesting another", () => {
-  assert.equal(
-    shouldAwaitQuestionOnlyVisualEvidenceCheckBeforeAdvisor({
-      authorizedImageAttached: true,
-    }),
-    false
-  );
-  assert.equal(
-    shouldAwaitQuestionOnlyVisualEvidenceCheckBeforeAdvisor({
-      authorizedImageAttached: false,
-    }),
-    true
-  );
-  assert.equal(
-    shouldRequestAdditionalVisualEvidenceBeforeAdvisor({
-      decision: "visual-missing",
-      authorizedImageAttached: false,
-    }),
-    true
-  );
-  assert.equal(
-    shouldRequestAdditionalVisualEvidenceBeforeAdvisor({
-      decision: "visual-missing",
-      authorizedImageAttached: true,
-    }),
-    false
-  );
-  assert.equal(
-    shouldRequestAdditionalVisualEvidenceBeforeAdvisor({
-      decision: "visual-sufficient",
-      authorizedImageAttached: false,
-    }),
-    false
-  );
 });
 
 test("refreshes a completed trace after background visual evidence settles", () => {
@@ -305,6 +267,14 @@ test("projects only definite current pairs to recovery ledger mutations", () => 
     decideAnswerRecoveryLedgerTransition({
       revisionAuthorized: true,
       answerResolution: "resolved",
+      evidenceRequirement: "visual-missing",
+    }),
+    { action: "cancel", reason: "definite-non-recovery" }
+  );
+  assert.deepEqual(
+    decideAnswerRecoveryLedgerTransition({
+      revisionAuthorized: true,
+      answerResolution: "unresolved",
       evidenceRequirement: "not-visual",
     }),
     { action: "cancel", reason: "definite-non-recovery" }

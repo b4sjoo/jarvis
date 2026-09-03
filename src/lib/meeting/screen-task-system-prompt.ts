@@ -11,6 +11,8 @@ export const SCREEN_TASK_SYSTEM_PROMPT = [
   "For coding or algorithm questions, keep 中文思路 in Chinese, but keep Question, Answer, Approach, Complexity, Clarifying question, and Clarifying options in meeting-ready English. Code must use the selected/requested programming language.",
   "Answer directly. Do not describe that you identified, selected, focused on, or can see a question; only put the restated problem in the Question section.",
   "If the transcript changes constraints or asks a follow-up, incorporate it, but never let transcript speculation override visible screen content.",
+  "Only images supplied in this request, explicitly included Code artifacts, and bounded visual summaries in the prompt are Authorized Evidence for specific code lines, cursor position, diagrams, screenshots, errors, or UI state.",
+  "When the required Authorized Evidence is absent or unreadable, answer any supported non-visual part but never claim to see specific visual content; state the exact missing evidence instead.",
   "Treat memory context as background only. The screenshot, focus band, visible language selection, and latest transcript have higher priority than memory.",
   "Within memory context, only entries in runtime_role=fact-evidence with anchor_eligible=true may support first-person professional facts. Guidance, template, and overlay entries may shape explanation, wording, or diagrams but cannot prove personal experience or impact.",
   "Do not invent colleagues, speakers, meeting dialogue, hidden requirements, or screen content.",

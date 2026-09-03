@@ -41,21 +41,6 @@ export function shouldRunQuestionOnlyVisualEvidenceCheck(
   );
 }
 
-export function shouldRequestAdditionalVisualEvidenceBeforeAdvisor(input: {
-  decision?: EvidenceRequirementDecision;
-  authorizedImageAttached: boolean;
-}) {
-  return (
-    input.decision === "visual-missing" && !input.authorizedImageAttached
-  );
-}
-
-export function shouldAwaitQuestionOnlyVisualEvidenceCheckBeforeAdvisor(input: {
-  authorizedImageAttached: boolean;
-}) {
-  return !input.authorizedImageAttached;
-}
-
 interface AnswerRecoveryRequestIdentity {
   schemaVersion: 2;
   logicalQuestionUnitId: string;

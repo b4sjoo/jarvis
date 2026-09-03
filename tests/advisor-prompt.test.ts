@@ -4,7 +4,18 @@ import {
   buildResponseActionInstructions,
   formatResponseActionContextScope,
 } from "../src/lib/meeting/response-action-contract.js";
-import { buildAdvisorUserMessage } from "../src/lib/meeting/advisor-prompt.js";
+import {
+  buildAdvisorSystemPrompt,
+  buildAdvisorUserMessage,
+} from "../src/lib/meeting/advisor-prompt.js";
+
+test("limits visual claims to Authorized Evidence without blocking text answers", () => {
+  const prompt = buildAdvisorSystemPrompt();
+
+  assert.match(prompt, /Authorized Evidence/);
+  assert.match(prompt, /never claim to see specific visual content/);
+  assert.match(prompt, /answer any non-visual part/);
+});
 
 test("gives the advisor a focused ask plus bounded semantic context", () => {
   const message = buildAdvisorUserMessage({
