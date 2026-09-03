@@ -32435,6 +32435,45 @@ export function useMeetingAssistant() {
             correctionTrace.id
           );
       const questionId = correctionQuestion.questionId;
+      const recordCorrectionHumanTypeTruth = (input: {
+        taskId?: string;
+        repairTraceId?: string;
+        evaluation?: QuestionHumanEvaluation;
+      }) => {
+        const sourceTraceId =
+          correctionQuestion.sourceTraceId ?? correctionTrace.id;
+        recordHumanGroundTruthV2(
+          sourceTraceId,
+          {
+            kind: "expected-question-type",
+            expectedQuestionType: decision.correctedType,
+            correctionScope: correctionScopeDecision.scope,
+          },
+          {
+            source: "manual-type-correction",
+            collection: correctionEvaluationCollection,
+            actionId: eventId,
+            repairTraceId: input.repairTraceId,
+            uiSurface: source,
+            evaluation: input.evaluation,
+            evaluationTarget: {
+              attemptId: sourceTraceId,
+              questionId,
+              taskId: input.taskId ?? correctionLogicalQuestionUnit.id,
+              logicalQuestionUnitId: correctionLogicalQuestionUnit.id,
+              logicalQuestionUnitRevision:
+                correctionLogicalQuestionUnit.revision,
+              currentTurnId: correctionLogicalQuestionUnit.currentTurnId,
+              sourceTurnIds: [
+                ...correctionLogicalQuestionUnit.sourceTurnIds,
+              ],
+              sourceTraceId,
+              repairTraceId: input.repairTraceId,
+              frozenAt: requestedAt,
+            },
+          }
+        );
+      };
       let correction: ManualQuestionTypeCorrection = {
         eventId,
         taskId:
@@ -32961,6 +33000,9 @@ export function useMeetingAssistant() {
             "cancelled",
             correctionSourceAdmissionMetadata
           );
+          recordCorrectionHumanTypeTruth({
+            taskId: activeTask?.parent.id ?? existingParent?.id,
+          });
           finalizeCorrection({
             authorizationFailureReason: correctionSourceAdmission.reason,
             failureMessage,
@@ -33379,41 +33421,11 @@ export function useMeetingAssistant() {
         sessionRecordingManagerRef.current?.recordManualQuestionTypeCorrection(
           correction
         );
-        recordHumanGroundTruthV2(
-          correctionQuestion.sourceTraceId ?? correctionTrace.id,
-          {
-            kind: "expected-question-type",
-            expectedQuestionType: decision.correctedType,
-            correctionScope: correctionScopeDecision.scope,
-          },
-          {
-            source: "manual-type-correction",
-            collection: correctionEvaluationCollection,
-            actionId: eventId,
-            repairTraceId: regenerationTrace.id,
-            uiSurface: source,
-            evaluation,
-            evaluationTarget: {
-              attemptId:
-                correctionQuestion.sourceTraceId ?? correctionTrace.id,
-              questionId,
-              taskId:
-                correctedActiveTask?.parent.id ??
-                correctionLogicalQuestionUnit.id,
-              logicalQuestionUnitId: correctionLogicalQuestionUnit.id,
-              logicalQuestionUnitRevision:
-                correctionLogicalQuestionUnit.revision,
-              currentTurnId: correctionLogicalQuestionUnit.currentTurnId,
-              sourceTurnIds: [
-                ...correctionLogicalQuestionUnit.sourceTurnIds,
-              ],
-              sourceTraceId:
-                correctionQuestion.sourceTraceId ?? correctionTrace.id,
-              repairTraceId: regenerationTrace.id,
-              frozenAt: requestedAt,
-            },
-          }
-        );
+        recordCorrectionHumanTypeTruth({
+          taskId: correctedActiveTask?.parent.id,
+          repairTraceId: regenerationTrace.id,
+          evaluation,
+        });
         setState((previous) => ({
           ...previous,
           ...stageSuggestionProjectionForManualCorrection(previous),

@@ -183,7 +183,7 @@ test("hands a no-parent Screen correction to Advisor from its committed source",
   assert.ok(lifecycleCommitIndex > sourceAdmissionIndex);
   assert.match(
     correction.slice(sourceAdmissionIndex, lifecycleCommitIndex),
-    /if \(!correctionSourceAdmission\.authorized\)[\s\S]*finalizeCorrection\(\{[\s\S]*authorizationFailureReason: correctionSourceAdmission\.reason[\s\S]*return;/
+    /if \(!correctionSourceAdmission\.authorized\)[\s\S]*recordCorrectionHumanTypeTruth\(\{[\s\S]*finalizeCorrection\(\{[\s\S]*authorizationFailureReason: correctionSourceAdmission\.reason[\s\S]*return;/
   );
   assert.match(
     source,
