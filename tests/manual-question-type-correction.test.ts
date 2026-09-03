@@ -168,6 +168,23 @@ test("shares one correction lifecycle commit boundary across correction paths", 
 
 test("hands a no-parent Screen correction to Advisor from its committed source", () => {
   const source = readFileSync("src/hooks/useMeetingAssistant.ts", "utf8");
+  const correction = source.slice(
+    source.indexOf("  const correctActiveQuestionType = useCallback"),
+    source.indexOf("  const resolveCurrentSuggestionQuestionLineage")
+  );
+  const sourceAdmissionIndex = correction.indexOf(
+    "const correctionSourceAdmission ="
+  );
+  const lifecycleCommitIndex = correction.indexOf(
+    "const lifecycleCommit = commitCorrectionLifecycleWithManager"
+  );
+
+  assert.ok(sourceAdmissionIndex >= 0);
+  assert.ok(lifecycleCommitIndex > sourceAdmissionIndex);
+  assert.match(
+    correction.slice(sourceAdmissionIndex, lifecycleCommitIndex),
+    /if \(!correctionSourceAdmission\.authorized\)[\s\S]*finalizeCorrection\(\{[\s\S]*authorizationFailureReason: correctionSourceAdmission\.reason[\s\S]*return;/
+  );
   assert.match(
     source,
     /advisorJob\.source === "manual-correction"[\s\S]*authorizeSettlementOwnedQuestionContext\(\{[\s\S]*sourceKind: settlementIdentitySource\.sourceKind[\s\S]*screenObservations:/

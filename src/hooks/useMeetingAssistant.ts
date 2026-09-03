@@ -32931,6 +32931,42 @@ export function useMeetingAssistant() {
               reason: `${selectedPlaybook.reason}; authoritative manual runtime correction`,
             }
           : undefined;
+        const correctionSourceAdmission =
+          authorizeSettlementOwnedQuestionContext({
+            sourceKind: correctionCurrentQuestionSettlement.sourceKind,
+            sourceObservationIds:
+              correctionCurrentQuestionSettlement.sourceObservationIds,
+            logicalQuestionText: correctionLogicalQuestionUnit.normalizedText,
+            screenObservations:
+              contextManagerRef.current.getState().screenObservations,
+          });
+        const correctionSourceAdmissionMetadata = {
+          ...formatSettlementOwnedQuestionContextForTrace(
+            correctionSourceAdmission
+          ),
+          settlementOwnedQuestionContextStage: "pre-correction-mutation",
+        };
+        traceStoreRef.current.updateMetadata(
+          correctionTrace.id,
+          correctionSourceAdmissionMetadata
+        );
+        if (!correctionSourceAdmission.authorized) {
+          const failureMessage =
+            correctionSourceAdmission.reason === "logical-question-empty"
+              ? "The corrected question has no source text to regenerate from."
+              : "The corrected Screen source is no longer available. Capture the question again.";
+          traceStoreRef.current.finishStep(
+            correctionTrace.id,
+            mutationStepId,
+            "cancelled",
+            correctionSourceAdmissionMetadata
+          );
+          finalizeCorrection({
+            authorizationFailureReason: correctionSourceAdmission.reason,
+            failureMessage,
+          });
+          return;
+        }
         const mutationAuthorization = recordCorrectionAuthorization(
           correctionRuntimeToken,
           "pre-correction-mutation"
