@@ -10630,6 +10630,7 @@ export function useMeetingAssistant() {
         currentOperationId: activeAdvisorJobRef.current?.id,
       });
     const trySameOwnerAnswerCommitRebase = (stage: string) => {
+      if (!advisorJob.logicalQuestionUnit) return false;
       const startedAt = performance.now();
       const currentContext = contextManagerRef.current.getState();
       const rebaseDecision = decideSameOwnerAnswerCommitRebase({
@@ -10640,7 +10641,7 @@ export function useMeetingAssistant() {
         stableAnswer: stableAnswerRevisionRef.current,
         sessionId: advisorJob.expectedSessionId,
         runtimeEpoch: advisorJob.runtimeCommitToken.runtimeEpoch,
-        logicalQuestionUnitId: advisorJob.logicalQuestionUnit?.id,
+        logicalQuestionUnitId: advisorJob.logicalQuestionUnit.id,
         jobScheduledAt: advisorJob.scheduledAt,
       });
       const currentTask = currentContext.activeMeetingTask;

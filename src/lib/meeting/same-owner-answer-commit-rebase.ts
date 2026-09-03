@@ -29,7 +29,7 @@ export function decideSameOwnerAnswerCommitRebase(input: {
   stableAnswer?: StableAnswerRevision | null;
   sessionId: string;
   runtimeEpoch: number;
-  logicalQuestionUnitId?: string;
+  logicalQuestionUnitId: string;
   jobScheduledAt: number;
 }): SameOwnerAnswerCommitRebaseDecision {
   const expectedParentRevision = input.expectedTask?.parent.revisions;
@@ -41,6 +41,9 @@ export function decideSameOwnerAnswerCommitRebase(input: {
     currentTaskRuntimeRevision: input.currentTaskRuntime.revision,
   };
   if (!input.expectedTask || !input.currentTask) {
+    return { ...base, authorized: false, reason: "owner-missing" };
+  }
+  if (!input.logicalQuestionUnitId.trim()) {
     return { ...base, authorized: false, reason: "owner-missing" };
   }
 

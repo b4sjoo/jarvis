@@ -340,6 +340,23 @@ test("rejects stale receipts, multiple revisions, and another branch", () => {
   );
 });
 
+test("rejects rebase without a current logical-question owner", () => {
+  assert.equal(
+    decideSameOwnerAnswerCommitRebase({
+      expectedTask: task(1),
+      currentTask: task(2),
+      expectedTaskRuntimeRevision: 4,
+      currentTaskRuntime: runtime(5),
+      stableAnswer: stable(),
+      sessionId: "session-1",
+      runtimeEpoch: 2,
+      logicalQuestionUnitId: "",
+      jobScheduledAt: 100,
+    }).reason,
+    "owner-missing"
+  );
+});
+
 test("keeps the rebase behind the exact parent revision rejection", () => {
   const hook = readFileSync("src/hooks/useMeetingAssistant.ts", "utf8");
   const start = hook.indexOf("const trySameOwnerAnswerCommitRebase");
@@ -347,6 +364,10 @@ test("keeps the rebase behind the exact parent revision rejection", () => {
   const implementation = hook.slice(start, end);
 
   assert.ok(start >= 0 && end > start);
+  assert.match(
+    implementation,
+    /if \(!advisorJob\.logicalQuestionUnit\) return false;/
+  );
   assert.match(
     hook,
     /decision\.reason === "parent-revision-mismatch"[\s\S]*trySameOwnerAnswerCommitRebase\(stage\)/
