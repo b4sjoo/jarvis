@@ -12106,6 +12106,7 @@ export function useMeetingAssistant() {
     if (
       !force &&
       !runtimeTypeAdjudicationOutputAuthorized &&
+      !advisorJob.logicalQuestionUnit &&
       !advisorEngineRef.current.shouldRequestSuggestion(latestTurn)
     ) {
       recordCurrentQuestionSettlement();

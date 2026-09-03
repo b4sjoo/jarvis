@@ -52,6 +52,20 @@ test("organic capture transitions update both liveness facts", () => {
   assert.match(source, /isRuntimeActive: runtimeActiveRef\.current,/);
 });
 
+test("canonical response authority is not revoked by an ambient Me turn", () => {
+  const runAdvisor = sourceSlice(
+    "  const runAdvisor = useCallback(",
+    "  const scheduleAdvisor = useCallback("
+  );
+
+  assert.match(
+    runAdvisor,
+    /!advisorJob\.logicalQuestionUnit\s*&&\s*!advisorEngineRef\.current\.shouldRequestSuggestion\(latestTurn\)/
+  );
+  assert.match(runAdvisor, /isAnswerDeliveryLockActive\(/);
+  assert.match(runAdvisor, /compileSettledAdvisorPromptContext\(/);
+});
+
 function sourceSlice(startMarker: string, endMarker: string) {
   const start = source.indexOf(startMarker);
   const end = source.indexOf(endMarker, start + startMarker.length);
