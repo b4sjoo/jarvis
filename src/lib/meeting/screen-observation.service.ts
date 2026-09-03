@@ -58,7 +58,10 @@ import {
   requireMeetingAIResponseCandidate,
   type MeetingAIResponseCandidate,
 } from "./meeting-ai-response.js";
-import { SCREEN_TASK_SYSTEM_PROMPT } from "./screen-task-system-prompt.js";
+import {
+  SCREEN_FOCUSED_CODE_EXPLANATION_INSTRUCTION,
+  SCREEN_TASK_SYSTEM_PROMPT,
+} from "./screen-task-system-prompt.js";
 
 export type ScreenCaptureTargetType = "active-window" | "current-monitor";
 
@@ -502,7 +505,7 @@ function buildScreenPreflightUserMessage({
     "Schema:",
     '{"question": string|null, "focusedEvidenceSummary": string|null, "questionType": "behavioral"|"coding"|"general-system-design"|"ai-ml-system-design"|"project-deep-dive"|"field-knowledge"|"unknown", "askFrame": "hypothetical-design"|"past-project"|"ambiguous"|"direct-answer"|"unknown", "topicDomain": "ai-ml-infra"|"agentic-ai"|"search"|"backend"|"unknown", "projectAnchor": string|null, "programmingLanguage": string|null, "confidence": number, "isBehavioralInterview": boolean, "amazonLeadershipPrinciple": string|null}',
     "question: the active visible interview/software-engineering question near the cursor, or null.",
-    "focusedEvidenceSummary: one short literal summary of cursor/focus-adjacent code lines, line numbers, error text, or requested visual evidence. Preserve visible identifiers and ranges. Return null when no such focused evidence is visible.",
+    "focusedEvidenceSummary: one short literal summary of cursor/focus-adjacent code lines, line numbers, error text, or requested visual evidence. State when a code block is visibly highlighted or selected. Preserve visible identifiers and ranges. Return null when no such focused evidence is visible.",
     "questionType: classify the question. Use ai-ml-system-design for hypothetical AI/ML infra design such as RAG, model serving, agent memory, evaluation, retrieval, vector search, model routing, or AI platform architecture. Use general-system-design for non-AI backend/system design such as ticket selling, rate limiter, chat, booking, feeds, or storage systems. Use field-knowledge for direct conceptual questions such as 'what is X', 'explain X', 'compare X and Y', or 'what are the tradeoffs of X' when they do not ask to design a system. Use project-deep-dive when the question asks about a project the candidate built, their role, tradeoffs, architecture, impact, or lessons.",
     "askFrame: hypothetical-design for future/imagined design questions; past-project for questions about the candidate's actual past work; ambiguous when it asks both about an existing project and a future improvement; direct-answer for field knowledge, coding, or behavioral questions.",
     "topicDomain: choose agentic-ai for agents, memory, tool use, planning, or agent frameworks; ai-ml-infra for model serving, RAG, vector DB, embeddings, evaluation, data/model pipelines, or ML platforms; search for search/retrieval/ranking systems; backend for general backend systems.",
@@ -692,6 +695,7 @@ function buildScreenTaskUserMessage({
     "If a focus band is present, Image 1 is the cursor-centered horizontal focus band and Image 2 is the full active-window context.",
     "If no focus band is present, Image 1 is the full active-window screenshot.",
     "When the focus band is present, first identify the active question, active code region, visible language setting, or UI option from Image 1. Use Image 2 only to recover surrounding context for that selected target.",
+    SCREEN_FOCUSED_CODE_EXPLANATION_INSTRUCTION,
     "Do not answer an earlier, higher, or larger question from the full screenshot when the focus band indicates a different target.",
     "If the focus band shows a selected programming language, language dropdown, or language tab, treat that as an explicit language requirement even if the problem statement is only fully readable in the full screenshot.",
     "Language priority is: selected language in the focus band, explicit language in the full screenshot, transcript clarification, then Python default. Treat TypeScript as TypeScript, not JavaScript. Treat Go or Golang as Go.",
