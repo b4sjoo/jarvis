@@ -407,6 +407,8 @@ export function rebaseAnswerGenerationLeaseAfterOwnedParentMutation(input: {
   taskId: string;
   taskRevision: number | undefined;
   expectedRevisionDelta?: number;
+  visibleAnswerRevision?: number;
+  expectedVisibleAnswerRevisionDelta?: number;
 }): AnswerGenerationLease | undefined {
   if (
     input.lease.taskId !== input.taskId ||
@@ -418,9 +420,20 @@ export function rebaseAnswerGenerationLeaseAfterOwnedParentMutation(input: {
   ) {
     return undefined;
   }
+  if (
+    input.visibleAnswerRevision !== undefined &&
+    input.visibleAnswerRevision !==
+      input.lease.baseVisibleAnswerRevision +
+        (input.expectedVisibleAnswerRevisionDelta ?? 0)
+  ) {
+    return undefined;
+  }
   return {
     ...input.lease,
     taskRevision: input.taskRevision,
+    baseVisibleAnswerRevision:
+      input.visibleAnswerRevision ??
+      input.lease.baseVisibleAnswerRevision,
   };
 }
 

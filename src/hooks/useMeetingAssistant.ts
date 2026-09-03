@@ -924,6 +924,10 @@ import {
   PENDING_ANSWER_TTL_MS,
 } from "@/lib/meeting";
 import {
+  decideSameOwnerAnswerCommitRebase,
+  formatSameOwnerAnswerCommitRebaseForTrace,
+} from "@/lib/meeting/same-owner-answer-commit-rebase";
+import {
   composePhaseNavigationPromptContext,
   formatPhaseNavigationPromptMetricsForTrace,
   isPhaseNavigationAction,
@@ -10592,6 +10596,7 @@ export function useMeetingAssistant() {
       options.settledExecutionPlanOverride;
     let answerGenerationLease: AnswerGenerationLease | undefined;
     let generationAuthorizedArtifacts: AnswerArtifactSection[] = [];
+    let originalPromptContext = promptContext;
     const logicalQuestionLease = advisorJob.logicalQuestionUnit
       ? createLogicalQuestionUnitLease(advisorJob.logicalQuestionUnit)
       : undefined;
@@ -10624,6 +10629,98 @@ export function useMeetingAssistant() {
         current: readRuntimeCommitSnapshot(),
         currentOperationId: activeAdvisorJobRef.current?.id,
       });
+    const trySameOwnerAnswerCommitRebase = (stage: string) => {
+      const startedAt = performance.now();
+      const currentContext = contextManagerRef.current.getState();
+      const rebaseDecision = decideSameOwnerAnswerCommitRebase({
+        expectedTask: promptContext.activeMeetingTask,
+        currentTask: currentContext.activeMeetingTask,
+        expectedTaskRuntimeRevision: promptContext.taskRuntime.revision,
+        currentTaskRuntime: currentContext.taskRuntime,
+        stableAnswer: stableAnswerRevisionRef.current,
+        sessionId: advisorJob.expectedSessionId,
+        runtimeEpoch: advisorJob.runtimeCommitToken.runtimeEpoch,
+        logicalQuestionUnitId: advisorJob.logicalQuestionUnit?.id,
+        jobScheduledAt: advisorJob.scheduledAt,
+      });
+      const currentTask = currentContext.activeMeetingTask;
+      const rebasedPlan =
+        rebaseDecision.authorized && settledExecutionPlan && currentTask
+          ? rebaseSettledAdvisorExecutionPlanAfterOwnedParentMutation({
+              plan: settledExecutionPlan,
+              activeMeetingTask: currentTask,
+            })
+          : undefined;
+      const rebasedLease =
+        rebaseDecision.authorized && answerGenerationLease && currentTask
+          ? rebaseAnswerGenerationLeaseAfterOwnedParentMutation({
+              lease: answerGenerationLease,
+              taskId: currentTask.parent.id,
+              taskRevision: currentTask.parent.revisions,
+              visibleAnswerRevision: visibleAnswerRevisionRef.current,
+              expectedVisibleAnswerRevisionDelta: 1,
+            })
+          : undefined;
+      const integrationAuthorized = Boolean(
+        rebaseDecision.authorized &&
+          currentTask &&
+          (!settledExecutionPlan || rebasedPlan) &&
+          (!answerGenerationLease || rebasedLease)
+      );
+      const durationMs = Math.max(0, performance.now() - startedAt);
+      if (traceId) {
+        traceStoreRef.current.updateMetadata(traceId, {
+          ...formatSameOwnerAnswerCommitRebaseForTrace(
+            rebaseDecision,
+            durationMs,
+            stage
+          ),
+          sameOwnerAnswerCommitRebaseApplied: integrationAuthorized,
+          sameOwnerAnswerCommitRebaseIntegrationReason:
+            integrationAuthorized
+              ? "authorized"
+              : rebaseDecision.authorized
+                ? "dependent-lease-rebase-rejected"
+                : rebaseDecision.reason,
+        });
+      }
+      if (!integrationAuthorized || !currentTask) return false;
+
+      const currentPromptContext =
+        contextManagerRef.current.buildAdvisorPromptContext();
+      const rebasePromptContext = (context: AdvisorPromptContext) => ({
+        ...context,
+        taskRuntime: currentPromptContext.taskRuntime,
+        activeMeetingTask: currentPromptContext.activeMeetingTask,
+        interviewPlaybook: currentPromptContext.interviewPlaybook,
+      });
+      effectiveRuntimeCommitToken = rebaseRuntimeCommitToken({
+        token: effectiveRuntimeCommitToken,
+        snapshot: readRuntimeCommitSnapshot(),
+      });
+      promptContext = rebasePromptContext(promptContext);
+      originalPromptContext = rebasePromptContext(originalPromptContext);
+      if (rebasedPlan) {
+        const previousPlanId = settledExecutionPlan?.id;
+        settledExecutionPlan = rebasedPlan;
+        if (settledAdvisorExecutionPlanRef.current?.id === previousPlanId) {
+          settledAdvisorExecutionPlanRef.current = rebasedPlan;
+        }
+      }
+      if (rebasedLease) {
+        answerGenerationLease = rebasedLease;
+        if (
+          activeAdvisorGenerationLeaseRef.current?.advisorJobId ===
+          advisorJob.id
+        ) {
+          activeAdvisorGenerationLeaseRef.current = {
+            advisorJobId: advisorJob.id,
+            lease: rebasedLease,
+          };
+        }
+      }
+      return true;
+    };
     const terminalizeAuthorizationRejection = (input: {
       reason: string;
       source: string;
@@ -10645,6 +10742,13 @@ export function useMeetingAssistant() {
       stage: string,
       decision = readCommitDecision()
     ) => {
+      if (
+        !decision.authorized &&
+        decision.reason === "parent-revision-mismatch" &&
+        trySameOwnerAnswerCommitRebase(stage)
+      ) {
+        decision = readCommitDecision();
+      }
       if (traceId) {
         traceStoreRef.current.updateMetadata(
           traceId,
@@ -11034,7 +11138,7 @@ export function useMeetingAssistant() {
         });
       }
     }
-    const originalPromptContext = promptContext;
+    originalPromptContext = promptContext;
     const latestTurn = promptContext.latestTurn;
     const hasContext = Boolean(
       promptContext.latestTurn ||

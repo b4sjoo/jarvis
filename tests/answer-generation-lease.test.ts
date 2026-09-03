@@ -391,15 +391,19 @@ test("rebases a generation lease only for its own single parent revision mutatio
     lease,
     taskId: "parent-a",
     taskRevision: 4,
+    visibleAnswerRevision: 9,
+    expectedVisibleAnswerRevisionDelta: 1,
   });
 
   assert.ok(rebased);
   assert.equal(rebased.id, lease.id);
   assert.equal(rebased.taskRevision, 4);
+  assert.equal(rebased.baseVisibleAnswerRevision, 9);
   assert.equal(
     authorizeAnswerGenerationLease(rebased, {
       ...buildCurrentSnapshot(),
       taskRevision: 4,
+      visibleAnswerRevision: 9,
       authorizedArtifacts: ["answer", "code", "complexity"],
     }).authorized,
     true
@@ -417,6 +421,16 @@ test("rebases a generation lease only for its own single parent revision mutatio
       lease,
       taskId: "parent-a",
       taskRevision: 5,
+    }),
+    undefined
+  );
+  assert.equal(
+    rebaseAnswerGenerationLeaseAfterOwnedParentMutation({
+      lease,
+      taskId: "parent-a",
+      taskRevision: 4,
+      visibleAnswerRevision: 10,
+      expectedVisibleAnswerRevisionDelta: 1,
     }),
     undefined
   );
