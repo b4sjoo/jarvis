@@ -47,7 +47,7 @@ const App = () => {
         <Card
           className={`w-full flex flex-row items-center gap-2 ${
             meetingFocusModeActive
-              ? "pointer-events-none border-transparent bg-transparent p-0 shadow-none"
+              ? "pointer-events-none border-transparent bg-transparent p-0 opacity-0 shadow-none"
               : "p-2"
           }`}
         >
