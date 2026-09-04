@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   formatBehavioralStoryFamilySelectionForTrace,
   selectBehavioralStoryFamily,
+  shouldAdmitBehavioralFamilyLinkedStory,
 } from "../src/lib/memory/behavioral-story-family.js";
 import type { MemoryEntry } from "../src/lib/memory/types.js";
 
@@ -47,6 +49,7 @@ test("selects one family and its only reviewed personal story", () => {
     formatBehavioralStoryFamilySelectionForTrace(selection),
     {
       behavioralStoryFamilyDisposition: "selected",
+      behavioralStoryFamilySelectionSource: "query",
       behavioralStoryFamilyQueryChars: 63,
       behavioralStoryFamilyCandidateCount: 2,
       behavioralStoryFamilySelectedId: "family-conflict",
@@ -77,6 +80,71 @@ test("selects one family and its only reviewed personal story", () => {
       ],
     }
   );
+});
+
+test("preserves an active branch story instead of reranking a generic follow-up", () => {
+  const costStory = entry({
+    id: "story-cost",
+    type: "personal_story",
+    title: "AOS cleanup story",
+  });
+  const conflictStory = entry({
+    id: "story-conflict",
+    type: "personal_story",
+    title: "Agentic Memory conflict story",
+  });
+  const selection = selectBehavioralStoryFamily({
+    entries: [
+      family({
+        id: "family-cost",
+        title: "Cost efficiency",
+        keywords: ["cost", "result"],
+        evidenceEntryIds: [costStory.id],
+      }),
+      family({
+        id: "family-conflict",
+        title: "Conflict influence",
+        keywords: ["conflict", "result"],
+        evidenceEntryIds: [conflictStory.id],
+      }),
+      costStory,
+      conflictStory,
+    ],
+    query: "And then?",
+    questionType: "behavioral",
+    preferredStoryAnchors: [conflictStory.title],
+  });
+
+  assert.equal(selection.selectionSource, "active-story-anchor");
+  assert.equal(selection.selected?.story.id, conflictStory.id);
+});
+
+test("overrides only the generic project-scope rejection for the selected story", () => {
+  assert.equal(
+    shouldAdmitBehavioralFamilyLinkedStory({
+      selectedStoryId: "story-1",
+      entryId: "story-1",
+      eligible: false,
+      rejectReason: "general-without-positive-scope",
+    }),
+    true
+  );
+  for (const rejectReason of [
+    "project-anchor-mismatch",
+    "question-type-family-mismatch",
+    "use-case-mismatch",
+    "uncurated",
+  ]) {
+    assert.equal(
+      shouldAdmitBehavioralFamilyLinkedStory({
+        selectedStoryId: "story-1",
+        entryId: "story-1",
+        eligible: false,
+        rejectReason,
+      }),
+      false
+    );
+  }
 });
 
 test("keeps runner-up observational and rejects invalid family links", () => {
@@ -141,6 +209,28 @@ test("does not run family selection outside Behavioral", () => {
     questionType: "coding",
   });
   assert.equal(selection.disposition, "not-behavioral");
+});
+
+test("wires Answer Focus and active story continuity into production retrieval", () => {
+  const hook = readFileSync("src/hooks/useMeetingAssistant.ts", "utf8");
+  const retrieval = readFileSync("src/lib/memory/retrieval.ts", "utf8");
+
+  assert.match(
+    hook,
+    /behavioralStoryQuery:\s*advisorQuestionAnswerFocusText\s*\|\|\s*advisorCurrentQuestionEvidenceText/
+  );
+  assert.match(
+    hook,
+    /preferredBehavioralStoryAnchors:[\s\S]{0,220}effectiveAdvisorSettlementView\.supportedFactAnchors/
+  );
+  assert.match(
+    retrieval,
+    /const selected = \[\.\.\.behavioralFamilyEntries, \.\.\.ordinaryEntries\]/
+  );
+  assert.match(
+    retrieval,
+    /questionType === "behavioral" &&\s*entry\.type === "personal_story"/
+  );
 });
 
 function family(input: Partial<MemoryEntry> & Pick<MemoryEntry, "id" | "title">) {

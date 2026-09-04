@@ -140,6 +140,7 @@ export function extractRuntimeFactAnchorLabels(
 }
 
 export function getRuntimeFactAnchorLabel(entry: MemoryEntry) {
+  if (entry.type === "personal_story") return entry.title || entry.id;
   return entry.projectName || entry.projectId || entry.title || entry.id;
 }
 

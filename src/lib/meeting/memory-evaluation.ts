@@ -14,6 +14,8 @@ export function buildMemoryEvaluationTraceMetadata(
 ) {
   return {
     memoryGeneralEligibility: result.generalEligibility,
+    memoryBehavioralStoryFamilySelection:
+      result.behavioralStoryFamilySelection,
     memoryEvaluationSnapshot: {
       version: MEMORY_EVALUATION_SNAPSHOT_VERSION,
       entries: result.entries.map((item) => ({

@@ -32,7 +32,9 @@ test("allows behavioral answers when selected memory contains a supported story 
   assert.equal(decision.state, "strong-anchor");
   assert.equal(decision.action, "answer-with-anchor");
   assert.equal(decision.selectedAnchorId, "mem_story_aos_cleanup");
-  assert.deepEqual(decision.supportedAnchorTitles, ["AOS cleanup"]);
+  assert.deepEqual(decision.supportedAnchorTitles, [
+    "AOS cleanup cost-saving story",
+  ]);
 });
 
 test("does not promote a story template to fact evidence", () => {

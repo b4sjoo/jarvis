@@ -46,6 +46,11 @@ import {
   resolveProjectScopedFactMemoryEligibility,
 } from "./general-eligibility.js";
 import { scoreCurrentQuestionRelevance } from "./current-question-ranking.js";
+import {
+  selectBehavioralStoryFamily,
+  shouldAdmitBehavioralFamilyLinkedStory,
+  summarizeBehavioralStoryFamilySelection,
+} from "./behavioral-story-family.js";
 
 const DEFAULT_MAX_ENTRIES = 5;
 const DEFAULT_MAX_CHARS = 6000;
@@ -66,6 +71,8 @@ export async function retrieveMemoryContext({
   sessionId,
   query,
   currentQuestionQuery,
+  behavioralStoryQuery,
+  preferredBehavioralStoryAnchors,
   diagramDomainQuery,
   diagramTopicDomain,
   useCase,
@@ -128,6 +135,26 @@ callbacks: MemoryRetrievalRuntimeCallbacks = {}): Promise<MemoryRetrievalResult>
   const diagramOverlayRejections = new Map(
     diagramOverlayGate.rejected.map((item) => [item.entryId, item])
   );
+  const behavioralFamilyProposal =
+    questionType === "behavioral"
+      ? selectBehavioralStoryFamily({
+          entries,
+          query:
+            behavioralStoryQuery?.trim() ||
+            currentQuestionQuery?.trim() ||
+            query,
+          questionType,
+          preferredStoryAnchors: preferredBehavioralStoryAnchors,
+        })
+      : undefined;
+  const behavioralFamilyCatalogIds = new Set(
+    behavioralFamilyProposal?.candidates.flatMap((candidate) => [
+      candidate.family.id,
+      candidate.story.id,
+    ]) ?? []
+  );
+  const selectedBehavioralStoryId =
+    behavioralFamilyProposal?.selected?.story.id;
   let interviewFamilyEvaluationMs = 0;
 
   for (const entry of entries) {
@@ -151,22 +178,37 @@ callbacks: MemoryRetrievalRuntimeCallbacks = {}): Promise<MemoryRetrievalResult>
       interviewFamilyRecorder.record(entry.id, decision.familyGateDecision);
       interviewFamilyEvaluationMs += decision.familyGateEvaluationMs;
     }
-    if (decision.generalEligibilityDecision) {
+    const behavioralLinkedStoryScopeOverride =
+      shouldAdmitBehavioralFamilyLinkedStory({
+        selectedStoryId: selectedBehavioralStoryId,
+        entryId: entry.id,
+        eligible: decision.eligible,
+        rejectReason: decision.eligible ? undefined : decision.reason,
+      });
+    const generalEligibilityDecision = behavioralLinkedStoryScopeOverride
+      ? {
+          applies: true as const,
+          eligible: true as const,
+          scopePath: "explicit-reusable" as const,
+          evidence: ["behavioral-family-linked-story"],
+        }
+      : decision.generalEligibilityDecision;
+    if (generalEligibilityDecision) {
       generalEligibilityRecorder.record(
         entry.id,
-        decision.generalEligibilityDecision
+        generalEligibilityDecision
       );
       if (
-        decision.eligible &&
-        decision.generalEligibilityDecision.scopePath
+        (decision.eligible || behavioralLinkedStoryScopeOverride) &&
+        generalEligibilityDecision.scopePath
       ) {
         generalScopePaths.set(
           entry.id,
-          decision.generalEligibilityDecision.scopePath
+          generalEligibilityDecision.scopePath
         );
       }
     }
-    if (decision.eligible) {
+    if (decision.eligible || behavioralLinkedStoryScopeOverride) {
       eligibleEntries.push(entry);
     } else {
       rejectRecorder.record(decision.reason, entry);
@@ -189,10 +231,36 @@ callbacks: MemoryRetrievalRuntimeCallbacks = {}): Promise<MemoryRetrievalResult>
     query,
     currentQuestionQuery: currentQuestionQuery?.trim() || query,
   };
-
+  const eligibleEntryIds = new Set(eligibleEntries.map((entry) => entry.id));
+  const behavioralFamilySelection =
+    behavioralFamilyProposal?.selected &&
+    eligibleEntryIds.has(behavioralFamilyProposal.selected.family.id) &&
+    eligibleEntryIds.has(behavioralFamilyProposal.selected.story.id)
+      ? behavioralFamilyProposal
+      : behavioralFamilyProposal
+        ? {
+            ...behavioralFamilyProposal,
+            selected: undefined,
+            runnerUp: undefined,
+            margin: undefined,
+            selectionSource: undefined,
+            disposition: "no-valid-family" as const,
+          }
+        : undefined;
+  const behavioralFamilySelectedIds = new Set(
+    behavioralFamilySelection?.selected
+      ? [
+          behavioralFamilySelection.selected.family.id,
+          behavioralFamilySelection.selected.story.id,
+        ]
+      : []
+  );
   const taggedEntries: MemoryEntry[] = [];
   for (const entry of eligibleEntries) {
-    if (hasRequiredTaggedHints(entry, query)) {
+    if (
+      behavioralFamilySelectedIds.has(entry.id) ||
+      hasRequiredTaggedHints(entry, query)
+    ) {
       taggedEntries.push(entry);
     } else {
       rejectRecorder.record("missing-required-tag-hint", entry);
@@ -203,7 +271,11 @@ callbacks: MemoryRetrievalRuntimeCallbacks = {}): Promise<MemoryRetrievalResult>
   }
 
   const alwaysEntries = taggedEntries
-    .filter((entry) => entry.injectionMode === "always" || entry.priority === "pinned")
+    .filter(
+      (entry) =>
+        !behavioralFamilyCatalogIds.has(entry.id) &&
+        (entry.injectionMode === "always" || entry.priority === "pinned")
+    )
     .map((entry) =>
       scoreMemoryEntry(
         entry,
@@ -215,7 +287,15 @@ callbacks: MemoryRetrievalRuntimeCallbacks = {}): Promise<MemoryRetrievalResult>
     )
     .map((item) => appendGeneralScopeReason(item, generalScopePaths));
   const scoredRetrievalEntries = taggedEntries
-    .filter((entry) => entry.injectionMode === "retrieval" && entry.priority !== "pinned")
+    .filter(
+      (entry) =>
+        !behavioralFamilyCatalogIds.has(entry.id) &&
+        !(
+          questionType === "behavioral" && entry.type === "personal_story"
+        ) &&
+        entry.injectionMode === "retrieval" &&
+        entry.priority !== "pinned"
+    )
     .map((entry) =>
       scoreMemoryEntry(
         entry,
@@ -240,8 +320,46 @@ callbacks: MemoryRetrievalRuntimeCallbacks = {}): Promise<MemoryRetrievalResult>
     .sort((left, right) => right.score - left.score)
     .slice(0, memoryPolicy?.maxEntries ?? maxEntries);
 
-  const selected = dedupeRetrievedEntries([...alwaysEntries, ...retrievalEntries])
+  const behavioralFamilyEntries = behavioralFamilySelection?.selected
+    ? [
+        behavioralFamilySelection.selected.story,
+        behavioralFamilySelection.selected.family,
+      ].map((entry) => {
+        const scored = scoreMemoryEntry(
+          entry,
+          queryTokens,
+          currentQuestionTokens,
+          scoringContext,
+          false
+        );
+        return appendGeneralScopeReason(
+          {
+            ...scored,
+            matchReason: [
+              ...scored.matchReason,
+              entry.id === behavioralFamilySelection.selected!.story.id
+                ? `behavioral-family-story:${behavioralFamilySelection.selected!.family.id}`
+                : "behavioral-family:selected",
+            ],
+          },
+          generalScopePaths
+        );
+      })
+    : [];
+  const ordinaryEntries = dedupeRetrievedEntries([
+    ...alwaysEntries,
+    ...retrievalEntries,
+  ])
+    .filter(
+      (entry) =>
+        !behavioralFamilyCatalogIds.has(entry.entry.id) &&
+        !(
+          questionType === "behavioral" &&
+          entry.entry.type === "personal_story"
+        )
+    )
     .sort((left, right) => right.score - left.score);
+  const selected = [...behavioralFamilyEntries, ...ordinaryEntries];
   const policyScoringMs = elapsedMs(policyScoringStartedAt);
   const budgetFormattingStartedAt = monotonicNow();
   const budgeted = applyMemoryBudget(
@@ -338,6 +456,8 @@ callbacks: MemoryRetrievalRuntimeCallbacks = {}): Promise<MemoryRetrievalResult>
       overlayRejectRecorder.summary(),
       diagramOverlayGate
     ),
+    behavioralStoryFamilySelection:
+      summarizeBehavioralStoryFamilySelection(behavioralFamilySelection),
     policySnapshot,
     performance,
   };
@@ -413,8 +533,23 @@ export function formatMemorySelectionForTrace(result: MemoryRetrievalResult) {
   const overlaySummary = formatOverlaySelectionForTrace(
     result.overlaySelection
   );
+  const behavioralSummary = result.behavioralStoryFamilySelection
+    ? [
+        "Behavioral story family selection:",
+        `- disposition: ${result.behavioralStoryFamilySelection.disposition}`,
+        `- source: ${result.behavioralStoryFamilySelection.selectionSource ?? "none"}`,
+        `- selected: ${result.behavioralStoryFamilySelection.selectedFamilyId ?? "none"} / ${result.behavioralStoryFamilySelection.selectedStoryId ?? "none"}`,
+        `- runner-up: ${result.behavioralStoryFamilySelection.runnerUpFamilyId ?? "none"}`,
+        `- margin: ${result.behavioralStoryFamilySelection.margin ?? "none"}`,
+      ].join("\n")
+    : "";
   if (!result.entries.length) {
-    return ["No memory entries injected.", "", rejectSummary, overlaySummary]
+    return [
+      "No memory entries injected.",
+      behavioralSummary,
+      rejectSummary,
+      overlaySummary,
+    ]
       .filter(Boolean)
       .join("\n");
   }
@@ -450,7 +585,7 @@ export function formatMemorySelectionForTrace(result: MemoryRetrievalResult) {
     })
     .join("\n\n---\n\n");
 
-  return [selected, rejectSummary, overlaySummary]
+  return [behavioralSummary, selected, rejectSummary, overlaySummary]
     .filter(Boolean)
     .join("\n\n---\n\n");
 }

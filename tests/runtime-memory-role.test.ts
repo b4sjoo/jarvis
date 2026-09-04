@@ -105,6 +105,23 @@ test("extracts anchors and telemetry only from eligible fact evidence", () => {
   assert.equal(telemetry.anchorIneligibleCount, 3);
 });
 
+test("uses the exact story title as a personal-story anchor", () => {
+  const entries = [
+    makeRetrievedEntry(
+      makeMemoryEntry({
+        id: "mem_story",
+        type: "personal_story",
+        title: "Agentic Memory consistency conflict",
+        projectName: "Agentic Memory",
+      })
+    ),
+  ];
+
+  assert.deepEqual(extractRuntimeFactAnchorLabels(entries), [
+    "Agentic Memory consistency conflict",
+  ]);
+});
+
 function makeRetrievedEntry(entry: MemoryEntry): RetrievedMemoryEntry {
   return {
     entry,

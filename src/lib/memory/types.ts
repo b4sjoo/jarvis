@@ -235,6 +235,8 @@ export interface MemoryRetrievalRequest {
   sessionId?: string;
   query: string;
   currentQuestionQuery?: string;
+  behavioralStoryQuery?: string;
+  preferredBehavioralStoryAnchors?: string[];
   diagramDomainQuery?: string;
   diagramTopicDomain?: MemoryTopicDomain;
   useCase: MemoryUseCase;
@@ -353,8 +355,22 @@ export interface MemoryRetrievalResult {
   generalEligibility?: MemoryGeneralEligibilitySummary;
   interviewFamilyResolution?: MemoryInterviewFamilyResolutionTelemetry;
   overlaySelection?: MemoryOverlaySelectionSummary;
+  behavioralStoryFamilySelection?: MemoryBehavioralStoryFamilySelectionSummary;
   policySnapshot: MemoryPolicySnapshot;
   performance?: MemoryRetrievalPerformance;
+}
+
+export interface MemoryBehavioralStoryFamilySelectionSummary {
+  disposition: string;
+  selectionSource?: "query" | "active-story-anchor";
+  queryChars: number;
+  candidateCount: number;
+  selectedFamilyId?: string;
+  selectedStoryId?: string;
+  selectedScore?: number;
+  runnerUpFamilyId?: string;
+  runnerUpScore?: number;
+  margin?: number;
 }
 
 export interface MemoryInterviewFamilyResolutionTelemetryEvidence {

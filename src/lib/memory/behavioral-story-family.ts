@@ -1,6 +1,10 @@
 import { scoreCurrentQuestionRelevance } from "./current-question-ranking.js";
 import { classifyRuntimeMemoryRole } from "./runtime-role.js";
-import type { MemoryEntry } from "./types.js";
+import { resolveMemoryInterviewFamilies } from "./interview-family.js";
+import type {
+  MemoryBehavioralStoryFamilySelectionSummary,
+  MemoryEntry,
+} from "./types.js";
 
 export const BEHAVIORAL_STORY_FAMILY_TAG = "behavioral-story-family";
 
@@ -20,6 +24,7 @@ export interface BehavioralStoryFamilySelection {
   selected?: BehavioralStoryFamilyCandidate;
   runnerUp?: BehavioralStoryFamilyCandidate;
   margin?: number;
+  selectionSource?: "query" | "active-story-anchor";
   disposition:
     | "selected"
     | "not-behavioral"
@@ -29,9 +34,10 @@ export interface BehavioralStoryFamilySelection {
 }
 
 export function selectBehavioralStoryFamily(input: {
-  entries: MemoryEntry[];
+  entries: readonly MemoryEntry[];
   query: string;
   questionType?: string;
+  preferredStoryAnchors?: string[];
 }): BehavioralStoryFamilySelection {
   const query = input.query.trim();
   if (input.questionType !== "behavioral") {
@@ -64,24 +70,68 @@ export function selectBehavioralStoryFamily(input: {
   if (!candidates.length) {
     return emptySelection(query.length, "no-valid-family");
   }
-  if (candidates[0]!.score <= 0) {
+  const preferredAnchors = new Set(
+    (input.preferredStoryAnchors ?? [])
+      .map(normalizeAnchor)
+      .filter(Boolean)
+  );
+  const preserved = candidates.find((candidate) =>
+    storyAnchorValues(candidate.story).some((value) =>
+      preferredAnchors.has(value)
+    )
+  );
+  if (candidates[0]!.score <= 0 && !preserved) {
     return {
       queryChars: query.length,
       candidates,
       disposition: "no-positive-match",
     };
   }
-
-  const selected = candidates[0]!;
-  const runnerUp = candidates[1];
+  const selected = preserved ?? candidates[0]!;
+  const runnerUp = candidates.find(
+    (candidate) => candidate.family.id !== selected.family.id
+  );
   return {
     queryChars: query.length,
     candidates,
     selected,
     runnerUp,
     margin: runnerUp ? selected.score - runnerUp.score : selected.score,
+    selectionSource: preserved ? "active-story-anchor" : "query",
     disposition: "selected",
   };
+}
+
+export function summarizeBehavioralStoryFamilySelection(
+  selection: BehavioralStoryFamilySelection | undefined
+): MemoryBehavioralStoryFamilySelectionSummary | undefined {
+  return selection
+    ? {
+        disposition: selection.disposition,
+        selectionSource: selection.selectionSource,
+        queryChars: selection.queryChars,
+        candidateCount: selection.candidates.length,
+        selectedFamilyId: selection.selected?.family.id,
+        selectedStoryId: selection.selected?.story.id,
+        selectedScore: selection.selected?.score,
+        runnerUpFamilyId: selection.runnerUp?.family.id,
+        runnerUpScore: selection.runnerUp?.score,
+        margin: selection.margin,
+      }
+    : undefined;
+}
+
+export function shouldAdmitBehavioralFamilyLinkedStory(input: {
+  selectedStoryId?: string;
+  entryId: string;
+  eligible: boolean;
+  rejectReason?: string;
+}) {
+  return Boolean(
+    input.selectedStoryId === input.entryId &&
+      !input.eligible &&
+      input.rejectReason === "general-without-positive-scope"
+  );
 }
 
 export function formatBehavioralStoryFamilySelectionForTrace(
@@ -90,6 +140,7 @@ export function formatBehavioralStoryFamilySelectionForTrace(
   return selection
     ? {
         behavioralStoryFamilyDisposition: selection.disposition,
+        behavioralStoryFamilySelectionSource: selection.selectionSource,
         behavioralStoryFamilyQueryChars: selection.queryChars,
         behavioralStoryFamilyCandidateCount: selection.candidates.length,
         behavioralStoryFamilySelectedId: selection.selected?.family.id,
@@ -113,12 +164,24 @@ export function formatBehavioralStoryFamilySelectionForTrace(
     : {};
 }
 
+function storyAnchorValues(entry: MemoryEntry) {
+  return [entry.id, entry.title, entry.projectId, entry.projectName]
+    .map(normalizeAnchor)
+    .filter(Boolean);
+}
+
+function normalizeAnchor(value: string | undefined) {
+  return value?.normalize("NFKC").trim().toLowerCase() ?? "";
+}
+
 function isBehavioralStoryFamily(entry: MemoryEntry) {
   return (
     entry.enabled &&
     entry.curationStatus === "curated" &&
     entry.type === "answer_template" &&
-    entry.tags.includes(BEHAVIORAL_STORY_FAMILY_TAG)
+    entry.tags.includes(BEHAVIORAL_STORY_FAMILY_TAG) &&
+    hasBehavioralUseCase(entry) &&
+    resolveMemoryInterviewFamilies(entry).families.includes("behavioral")
   );
 }
 
@@ -127,7 +190,16 @@ function isEligiblePersonalStory(entry: MemoryEntry) {
     entry.enabled &&
     entry.curationStatus === "curated" &&
     entry.type === "personal_story" &&
+    hasBehavioralUseCase(entry) &&
+    resolveMemoryInterviewFamilies(entry).families.includes("behavioral") &&
     classifyRuntimeMemoryRole(entry).anchorEligible
+  );
+}
+
+function hasBehavioralUseCase(entry: MemoryEntry) {
+  return (
+    entry.useCases.includes("behavioral_interview") ||
+    entry.useCases.includes("meeting_assistant")
   );
 }
 

@@ -9615,6 +9615,8 @@ export function useMeetingAssistant() {
       traceId,
       query,
       currentQuestionEvidenceText,
+      behavioralStoryQuery,
+      preferredBehavioralStoryAnchors,
       diagramDomainContext,
       diagramTopicDomain,
       source,
@@ -9635,6 +9637,8 @@ export function useMeetingAssistant() {
       taskId?: string;
       query: string;
       currentQuestionEvidenceText?: string;
+      behavioralStoryQuery?: string;
+      preferredBehavioralStoryAnchors?: string[];
       diagramDomainContext?: DiagramDomainQueryContext;
       diagramTopicDomain?: MemoryTopicDomain;
       source: "advisor" | "screen";
@@ -9692,6 +9696,8 @@ export function useMeetingAssistant() {
               blockedFamilies: effectiveMemoryPolicy?.blockedFamilies,
               strictProjectAnchor: effectiveMemoryPolicy?.strictProjectAnchor,
               queryChars: query.length,
+              behavioralStoryQueryChars:
+                behavioralStoryQuery?.trim().length ?? 0,
               diagramDomainQueryChars:
                 diagramDomainContext?.query.length ?? 0,
               diagramDomainEvidenceSources:
@@ -9735,6 +9741,8 @@ export function useMeetingAssistant() {
               blockedFamilies: effectiveMemoryPolicy?.blockedFamilies,
               strictProjectAnchor: effectiveMemoryPolicy?.strictProjectAnchor,
               queryChars: query.length,
+              behavioralStoryQueryChars:
+                behavioralStoryQuery?.trim().length ?? 0,
               diagramDomainQueryChars:
                 diagramDomainContext?.query.length ?? 0,
               diagramDomainEvidenceSources:
@@ -9754,6 +9762,8 @@ export function useMeetingAssistant() {
             sessionId: memoryRuntimeSessionId,
             query,
             currentQuestionQuery: currentQuestionEvidenceText,
+            behavioralStoryQuery,
+            preferredBehavioralStoryAnchors,
             diagramDomainQuery: diagramDomainContext?.query,
             diagramTopicDomain,
             useCase: resolvedUseCase,
@@ -14010,6 +14020,14 @@ export function useMeetingAssistant() {
       query: advisorRetrievalQuery,
       currentQuestionEvidenceText:
         advisorCurrentQuestionEvidenceText,
+      behavioralStoryQuery:
+        advisorQuestionAnswerFocusText ||
+        advisorCurrentQuestionEvidenceText,
+      preferredBehavioralStoryAnchors:
+        advisorQuestionType === "behavioral" &&
+        advisorContinuityRelation !== "new-parent"
+          ? effectiveAdvisorSettlementView.supportedFactAnchors
+          : undefined,
       diagramDomainContext: advisorDiagramDomainContext,
       diagramTopicDomain:
         settledExecutionPlan?.memoryPolicy.topicDomain ??
@@ -29679,6 +29697,13 @@ export function useMeetingAssistant() {
           query: screenMemoryQuery,
           currentQuestionEvidenceText:
             screenPrimaryAskEvidenceText,
+          behavioralStoryQuery: screenPrimaryAskEvidenceText,
+          preferredBehavioralStoryAnchors:
+            settledScreenQuestionType === "behavioral" &&
+            provisionalScreenTaskRelation !== "new-parent"
+              ? screenExecutionContextState.activeMeetingTask?.parent
+                  .supportedFactAnchors
+              : undefined,
           diagramDomainContext: screenDiagramDomainContext,
           diagramTopicDomain:
             screenPreflight?.topicDomain ??

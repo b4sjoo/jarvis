@@ -168,13 +168,13 @@ export function createInterviewPlaybookFromCatalog(input: {
       reason,
       allowedFamilies: ["behavioral"],
       firstMove:
-        "Select a supported first-person story, map it to the competency, then answer with action, tradeoff, impact, and learning.",
+        "Use the single supported personal story selected by the Behavioral family contract. Adapt its emphasis to the question, then answer with action, tradeoff, impact, and learning without changing story identity.",
       clarifyingStrategy:
         "Ask only if the story choice is genuinely ambiguous; otherwise choose the safest supported story anchor.",
       outputContract:
-        "中文思路 should name the story anchor and risk to avoid. Answer should be a compact first-person story with supported facts only.",
+        "中文思路 should name the selected story anchor and the factual risk to avoid. Answer should be a speakable 60-90 second first-person STAR using supported facts only; keep deeper tradeoff, failure, and retrospective material for follow-ups.",
       followUpPolicy:
-        "Follow-ups should adjust the same story angle, not restart with a different project unless the interviewer explicitly switches.",
+        "Follow-ups should preserve the committed story anchor and select the relevant result, tradeoff, failure-recovery, or retrospective angle. Do not restart with a different story unless the interviewer explicitly switches topics.",
       maxEntries: 6,
       maxChars: 6500,
     });
