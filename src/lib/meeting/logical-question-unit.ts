@@ -60,6 +60,7 @@ export interface LogicalQuestionUnit {
     text: string;
     sourceHash: string;
     source: "runtime-llm";
+    decision: "output-request" | "no-output-request";
     sourceTurnIds: string[];
   };
   termCorrectionOverlays?: ActiveQuestionTermCorrection[];
@@ -271,6 +272,8 @@ export function formatLogicalQuestionUnitForTrace(
       unit.responseOpportunityTarget?.text,
     responseOpportunityDecisionTargetSource:
       unit.responseOpportunityTarget?.source,
+    responseOpportunityDecisionTargetDecision:
+      unit.responseOpportunityTarget?.decision,
     responseOpportunityDecisionTargetSourceHash:
       unit.responseOpportunityTarget?.sourceHash,
     responseOpportunityDecisionTargetSourceTurnIds:

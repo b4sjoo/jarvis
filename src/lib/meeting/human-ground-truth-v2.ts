@@ -864,7 +864,8 @@ export function projectObservedPrimaryAskTargetV2(
     metadata.responseOpportunityDecisionTarget
   );
   const responseDecision = readString(
-    metadata.responseOpportunityDecision
+    metadata.responseOpportunityDecision ??
+      metadata.responseOpportunityDecisionTargetDecision
   );
   const runtimeTargetSourceBacked =
     metadata.responseOpportunityTargetSpansValid === true ||

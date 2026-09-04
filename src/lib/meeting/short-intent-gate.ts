@@ -520,13 +520,16 @@ export function applyResponseOpportunityDecisionTarget(input: {
   result: LlmResponseOpportunityDecision;
 }): LogicalQuestionUnit {
   const decisionTarget = input.result.decisionTarget.trim();
-  if (!decisionTarget) return input.logicalQuestionUnit;
+  if (!decisionTarget || input.result.decision === "unclear") {
+    return input.logicalQuestionUnit;
+  }
   return {
     ...input.logicalQuestionUnit,
     responseOpportunityTarget: {
       text: decisionTarget,
       sourceHash: input.request.sourceHash,
       source: "runtime-llm",
+      decision: input.result.decision,
       sourceTurnIds: Array.from(
         new Set(input.result.targetSpans.map((span) => span.turnId))
       ),

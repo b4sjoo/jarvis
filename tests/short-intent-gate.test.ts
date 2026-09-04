@@ -253,9 +253,42 @@ test("uses a source-backed terminal target without discarding bounded context", 
     result: parsed.value,
   });
   assert.equal(getLogicalQuestionAnswerFocusText(targeted), "How about you?");
+  assert.equal(
+    targeted.responseOpportunityTarget?.decision,
+    "output-request"
+  );
   assert.match(
     getLogicalQuestionSemanticEvidenceText(targeted),
     /storage control plane/
+  );
+});
+
+test("preserves a no-output decision with its reusable target", () => {
+  const logicalUnit = logicalQuestionUnit("Thanks, that makes sense.");
+  const request = buildResponseOpportunityRequest({
+    logicalQuestionUnit: logicalUnit,
+  });
+  const parsed = parseResponseOpportunityOutput(
+    JSON.stringify({
+      v: 4,
+      d: "n",
+      c: 0.98,
+      t: [0],
+      r: "acknowledgement",
+    }),
+    request
+  );
+  assert.equal(parsed.ok, true);
+  if (!parsed.ok) return;
+
+  const targeted = applyResponseOpportunityDecisionTarget({
+    logicalQuestionUnit: logicalUnit,
+    request,
+    result: parsed.value,
+  });
+  assert.equal(
+    targeted.responseOpportunityTarget?.decision,
+    "no-output-request"
   );
 });
 
