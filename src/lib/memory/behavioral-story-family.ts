@@ -76,7 +76,7 @@ export function selectBehavioralStoryFamily(input: {
       .filter(Boolean)
   );
   const preserved = candidates.find((candidate) =>
-    storyAnchorValues(candidate.story).some((value) =>
+    storyIdentityAnchorValues(candidate.story).some((value) =>
       preferredAnchors.has(value)
     )
   );
@@ -164,8 +164,8 @@ export function formatBehavioralStoryFamilySelectionForTrace(
     : {};
 }
 
-function storyAnchorValues(entry: MemoryEntry) {
-  return [entry.id, entry.title, entry.projectId, entry.projectName]
+function storyIdentityAnchorValues(entry: MemoryEntry) {
+  return [entry.id, entry.title]
     .map(normalizeAnchor)
     .filter(Boolean);
 }

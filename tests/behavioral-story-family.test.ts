@@ -119,6 +119,57 @@ test("preserves an active branch story instead of reranking a generic follow-up"
   assert.equal(selection.selected?.story.id, conflictStory.id);
 });
 
+test("does not switch stories through a shared project alias", () => {
+  const conflictStory = entry({
+    id: "story-conflict",
+    type: "personal_story",
+    title: "Agentic Memory consistency conflict",
+    projectId: "agentic-memory",
+    projectName: "Agentic Memory",
+  });
+  const failureStory = entry({
+    id: "story-failure",
+    type: "personal_story",
+    title: "Agentic Memory JSON failure",
+    projectId: "agentic-memory",
+    projectName: "Agentic Memory",
+  });
+  const entries = [
+    family({
+      id: "family-conflict",
+      title: "Conflict influence",
+      keywords: ["conflict", "disagreement"],
+      evidenceEntryIds: [conflictStory.id],
+    }),
+    family({
+      id: "family-failure",
+      title: "Failure recovery",
+      keywords: ["failure", "mistake", "recovery"],
+      evidenceEntryIds: [failureStory.id],
+    }),
+    conflictStory,
+    failureStory,
+  ];
+
+  const preserved = selectBehavioralStoryFamily({
+    entries,
+    query: "What failed, and how did you recover from the mistake?",
+    questionType: "behavioral",
+    preferredStoryAnchors: [conflictStory.title, "Agentic Memory"],
+  });
+  assert.equal(preserved.selectionSource, "active-story-anchor");
+  assert.equal(preserved.selected?.story.id, conflictStory.id);
+
+  const projectOnly = selectBehavioralStoryFamily({
+    entries,
+    query: "What failed, and how did you recover from the mistake?",
+    questionType: "behavioral",
+    preferredStoryAnchors: ["Agentic Memory"],
+  });
+  assert.equal(projectOnly.selectionSource, "query");
+  assert.equal(projectOnly.selected?.story.id, failureStory.id);
+});
+
 test("overrides only the generic project-scope rejection for the selected story", () => {
   assert.equal(
     shouldAdmitBehavioralFamilyLinkedStory({
