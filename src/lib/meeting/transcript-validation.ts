@@ -85,18 +85,6 @@ export function validateTranscriptCandidate({
     });
   }
 
-  if (!isLongEnoughForPromptEcho(normalizedText)) {
-    return buildDecision({
-      disposition: "accepted",
-      reason: "valid",
-      normalizedText,
-      normalizedPrompt,
-      audioDurationMs,
-      transcriptCharsPerSecond,
-      densitySuspicious,
-    });
-  }
-
   if (normalizedPrompt && normalizedText === normalizedPrompt) {
     return buildDecision({
       disposition: "rejected",
@@ -110,17 +98,42 @@ export function validateTranscriptCandidate({
     });
   }
 
-  const promptSimilarity = normalizedPrompt
-    ? tokenBigramDice(normalizedText, normalizedPrompt)
-    : 0;
   const partialEcho = isSubstantialPromptSubstring(
     normalizedText,
     normalizedPrompt
   );
+  if (partialEcho) {
+    return buildDecision({
+      disposition: "rejected",
+      reason: "prompt-echo-similar",
+      promptSimilarity: tokenBigramDice(normalizedText, normalizedPrompt),
+      normalizedText,
+      normalizedPrompt,
+      audioDurationMs,
+      transcriptCharsPerSecond,
+      densitySuspicious,
+    });
+  }
+
+  if (!isLongEnoughForPromptEcho(normalizedText)) {
+    return buildDecision({
+      disposition: "accepted",
+      reason: "valid",
+      normalizedText,
+      normalizedPrompt,
+      audioDurationMs,
+      transcriptCharsPerSecond,
+      densitySuspicious,
+    });
+  }
+
+  const promptSimilarity = normalizedPrompt
+    ? tokenBigramDice(normalizedText, normalizedPrompt)
+    : 0;
 
   if (
     normalizedPrompt &&
-    (partialEcho || promptSimilarity >= clampThreshold(similarityThreshold))
+    promptSimilarity >= clampThreshold(similarityThreshold)
   ) {
     return buildDecision({
       disposition: "rejected",

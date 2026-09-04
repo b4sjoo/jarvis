@@ -43,6 +43,32 @@ test("rejects a substantial prompt prefix even when the provider truncates it", 
   assert.equal(decision.reason, "prompt-echo-similar");
 });
 
+test("rejects a substantial prompt prefix below the generic length gate", () => {
+  const promptPrefix =
+    "Likely technical terms and acronyms: Snowflake, RAG, HNSW, ML Commons.";
+  const speechBiasPrompt = `${promptPrefix} Preserve acronyms and product names exactly.`;
+  const decision = validateTranscriptCandidate({
+    text: promptPrefix,
+    speechBiasPrompt,
+  });
+
+  assert.ok(promptPrefix.length < 80);
+  assert.equal(decision.disposition, "rejected");
+  assert.equal(decision.reason, "prompt-echo-similar");
+});
+
+test("rejects an exact prompt echo below the generic length gate", () => {
+  const speechBiasPrompt = "Likely terms: Snowflake, RAG, HNSW, and ML Commons.";
+  const decision = validateTranscriptCandidate({
+    text: speechBiasPrompt,
+    speechBiasPrompt,
+  });
+
+  assert.ok(speechBiasPrompt.length < 80);
+  assert.equal(decision.disposition, "rejected");
+  assert.equal(decision.reason, "prompt-echo-exact");
+});
+
 test("accepts valid speech that uses several speech-bias terms", () => {
   const decision = validateTranscriptCandidate({
     text:
