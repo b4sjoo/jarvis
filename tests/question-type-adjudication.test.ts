@@ -79,6 +79,8 @@ test("builds a bounded type-only request without local classifier evidence", () 
   assert.equal(request.logicalQuestionUnitRevision, 1);
   assert.match(prompts.systemPrompt, /Classify only the question type/i);
   assert.match(prompts.systemPrompt, /Do not decide task relation/i);
+  assert.match(prompts.systemPrompt, /"v":1,"t":/i);
+  assert.doesNotMatch(prompts.systemPrompt, /evidenceSpans must contain/i);
   assert.match(
     prompts.systemPrompt,
     /named candidate project.*actual project facts/i
@@ -514,19 +516,25 @@ test("strictly parses grounded type output and rejects broader authority", () =>
     ),
   });
   const valid = {
+    v: 1,
+    t: "ai-ml-system-design",
+    c: 0.94,
+    e: "RAG system",
+  };
+
+  const parsed = parseQuestionTypeAdjudicationOutput(
+    JSON.stringify(valid),
+    request
+  );
+  assert.equal(parsed.ok, true);
+  assert.deepEqual(parsed.ok ? parsed.value : undefined, {
     schemaVersion: 1,
     questionType: "ai-ml-system-design",
     confidence: 0.94,
-    evidenceSpans: ["RAG system", "trip planning app"],
-  };
-
-  assert.equal(
-    parseQuestionTypeAdjudicationOutput(
-      `\`\`\`json\n${JSON.stringify(valid)}\n\`\`\``,
-      request
-    ).ok,
-    true
-  );
+    evidenceSpans: ["RAG system"],
+    ambiguityReason: undefined,
+  });
+  assert.ok(JSON.stringify(valid).length < 100);
   assert.deepEqual(
     parseQuestionTypeAdjudicationOutput(
       JSON.stringify({
@@ -546,7 +554,7 @@ test("strictly parses grounded type output and rejects broader authority", () =>
     parseQuestionTypeAdjudicationOutput(
       JSON.stringify({
         ...valid,
-        evidenceSpans: ["vector database benchmark"],
+        e: "vector database benchmark",
       }),
       request
     ),
@@ -554,6 +562,35 @@ test("strictly parses grounded type output and rejects broader authority", () =>
       ok: false,
       reason: "invalid-evidence-span",
       errorKind: "evidence",
+      evidenceSpansValid: false,
+    }
+  );
+  assert.deepEqual(
+    parseQuestionTypeAdjudicationOutput(
+      JSON.stringify({
+        schemaVersion: 1,
+        questionType: "ai-ml-system-design",
+        confidence: 0.94,
+        evidenceSpans: ["RAG system"],
+      }),
+      request
+    ),
+    {
+      ok: false,
+      reason: "non-type-field-present",
+      errorKind: "schema",
+      evidenceSpansValid: false,
+    }
+  );
+  assert.deepEqual(
+    parseQuestionTypeAdjudicationOutput(
+      '{"schemaVersion":1,"questionType":"behavioral","confidence":0.93,"evidence',
+      request
+    ),
+    {
+      ok: false,
+      reason: "truncated-json",
+      errorKind: "parse",
       evidenceSpansValid: false,
     }
   );

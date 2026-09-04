@@ -23,7 +23,7 @@ import type { MeetingQuestionTypeAdjudicationMode } from "./types.js";
 
 export const QUESTION_TYPE_ADJUDICATION_SCHEMA_VERSION = 1;
 export const QUESTION_TYPE_ADJUDICATION_PROMPT_VERSION =
-  "question-type-adjudication-v5";
+  "question-type-adjudication-v6";
 export const QUESTION_TYPE_ADJUDICATION_MAX_OUTPUT_CHARS = 2_048;
 export const QUESTION_TYPE_ENFORCEMENT_WAIT_BUDGET_MS = 2_000;
 export const VOICE_FIRST_PARENT_QUESTION_TYPE_WAIT_BUDGET_MS = 4_000;
@@ -649,8 +649,10 @@ export function buildQuestionTypeAdjudicationPrompts(
       "A question about why a named candidate project made a concrete implementation choice, or how that project handled failures, depends on actual project facts and is project-deep-dive even when it mentions a technical concept.",
       "field-knowledge asks for a factual or conceptual explanation that can be answered independently of what the candidate actually implemented in a project.",
       "Use unknown for logistics, compensation, scheduling, filler, incomplete content, or genuine ambiguity.",
-      "evidenceSpans must contain exactly one shortest identifying exact verbatim substring from question.sourceTexts.",
-      "Schema: {schemaVersion:1,questionType,confidence,evidenceSpans,ambiguityReason?}.",
+      "e must be one shortest identifying exact verbatim substring from question.sourceTexts.",
+      "Allowed t values are the questionType values listed above.",
+      'Schema: {"v":1,"t":"one allowed value","c":number,"e":"exact quote"}.',
+      'Optional field: "r":"short ambiguity reason". Omit r when it is not useful.',
       ].join(" ");
   return buildRuntimeInferenceModelInput({ systemPrompt, semanticPayload });
 }
@@ -667,47 +669,28 @@ export function parseQuestionTypeAdjudicationOutput(
   if (request.reviewScope === "field-vs-coding") {
     return parseFieldCodingScoreOutput(candidate, request);
   }
-  const allowedKeys = new Set([
-    "schemaVersion",
-    "questionType",
-    "confidence",
-    "evidenceSpans",
-    "ambiguityReason",
-  ]);
+  const allowedKeys = new Set(["v", "t", "c", "e", "r"]);
   if (Object.keys(candidate).some((key) => !allowedKeys.has(key))) {
     return parseFailure("non-type-field-present", "schema");
   }
-  if (
-    candidate.schemaVersion !==
-    QUESTION_TYPE_ADJUDICATION_SCHEMA_VERSION
-  ) {
+  if (candidate.v !== QUESTION_TYPE_ADJUDICATION_SCHEMA_VERSION) {
     return parseFailure("unsupported-schema-version", "schema");
   }
-  if (!isCanonicalQuestionType(candidate.questionType)) {
+  if (!isCanonicalQuestionType(candidate.t)) {
     return parseFailure("invalid-question-type", "schema");
   }
   if (
-    typeof candidate.confidence !== "number" ||
-    !Number.isFinite(candidate.confidence) ||
-    candidate.confidence < 0 ||
-    candidate.confidence > 1
+    typeof candidate.c !== "number" ||
+    !Number.isFinite(candidate.c) ||
+    candidate.c < 0 ||
+    candidate.c > 1
   ) {
     return parseFailure("invalid-confidence", "schema");
   }
-  if (
-    !Array.isArray(candidate.evidenceSpans) ||
-    candidate.evidenceSpans.length === 0 ||
-    candidate.evidenceSpans.length > 8 ||
-    candidate.evidenceSpans.some(
-      (span) => typeof span !== "string" || !span.trim()
-    )
-  ) {
+  if (typeof candidate.e !== "string" || !candidate.e.trim()) {
     return parseFailure("invalid-evidence-spans", "schema");
   }
-  if (
-    candidate.ambiguityReason !== undefined &&
-    typeof candidate.ambiguityReason !== "string"
-  ) {
+  if (candidate.r !== undefined && typeof candidate.r !== "string") {
     return parseFailure("invalid-ambiguity-reason", "schema");
   }
 
@@ -715,9 +698,7 @@ export function parseQuestionTypeAdjudicationOutput(
     .map((source) => source.text)
     .join("\n")
     .toLocaleLowerCase();
-  const evidenceSpans = (candidate.evidenceSpans as string[]).map(
-    (span) => span.trim()
-  );
+  const evidenceSpans = [candidate.e.trim()];
   const evidenceSpansValid = evidenceSpans.every((span) =>
     allowedEvidence.includes(span.toLocaleLowerCase())
   );
@@ -730,12 +711,10 @@ export function parseQuestionTypeAdjudicationOutput(
     evidenceSpansValid: true,
     value: {
       schemaVersion: QUESTION_TYPE_ADJUDICATION_SCHEMA_VERSION,
-      questionType: candidate.questionType,
-      confidence: candidate.confidence,
+      questionType: candidate.t,
+      confidence: candidate.c,
       evidenceSpans,
-      ambiguityReason: candidate.ambiguityReason as
-        | string
-        | undefined,
+      ambiguityReason: candidate.r as string | undefined,
     },
   };
 }
