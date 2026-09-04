@@ -263,6 +263,38 @@ test("uses a source-backed terminal target without discarding bounded context", 
   );
 });
 
+test("restores selected decision spans to their original source order", () => {
+  const request = buildResponseOpportunityRequest({
+    logicalQuestionUnit: logicalQuestionUnit(
+      "What should I build?",
+      "The service must support regional failover."
+    ),
+  });
+  assert.equal(request.decisionSpans.length, 2);
+
+  const parsed = parseResponseOpportunityOutput(
+    JSON.stringify({
+      v: 4,
+      d: "o",
+      c: 0.96,
+      t: [1, 0],
+      r: "ask",
+    }),
+    request
+  );
+  assert.equal(parsed.ok, true);
+  if (!parsed.ok) return;
+
+  assert.deepEqual(
+    parsed.value.targetSpans.map((span) => span.turnId),
+    ["turn-previous", "turn-current"]
+  );
+  assert.equal(
+    parsed.value.decisionTarget,
+    "The service must support regional failover. What should I build?"
+  );
+});
+
 test("preserves a no-output decision with its reusable target", () => {
   const logicalUnit = logicalQuestionUnit("Thanks, that makes sense.");
   const request = buildResponseOpportunityRequest({

@@ -303,7 +303,7 @@ export function buildResponseOpportunityPrompts(
       "Select the exact source-backed decision target before deciding whether it requests output.",
       "Return only this compact schema: {v:4,d:'o'|'n'|'u',c:number,t:number[],r:string}.",
       "d means o=output-request, n=no-output-request, u=unclear. c is confidence from 0 to 1.",
-      "t contains only zero-based indexes into decisionSpans; never copy source text or turn IDs into the output. Use one to four indexes for o or n. Use an empty array for u when no target is supported.",
+      "t contains only zero-based indexes into decisionSpans in ascending source order; never copy source text or turn IDs into the output. Use one to four indexes for o or n. Use an empty array for u when no target is supported.",
       "r must be exactly one of: ask,directive,correction,constraint,phase-control,acknowledgement,greeting,closing,logistics,answer-to-candidate,bounded-source-insufficient.",
     ].join(" ");
   return buildRuntimeInferenceModelInput({
@@ -369,7 +369,12 @@ export function parseResponseOpportunityOutput(
       return parseFailure("invalid-target-index", "evidence");
     }
     targetIndexes.add(value);
-    targetSpans.push({ ...request.decisionSpans[value] });
+  }
+  const orderedTargetIndexes = [...targetIndexes].sort(
+    (left, right) => left - right
+  );
+  for (const index of orderedTargetIndexes) {
+    targetSpans.push({ ...request.decisionSpans[index] });
   }
   const decision =
     candidate.d === "o"
