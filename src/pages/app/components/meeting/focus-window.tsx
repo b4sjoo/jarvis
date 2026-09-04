@@ -149,6 +149,19 @@ function MeetingFocusAnswerWindow({
               />
             </section>
 
+            {sections.approach ? (
+              <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3">
+                <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
+                  <MessageSquareTextIcon className="h-3.5 w-3.5" />
+                  Approach
+                </div>
+                <MeetingMarkdownText
+                  className={cn(WRAP_TEXT_CLASS, "text-xs leading-5")}
+                  value={sections.approach}
+                />
+              </section>
+            ) : null}
+
             {sections.whiteboard ? (
               <section className="min-w-0 overflow-hidden rounded-md border border-border/70 bg-muted/20 p-3">
                 <div className="mb-2 flex items-center gap-2 text-xs font-semibold">

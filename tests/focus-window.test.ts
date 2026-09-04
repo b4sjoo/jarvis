@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   EMPTY_MEETING_FOCUS_SNAPSHOT,
@@ -73,6 +74,31 @@ test("focus snapshot keeps current-question and durable-parent types separate", 
   assert.equal(EMPTY_MEETING_FOCUS_SNAPSHOT.parentQuestionType, undefined);
   assert.equal(EMPTY_MEETING_FOCUS_SNAPSHOT.parentTaskId, undefined);
   assert.equal(EMPTY_MEETING_FOCUS_SNAPSHOT.durableOwnerMissing, false);
+});
+
+test("renders the existing Approach snapshot in both Focus answer surfaces", () => {
+  const protectedWindow = readFileSync(
+    "src/pages/app/components/meeting/focus-window.tsx",
+    "utf8"
+  );
+  const embeddedFallback = readFileSync(
+    "src/pages/app/components/meeting/index.tsx",
+    "utf8"
+  );
+  const protectedAnswer = protectedWindow.slice(
+    protectedWindow.indexOf("function MeetingFocusAnswerWindow"),
+    protectedWindow.indexOf("function MeetingFocusControlsWindow")
+  );
+  const embeddedAnswer = embeddedFallback.slice(
+    embeddedFallback.indexOf("const FocusModePanel"),
+    embeddedFallback.indexOf("const TranscriptLineageWindow")
+  );
+
+  assert.match(protectedAnswer, /Approach[\s\S]*sections\.approach/);
+  assert.match(
+    embeddedAnswer,
+    /Approach[\s\S]*suggestionSections\.approach/
+  );
 });
 
 test("focus controls keep short transcripts at the compact base geometry", () => {

@@ -17,6 +17,7 @@ const INTERVIEW_WINDOW_LABELS: [&str; 3] = [
 ];
 const FOCUS_ANSWER_WIDTH: f64 = 920.0;
 const FOCUS_ANSWER_HEIGHT: f64 = 540.0;
+const FOCUS_ANSWER_MIN_HEIGHT: f64 = 360.0;
 const FOCUS_CONTROLS_WIDTH: f64 = 920.0;
 const FOCUS_CONTROLS_HEIGHT: f64 = 230.0;
 const FOCUS_CONTROLS_MAX_WIDTH: f64 = 1280.0;
@@ -275,8 +276,14 @@ pub fn show_meeting_focus_windows(app: tauri::AppHandle) -> Result<(), String> {
         FOCUS_CONTROLS_HEIGHT,
     )?;
 
-    position_focus_window(&app, &answer, FocusWindowPlacement::Top)?;
-    position_focus_window(&app, &controls, FocusWindowPlacement::Bottom)?;
+    set_meeting_focus_controls_geometry(
+        app.clone(),
+        0,
+        FOCUS_CONTROLS_WIDTH,
+        FOCUS_CONTROLS_HEIGHT,
+        60.0,
+        false,
+    )?;
 
     answer
         .show()
@@ -315,6 +322,9 @@ pub fn set_meeting_focus_controls_geometry(
     let controls = app
         .get_webview_window(FOCUS_CONTROLS_WINDOW_LABEL)
         .ok_or_else(|| "Focus controls window is not available".to_string())?;
+    let answer = app
+        .get_webview_window(FOCUS_ANSWER_WINDOW_LABEL)
+        .ok_or_else(|| "Focus answer window is not available".to_string())?;
     let reference_window = app
         .get_webview_window(MAIN_WINDOW_LABEL)
         .or_else(|| app.webview_windows().values().next().cloned())
@@ -334,42 +344,35 @@ pub fn set_meeting_focus_controls_geometry(
         .map_err(|error| format!("Failed to get Focus Mode scale factor: {}", error))?
         .max(1.0);
     let monitor_size = monitor.size();
-    let monitor_position = monitor.position();
     let logical_monitor_width = monitor_size.width as f64 / scale_factor;
     let maximum_width = FOCUS_CONTROLS_MAX_WIDTH
         .min((logical_monitor_width - WINDOW_SIDE_MARGIN).max(MIN_WINDOW_WIDTH));
-
-    let monitor_bottom = monitor_position.y + monitor_size.height as i32;
-    let controls_bottom = monitor_bottom - FOCUS_BOTTOM_MARGIN;
-    let answer_bottom = app
-        .get_webview_window(FOCUS_ANSWER_WINDOW_LABEL)
-        .and_then(|answer| {
-            let position = answer.outer_position().ok()?;
-            let size = answer.outer_size().ok()?;
-            Some(position.y + size.height as i32)
-        })
-        .unwrap_or_else(|| {
-            monitor_position.y
-                + FOCUS_TOP_MARGIN
-                + (FOCUS_ANSWER_HEIGHT * scale_factor).round() as i32
-        });
-    let available_height = ((controls_bottom - answer_bottom - FOCUS_WINDOW_GAP).max(0) as f64
-        / scale_factor)
-        .max(FOCUS_CONTROLS_HEIGHT);
-    let maximum_height = FOCUS_CONTROLS_MAX_HEIGHT.min(available_height);
+    let reserved_vertical_space =
+        (FOCUS_TOP_MARGIN + FOCUS_BOTTOM_MARGIN + FOCUS_WINDOW_GAP) as f64;
+    let available_height =
+        ((monitor_size.height as f64 - reserved_vertical_space).max(scale_factor) / scale_factor)
+            .max(FOCUS_CONTROLS_HEIGHT + 1.0);
+    let (answer_height, controls_height) =
+        resolve_focus_window_vertical_layout(available_height, preferred_height);
     let (applied_width, applied_height) = clamp_focus_controls_geometry(
         preferred_width,
-        preferred_height,
+        controls_height,
         maximum_width,
-        maximum_height,
+        controls_height,
     );
 
+    let answer_width =
+        FOCUS_ANSWER_WIDTH.min((logical_monitor_width - WINDOW_SIDE_MARGIN).max(MIN_WINDOW_WIDTH));
+    answer
+        .set_size(Size::Logical(LogicalSize::new(answer_width, answer_height)))
+        .map_err(|error| format!("Failed to resize Focus answer window: {}", error))?;
     controls
         .set_size(Size::Logical(LogicalSize::new(
             applied_width,
             applied_height,
         )))
         .map_err(|error| format!("Failed to resize Focus controls window: {}", error))?;
+    position_focus_window(&app, &answer, FocusWindowPlacement::Top)?;
     position_focus_window(&app, &controls, FocusWindowPlacement::Bottom)?;
 
     Ok(FocusControlsGeometryResult {
@@ -399,6 +402,23 @@ pub fn hide_interview_windows_best_effort<R: Runtime>(app: &AppHandle<R>) {
 enum FocusWindowPlacement {
     Top,
     Bottom,
+}
+
+fn resolve_focus_window_vertical_layout(
+    available_height: f64,
+    preferred_controls_height: f64,
+) -> (f64, f64) {
+    let available_height = available_height.max(FOCUS_CONTROLS_HEIGHT + 1.0);
+    let maximum_controls_height = (available_height - FOCUS_ANSWER_MIN_HEIGHT)
+        .max(FOCUS_CONTROLS_HEIGHT)
+        .min(FOCUS_CONTROLS_MAX_HEIGHT)
+        .min(available_height - 1.0);
+    let controls_height = preferred_controls_height
+        .max(FOCUS_CONTROLS_HEIGHT)
+        .min(maximum_controls_height);
+    let answer_height = (available_height - controls_height).max(1.0);
+
+    (answer_height, controls_height)
 }
 
 fn clamp_focus_controls_geometry(
@@ -573,9 +593,10 @@ pub fn show_dashboard_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), Strin
 #[cfg(test)]
 mod tests {
     use super::{
-        clamp_focus_controls_geometry, FOCUS_ANSWER_WINDOW_LABEL, FOCUS_CONTROLS_HEIGHT,
-        FOCUS_CONTROLS_MAX_HEIGHT, FOCUS_CONTROLS_MAX_WIDTH, FOCUS_CONTROLS_WIDTH,
-        FOCUS_CONTROLS_WINDOW_LABEL, INTERVIEW_WINDOW_LABELS, MAIN_WINDOW_LABEL,
+        clamp_focus_controls_geometry, resolve_focus_window_vertical_layout,
+        FOCUS_ANSWER_WINDOW_LABEL, FOCUS_CONTROLS_HEIGHT, FOCUS_CONTROLS_MAX_HEIGHT,
+        FOCUS_CONTROLS_MAX_WIDTH, FOCUS_CONTROLS_WIDTH, FOCUS_CONTROLS_WINDOW_LABEL,
+        INTERVIEW_WINDOW_LABELS, MAIN_WINDOW_LABEL,
     };
 
     #[test]
@@ -609,5 +630,30 @@ mod tests {
             clamp_focus_controls_geometry(1280.0, 350.0, 1100.0, 250.0),
             (1100.0, 250.0)
         );
+    }
+
+    #[test]
+    fn focus_answer_window_fills_the_space_above_compact_controls() {
+        assert_eq!(
+            resolve_focus_window_vertical_layout(1000.0, FOCUS_CONTROLS_HEIGHT),
+            (770.0, 230.0)
+        );
+    }
+
+    #[test]
+    fn focus_controls_growth_preserves_the_answer_minimum_when_space_allows() {
+        assert_eq!(
+            resolve_focus_window_vertical_layout(600.0, FOCUS_CONTROLS_MAX_HEIGHT),
+            (360.0, 240.0)
+        );
+    }
+
+    #[test]
+    fn focus_windows_never_overlap_on_a_short_available_viewport() {
+        let (answer_height, controls_height) =
+            resolve_focus_window_vertical_layout(480.0, FOCUS_CONTROLS_MAX_HEIGHT);
+
+        assert_eq!((answer_height, controls_height), (250.0, 230.0));
+        assert_eq!(answer_height + controls_height, 480.0);
     }
 }
