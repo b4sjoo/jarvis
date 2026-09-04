@@ -29206,28 +29206,6 @@ export function useMeetingAssistant() {
             effectiveScreenSettlementView.effectiveSettlement
           ),
         });
-        if (screenCurrentQuestionSettlement) {
-          currentQuestionSettlementRef.current =
-            screenCurrentQuestionSettlement;
-          traceStoreRef.current.updateMetadata(trace.id, {
-            ...formatCurrentQuestionSettlementForTrace(
-              screenCurrentQuestionSettlement
-            ),
-            currentQuestionSettlementDisposition:
-              resolveCurrentQuestionSettlementDisposition({
-                settlement: screenCurrentQuestionSettlement,
-              }),
-            currentQuestionSettlementSourceObservationIds: [
-              observation.id,
-            ],
-            currentQuestionSettlementAppliedToResponse: true,
-            currentQuestionSettlementAppliedToSettlement: true,
-            currentQuestionSettlementAppliedToParent: false,
-          });
-          if (schedulePendingLatePreflightRepair()) {
-            throw new Error("late-valid-screen-preflight-repair");
-          }
-        }
         const settledScreenQuestionType =
           screenCurrentQuestionSettlement?.questionType ??
           screenMemoryQuestionType;
@@ -29492,6 +29470,43 @@ export function useMeetingAssistant() {
                 trace.id
               );
             }
+          }
+        }
+        const screenLifecyclePublicationAuthorized = Boolean(
+          !screenTransitionCandidate ||
+            sourceOwnedTransitionDurablySatisfied(
+              screenSourceOwnedTransitionReceipt
+            )
+        );
+        if (
+          screenCurrentQuestionSettlement &&
+          screenLifecyclePublicationAuthorized
+        ) {
+          currentQuestionSettlementRef.current =
+            screenCurrentQuestionSettlement;
+          traceStoreRef.current.updateMetadata(trace.id, {
+            ...formatCurrentQuestionSettlementForTrace(
+              screenCurrentQuestionSettlement
+            ),
+            currentQuestionSettlementDisposition:
+              resolveCurrentQuestionSettlementDisposition({
+                settlement: screenCurrentQuestionSettlement,
+              }),
+            currentQuestionSettlementSourceObservationIds: [
+              observation.id,
+            ],
+            currentQuestionSettlementAppliedToResponse: true,
+            currentQuestionSettlementAppliedToSettlement: true,
+            currentQuestionSettlementAppliedToParent:
+              sourceOwnedTransitionDurableMutationApplied(
+                screenSourceOwnedTransitionReceipt
+              ),
+            screenSettlementPublicationStage: screenTransitionCandidate
+              ? "after-durable-lifecycle"
+              : "no-lifecycle-required",
+          });
+          if (schedulePendingLatePreflightRepair()) {
+            throw new Error("late-valid-screen-preflight-repair");
           }
         }
         const screenPostTransitionContextState =
