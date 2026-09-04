@@ -419,6 +419,33 @@ test("current hypothetical framing overrides an inherited project-deep-dive type
   );
 });
 
+test("keeps fact requirements for hypothetical wording inside a bound project", () => {
+  const introduction = buildFactAnchorDecision({
+    questionType: "project-deep-dive",
+    questionText:
+      "If you want to introduce this project to someone unfamiliar with it, how would you explain it?",
+    projectAnchor: "Agentic Memory",
+    personalEvidenceGuardrailMode: "enforcement",
+    memoryContext: makeMemoryResult([]),
+  });
+  const extension = buildFactAnchorDecision({
+    questionType: "project-deep-dive",
+    questionText:
+      "How would you add a DLQ to the Agentic Memory design in the future?",
+    projectAnchor: "Agentic Memory",
+    personalEvidenceGuardrailMode: "enforcement",
+    memoryContext: makeMemoryResult([]),
+  });
+
+  for (const decision of [introduction, extension]) {
+    assert.equal(decision.requiredFor, "project-deep-dive");
+    assert.equal(
+      decision.requirementReason,
+      "committed-project-authority-preserves-fact-requirement"
+    );
+  }
+});
+
 test("offers project choices instead of blending multiple eligible projects", () => {
   const decision = buildFactAnchorDecision({
     questionType: "project-deep-dive",

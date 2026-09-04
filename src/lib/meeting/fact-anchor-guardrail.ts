@@ -181,7 +181,8 @@ export function buildFactAnchorDecision({
   const requirementResolution = resolveFactAnchorRequirement(
     questionType,
     personalEvidence,
-    projectFactSensitive
+    projectFactSensitive,
+    Boolean(projectAnchor?.trim() || projectBindingDecision?.binding)
   );
   const withProjectFactSensitivity = (
     decision: FactAnchorDecision
@@ -469,7 +470,8 @@ export function formatFactAnchorDecisionForTrace(
 function resolveFactAnchorRequirement(
   questionType: MemoryQuestionType | undefined,
   personalEvidence: FactAnchorDecision["personalEvidence"],
-  projectFactSensitive: boolean
+  projectFactSensitive: boolean,
+  committedProjectAuthority: boolean
 ): {
   requiredFor: FactAnchorRequiredFor;
   source: NonNullable<FactAnchorDecision["requirementSource"]>;
@@ -497,6 +499,13 @@ function resolveFactAnchorRequirement(
     personalEvidence.confidenceTier === "high" &&
     personalEvidence.counterSignals.length > 0
   ) {
+    if (questionType === "project-deep-dive" && committedProjectAuthority) {
+      return {
+        requiredFor: "project-deep-dive",
+        source: "settled-question-type",
+        reason: "committed-project-authority-preserves-fact-requirement",
+      };
+    }
     return {
       requiredFor: "none",
       source: "current-question-personal-evidence",
