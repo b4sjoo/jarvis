@@ -352,6 +352,92 @@ test("records only source-owned effective LQU projections", () => {
   assert.equal(ledger.list().length, 1);
 });
 
+test("records Screen observation identity in the shared effective source ledger", () => {
+  const activeTask = task();
+  activeTask.child = undefined;
+  activeTask.source = "screen";
+  const screenUnit: LogicalQuestionUnit = {
+    ...unit(
+      "screen-answer-sufficiency:screen-1",
+      "screen:screen-1",
+      "Design a URL shortener.",
+      100
+    ),
+    sourceTurnIds: [],
+  };
+  const settlement: EffectiveCurrentQuestionSettlement = {
+    ...effective("new-parent"),
+    logicalQuestionUnitId: screenUnit.id,
+    sourceKind: "screen",
+    sourceTurnIds: [],
+    sourceObservationIds: ["screen-1"],
+  };
+
+  const record = createEffectiveQuestionSourceRecord({
+    logicalQuestionUnit: screenUnit,
+    settlement,
+    activeMeetingTask: activeTask,
+    settledAt: 120,
+  });
+
+  assert.equal(record?.sourceKind, "screen");
+  assert.deepEqual(record?.sourceTurnIds, []);
+  assert.deepEqual(record?.sourceObservationIds, ["screen-1"]);
+  assert.equal(record?.owner.kind, "parent-mainline");
+});
+
+test("uses a Screen observation timestamp as the raw transcript boundary", () => {
+  const activeTask = task();
+  activeTask.child = undefined;
+  activeTask.parent.canonicalQuestionSourceTurnIds = [];
+  activeTask.parent.startTurnId = undefined;
+  activeTask.parent.promptTranscriptStartTurnId = undefined;
+  const current = unit(
+    "lqu-current-after-screen",
+    "turn-current-after-screen",
+    "What should we monitor?",
+    200
+  );
+  const selection = selectOwnerScopedRelationEvidence({
+    records: [
+      record({
+        recordId: "record-screen-parent",
+        logicalQuestionUnitId: "screen-parent",
+        sourceKind: "screen",
+        sourceTurnIds: [],
+        sourceObservationIds: ["screen-1"],
+        text: "Design a URL shortener.",
+        updatedAt: 100,
+        settledAt: 101,
+        owner: { kind: "parent-mainline", parentId: "parent-rag" },
+      }),
+    ],
+    currentLogicalQuestionUnit: current,
+    activeMeetingTask: activeTask,
+    transcriptTurns: [
+      turn("turn-before-screen", "Discuss an unrelated coding problem.", 20),
+      turn("turn-after-screen", "The service spans three regions.", 150),
+      turn(
+        "turn-current-after-screen",
+        "What should we monitor?",
+        200
+      ),
+    ],
+  });
+  const parentText = selection.recentParentEvidence
+    .map((evidence) => evidence.text)
+    .join(" ");
+
+  assert.doesNotMatch(parentText, /unrelated coding/i);
+  assert.match(parentText, /three regions/i);
+  assert.equal(
+    selection.recentParentEvidence.some(
+      (evidence) => evidence.sourceObservationIds[0] === "screen-1"
+    ),
+    true
+  );
+});
+
 test("selects LQU-first evidence without acknowledgement or logistics", () => {
   const records: EffectiveQuestionSourceRecord[] = [
     {

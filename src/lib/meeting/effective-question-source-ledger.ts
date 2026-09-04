@@ -29,7 +29,9 @@ export interface EffectiveQuestionSourceRecord {
   logicalQuestionUnitId: string;
   logicalQuestionRevision: number;
   sourceHash: string;
+  sourceKind?: CurrentQuestionSettlementDecision["sourceKind"];
   sourceTurnIds: string[];
+  sourceObservationIds?: string[];
   correctionIds?: string[];
   effectiveSourceTexts?: Array<{ turnId: string; text: string }>;
   text: string;
@@ -47,6 +49,7 @@ export interface OwnerScopedRelationEvidence {
   text: string;
   role?: "question" | "constraint" | "transition";
   sourceTurnIds: string[];
+  sourceObservationIds: string[];
   selectionReason: "lqu-projection" | "raw-recent-turn";
   ownerKind: EffectiveQuestionSourceOwner["kind"];
 }
@@ -314,7 +317,9 @@ export function createEffectiveQuestionSourceRecord(input: {
     logicalQuestionUnitId: input.logicalQuestionUnit.id,
     logicalQuestionRevision: input.logicalQuestionUnit.revision,
     sourceHash: input.settlement.sourceHash,
+    sourceKind: input.settlement.sourceKind,
     sourceTurnIds: [...input.logicalQuestionUnit.sourceTurnIds],
+    sourceObservationIds: [...input.settlement.sourceObservationIds],
     correctionIds: [...sourceProjection.correctionIds],
     effectiveSourceTexts: sourceProjection.effectiveSourceTexts.map(
       (source) => ({ ...source })
@@ -402,6 +407,12 @@ export function selectOwnerScopedRelationEvidence(input: {
     input.transcriptTurns,
     activeMeetingTask.child?.basedOnTurnIds ?? []
   );
+  const observationBoundaryAt = ownedRecords
+    .filter((record) => (record.sourceObservationIds?.length ?? 0) > 0)
+    .reduce(
+      (latest, record) => Math.max(latest, record.updatedAt),
+      Number.NEGATIVE_INFINITY
+    );
   const rawCandidates = input.transcriptTurns.filter((turn, index) => {
     if (
       turn.speaker !== "them" ||
@@ -409,7 +420,8 @@ export function selectOwnerScopedRelationEvidence(input: {
       coveredTurnIds.has(turn.id) ||
       turn.contextFusionStatus === "duplicate-suppressed" ||
       !turn.text.trim() ||
-      (parentBoundaryIndex >= 0 && index < parentBoundaryIndex)
+      (parentBoundaryIndex >= 0 && index < parentBoundaryIndex) ||
+      turn.endedAt < observationBoundaryAt
     ) {
       return false;
     }
@@ -502,6 +514,7 @@ function selectLquEvidence(
       text,
       role: classifyRole(record.text),
       sourceTurnIds: [...record.sourceTurnIds],
+      sourceObservationIds: [...(record.sourceObservationIds ?? [])],
       selectionReason: "lqu-projection",
       ownerKind: record.owner.kind,
     });
@@ -527,6 +540,7 @@ function supplementRawEvidence(
       text,
       role: classifyRole(text),
       sourceTurnIds: [turn.id],
+      sourceObservationIds: [],
       selectionReason: "raw-recent-turn",
       ownerKind,
     });
@@ -559,6 +573,7 @@ function cloneRecord(record: EffectiveQuestionSourceRecord) {
   return {
     ...record,
     sourceTurnIds: [...record.sourceTurnIds],
+    sourceObservationIds: [...(record.sourceObservationIds ?? [])],
     correctionIds: record.correctionIds
       ? [...record.correctionIds]
       : undefined,

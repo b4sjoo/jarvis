@@ -29509,6 +29509,50 @@ export function useMeetingAssistant() {
             throw new Error("late-valid-screen-preflight-repair");
           }
         }
+        const existingBoundVoiceSourceRecord =
+          screenQuestionOwnedByVoice && screenRelationLogicalQuestionUnit
+            ? effectiveQuestionSourceLedgerRef.current.findLogicalQuestion({
+                sessionId: screenRelationLogicalQuestionUnit.sessionId,
+                runtimeEpoch: screenRelationLogicalQuestionUnit.runtimeEpoch,
+                logicalQuestionUnitId: screenRelationLogicalQuestionUnit.id,
+                logicalQuestionRevision:
+                  screenRelationLogicalQuestionUnit.revision,
+              })
+            : undefined;
+        const screenEffectiveQuestionSourceRecord =
+          screenLifecyclePublicationAuthorized &&
+          sourceOwnedTransitionDurablySatisfied(
+            screenSourceOwnedTransitionReceipt
+          ) &&
+          effectiveScreenSettlementView.effectiveSettlement &&
+          screenRelationLogicalQuestionUnit &&
+          !existingBoundVoiceSourceRecord
+            ? createEffectiveQuestionSourceRecord({
+                logicalQuestionUnit: screenRelationLogicalQuestionUnit,
+                settlement:
+                  effectiveScreenSettlementView.effectiveSettlement,
+                activeMeetingTask:
+                  contextManagerRef.current.getState().activeMeetingTask,
+              })
+            : undefined;
+        if (screenEffectiveQuestionSourceRecord) {
+          effectiveQuestionSourceLedgerRef.current.upsert(
+            screenEffectiveQuestionSourceRecord
+          );
+        }
+        traceStoreRef.current.updateMetadata(trace.id, {
+          screenEffectiveQuestionSourceRecordId:
+            screenEffectiveQuestionSourceRecord?.recordId ??
+            existingBoundVoiceSourceRecord?.recordId,
+          screenEffectiveQuestionSourceDisposition:
+            screenEffectiveQuestionSourceRecord
+              ? "committed-after-durable-lifecycle"
+              : existingBoundVoiceSourceRecord
+                ? "reused-bound-voice-record"
+                : screenCurrentOnly
+                  ? "current-only-not-recorded"
+                  : "not-recorded",
+        });
         const screenPostTransitionContextState =
           contextManagerRef.current.getState();
         const screenFreshParentCreated =

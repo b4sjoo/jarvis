@@ -34,4 +34,8 @@ test("publishes a Screen settlement only after its lifecycle receipt", () => {
     block,
     /screenLifecyclePublicationAuthorized[\s\S]*sourceOwnedTransitionDurablySatisfied/
   );
+  assert.match(
+    block,
+    /screenEffectiveQuestionSourceRecord[\s\S]*createEffectiveQuestionSourceRecord/
+  );
 });
