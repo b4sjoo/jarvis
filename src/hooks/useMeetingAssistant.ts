@@ -28731,9 +28731,7 @@ export function useMeetingAssistant() {
             : undefined;
         const screenEffectiveQuestionSourceRecord =
           screenLifecyclePublicationAuthorized &&
-          sourceOwnedTransitionDurablySatisfied(
-            screenSourceOwnedTransitionReceipt
-          ) &&
+          !screenCurrentOnly &&
           effectiveScreenSettlementView.effectiveSettlement &&
           screenRelationLogicalQuestionUnit &&
           !existingBoundVoiceSourceRecord
@@ -28756,7 +28754,9 @@ export function useMeetingAssistant() {
             existingBoundVoiceSourceRecord?.recordId,
           screenEffectiveQuestionSourceDisposition:
             screenEffectiveQuestionSourceRecord
-              ? "committed-after-durable-lifecycle"
+              ? screenTransitionCandidate
+                ? "committed-after-durable-lifecycle"
+                : "committed-no-lifecycle-required"
               : existingBoundVoiceSourceRecord
                 ? "reused-bound-voice-record"
                 : screenCurrentOnly

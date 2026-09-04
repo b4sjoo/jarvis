@@ -25,6 +25,17 @@ test("publishes a Screen settlement only after its lifecycle receipt", () => {
   const settlementPublication = block.indexOf(
     "currentQuestionSettlementRef.current ="
   );
+  const ledgerAdmissionStart = block.indexOf(
+    "const screenEffectiveQuestionSourceRecord ="
+  );
+  const ledgerAdmissionEnd = block.indexOf(
+    "if (screenEffectiveQuestionSourceRecord)",
+    ledgerAdmissionStart
+  );
+  const ledgerAdmission = block.slice(
+    ledgerAdmissionStart,
+    ledgerAdmissionEnd
+  );
 
   assert.ok(start >= 0 && end > start);
   assert.ok(transitionCommit >= 0);
@@ -38,4 +49,16 @@ test("publishes a Screen settlement only after its lifecycle receipt", () => {
     block,
     /screenEffectiveQuestionSourceRecord[\s\S]*createEffectiveQuestionSourceRecord/
   );
+  assert.ok(
+    ledgerAdmissionStart >= 0 && ledgerAdmissionEnd > ledgerAdmissionStart
+  );
+  assert.match(
+    ledgerAdmission,
+    /screenLifecyclePublicationAuthorized\s*&&\s*!screenCurrentOnly/
+  );
+  assert.doesNotMatch(
+    ledgerAdmission,
+    /sourceOwnedTransitionDurablySatisfied/
+  );
+  assert.match(block, /committed-no-lifecycle-required/);
 });
