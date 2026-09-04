@@ -114,6 +114,21 @@ Complexity: O(n) time and O(k) space.`);
   assert.equal(reparsed.sections.code, undefined);
 });
 
+test("does not let an empty Code section exempt runnable Approach code", () => {
+  const parsed = parseMeetingAnswer(`Answer: Explain the implementation.
+Approach: This block is misplaced runnable code.
+
+\`\`\`python
+print("must remain Code-owned")
+\`\`\`
+
+Code: -
+Complexity: O(1).`);
+
+  assert.equal(parsed.sections.approach, "This block is misplaced runnable code.");
+  assert.equal(parsed.sections.code, 'print("must remain Code-owned")');
+});
+
 test("supports Markdown labels and infrastructure diagram alias", () => {
   const parsed = parseMeetingAnswer(`## **中文思路:** 先明确写路径。
 **Answer:** Separate the write and read paths.

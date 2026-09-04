@@ -708,7 +708,7 @@ test("coding baseline clarifies callable contracts without adding a question sub
 test("keeps optimized pseudocode in Approach without granting Code authority", () => {
   const contract = formatCodingPlaybookPhaseContract("optimized_pseudocode");
 
-  assert.match(contract, /pseudocode in Approach/);
+  assert.match(contract, /exact marker `Pseudocode:`/);
   assert.match(contract, /fenced text block or ordered steps/);
   assert.match(contract, /Do not emit Code/);
 });

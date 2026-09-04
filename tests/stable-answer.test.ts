@@ -234,6 +234,35 @@ Complexity: O(n) time and O(k) space.`
   assert.equal(stable.sections.complexity.revision, 1);
 });
 
+test("drops unmarked runnable Approach code without Code authority", () => {
+  const stable = commitStableAnswerRevision({
+    candidate: suggestion(
+      "misplaced-code-answer",
+      `Answer: Explain the implementation.
+Approach: This block is misplaced runnable code.
+
+\`\`\`python
+print("must remain Code-owned")
+\`\`\`
+
+Code: -
+Complexity: O(1).`
+    ),
+    authorizedArtifacts: ["answer", "complexity"],
+    taskId: "coding-parent",
+    logicalQuestionUnitId: "coding-question",
+    logicalQuestionRevision: 2,
+  });
+
+  assert.ok(stable);
+  assert.doesNotMatch(
+    stable.suggestion.meetingAnswer?.sections.approach ?? "",
+    /must remain Code-owned/
+  );
+  assert.equal(stable.suggestion.meetingAnswer?.sections.code, undefined);
+  assert.equal(stable.sections.code.revision, 0);
+});
+
 test("does not advance an authorized artifact revision when the candidate omits it", () => {
   const first = commitStableAnswerRevision({
     candidate: suggestion(

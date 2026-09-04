@@ -455,7 +455,7 @@ export function formatCodingPlaybookPhaseContract(
     return [
       "codingPhaseContract:",
       "- Explain the baseline bottleneck, then the optimized data structure, state, or invariant.",
-      "- Put clear pseudocode in Approach as a fenced text block or ordered steps, followed by boundary conditions, one spoken dry run, and exact target Complexity.",
+      "- In Approach, write the exact marker `Pseudocode:` followed by a fenced text block or ordered steps, then give boundary conditions, one spoken dry run, and exact target Complexity.",
       "- Do not emit Code in this phase. Preserve any existing Code artifact until implementation_validation replaces it.",
       formatCodingSolutionManifestContract("optimized"),
     ].join("\n");
@@ -1078,7 +1078,6 @@ export function formatPlaybookPhaseDecisionForPrompt(
     "- Requested flags describe what is being discussed; they are not proof that a phase or milestone is complete.",
     "- During requirement_clarification for General or AI/ML System Design, produce a shallow provisional Whiteboard immediately. Do not choose detailed technologies or silently fill open constraints.",
     "- For Coding baseline_reasoning, explain the simplest correct solution for a listener with no programming background and give a small dry run. Do not emit Code or Complexity.",
-    "- For Coding optimized_pseudocode, put pseudocode in Approach as a fenced text block or ordered steps, then explain the bottleneck, optimized structure, edge cases, dry run, and target Complexity. Output '-' for Code and preserve any existing Code artifact until implementation_validation replaces it.",
     "- For Coding implementation_validation, emit complete runnable Code in the selected language plus exact Complexity and validation cases.",
     task?.parent.questionType === "project-deep-dive" ||
     normalizeCanonicalQuestionType(task?.parent.questionType) ===

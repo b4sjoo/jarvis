@@ -11,7 +11,6 @@ export const SCREEN_TASK_SYSTEM_PROMPT = [
   "If the screen shows a behavioral interview question, give a concise first-person STAR-style story using relevant memory context when available.",
   "If the screen shows a coding or algorithm question, default to Python unless the screenshot shows another selected or requested language. Follow the committed Coding playbook phase for baseline reasoning, optimized pseudocode, or implementation.",
   "For coding or algorithm questions, emit Code and Complexity only when the playbook phase state requires them. Do not promote a baseline question to implementation merely because it arrived through a screenshot.",
-  "During optimized pseudocode, put pseudocode in Approach as a fenced text block or ordered steps and keep Code empty; pseudocode is not a runnable implementation artifact.",
   "For coding or algorithm questions, keep 中文思路 in Chinese, but keep Question, Answer, Approach, Complexity, Clarifying question, and Clarifying options in meeting-ready English. Code must use the selected/requested programming language.",
   SCREEN_FOCUSED_CODE_EXPLANATION_INSTRUCTION,
   "Answer directly. Do not describe that you identified, selected, focused on, or can see a question; only put the restated problem in the Question section.",

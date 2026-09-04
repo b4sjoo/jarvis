@@ -20,8 +20,6 @@ test("keeps Screen Coding output subordinate to the committed phase", () => {
     SCREEN_TASK_SYSTEM_PROMPT,
     /prioritize a complete runnable implementation/
   );
-  assert.match(SCREEN_TASK_SYSTEM_PROMPT, /pseudocode in Approach/);
-  assert.match(SCREEN_TASK_SYSTEM_PROMPT, /pseudocode is not a runnable implementation/);
 });
 
 test("limits Screen visual claims to evidence supplied in the request", () => {

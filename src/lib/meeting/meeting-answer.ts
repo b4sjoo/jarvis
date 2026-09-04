@@ -195,9 +195,16 @@ export function parseMeetingAnswer(
     ])
   );
   const hasExplicitCodeSection = recognizedLabels.includes("Code");
-  const extractedCode = hasExplicitCodeSection
+  const approachFence = extractFirstCodeFence(rawApproach);
+  const preserveApproachPseudocode = Boolean(
+    hasExplicitCodeSection &&
+      !rawCode &&
+      approachFence &&
+      hasExplicitPseudocodeMarker(rawApproach, approachFence.fence)
+  );
+  const extractedCode = preserveApproachPseudocode
     ? undefined
-    : extractFirstCodeFence(rawApproach);
+    : approachFence;
   const approach = extractedCode
     ? sanitizeMeetingAnswerSection(rawApproach.replace(extractedCode.fence, ""))
     : rawApproach;
@@ -595,6 +602,15 @@ function extractFirstCodeFence(value: string) {
     fence: match[0],
     code: stripOuterMeetingAnswerCodeFence(match[0]),
   };
+}
+
+function hasExplicitPseudocodeMarker(value: string, fence: string) {
+  const fenceIndex = value.indexOf(fence);
+  if (fenceIndex < 0) return false;
+
+  return /(?:^|\n)[^\S\n]*Pseudocode[^\S\n]*:\s*$/i.test(
+    value.slice(0, fenceIndex)
+  );
 }
 
 function escapeRegExp(value: string) {
