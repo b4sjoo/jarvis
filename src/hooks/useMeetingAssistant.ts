@@ -22374,6 +22374,9 @@ export function useMeetingAssistant() {
           logicalQuestionUnitRevision: logicalQuestionUnit?.revision,
         }),
         ...formatLogicalQuestionUnitForTrace(logicalQuestionUnit),
+        legacyCombinedIntentSchedulingRetired: true,
+        taxonomyAdjudicationDisposition: "retired-not-scheduled",
+        interviewerIntentLlmDisposition: "retired-not-scheduled",
       };
       traceStoreRef.current.updateMetadata(traceId, initialMetadata);
       semanticTaxonomyEvidenceByTurnRef.current.set(turn.id, {
@@ -22415,13 +22418,6 @@ export function useMeetingAssistant() {
           traceId,
           taskId: contextState.activeMeetingTask?.id,
           metadata: initialMetadata,
-        });
-        scheduleTaxonomyAdjudicationShadow({
-          turn,
-          traceId,
-          turnGateAction,
-          logicalQuestionUnit,
-          lexical,
         });
         return runtimeAdjudication;
       }
@@ -22575,15 +22571,6 @@ export function useMeetingAssistant() {
             taskId: contextState.activeMeetingTask?.id,
             metadata,
           });
-          scheduleTaxonomyAdjudicationShadow({
-            turn,
-            traceId,
-            turnGateAction,
-            logicalQuestionUnit,
-            lexical,
-            semantic,
-            hybrid,
-          });
         })
         .catch((error) => {
           const metadata = {
@@ -22620,13 +22607,6 @@ export function useMeetingAssistant() {
             traceId,
             taskId: contextState.activeMeetingTask?.id,
             metadata,
-          });
-          scheduleTaxonomyAdjudicationShadow({
-            turn,
-            traceId,
-            turnGateAction,
-            logicalQuestionUnit,
-            lexical,
           });
         });
       return runtimeAdjudication;
