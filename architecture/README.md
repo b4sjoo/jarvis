@@ -98,12 +98,14 @@ The tracked contracts in this directory reject:
 The initial guard ceiling recorded 18 task-mutation callsites in 2 modules, 0
 live legacy-reader imports, 5 cycle components with 501 internal edges, 7 broad
 meeting-barrel consumers, and 7 explained command-registration exceptions. The
-August 29 measured state is 2 analyzer-recognized transition/clear callsites in
-1 module, 0 live legacy imports, 5 cycle components with 490 internal edges,
-and 7 broad barrel consumers. The task-writer metric is scanner-specific and
-does not count expiration mutation. The checked ceilings prevent recognized
-regression; later maintainability tasks must expand mutation coverage and
-deliberately lower the remaining cycle and barrel counts.
+September 4 Task 190 dependency cut leaves 2 analyzer-recognized
+transition/clear callsites in 1 module, 0 live legacy imports, 6 cycle
+components with 83 internal edges, a largest component of 16 modules, and 7
+broad barrel consumers. The extra component is the result of splitting the
+former 135-module component, not a new feedback edge. The task-writer metric is
+scanner-specific and does not count expiration mutation. The checked baseline
+now rejects any new cycle component or 84th internal edge; later
+maintainability tasks should continue reducing both counts.
 
 ## Verification
 

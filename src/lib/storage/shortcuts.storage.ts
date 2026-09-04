@@ -5,7 +5,7 @@ import {
   ShortcutConflict,
   ShortcutAction,
 } from "@/types";
-import { getPlatform } from "@/lib";
+import { getPlatform } from "../platform";
 import { removeRetiredDefaultShortcutBindings } from "./retired-shortcuts";
 
 /**

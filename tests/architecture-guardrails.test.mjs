@@ -31,7 +31,8 @@ test("accepts the tracked architecture baseline", () => {
   assert.equal(result.metrics.taskWriterCallsites, 2);
   assert.equal(result.metrics.taskWriterModules, 1);
   assert.equal(result.metrics.liveLegacyImports, 0);
-  assert.equal(result.metrics.importCycles, 5);
+  assert.equal(result.metrics.importCycles, 6);
+  assert.equal(result.metrics.importCycleEdges, 83);
   assert.equal(result.metrics.frontendCommandsWithoutNativeRegistration, 1);
 });
 

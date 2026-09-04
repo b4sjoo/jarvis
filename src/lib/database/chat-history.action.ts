@@ -1,6 +1,6 @@
 import { getDatabase } from "./config";
 import { ChatConversation } from "@/types";
-import { safeLocalStorage } from "@/lib";
+import { safeLocalStorage } from "../storage/helper";
 
 // Legacy localStorage key for migration purposes
 const LEGACY_CHAT_HISTORY_KEY = "chat_history";

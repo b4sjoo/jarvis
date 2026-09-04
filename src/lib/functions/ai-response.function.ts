@@ -9,7 +9,8 @@ import {
 import { Message, TYPE_PROVIDER } from "@/types";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import curl2Json from "@bany/curl-to-json";
-import { getResponseSettings, RESPONSE_LENGTHS, LANGUAGES } from "@/lib";
+import { RESPONSE_LENGTHS, LANGUAGES } from "../response-settings.constants";
+import { getResponseSettings } from "../storage/response-settings.storage";
 import { MARKDOWN_FORMATTING_INSTRUCTIONS } from "@/config/constants";
 import {
   AIResponseEventBuilder,
