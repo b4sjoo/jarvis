@@ -450,6 +450,7 @@ import {
   parseNativeAudioSegmentDroppedEvent,
   buildMemoryEvaluationTraceMetadata,
   formatMeetingAnswerTraceMetadata,
+  formatModelGenerationTerminalForTrace,
   formatModelGenerationTimingForTrace,
   formatAnswerGenerationLeaseForTrace,
   formatStableAnswerCommitForTrace,
@@ -14766,6 +14767,7 @@ export function useMeetingAssistant() {
               },
               onTerminal: (outcome) => {
                 traceStoreRef.current.updateMetadata(traceId, {
+                  ...formatModelGenerationTerminalForTrace(outcome),
                   providerOutcomeStatus: outcome.status,
                   providerFailureClass: outcome.failureClass,
                   providerAttemptId: outcome.attemptId,
@@ -29699,6 +29701,7 @@ export function useMeetingAssistant() {
               },
               onTerminal: (outcome) => {
                 traceStoreRef.current.updateMetadata(trace.id, {
+                  ...formatModelGenerationTerminalForTrace(outcome),
                   providerOutcomeStatus: outcome.status,
                   providerFailureClass: outcome.failureClass,
                   providerAttemptId: outcome.attemptId,

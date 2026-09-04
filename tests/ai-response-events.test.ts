@@ -76,8 +76,11 @@ test("builds content separately from exactly one successful terminal outcome", (
       providerId: "provider-a",
       startedAt: 100,
       firstContentAt: 110,
+      lastContentAt: 120,
       finishedAt: 130,
       chunkCount: 2,
+      observedContentChars: 5,
+      observedContentHash: "4f9f2cab",
       text: "hello",
     },
   });
@@ -108,6 +111,9 @@ test("keeps partial content out of a failed terminal outcome", () => {
   if (terminal.type !== "terminal") return;
   assert.equal(terminal.outcome.status, "failed");
   assert.equal(terminal.outcome.chunkCount, 1);
+  assert.equal(terminal.outcome.lastContentAt, 110);
+  assert.equal(terminal.outcome.observedContentChars, 7);
+  assert.equal(terminal.outcome.observedContentHash, "c54d769a");
   assert.equal(terminal.outcome.text, undefined);
 });
 

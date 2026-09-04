@@ -1,3 +1,5 @@
+import type { AIResponseTerminalOutcome } from "../functions/ai-response-events.js";
+
 export const MODEL_GENERATION_TELEMETRY_SCHEMA_VERSION = 1;
 export const MEETING_ADVISOR_PROMPT_CONTRACT_VERSION =
   "meeting-advisor-prompt-v1";
@@ -97,9 +99,42 @@ export function formatModelGenerationTimingForTrace(
   };
 }
 
+export function formatModelGenerationTerminalForTrace(
+  outcome: Readonly<AIResponseTerminalOutcome>
+): Record<string, unknown> {
+  return {
+    modelGenerationTerminalAt: outcome.finishedAt,
+    modelGenerationLastContentAt: outcome.lastContentAt,
+    modelGenerationTerminalMs: elapsed(
+      outcome.startedAt,
+      outcome.finishedAt
+    ),
+    modelGenerationLastContentMs: elapsed(
+      outcome.startedAt,
+      outcome.lastContentAt
+    ),
+    modelGenerationChunkCount: outcome.chunkCount,
+    modelGenerationObservedContentChars:
+      outcome.observedContentChars,
+    modelGenerationObservedContentHash:
+      outcome.observedContentHash,
+    modelGenerationCompletionSignal:
+      outcome.completionSignal ?? completionSignalFromStatus(outcome.status),
+  };
+}
+
 function elapsed(startedAt?: number, endedAt?: number) {
   if (startedAt === undefined || endedAt === undefined) return undefined;
   return Math.max(0, endedAt - startedAt);
+}
+
+function completionSignalFromStatus(
+  status: AIResponseTerminalOutcome["status"]
+) {
+  if (status === "timed-out") return "request-timeout";
+  if (status === "aborted") return "request-abort";
+  if (status === "failed") return "request-failure";
+  return undefined;
 }
 
 function privacySafeIdentifier(

@@ -75,8 +75,12 @@ export interface GenerationResultProviderAttempt {
   modelId: string;
   startedAt: number;
   firstContentAt?: number;
+  lastContentAt?: number;
   finishedAt: number;
   chunkCount: number;
+  observedContentChars?: number;
+  observedContentHash?: string;
+  completionSignal?: AIResponseTerminalOutcome["completionSignal"];
   statusCode?: number;
   safeErrorSummary?: string;
 }
@@ -816,8 +820,12 @@ export function formatGenerationResultLedgerForTrace(
         modelId: attempt.modelId,
         startedAt: attempt.startedAt,
         firstContentAt: attempt.firstContentAt,
+        lastContentAt: attempt.lastContentAt,
         finishedAt: attempt.finishedAt,
         chunkCount: attempt.chunkCount,
+        observedContentChars: attempt.observedContentChars,
+        observedContentHash: attempt.observedContentHash,
+        completionSignal: attempt.completionSignal,
         statusCode: attempt.statusCode,
         safeErrorSummary: attempt.safeErrorSummary,
       })
@@ -927,8 +935,12 @@ function toSafeAttempt(
     modelId: outcome.modelId,
     startedAt: outcome.startedAt,
     firstContentAt: outcome.firstContentAt,
+    lastContentAt: outcome.lastContentAt,
     finishedAt: outcome.finishedAt,
     chunkCount: outcome.chunkCount,
+    observedContentChars: outcome.observedContentChars,
+    observedContentHash: outcome.observedContentHash,
+    completionSignal: outcome.completionSignal,
     statusCode: outcome.statusCode,
     safeErrorSummary: outcome.safeErrorSummary?.slice(0, 500),
   };

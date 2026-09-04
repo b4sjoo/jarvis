@@ -21,6 +21,15 @@ export type AIResponseAttemptDisposition =
   | "retrying"
   | "stale";
 
+export type AIResponseCompletionSignal =
+  | "non-streaming-response"
+  | "stream-eof"
+  | "openai-done"
+  | "anthropic-message-stop"
+  | "request-timeout"
+  | "request-abort"
+  | "request-failure";
+
 export interface AIResponseExecutionIdentity {
   requestId: string;
   executionPlanId: string;
@@ -83,8 +92,12 @@ export interface AIResponseTerminalOutcome {
   providerId: string;
   startedAt: number;
   firstContentAt?: number;
+  lastContentAt?: number;
   finishedAt: number;
   chunkCount: number;
+  observedContentChars?: number;
+  observedContentHash?: string;
+  completionSignal?: AIResponseCompletionSignal;
   text?: string;
 }
 
@@ -108,8 +121,11 @@ export type AIResponseTerminalInput = Omit<
   | "providerId"
   | "startedAt"
   | "firstContentAt"
+  | "lastContentAt"
   | "finishedAt"
   | "chunkCount"
+  | "observedContentChars"
+  | "observedContentHash"
   | "requestId"
   | "attemptId"
   | "executionPlanId"
@@ -130,6 +146,7 @@ export class AIResponseEventBuilder {
   private readonly identity: AIResponseAttemptIdentity;
   private readonly startedAt: number;
   private firstContentAt?: number;
+  private lastContentAt?: number;
   private chunkCount = 0;
   private text = "";
   private finished = false;
@@ -156,6 +173,7 @@ export class AIResponseEventBuilder {
       throw new Error("AI response content delta cannot be empty");
     }
     this.firstContentAt ??= emittedAt;
+    this.lastContentAt = emittedAt;
     this.chunkCount += 1;
     this.text += content;
     return {
@@ -193,12 +211,26 @@ export class AIResponseEventBuilder {
         providerId: this.providerId,
         startedAt: this.startedAt,
         firstContentAt: this.firstContentAt,
+        lastContentAt: this.lastContentAt,
         finishedAt,
         chunkCount: this.chunkCount,
+        observedContentChars: this.text.length,
+        observedContentHash: this.text
+          ? hashObservedAIResponseContent(this.text)
+          : undefined,
         text: input.status === "success" ? this.text : undefined,
       },
     };
   }
+}
+
+function hashObservedAIResponseContent(value: string) {
+  let hash = 2_166_136_261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16_777_619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
 export async function* coordinateAIResponseAttempts(input: {
@@ -279,6 +311,7 @@ export async function* coordinateAIResponseAttempts(input: {
         status: "failed",
         failureClass: "unexpected",
         retryable: false,
+        completionSignal: "request-failure",
         safeErrorSummary:
           error instanceof Error
             ? boundAIResponseErrorText(error.message)
@@ -294,6 +327,7 @@ export async function* coordinateAIResponseAttempts(input: {
         status: "failed",
         failureClass: "unexpected",
         retryable: false,
+        completionSignal: "request-failure",
         safeErrorSummary: "AI response attempt ended without a terminal outcome",
       });
       return;
@@ -313,7 +347,11 @@ export async function* coordinateAIResponseAttempts(input: {
         input.providerId ?? "unknown",
         abortedIdentity
       );
-      yield builder.terminal({ status: "aborted", retryable: false });
+      yield builder.terminal({
+        status: "aborted",
+        retryable: false,
+        completionSignal: "request-abort",
+      });
       return;
     }
   }

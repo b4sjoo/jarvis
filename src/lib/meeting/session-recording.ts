@@ -1126,10 +1126,17 @@ export interface SessionCompactTraceSummary {
     firstContentAt?: number;
     firstVisiblePartialAt?: number;
     completedAt?: number;
+    terminalAt?: number;
+    lastContentAt?: number;
     firstContentMs?: number;
     firstVisiblePartialMs?: number;
     durationMs?: number;
+    terminalMs?: number;
+    lastContentMs?: number;
     chunkCount?: number;
+    observedContentChars?: number;
+    observedContentHash?: string;
+    completionSignal?: string;
     terminalDisposition?: string;
     terminalReason?: string;
   };
@@ -1306,10 +1313,14 @@ interface SessionModelGenerationAggregate {
   byRequestOrigin: Record<string, number>;
   byRoute: Record<string, number>;
   byTerminalDisposition: Record<string, number>;
+  byCompletionSignal: Record<string, number>;
   firstContentMs: SessionNumberAggregate;
   firstVisiblePartialMs: SessionNumberAggregate;
   durationMs: SessionNumberAggregate;
+  terminalMs: SessionNumberAggregate;
+  lastContentMs: SessionNumberAggregate;
   chunkCount: SessionNumberAggregate;
+  observedContentChars: SessionNumberAggregate;
 }
 
 interface SessionAnswerStabilityAggregate {
@@ -6241,6 +6252,14 @@ export function buildCompactTraceSummary({
         metadataSources,
         "modelGenerationCompletedAt"
       ),
+      terminalAt: readFirstNumberFromMetadata(
+        metadataSources,
+        "modelGenerationTerminalAt"
+      ),
+      lastContentAt: readFirstNumberFromMetadata(
+        metadataSources,
+        "modelGenerationLastContentAt"
+      ),
       firstContentMs: readFirstNumberFromMetadata(
         metadataSources,
         "modelGenerationFirstContentMs"
@@ -6253,9 +6272,29 @@ export function buildCompactTraceSummary({
         metadataSources,
         "modelGenerationDurationMs"
       ),
+      terminalMs: readFirstNumberFromMetadata(
+        metadataSources,
+        "modelGenerationTerminalMs"
+      ),
+      lastContentMs: readFirstNumberFromMetadata(
+        metadataSources,
+        "modelGenerationLastContentMs"
+      ),
       chunkCount: readFirstNumberFromMetadata(
         metadataSources,
         "modelGenerationChunkCount"
+      ),
+      observedContentChars: readFirstNumberFromMetadata(
+        metadataSources,
+        "modelGenerationObservedContentChars"
+      ),
+      observedContentHash: readFirstString(
+        metadataSources,
+        "modelGenerationObservedContentHash"
+      ),
+      completionSignal: readFirstString(
+        metadataSources,
+        "modelGenerationCompletionSignal"
       ),
       terminalDisposition: readFirstString(
         metadataSources,
@@ -7648,6 +7687,9 @@ function aggregateModelGeneration(
     byTerminalDisposition: countModelGenerationDimension(
       generations.map((generation) => generation.terminalDisposition)
     ),
+    byCompletionSignal: countModelGenerationDimension(
+      generations.map((generation) => generation.completionSignal)
+    ),
     firstContentMs: aggregateNumbers(
       generations.map((generation) => generation.firstContentMs)
     ),
@@ -7657,8 +7699,17 @@ function aggregateModelGeneration(
     durationMs: aggregateNumbers(
       generations.map((generation) => generation.durationMs)
     ),
+    terminalMs: aggregateNumbers(
+      generations.map((generation) => generation.terminalMs)
+    ),
+    lastContentMs: aggregateNumbers(
+      generations.map((generation) => generation.lastContentMs)
+    ),
     chunkCount: aggregateNumbers(
       generations.map((generation) => generation.chunkCount)
+    ),
+    observedContentChars: aggregateNumbers(
+      generations.map((generation) => generation.observedContentChars)
     ),
   };
 }

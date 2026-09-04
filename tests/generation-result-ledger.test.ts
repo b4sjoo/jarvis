@@ -82,8 +82,12 @@ function outcome(
     providerId: "provider-1",
     startedAt: 100,
     firstContentAt: 120,
+    lastContentAt: 130,
     finishedAt: 140,
     chunkCount: 2,
+    observedContentChars: 44,
+    observedContentHash: "abc12345",
+    completionSignal: "openai-done",
     text: "model text must not be copied to the ledger",
     ...overrides,
   };
@@ -126,6 +130,11 @@ test("stores bounded safe generation attempts without model text", () => {
   assert.ok(stored);
   assert.equal(stored.providerAttempts.length, 1);
   assert.equal(stored.terminalOutcome?.status, "success");
+  assert.equal(stored.providerAttempts[0]?.chunkCount, 2);
+  assert.equal(stored.providerAttempts[0]?.lastContentAt, 130);
+  assert.equal(stored.providerAttempts[0]?.observedContentChars, 44);
+  assert.equal(stored.providerAttempts[0]?.observedContentHash, "abc12345");
+  assert.equal(stored.providerAttempts[0]?.completionSignal, "openai-done");
   assert.equal("text" in stored.providerAttempts[0], false);
   assert.doesNotMatch(
     JSON.stringify(formatGenerationResultLedgerForTrace(stored)),

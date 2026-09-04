@@ -141,7 +141,11 @@ async function* fetchAIResponseAttemptEvents(
 
     // Check if already aborted
     if (requestSignal.signal?.aborted) {
-      yield terminal({ status: "aborted", retryable: false });
+      yield terminal({
+        status: "aborted",
+        retryable: false,
+        completionSignal: "request-abort",
+      });
       return;
     }
 
@@ -260,10 +264,15 @@ async function* fetchAIResponseAttemptEvents(
           yield terminal({
             status: "timed-out",
             retryable: true,
+            completionSignal: "request-timeout",
             safeErrorSummary: `AI request timed out after ${requestOptions?.timeoutMs}ms.`,
           });
         } else {
-          yield terminal({ status: "aborted", retryable: false });
+          yield terminal({
+            status: "aborted",
+            retryable: false,
+            completionSignal: "request-abort",
+          });
         }
         return;
       }
@@ -271,6 +280,7 @@ async function* fetchAIResponseAttemptEvents(
         status: "failed",
         failureClass: "transport",
         retryable: true,
+        completionSignal: "request-failure",
         safeErrorSummary: `Network error during API request: ${
           fetchError instanceof Error ? fetchError.message : "Unknown error"
         }`,
@@ -289,6 +299,7 @@ async function* fetchAIResponseAttemptEvents(
         failureClass,
         retryable:
           failureClass === "rate-limit" || response.status >= 500,
+        completionSignal: "request-failure",
         statusCode: response.status,
         safeErrorSummary: `API request failed: ${response.status} ${response.statusText}${
           errorText ? ` - ${boundAIResponseErrorText(errorText)}` : ""
@@ -306,6 +317,7 @@ async function* fetchAIResponseAttemptEvents(
           status: "failed",
           failureClass: "provider-response-parse",
           retryable: false,
+          completionSignal: "request-failure",
           safeErrorSummary: `Failed to parse non-streaming response: ${
             parseError instanceof Error ? parseError.message : "Unknown error"
           }`,
@@ -320,9 +332,17 @@ async function* fetchAIResponseAttemptEvents(
         typeof candidateContent === "string" ? candidateContent : "";
       if (content) {
         yield eventBuilder.content(content);
-        yield terminal({ status: "success", retryable: false });
+        yield terminal({
+          status: "success",
+          retryable: false,
+          completionSignal: "non-streaming-response",
+        });
       } else {
-        yield terminal({ status: "empty", retryable: false });
+        yield terminal({
+          status: "empty",
+          retryable: false,
+          completionSignal: "non-streaming-response",
+        });
       }
       return;
     }
@@ -332,17 +352,26 @@ async function* fetchAIResponseAttemptEvents(
         status: "failed",
         failureClass: "stream-unavailable",
         retryable: false,
+        completionSignal: "request-failure",
         safeErrorSummary: "Streaming not supported or response body missing",
       });
       return;
     }
 
+    let streamCompletionSignal:
+      | "stream-eof"
+      | "openai-done"
+      | "anthropic-message-stop"
+      | undefined;
     try {
       for await (const streamEvent of decodeServerSentEventStream({
         body: response.body,
         signal: requestSignal.signal,
       })) {
-        if (streamEvent.type !== "data") continue;
+        if (streamEvent.type === "complete") {
+          streamCompletionSignal = streamEvent.signal;
+          continue;
+        }
         try {
           const parsed = JSON.parse(streamEvent.data);
           const delta = getStreamingContent(
@@ -363,10 +392,15 @@ async function* fetchAIResponseAttemptEvents(
           yield terminal({
             status: "timed-out",
             retryable: true,
+            completionSignal: "request-timeout",
             safeErrorSummary: `AI request timed out after ${requestOptions?.timeoutMs}ms.`,
           });
         } else {
-          yield terminal({ status: "aborted", retryable: false });
+          yield terminal({
+            status: "aborted",
+            retryable: false,
+            completionSignal: "request-abort",
+          });
         }
         return;
       }
@@ -374,6 +408,7 @@ async function* fetchAIResponseAttemptEvents(
         status: "failed",
         failureClass: "stream-read",
         retryable: true,
+        completionSignal: "request-failure",
         safeErrorSummary: `Error reading stream: ${
           readError instanceof Error ? readError.message : "Unknown error"
         }`,
@@ -382,14 +417,23 @@ async function* fetchAIResponseAttemptEvents(
     }
     yield terminal(
       eventBuilder.hasContent
-        ? { status: "success", retryable: false }
-        : { status: "empty", retryable: false }
+        ? {
+            status: "success",
+            retryable: false,
+            completionSignal: streamCompletionSignal ?? "stream-eof",
+          }
+        : {
+            status: "empty",
+            retryable: false,
+            completionSignal: streamCompletionSignal ?? "stream-eof",
+          }
     );
   } catch (error) {
     yield terminal({
       status: "failed",
       failureClass: "configuration",
       retryable: false,
+      completionSignal: "request-failure",
       safeErrorSummary:
         error instanceof Error ? error.message : "Unknown error",
     });

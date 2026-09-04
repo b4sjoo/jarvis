@@ -60,6 +60,12 @@ export function formatRuntimeInferenceProviderOutcomeForTrace(
     [`${prefix}ProviderOutcomeFinal`]: outcome?.final,
     [`${prefix}ProviderAttemptDisposition`]: outcome?.disposition,
     [`${prefix}ProviderRequestId`]: outcome?.requestId,
+    [`${prefix}ProviderLastContentAt`]: outcome?.lastContentAt,
+    [`${prefix}ProviderObservedContentChars`]:
+      outcome?.observedContentChars,
+    [`${prefix}ProviderObservedContentHash`]:
+      outcome?.observedContentHash,
+    [`${prefix}ProviderCompletionSignal`]: outcome?.completionSignal,
   };
 }
 
