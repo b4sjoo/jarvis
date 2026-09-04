@@ -438,6 +438,72 @@ test("uses a Screen observation timestamp as the raw transcript boundary", () =>
   );
 });
 
+test("does not let a retired child Screen prune resumed parent evidence", () => {
+  const activeTask = task();
+  activeTask.child = undefined;
+  activeTask.parent.canonicalQuestionSourceTurnIds = [];
+  activeTask.parent.startTurnId = undefined;
+  activeTask.parent.promptTranscriptStartTurnId = undefined;
+  const current = unit(
+    "lqu-current-after-resume",
+    "turn-current-after-resume",
+    "What would you monitor next?",
+    400
+  );
+  const selection = selectOwnerScopedRelationEvidence({
+    records: [
+      record({
+        recordId: "record-screen-parent",
+        logicalQuestionUnitId: "screen-parent",
+        sourceKind: "screen",
+        sourceTurnIds: [],
+        sourceObservationIds: ["screen-parent"],
+        text: "Design a production RAG system.",
+        updatedAt: 100,
+        settledAt: 101,
+        owner: { kind: "parent-mainline", parentId: "parent-rag" },
+      }),
+      record({
+        recordId: "record-retired-child-screen",
+        logicalQuestionUnitId: "screen-retired-child",
+        sourceKind: "screen",
+        sourceTurnIds: [],
+        sourceObservationIds: ["screen-retired-child"],
+        text: "Implement the retrieval helper.",
+        updatedAt: 300,
+        settledAt: 301,
+        owner: {
+          kind: "active-child",
+          parentId: "parent-rag",
+          childId: "child-retired",
+        },
+      }),
+    ],
+    currentLogicalQuestionUnit: current,
+    activeMeetingTask: activeTask,
+    transcriptTurns: [
+      turn("turn-before-parent-screen", "Old unrelated task.", 20),
+      turn(
+        "turn-parent-after-screen",
+        "The RAG service runs in three regions.",
+        200
+      ),
+      turn(
+        "turn-current-after-resume",
+        "What would you monitor next?",
+        400
+      ),
+    ],
+  });
+  const parentText = selection.recentParentEvidence
+    .map((evidence) => evidence.text)
+    .join(" ");
+
+  assert.doesNotMatch(parentText, /Old unrelated task/i);
+  assert.match(parentText, /three regions/i);
+  assert.doesNotMatch(parentText, /retrieval helper/i);
+});
+
 test("selects LQU-first evidence without acknowledgement or logistics", () => {
   const records: EffectiveQuestionSourceRecord[] = [
     {

@@ -407,12 +407,8 @@ export function selectOwnerScopedRelationEvidence(input: {
     input.transcriptTurns,
     activeMeetingTask.child?.basedOnTurnIds ?? []
   );
-  const observationBoundaryAt = ownedRecords
-    .filter((record) => (record.sourceObservationIds?.length ?? 0) > 0)
-    .reduce(
-      (latest, record) => Math.max(latest, record.updatedAt),
-      Number.NEGATIVE_INFINITY
-    );
+  const parentObservationBoundaryAt = latestObservationBoundary(parentRecords);
+  const branchObservationBoundaryAt = latestObservationBoundary(branchRecords);
   const rawCandidates = input.transcriptTurns.filter((turn, index) => {
     if (
       turn.speaker !== "them" ||
@@ -420,8 +416,7 @@ export function selectOwnerScopedRelationEvidence(input: {
       coveredTurnIds.has(turn.id) ||
       turn.contextFusionStatus === "duplicate-suppressed" ||
       !turn.text.trim() ||
-      (parentBoundaryIndex >= 0 && index < parentBoundaryIndex) ||
-      turn.endedAt < observationBoundaryAt
+      (parentBoundaryIndex >= 0 && index < parentBoundaryIndex)
     ) {
       return false;
     }
@@ -443,16 +438,20 @@ export function selectOwnerScopedRelationEvidence(input: {
     ? rawCandidates.filter(
         (turn) =>
           input.transcriptTurns.findIndex((item) => item.id === turn.id) >=
-          childBoundaryIndex
+            childBoundaryIndex &&
+          turn.endedAt >= branchObservationBoundaryAt
       )
     : [];
   const parentRaw = childId && childBoundaryIndex >= 0
     ? rawCandidates.filter(
         (turn) =>
           input.transcriptTurns.findIndex((item) => item.id === turn.id) <
-          childBoundaryIndex
+            childBoundaryIndex &&
+          turn.endedAt >= parentObservationBoundaryAt
       )
-    : rawCandidates;
+    : rawCandidates.filter(
+        (turn) => turn.endedAt >= parentObservationBoundaryAt
+      );
 
   supplementRawEvidence(recentBranchEvidence, branchRaw, 3, 480, "active-child");
   supplementRawEvidence(recentParentEvidence, parentRaw, 5, 720, "parent-mainline");
@@ -477,6 +476,15 @@ export function selectOwnerScopedRelationEvidence(input: {
       supersededRecordCount: input.records.length - latestRecords.length,
     },
   };
+}
+
+function latestObservationBoundary(records: EffectiveQuestionSourceRecord[]) {
+  return records
+    .filter((record) => (record.sourceObservationIds?.length ?? 0) > 0)
+    .reduce(
+      (latest, record) => Math.max(latest, record.updatedAt),
+      Number.NEGATIVE_INFINITY
+    );
 }
 
 export function selectLatestEffectiveQuestionSourceRecords(
