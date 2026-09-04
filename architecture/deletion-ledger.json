@@ -1,7 +1,7 @@
 {
   "$schema": "./deletion-ledger.schema.json",
   "version": 1,
-  "updatedAt": "2026-08-30",
+  "updatedAt": "2026-09-04",
   "entries": [
     {
       "id": "task-runtime-legacy-active-screen-root",
@@ -271,6 +271,48 @@
         "response-only-ambiguous-relation",
         "latest-response-only-substantive",
         "Response-only handling"
+      ]
+    },
+    {
+      "id": "legacy-combined-intent-live-scheduling",
+      "symbolOrSurface": "Legacy Combined Intent Runtime LLM scheduled from canonical meeting ingress",
+      "verdict": "delete",
+      "ownerTaskId": 168,
+      "replacement": "Independent Response Opportunity, Question Type, and ordered tri-split Relation operations",
+      "persistedDataImpact": "recording",
+      "historicalReader": "Versioned Combined Intent trace and reflection decoders",
+      "proofCommands": [
+        "npm run verify:deletion-ledger",
+        "npm test",
+        "npm run build"
+      ],
+      "deletionGate": "Canonical ingress never invokes the Combined Intent scheduler; historical output remains observation-only.",
+      "rollbackBoundary": "Live scheduling retirement is separate from physical request, parser, and decoder deletion.",
+      "status": "deleted",
+      "forbiddenPatterns": [
+        "scheduleTaxonomyAdjudicationShadow({"
+      ]
+    },
+    {
+      "id": "legacy-direct-relation-live-scheduling",
+      "symbolOrSurface": "Monolithic Direct Relation provider runtime and scheduler",
+      "verdict": "delete",
+      "ownerTaskId": 168,
+      "replacement": "Child Affinity, Parent Affinity, approved matrix, Canonical Relation, and source-topology null hypothesis",
+      "persistedDataImpact": "recording",
+      "historicalReader": "Versioned Direct Relation trace and reflection decoders",
+      "proofCommands": [
+        "npm run verify:deletion-ledger",
+        "npm run verify:architecture",
+        "npm test",
+        "npm run build"
+      ],
+      "deletionGate": "The ordered Relation handle exposes only tri-split operations and never allocates or calls a monolithic Direct Relation provider runtime.",
+      "rollbackBoundary": "Hook scheduler deletion is separate from shared Relation contract and historical decoder cleanup.",
+      "status": "deleted",
+      "forbiddenPatterns": [
+        "taskRelationAdjudicationRuntimeRef",
+        "requestTaskRelationAdjudication({"
       ]
     }
   ]
