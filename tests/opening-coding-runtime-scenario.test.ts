@@ -142,10 +142,11 @@ function resolveResponseCommand(
   const decision = decideResponseOpportunityRelease({
     original: intent,
     result: {
-      schemaVersion: 3,
+      schemaVersion: 4,
       decision: outcome,
       confidence: 1,
-      evidenceSpans: [
+      decisionTarget: "implement an LRU cache",
+      targetSpans: [
         { turnId: "turn-opening-coding", text: "implement an LRU cache" },
       ],
       reason: outcome === "output-request" ? "directive" : "acknowledgement",

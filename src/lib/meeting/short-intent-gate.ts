@@ -6,7 +6,9 @@ import {
   RESPONSE_OPPORTUNITY_MAX_OUTPUT_CHARS,
   RESPONSE_OPPORTUNITY_MAX_OUTPUT_TOKENS,
   RESPONSE_OPPORTUNITY_MAX_CLARIFICATION_CHARS,
+  RESPONSE_OPPORTUNITY_MAX_DECISION_SPANS,
   RESPONSE_OPPORTUNITY_MAX_SOURCE_CHARS,
+  RESPONSE_OPPORTUNITY_MAX_TARGET_SPANS,
   RESPONSE_OPPORTUNITY_PROMPT_VERSION,
   RESPONSE_OPPORTUNITY_SCHEMA_VERSION,
   buildResponseOpportunityRequest,
@@ -16,7 +18,7 @@ import {
   type ResponseOpportunityRequest,
   type ResponseOpportunityContextCapsule,
   type ResponseOpportunitySemanticPayload,
-  type ResponseOpportunitySourceSpan,
+  type ResponseOpportunityDecisionSpan,
 } from "./response-opportunity-contract.js";
 import type { RuntimeInferenceRuntimeJob } from "./runtime-inference-runtime.js";
 import { buildRuntimeInferenceModelInput } from "./runtime-inference.js";
@@ -27,7 +29,9 @@ export {
   RESPONSE_OPPORTUNITY_MAX_OUTPUT_CHARS,
   RESPONSE_OPPORTUNITY_MAX_OUTPUT_TOKENS,
   RESPONSE_OPPORTUNITY_MAX_CLARIFICATION_CHARS,
+  RESPONSE_OPPORTUNITY_MAX_DECISION_SPANS,
   RESPONSE_OPPORTUNITY_MAX_SOURCE_CHARS,
+  RESPONSE_OPPORTUNITY_MAX_TARGET_SPANS,
   RESPONSE_OPPORTUNITY_PROMPT_VERSION,
   RESPONSE_OPPORTUNITY_SCHEMA_VERSION,
   buildResponseOpportunityRequest,
@@ -37,7 +41,7 @@ export {
   type ResponseOpportunityRequest,
   type ResponseOpportunityContextCapsule,
   type ResponseOpportunitySemanticPayload,
-  type ResponseOpportunitySourceSpan,
+  type ResponseOpportunityDecisionSpan,
 };
 export const RESPONSE_OPPORTUNITY_SESSION_START_LIMIT = 120;
 export const RESPONSE_OPPORTUNITY_RELEASE_MIN_CONFIDENCE = 0.85;
@@ -95,10 +99,11 @@ export interface ResponseOpportunityLocalDecision {
 }
 
 export interface LlmResponseOpportunityDecision {
-  schemaVersion: 3;
+  schemaVersion: 4;
   decision: ResponseOpportunityDecision;
   confidence: number;
-  evidenceSpans: ResponseOpportunitySourceSpan[];
+  decisionTarget: string;
+  targetSpans: ResponseOpportunityDecisionSpan[];
   reason: string;
 }
 
@@ -106,13 +111,13 @@ export type ResponseOpportunityParseResult =
   | {
       ok: true;
       value: LlmResponseOpportunityDecision;
-      evidenceSpansValid: true;
+      targetSpansValid: true;
     }
   | {
       ok: false;
       reason: string;
       errorKind: "parse" | "schema" | "evidence" | "provider";
-      evidenceSpansValid: boolean;
+      targetSpansValid: boolean;
     };
 
 export interface ResponseOpportunityLease {
@@ -140,7 +145,8 @@ export interface ResponseOpportunityProposal {
   logicalQuestionRevision: number;
   decision: ResponseOpportunityDecision;
   confidence: number;
-  evidenceSpans: ResponseOpportunitySourceSpan[];
+  decisionTarget: string;
+  targetSpans: ResponseOpportunityDecisionSpan[];
   source: "runtime-llm";
   capability: "settlement-proposal";
   disposition: "success";
@@ -293,9 +299,11 @@ export function buildResponseOpportunityPrompts(
           ]
         : []),
       "Do not classify question type, task relation, parent, evidence mode, context scope, playbook phase, or artifact intent.",
-      "Return only this compact schema: {v:3,d:'o'|'n'|'u',c:number,e:number[],r:string}.",
+      "decisionSpans are mechanically split source candidates. boundedContext is the same bounded source in its original order and is context only.",
+      "Select the exact source-backed decision target before deciding whether it requests output.",
+      "Return only this compact schema: {v:4,d:'o'|'n'|'u',c:number,t:number[],r:string}.",
       "d means o=output-request, n=no-output-request, u=unclear. c is confidence from 0 to 1.",
-      "e contains only zero-based indexes into sourceSpans; never copy source text or turn IDs into the output.",
+      "t contains only zero-based indexes into decisionSpans; never copy source text or turn IDs into the output. Use one to four indexes for o or n. Use an empty array for u when no target is supported.",
       "r must be exactly one of: ask,directive,correction,constraint,phase-control,acknowledgement,greeting,closing,logistics,answer-to-candidate,bounded-source-insufficient.",
     ].join(" ");
   return buildRuntimeInferenceModelInput({
@@ -313,7 +321,7 @@ export function parseResponseOpportunityOutput(
   });
   if (!parsed.ok) return parseFailure(parsed.reason, parsed.errorKind);
   const candidate = parsed.value;
-  const allowedKeys = new Set(["v", "d", "c", "e", "r"]);
+  const allowedKeys = new Set(["v", "d", "c", "t", "r"]);
   if (Object.keys(candidate).some((key) => !allowedKeys.has(key))) {
     return parseFailure("non-opportunity-field-present", "schema");
   }
@@ -342,26 +350,26 @@ export function parseResponseOpportunityOutput(
     return parseFailure("invalid-reason", "schema");
   }
   if (
-    !Array.isArray(candidate.e) ||
-    candidate.e.length === 0 ||
-    candidate.e.length > request.sourceSpans.length
+    !Array.isArray(candidate.t) ||
+    candidate.t.length > RESPONSE_OPPORTUNITY_MAX_TARGET_SPANS ||
+    (candidate.d !== "u" && candidate.t.length === 0)
   ) {
-    return parseFailure("invalid-evidence-spans", "schema");
+    return parseFailure("invalid-decision-target", "schema");
   }
-  const evidenceIndexes = new Set<number>();
-  const evidenceSpans: ResponseOpportunitySourceSpan[] = [];
-  for (const value of candidate.e) {
+  const targetIndexes = new Set<number>();
+  const targetSpans: ResponseOpportunityDecisionSpan[] = [];
+  for (const value of candidate.t) {
     if (
       typeof value !== "number" ||
       !Number.isInteger(value) ||
       value < 0 ||
-      value >= request.sourceSpans.length ||
-      evidenceIndexes.has(value)
+      value >= request.decisionSpans.length ||
+      targetIndexes.has(value)
     ) {
-      return parseFailure("invalid-evidence-index", "evidence");
+      return parseFailure("invalid-target-index", "evidence");
     }
-    evidenceIndexes.add(value);
-    evidenceSpans.push({ ...request.sourceSpans[value] });
+    targetIndexes.add(value);
+    targetSpans.push({ ...request.decisionSpans[value] });
   }
   const decision =
     candidate.d === "o"
@@ -379,16 +387,25 @@ export function parseResponseOpportunityOutput(
   if (!reasonMatchesDecision) {
     return parseFailure("decision-reason-mismatch", "schema");
   }
+  const decisionTarget = targetSpans
+    .map((span) => span.text.trim())
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+  if (decision !== "unclear" && !decisionTarget) {
+    return parseFailure("empty-decision-target", "evidence");
+  }
   return {
     ok: true,
     value: {
       schemaVersion: RESPONSE_OPPORTUNITY_SCHEMA_VERSION,
       decision,
       confidence: candidate.c,
-      evidenceSpans,
+      decisionTarget,
+      targetSpans,
       reason: candidate.r,
     },
-    evidenceSpansValid: true,
+    targetSpansValid: true,
   };
 }
 
@@ -487,12 +504,33 @@ export function createResponseOpportunityProposal(input: {
       input.request.logicalQuestionUnitRevision,
     decision: input.result.decision,
     confidence: input.result.confidence,
-    evidenceSpans: input.result.evidenceSpans.map((span) => ({ ...span })),
+    decisionTarget: input.result.decisionTarget,
+    targetSpans: input.result.targetSpans.map((span) => ({ ...span })),
     source: "runtime-llm",
     capability: "settlement-proposal",
     disposition: "success",
     createdAt,
     expiresAt: createdAt + RESPONSE_OPPORTUNITY_PROPOSAL_TTL_MS,
+  };
+}
+
+export function applyResponseOpportunityDecisionTarget(input: {
+  logicalQuestionUnit: LogicalQuestionUnit;
+  request: ResponseOpportunityRequest;
+  result: LlmResponseOpportunityDecision;
+}): LogicalQuestionUnit {
+  const decisionTarget = input.result.decisionTarget.trim();
+  if (!decisionTarget) return input.logicalQuestionUnit;
+  return {
+    ...input.logicalQuestionUnit,
+    responseOpportunityTarget: {
+      text: decisionTarget,
+      sourceHash: input.request.sourceHash,
+      source: "runtime-llm",
+      sourceTurnIds: Array.from(
+        new Set(input.result.targetSpans.map((span) => span.turnId))
+      ),
+    },
   };
 }
 
@@ -535,9 +573,9 @@ export function decideResponseOpportunityRelease(input: {
       evidence: [
         ...input.original.evidence,
         "runtime-response-opportunity",
-        ...input.result.evidenceSpans.map(
+        ...input.result.targetSpans.map(
           (span) =>
-            `runtime-evidence:${span.turnId}:${span.text}`
+            `runtime-decision-target:${span.turnId}:${span.text}`
         ),
       ],
       action: "answer-refresh",
@@ -597,8 +635,10 @@ export function formatResponseOpportunityProposalForTrace(
         responseOpportunityProposalSnapshotId: proposal.snapshotId,
         responseOpportunityProposalDecision: proposal.decision,
         responseOpportunityProposalConfidence: proposal.confidence,
-        responseOpportunityProposalEvidenceSpans:
-          proposal.evidenceSpans,
+        responseOpportunityProposalDecisionTarget:
+          proposal.decisionTarget,
+        responseOpportunityProposalTargetSpans:
+          proposal.targetSpans,
         responseOpportunityProposalSource: proposal.source,
         responseOpportunityProposalCapability: proposal.capability,
         responseOpportunityProposalDisposition: proposal.disposition,
@@ -622,6 +662,6 @@ function parseFailure(
     ok: false,
     reason,
     errorKind,
-    evidenceSpansValid: false,
+    targetSpansValid: false,
   };
 }

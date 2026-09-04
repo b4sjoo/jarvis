@@ -323,10 +323,9 @@ export function decideRuntimeTypeAdjudicationFirstParentAdmission(input: {
   }
   const topic = getLogicalQuestionSemanticEvidenceText(unit).trim();
   const boundedSubstantiveAsk = Boolean(
-    topic &&
+      topic &&
       !unit.truncated &&
-      responseOpportunityRequest.sourceSpans.length > 0 &&
-      responseOpportunityRequest.sourceSpans.length <= 2 &&
+      responseOpportunityRequest.decisionSpans.length > 0 &&
       (unit.primaryAskProjection?.primaryAskSpans.length ?? 0) <= 2
   );
   if (!boundedSubstantiveAsk) {

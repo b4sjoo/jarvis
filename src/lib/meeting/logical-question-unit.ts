@@ -56,6 +56,12 @@ export interface LogicalQuestionUnit {
   sectionHint?: PendingInterviewSectionHint;
   taskBoundaryEvidence?: PendingInterviewTaskBoundary;
   primaryAskProjection?: PrimaryAskProjection;
+  responseOpportunityTarget?: {
+    text: string;
+    sourceHash: string;
+    source: "runtime-llm";
+    sourceTurnIds: string[];
+  };
   termCorrectionOverlays?: ActiveQuestionTermCorrection[];
 }
 
@@ -261,6 +267,14 @@ export function formatLogicalQuestionUnitForTrace(
     explicitTaskBoundaryDisposition:
       unit.taskBoundaryEvidence?.disposition,
     ...formatPrimaryAskProjectionForTrace(unit.primaryAskProjection),
+    responseOpportunityDecisionTarget:
+      unit.responseOpportunityTarget?.text,
+    responseOpportunityDecisionTargetSource:
+      unit.responseOpportunityTarget?.source,
+    responseOpportunityDecisionTargetSourceHash:
+      unit.responseOpportunityTarget?.sourceHash,
+    responseOpportunityDecisionTargetSourceTurnIds:
+      unit.responseOpportunityTarget?.sourceTurnIds,
     primaryAskAnswerFocusText: answerFocusText,
     primaryAskSemanticEvidenceText: semanticEvidenceText,
     primaryAskAnswerFocusChars: answerFocusText.length,
@@ -272,6 +286,9 @@ export function getLogicalQuestionAnswerFocusText(
   unit: LogicalQuestionUnit | undefined
 ) {
   if (!unit) return "";
+  if (unit.responseOpportunityTarget?.text.trim()) {
+    return unit.responseOpportunityTarget.text.trim();
+  }
   if (unit.termCorrectionOverlays?.length) {
     return unit.normalizedText.trim();
   }

@@ -109,6 +109,7 @@ export function applyActiveQuestionTermCorrection(
       revision: correctedRevision,
       normalizedText,
       primaryAskProjection,
+      responseOpportunityTarget: undefined,
       updatedAt: now,
       compositionReasons: Array.from(
         new Set([

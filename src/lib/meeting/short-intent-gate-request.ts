@@ -78,7 +78,7 @@ export async function requestResponseOpportunity(input: {
           ok: false,
           reason: providerDisposition,
           errorKind: "provider",
-          evidenceSpansValid: false,
+          targetSpansValid: false,
         } satisfies ResponseOpportunityParseResult);
   return {
     ...providerResponse,

@@ -547,6 +547,7 @@ import {
   ResponseOpportunityRequestResult,
   ResponseOpportunitySessionBudget,
   RESPONSE_OPPORTUNITY_MAX_OUTPUT_CHARS,
+  applyResponseOpportunityDecisionTarget,
   authorizeResponseOpportunityLease,
   buildResponseOpportunityPrompts,
   buildResponseOpportunityRequest,
@@ -17207,6 +17208,10 @@ export function useMeetingAssistant() {
         responseOpportunityDisposition: "eligible",
         responseOpportunitySourceTurnId: turn.id,
         responseOpportunitySourceHash: request.sourceHash,
+        responseOpportunityDecisionSpanCount:
+          request.decisionSpans.length,
+        responseOpportunityBoundedContextChars:
+          request.boundedContext.length,
         responseOpportunityContextCapsulePresent: Boolean(
           request.contextCapsule
         ),
@@ -17479,6 +17484,47 @@ export function useMeetingAssistant() {
           const result = settlement.result;
           const parsed = result?.parsed;
           const parsedValue = parsed?.ok ? parsed.value : undefined;
+          const targetedLogicalQuestionUnit =
+            authorization.authorized &&
+            parsedValue &&
+            parsedValue.decision !== "unclear"
+              ? applyResponseOpportunityDecisionTarget({
+                  logicalQuestionUnit: latestLogicalQuestionUnit,
+                  request: settlement.job.request,
+                  result: parsedValue,
+                })
+              : latestLogicalQuestionUnit;
+          if (
+            targetedLogicalQuestionUnit.responseOpportunityTarget &&
+            latestForceAdviseTargetRef.current?.logicalQuestionUnit.id ===
+              targetedLogicalQuestionUnit.id &&
+            latestForceAdviseTargetRef.current.logicalQuestionUnit.revision ===
+              targetedLogicalQuestionUnit.revision
+          ) {
+            const currentTarget = latestForceAdviseTargetRef.current;
+            const presentation = {
+              ...currentTarget.presentation,
+              text: targetedLogicalQuestionUnit.responseOpportunityTarget.text,
+              updatedAt: Date.now(),
+            };
+            latestForceAdviseTargetRef.current = {
+              ...currentTarget,
+              presentation,
+              logicalQuestionUnit: targetedLogicalQuestionUnit,
+              logicalQuestionLease: createLogicalQuestionUnitLease(
+                targetedLogicalQuestionUnit
+              ),
+            };
+            setState((previous) =>
+              previous.latestInterviewerTurnCandidate?.targetId ===
+              presentation.targetId
+                ? {
+                    ...previous,
+                    latestInterviewerTurnCandidate: presentation,
+                  }
+                : previous
+            );
+          }
           const providerDisposition =
             result?.providerDisposition ??
             (settlement.disposition === "error"
@@ -17596,8 +17642,16 @@ export function useMeetingAssistant() {
             responseOpportunityParseValid: parsed?.ok ?? false,
             responseOpportunityDecision: parsedValue?.decision,
             responseOpportunityConfidence: parsedValue?.confidence,
+            responseOpportunityDecisionTarget:
+              parsedValue?.decisionTarget,
+            responseOpportunityTargetSpans:
+              parsedValue?.targetSpans,
+            responseOpportunityTargetSpansValid:
+              parsed?.targetSpansValid ?? false,
+            // Decode-only compatibility until Task 168 removes the old
+            // evidence-spans trace vocabulary.
             responseOpportunityEvidenceSpans:
-              parsedValue?.evidenceSpans,
+              parsedValue?.targetSpans,
             responseOpportunityDecisionApplied: decisionApplied,
             responseOpportunityLocalAuthorityPreserved:
               localAuthorityPreserved,
@@ -17644,7 +17698,7 @@ export function useMeetingAssistant() {
                   ? "ignore"
                   : "append-context",
             shortIntentGateConfidence: parsedValue?.confidence,
-            shortIntentGateEvidenceSpans: parsedValue?.evidenceSpans,
+            shortIntentGateEvidenceSpans: parsedValue?.targetSpans,
             shortIntentGateDecisionApplied: decisionApplied,
             shortIntentGateAppliedAction: decisionApplied
               ? "answer"
@@ -17716,7 +17770,7 @@ export function useMeetingAssistant() {
               validAppliedDecision
                 ? "runtime-response-opportunity"
                 : "local-output-authority-preserved",
-              latestLogicalQuestionUnit
+              targetedLogicalQuestionUnit
             );
             return;
           }
@@ -24207,7 +24261,11 @@ export function useMeetingAssistant() {
         });
       }
 
-      if (turnGate.action === "ignore") {
+      if (
+        turnGate.action === "ignore" &&
+        responseOpportunityLocalDecision.disposition ===
+          "deterministic-no-output"
+      ) {
         if (logicalQuestionUnit) {
           scheduleSemanticTaxonomyShadow({
             turn,

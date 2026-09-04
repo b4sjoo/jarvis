@@ -71,6 +71,10 @@ test("joins every reviewed response opportunity before canonical publication and
     /runtimeIntentSettlementPending:\s*responseOpportunityLocalDecision\.runtimeReviewRequired/
   );
   assert.match(
+    ingress,
+    /turnGate\.action === "ignore" &&\s*responseOpportunityLocalDecision\.disposition ===\s*"deterministic-no-output"/
+  );
+  assert.match(
     residualBranch,
     /runtime-required"\s*\? "answer-refresh"\s*: taxonomyTurnGateAction/
   );

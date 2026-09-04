@@ -85,15 +85,16 @@ test("keeps envelope fields out of every runtime LLM prompt", () => {
     question: questionProjection,
   };
   const responseOpportunity: ResponseOpportunityRequest = {
-    schemaVersion: 3,
-    promptVersion: "response-opportunity-v3-compact",
+    schemaVersion: 4,
+    promptVersion: "response-opportunity-v4-decision-target",
     logicalQuestionUnitId: "question-current",
     logicalQuestionUnitRevision: 2,
     currentTurnId: "turn-current",
     sourceHash: "source-hash",
-    sourceSpans: [
+    decisionSpans: [
       { turnId: "turn-current", text: "What would you monitor in production?" },
     ],
+    boundedContext: "What would you monitor in production?",
     contextCapsule: {
       pendingClarification: {
         summary: "Should I focus on monitoring?",

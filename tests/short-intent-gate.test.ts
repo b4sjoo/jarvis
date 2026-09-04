@@ -14,12 +14,17 @@ import {
   createResponseOpportunityLease,
   createResponseOpportunityContextCapsule,
   createResponseOpportunityProposal,
+  applyResponseOpportunityDecisionTarget,
   decideResponseOpportunityLocalRoute,
   decideResponseOpportunityRelease,
   parseResponseOpportunityOutput,
   resolveResponseOpportunityExecutionMode,
 } from "../src/lib/meeting/short-intent-gate.js";
-import type { LogicalQuestionUnit } from "../src/lib/meeting/logical-question-unit.js";
+import {
+  getLogicalQuestionAnswerFocusText,
+  getLogicalQuestionSemanticEvidenceText,
+  type LogicalQuestionUnit,
+} from "../src/lib/meeting/logical-question-unit.js";
 
 function logicalQuestionUnit(
   currentText: string,
@@ -186,14 +191,15 @@ test("builds a bounded LQU-only request and preserves the terminal tail", () => 
   const prompts = buildResponseOpportunityPrompts(request);
 
   assert.deepEqual(
-    request.sourceSpans.map((span) => span.turnId),
+    request.decisionSpans.map((span) => span.turnId),
     ["turn-previous", "turn-current"]
   );
-  assert.equal(request.sourceSpans.length, 2);
+  assert.equal(request.decisionSpans.length, 2);
   assert.equal(
-    request.sourceSpans.at(-1)?.text.endsWith(terminalAsk),
+    request.decisionSpans.at(-1)?.text.endsWith(terminalAsk),
     true
   );
+  assert.equal(request.boundedContext.endsWith(terminalAsk), true);
   assert.equal("activeTask" in request, false);
   assert.equal("questionType" in request, false);
   assert.equal("contextTurns" in request, false);
@@ -201,17 +207,56 @@ test("builds a bounded LQU-only request and preserves the terminal tail", () => 
   assert.match(prompts.systemPrompt, /one thing only/i);
   assert.match(prompts.systemPrompt, /Do not classify question type/i);
   const modelInput = JSON.parse(prompts.userMessage) as {
-    sourceSpans: Array<{ index: number; text: string }>;
+    decisionSpans: Array<{ index: number; text: string }>;
+    boundedContext: string;
   };
   assert.deepEqual(
-    modelInput.sourceSpans.map((span) => span.index),
+    modelInput.decisionSpans.map((span) => span.index),
     [0, 1]
   );
-  assert.equal(modelInput.sourceSpans[0].text, "Earlier bounded source");
+  assert.equal(modelInput.decisionSpans[0].text, "Earlier bounded source");
+  assert.equal(modelInput.boundedContext, request.boundedContext);
   assert.equal("logicalQuestionUnitId" in modelInput, false);
   assert.equal("sourceHash" in modelInput, false);
-  assert.equal("turnId" in modelInput.sourceSpans[0], false);
+  assert.equal("turnId" in modelInput.decisionSpans[0], false);
   assert.equal("manualForceAdvise" in modelInput, false);
+});
+
+test("uses a source-backed terminal target without discarding bounded context", () => {
+  const logicalUnit = logicalQuestionUnit(
+    "I have been with the team for three years. We build the storage control plane. How about you?"
+  );
+  const request = buildResponseOpportunityRequest({
+    logicalQuestionUnit: logicalUnit,
+  });
+  const targetIndex = request.decisionSpans.findIndex(
+    (span) => span.text === "How about you?"
+  );
+  assert.ok(targetIndex >= 0);
+
+  const parsed = parseResponseOpportunityOutput(
+    JSON.stringify({
+      v: 4,
+      d: "o",
+      c: 0.97,
+      t: [targetIndex],
+      r: "ask",
+    }),
+    request
+  );
+  assert.equal(parsed.ok, true);
+  if (!parsed.ok) return;
+
+  const targeted = applyResponseOpportunityDecisionTarget({
+    logicalQuestionUnit: logicalUnit,
+    request,
+    result: parsed.value,
+  });
+  assert.equal(getLogicalQuestionAnswerFocusText(targeted), "How about you?");
+  assert.match(
+    getLogicalQuestionSemanticEvidenceText(targeted),
+    /storage control plane/
+  );
 });
 
 test("adds a bounded pending-clarification capsule without widening output authority", () => {
@@ -293,10 +338,10 @@ test("strictly parses exact turn-scoped evidence and rejects extra authority", (
     logicalQuestionUnit: logicalQuestionUnit("Kubernetes"),
   });
   const validOutput = {
-    v: 3,
+    v: 4,
     d: "o",
     c: 0.97,
-    e: [0],
+    t: [0],
     r: "ask",
   };
   assert.equal(
@@ -316,7 +361,7 @@ test("strictly parses exact turn-scoped evidence and rejects extra authority", (
   const inventedEvidence = parseResponseOpportunityOutput(
     JSON.stringify({
       ...validOutput,
-      e: [1],
+      t: [1],
     }),
     request
   );
@@ -334,10 +379,10 @@ test("rejects contradictory response-opportunity decisions and reasons", () => {
   });
   const contradictory = parseResponseOpportunityOutput(
     JSON.stringify({
-      v: 3,
+      v: 4,
       d: "n",
       c: 1,
-      e: [0],
+      t: [0],
       r: "ask",
     }),
     request
@@ -355,7 +400,12 @@ test("rejects contradictory response-opportunity decisions and reasons", () => {
   ] as const) {
     assert.equal(
       parseResponseOpportunityOutput(
-        JSON.stringify({ v: 3, c: 0.95, e: [0], ...valid }),
+        JSON.stringify({
+          v: 4,
+          c: 0.95,
+          t: valid.d === "u" ? [] : [0],
+          ...valid,
+        }),
         request
       ).ok,
       true
@@ -379,16 +429,17 @@ test("accepts fenced compact provider output and rejects truncation", () => {
     logicalQuestionUnit: logicalQuestionUnit("Explain HNSW."),
   });
   const fenced = parseResponseOpportunityOutput(
-    '```json\n{"v":3,"d":"o","c":0.96,"e":[0],"r":"ask"}\n```',
+    '```json\n{"v":4,"d":"o","c":0.96,"t":[0],"r":"ask"}\n```',
     request
   );
   assert.equal(fenced.ok, true);
   if (fenced.ok) {
-    assert.deepEqual(fenced.value.evidenceSpans, request.sourceSpans);
+    assert.deepEqual(fenced.value.targetSpans, request.decisionSpans);
+    assert.equal(fenced.value.decisionTarget, "Explain HNSW.");
   }
 
   const truncated = parseResponseOpportunityOutput(
-    '{"v":3,"d":"o","c":0.96,"e":[0],"r":"ask"',
+    '{"v":4,"d":"o","c":0.96,"t":[0],"r":"ask"',
     request
   );
   assert.equal(truncated.ok, false);
@@ -449,9 +500,10 @@ test("releases only high-confidence output requests", () => {
     hasActiveTask: false,
   });
   const base = {
-    schemaVersion: 3 as const,
+    schemaVersion: 4 as const,
     confidence: 0.93,
-    evidenceSpans: [{ turnId: "turn-current", text: "Kubernetes" }],
+    decisionTarget: "Kubernetes",
+    targetSpans: [{ turnId: "turn-current", text: "Kubernetes" }],
     reason: "output requested",
   };
   const output = decideResponseOpportunityRelease({
@@ -492,10 +544,11 @@ test("creates a bounded proposal and enforces per-session dedupe", () => {
     operationId: "operation-a",
     request,
     result: {
-      schemaVersion: 3,
+      schemaVersion: 4,
       decision: "output-request",
       confidence: 0.95,
-      evidenceSpans: [
+      decisionTarget: "storage choice",
+      targetSpans: [
         { turnId: "turn-current", text: "storage choice" },
       ],
       reason: "The interviewer requests an explanation.",

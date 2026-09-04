@@ -149,6 +149,7 @@ export function reverseActiveQuestionTermCorrection(input: {
       ),
       boundaryReason: "manual-term-correction-reversal",
       primaryAskProjection,
+      responseOpportunityTarget: undefined,
       termCorrectionOverlays: remainingOverlays.length
         ? remainingOverlays.map((overlay) => ({ ...overlay }))
         : undefined,

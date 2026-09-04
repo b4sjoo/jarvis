@@ -636,6 +636,14 @@ function cloneLogicalQuestionUnit(unit: LogicalQuestionUnit) {
             ),
         }
       : undefined,
+    responseOpportunityTarget: unit.responseOpportunityTarget
+      ? {
+          ...unit.responseOpportunityTarget,
+          sourceTurnIds: [
+            ...unit.responseOpportunityTarget.sourceTurnIds,
+          ],
+        }
+      : undefined,
   };
 }
 

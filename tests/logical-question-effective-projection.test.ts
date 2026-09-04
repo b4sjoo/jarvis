@@ -42,8 +42,8 @@ test("uses the corrected projection for taxonomy and response opportunity", () =
 
   assert.match(taxonomy.text, /RAG/);
   assert.doesNotMatch(taxonomy.text, /ride-sharing/i);
-  assert.match(response.sourceSpans[0]?.text ?? "", /RAG/);
-  assert.doesNotMatch(response.sourceSpans[0]?.text ?? "", /ride-sharing/i);
+  assert.match(response.decisionSpans[0]?.text ?? "", /RAG/);
+  assert.doesNotMatch(response.decisionSpans[0]?.text ?? "", /ride-sharing/i);
 });
 
 test("replaces covered Them turns only in the model transcript", () => {
