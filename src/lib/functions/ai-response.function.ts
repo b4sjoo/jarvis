@@ -24,6 +24,7 @@ import {
   type AIResponseExecutionIdentityInput,
   type AIResponseRetryPolicy,
 } from "./ai-response-events.js";
+import { decodeServerSentEventStream } from "./server-sent-event-stream.js";
 
 export type {
   AIResponseEvent,
@@ -336,14 +337,28 @@ async function* fetchAIResponseAttemptEvents(
       return;
     }
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-
-    while (true) {
-      // Check if aborted
-      if (requestSignal.signal?.aborted) {
-        reader.cancel();
+    try {
+      for await (const streamEvent of decodeServerSentEventStream({
+        body: response.body,
+        signal: requestSignal.signal,
+      })) {
+        if (streamEvent.type !== "data") continue;
+        try {
+          const parsed = JSON.parse(streamEvent.data);
+          const delta = getStreamingContent(
+            parsed,
+            provider?.responseContentPath || ""
+          );
+          if (delta) yield eventBuilder.content(delta);
+        } catch {
+          // Ignore malformed provider data events without weakening terminal handling.
+        }
+      }
+    } catch (readError) {
+      if (
+        requestSignal.signal?.aborted ||
+        (readError instanceof Error && readError.name === "AbortError")
+      ) {
         if (requestSignal.timedOut()) {
           yield terminal({
             status: "timed-out",
@@ -355,77 +370,15 @@ async function* fetchAIResponseAttemptEvents(
         }
         return;
       }
-
-      let readResult;
-      try {
-        readResult = await reader.read();
-      } catch (readError) {
-        // Check if aborted
-        if (
-          requestSignal.signal?.aborted ||
-          (readError instanceof Error && readError.name === "AbortError")
-        ) {
-          if (requestSignal.timedOut()) {
-            yield terminal({
-              status: "timed-out",
-              retryable: true,
-              safeErrorSummary: `AI request timed out after ${requestOptions?.timeoutMs}ms.`,
-            });
-          } else {
-            yield terminal({ status: "aborted", retryable: false });
-          }
-          return;
-        }
-        yield terminal({
-          status: "failed",
-          failureClass: "stream-read",
-          retryable: true,
-          safeErrorSummary: `Error reading stream: ${
-            readError instanceof Error ? readError.message : "Unknown error"
-          }`,
-        });
-        return;
-      }
-      const { done, value } = readResult;
-      if (done) break;
-
-      // Check if aborted before processing
-      if (requestSignal.signal?.aborted) {
-        reader.cancel();
-        if (requestSignal.timedOut()) {
-          yield terminal({
-            status: "timed-out",
-            retryable: true,
-            safeErrorSummary: `AI request timed out after ${requestOptions?.timeoutMs}ms.`,
-          });
-        } else {
-          yield terminal({ status: "aborted", retryable: false });
-        }
-        return;
-      }
-
-      buffer += decoder.decode(value, { stream: true });
-
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-      for (const line of lines) {
-        if (line.startsWith("data:")) {
-          const trimmed = line.substring(5).trim();
-          if (!trimmed || trimmed === "[DONE]") continue;
-          try {
-            const parsed = JSON.parse(trimmed);
-            const delta = getStreamingContent(
-              parsed,
-              provider?.responseContentPath || ""
-            );
-            if (delta) {
-              yield eventBuilder.content(delta);
-            }
-          } catch (e) {
-            // Ignore parsing errors for partial JSON chunks
-          }
-        }
-      }
+      yield terminal({
+        status: "failed",
+        failureClass: "stream-read",
+        retryable: true,
+        safeErrorSummary: `Error reading stream: ${
+          readError instanceof Error ? readError.message : "Unknown error"
+        }`,
+      });
+      return;
     }
     yield terminal(
       eventBuilder.hasContent
