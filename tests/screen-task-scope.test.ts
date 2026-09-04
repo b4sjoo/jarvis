@@ -739,6 +739,14 @@ test("wires only the task-bound visual recovery fact into Screen binding", () =>
   );
   assert.doesNotMatch(capture, /unresolvedManualCorrectionTarget/);
   assert.doesNotMatch(capture, /explicitRecoveryTarget:/);
+  assert.match(
+    capture,
+    /screenVoiceQuestionBinding\.disposition === "bind-voice"[\s\S]{0,300}applyBoundVisualRecovery\(/
+  );
+  assert.match(
+    capture,
+    /effectiveDecision === "bind-voice"[\s\S]{0,300}applyBoundVisualRecovery\(/
+  );
 });
 
 test("keeps project and correction continuity matches non-authoritative", () => {

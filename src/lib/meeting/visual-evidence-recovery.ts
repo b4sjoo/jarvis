@@ -74,6 +74,13 @@ export type BoundVisualRecoveryRelationDecision =
       ownerBranchId: string;
     };
 
+export interface BoundVisualRecoveryApplicationDecision {
+  applied: boolean;
+  exactVisualEvidenceRecovery: boolean;
+  relation?: "followup-parent" | "child-probe" | "resume-parent";
+  branchRelation: BoundVisualRecoveryRelationDecision;
+}
+
 export interface AwaitingVisualEvidenceRecoveryAuthorization {
   authorized: boolean;
   reason:
@@ -445,6 +452,26 @@ export function resolveBoundVisualRecoveryRelation(input: {
         reason: "bound-parent-preserved",
         ownerBranchId: fact.ownerBranchId,
       };
+}
+
+export function projectBoundVisualRecoveryApplication(input: {
+  fact: AwaitingVisualEvidenceRecoveryFact;
+  topology: VisualRecoveryActiveTopology;
+}): BoundVisualRecoveryApplicationDecision {
+  const branchRelation = resolveBoundVisualRecoveryRelation(input);
+  const applied =
+    branchRelation.authorized ||
+    (input.fact.ownerKind === "current-question" &&
+      input.fact.ownerBranchId ===
+        input.topology.currentLogicalQuestionUnitId);
+  return {
+    applied,
+    exactVisualEvidenceRecovery: applied,
+    relation: branchRelation.authorized
+      ? branchRelation.relation
+      : undefined,
+    branchRelation,
+  };
 }
 
 export function authorizeAwaitingVisualEvidenceRecovery(input: {

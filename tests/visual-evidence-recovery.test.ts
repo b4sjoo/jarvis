@@ -5,6 +5,7 @@ import {
   authorizeVisualRecoveryCommit,
   createAwaitingVisualEvidenceRecoveryFact,
   decideVisualRecoveryPostCommitRebase,
+  projectBoundVisualRecoveryApplication,
   resolveBoundVisualRecoveryRelation,
   resolveSourceLinkageFallback,
   selectVisualRecoveryOpportunity,
@@ -356,6 +357,75 @@ test("prefers the active child opportunity and expires removed owners", () => {
   });
   assert.equal(removed.fact, undefined);
   assert.deepEqual(removed.expiredFactIds, [child.id]);
+});
+
+test("projects the same exact recovery application for every bind-voice entry", () => {
+  const parent = createAwaitingVisualEvidenceRecoveryFact({
+    resolution,
+    sessionId: "session-1",
+    runtimeEpoch: 4,
+    logicalQuestionUnitId: "question-parent-lines",
+    logicalQuestionRevision: 1,
+    answerRevision: 0,
+    visibleAnswerRevision: 2,
+    parentTaskId: "parent-coding",
+    parentRevision: 3,
+    ownerKind: "parent",
+    ownerBranchId: "parent-coding",
+    questionType: "coding",
+    questionText: "Explain lines 35 through 38.",
+    sourceHash: "parent-source",
+    manualCorrectionRevision: 0,
+    createdAt: 100,
+  });
+  assert.ok(parent);
+
+  const application = projectBoundVisualRecoveryApplication({
+    fact: parent,
+    topology: { parentId: "parent-coding" },
+  });
+  assert.equal(application.applied, true);
+  assert.equal(application.exactVisualEvidenceRecovery, true);
+  assert.equal(application.relation, "followup-parent");
+  assert.equal(application.branchRelation.reason, "bound-parent-preserved");
+
+  const currentQuestion = createAwaitingVisualEvidenceRecoveryFact({
+    resolution,
+    sessionId: "session-1",
+    runtimeEpoch: 4,
+    logicalQuestionUnitId: "question-current-lines",
+    logicalQuestionRevision: 1,
+    answerRevision: 0,
+    visibleAnswerRevision: 0,
+    ownerKind: "current-question",
+    ownerBranchId: "question-current-lines",
+    questionType: "coding",
+    questionText: "Explain the visible code.",
+    sourceHash: "current-source",
+    manualCorrectionRevision: 0,
+    createdAt: 100,
+  });
+  assert.ok(currentQuestion);
+  const currentApplication = projectBoundVisualRecoveryApplication({
+    fact: currentQuestion,
+    topology: {
+      currentLogicalQuestionUnitId: "question-current-lines",
+    },
+  });
+  assert.equal(currentApplication.applied, true);
+  assert.equal(currentApplication.exactVisualEvidenceRecovery, true);
+  assert.equal(currentApplication.relation, undefined);
+  assert.equal(
+    currentApplication.branchRelation.reason,
+    "owner-current-question-has-no-durable-relation"
+  );
+  assert.equal(
+    projectBoundVisualRecoveryApplication({
+      fact: currentQuestion,
+      topology: { currentLogicalQuestionUnitId: "question-newer" },
+    }).applied,
+    false
+  );
 });
 
 test("uses Question Type only for the Source Linkage failure fallback", () => {
