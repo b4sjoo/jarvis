@@ -193,7 +193,71 @@ test("closes the behavioral selector over fact anchors and golden queries", () =
   const draft = parseCuratedMemoryDraft(
     {
       path: "behavioral-golden.md",
-      content: `
+      content: behavioralGoldenDraft(),
+    },
+    1
+  );
+  const report = auditCuratedMemoryEvidence({ drafts: [draft], now: 2 });
+
+  assert.equal(report.schemaVersion, 2);
+  assert.equal(report.templateReferenceClosure.length, 6);
+  assert.ok(report.templateReferenceClosure.every((item) => item.complete));
+  assert.equal(report.behavioralGoldenQueries.length, 12);
+  assert.ok(report.behavioralGoldenQueries.every((golden) => golden.correct));
+  assert.equal(
+    report.issues.some(
+      (issue) => issue.code === "behavioral-golden-anchor-unreachable"
+    ),
+    false
+  );
+});
+
+function behavioralGoldenDraft() {
+  const definitions = [
+    {
+      family: "mem_behavioral_family_cost_efficiency",
+      story: "mem_aos_test_account_cleanup",
+      title: "Cost efficiency and operational waste",
+      keywords:
+        "cost savings waste resources inactive cleanup operational launch release blocker validation limit",
+    },
+    {
+      family: "mem_behavioral_family_conflict_influence",
+      story: "mem_agentic_memory_consistency_latency_conflict",
+      title: "Conflict influence and technical judgment",
+      keywords:
+        "conflict disagreement teammate influence decision synchronous consistency asynchronous latency tradeoff",
+    },
+    {
+      family: "mem_behavioral_family_failure_recovery",
+      story: "mem_agentic_memory_json_reliability_recovery",
+      title: "Failure recovery debugging and learning",
+      keywords:
+        "failure mistake error unreliable model output invalid json debugging root cause recovery learned",
+    },
+    {
+      family: "mem_behavioral_family_deadline_delivery",
+      story: "mem_beaglestone_deadline_delivery_story",
+      title: "Deadline prioritization and delivery",
+      keywords:
+        "deadline deliver pressure language quickly coordinate time zones four weeks project",
+    },
+    {
+      family: "mem_behavioral_family_customer_requirements",
+      story: "mem_customer_patch_vfi_story",
+      title: "Customer requirements pushback and maintainability",
+      keywords:
+        "customer unreasonable requirement request pushback customized above beyond maintainable solution long term",
+    },
+    {
+      family: "mem_behavioral_family_trust_people_development",
+      story: "mem_new_hire_pavan_development_story",
+      title: "Trust feedback and people development",
+      keywords:
+        "trust mentor mentoring new hire teammate feedback career develop productive team member",
+    },
+  ];
+  const source = `
 \`\`\`yaml
 sources:
   - id: source_profile
@@ -203,96 +267,44 @@ sources:
     scope: global
     curationStatus: curated
 \`\`\`
-
+`;
+  return [
+    source,
+    ...definitions.flatMap((definition) => [
+      `
 \`\`\`yaml
-- id: mem_behavioral_story_selector
+- id: ${definition.family}
   sourceId: source_profile
   type: answer_template
-  title: Behavioral interview story selector
-  content: Use these story anchors for cost, automation, ambiguity, and customer resource leakage.
+  title: ${definition.title}
+  content: ${definition.keywords}
   scope: global
+  tags: [behavioral-story-family, behavioral]
+  keywords: [${definition.keywords.split(" ").join(", ")}]
   enabled: true
-  injectionMode: always
-  useCases: [behavioral_interview]
+  injectionMode: retrieval
+  useCases: [meeting_assistant, behavioral_interview]
+  interviewFamilies: [behavioral]
   curationStatus: curated
-  evidenceEntryIds: [mem_aos_test_account_cleanup, mem_mlcommons_automated_model_interface, mem_agentic_memory_llm_decisioning, mem_managed_semantic_delete_cleanup]
+  evidenceEntryIds: [${definition.story}]
 \`\`\`
-
+`,
+      `
 \`\`\`yaml
-- id: mem_aos_test_account_cleanup
+- id: ${definition.story}
   sourceId: source_profile
   type: personal_story
-  title: Inactive test cluster cleanup
-  content: Removed more than 400 inactive test resources and saved over 30000 per month.
-  summary: Reduced operational waste and recurring cost.
+  title: ${definition.title} story
+  content: Verified personal story for ${definition.title}.
   scope: global
-  tags: [cost, waste, cleanup]
-  keywords: [inactive test resources, cost savings]
+  tags: [behavioral]
   enabled: true
-  useCases: [behavioral_interview]
-  curationStatus: curated
-\`\`\`
-
-\`\`\`yaml
-- id: mem_mlcommons_automated_model_interface
-  sourceId: source_profile
-  type: answer_evidence
-  title: Automated model interface generation
-  content: Automated repetitive manual integration setup with generated interfaces.
-  scope: global
-  tags: [automation, model-interface]
-  keywords: [manual model integration, generated interfaces]
-  enabled: true
-  useCases: [behavioral_interview]
-  curationStatus: curated
-\`\`\`
-
-\`\`\`yaml
-- id: mem_agentic_memory_llm_decisioning
-  sourceId: source_profile
-  type: answer_evidence
-  title: Agentic Memory two-phase decisioning
-  content: Resolved architecture ambiguity with separate fact extraction and memory decision phases.
-  scope: global
-  tags: [agentic-memory, architecture, ambiguity]
-  keywords: [two-phase, fact extraction, memory decisioning]
-  enabled: true
-  useCases: [behavioral_interview]
-  curationStatus: curated
-\`\`\`
-
-\`\`\`yaml
-- id: mem_managed_semantic_delete_cleanup
-  sourceId: source_profile
-  type: answer_evidence
-  title: Semantic search resource cleanup
-  content: Prevented customer resource leakage by cleaning up orphaned semantic search pipelines.
-  scope: global
-  tags: [customer, resource-leakage, cleanup]
-  keywords: [orphaned pipelines, semantic search]
-  enabled: true
-  useCases: [behavioral_interview]
+  injectionMode: retrieval
+  useCases: [meeting_assistant, behavioral_interview]
+  interviewFamilies: [behavioral]
   curationStatus: curated
 \`\`\`
 `,
-    },
-    1
-  );
-  const report = auditCuratedMemoryEvidence({ drafts: [draft], now: 2 });
-
-  assert.equal(report.templateReferenceClosure[0]?.complete, true);
-  assert.equal(report.behavioralGoldenQueries.length, 4);
-  assert.ok(
-    report.behavioralGoldenQueries.every(
-      (golden) =>
-        golden.expectedAnchorReachable &&
-        golden.topRankedAnchorId === golden.expectedAnchorId
-    )
-  );
-  assert.equal(
-    report.issues.some(
-      (issue) => issue.code === "behavioral-golden-anchor-unreachable"
-    ),
-    false
-  );
-});
+    ]),
+  ].join("\n");
+}

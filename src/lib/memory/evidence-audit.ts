@@ -1,4 +1,8 @@
 import { classifyRuntimeMemoryRole } from "./runtime-role.js";
+import {
+  BEHAVIORAL_STORY_FAMILY_TAG,
+  selectBehavioralStoryFamily,
+} from "./behavioral-story-family.js";
 import type {
   MemoryEntry,
   MemorySource,
@@ -6,7 +10,7 @@ import type {
   RuntimeMemoryRole,
 } from "./types.js";
 
-export const KMB_EVIDENCE_AUDIT_SCHEMA_VERSION = 1 as const;
+export const KMB_EVIDENCE_AUDIT_SCHEMA_VERSION = 2 as const;
 
 export type KmbEvidenceAuditIssueCode =
   | "duplicate-source-id"
@@ -56,11 +60,13 @@ export interface KmbTemplateReferenceClosure {
 
 export interface KmbBehavioralGoldenQueryCoverage {
   id: string;
-  expectedSelectorId: string;
-  expectedAnchorId: string;
-  topRankedAnchorId?: string;
-  expectedAnchorRank?: number;
-  expectedAnchorReachable: boolean;
+  expectedFamilyId: string;
+  expectedStoryId: string;
+  selectedFamilyId?: string;
+  selectedStoryId?: string;
+  runnerUpFamilyId?: string;
+  margin?: number;
+  correct: boolean;
 }
 
 export type ProjectEvidenceQuestionFamily =
@@ -108,36 +114,90 @@ const AUTOBIOGRAPHICAL_TEMPLATE =
   /\b(?:behavioral (?:interview )?story selector|story anchors?|interview pitch|opening pack|personal narrative)\b/iu;
 
 const MAX_TEMPLATE_EVIDENCE_LINKS = 6;
-const BEHAVIORAL_GOLDEN_TOP_K = 4;
-
 export const BEHAVIORAL_EVIDENCE_GOLDEN_QUERIES = [
   {
     id: "cost-waste",
     query:
       "Tell me about a time you eliminated operational waste and saved significant cost from inactive test resources.",
-    expectedSelectorId: "mem_behavioral_story_selector",
-    expectedAnchorId: "mem_aos_test_account_cleanup",
+    expectedFamilyId: "mem_behavioral_family_cost_efficiency",
+    expectedStoryId: "mem_aos_test_account_cleanup",
   },
   {
-    id: "manual-overhead",
+    id: "prelaunch-resource-risk",
     query:
-      "Tell me about a repetitive manual model integration task you automated with generated interfaces.",
-    expectedSelectorId: "mem_behavioral_story_selector",
-    expectedAnchorId: "mem_mlcommons_automated_model_interface",
+      "Describe a serious operational problem you found before launch that blocked release validation.",
+    expectedFamilyId: "mem_behavioral_family_cost_efficiency",
+    expectedStoryId: "mem_aos_test_account_cleanup",
   },
   {
-    id: "architecture-ambiguity",
+    id: "teammate-conflict",
     query:
-      "Describe an ambiguous Agentic Memory architecture decision involving two-phase fact extraction and memory decisioning.",
-    expectedSelectorId: "mem_behavioral_story_selector",
-    expectedAnchorId: "mem_agentic_memory_llm_decisioning",
+      "Tell me about a time you disagreed with a teammate and influenced the final technical decision.",
+    expectedFamilyId: "mem_behavioral_family_conflict_influence",
+    expectedStoryId: "mem_agentic_memory_consistency_latency_conflict",
   },
   {
-    id: "customer-resource-leakage",
+    id: "consistency-latency-conflict",
     query:
-      "Tell me about preventing customer resource leakage by cleaning up orphaned semantic search pipelines.",
-    expectedSelectorId: "mem_behavioral_story_selector",
-    expectedAnchorId: "mem_managed_semantic_delete_cleanup",
+      "Describe a conflict about synchronous consistency versus asynchronous latency and how you resolved it.",
+    expectedFamilyId: "mem_behavioral_family_conflict_influence",
+    expectedStoryId: "mem_agentic_memory_consistency_latency_conflict",
+  },
+  {
+    id: "failed-model-output",
+    query:
+      "Tell me about a project failure caused by unreliable model output and how you recovered.",
+    expectedFamilyId: "mem_behavioral_family_failure_recovery",
+    expectedStoryId: "mem_agentic_memory_json_reliability_recovery",
+  },
+  {
+    id: "mistake-learning",
+    query:
+      "Give me an example of a failure or mistake, the debugging process, and what you learned.",
+    expectedFamilyId: "mem_behavioral_family_failure_recovery",
+    expectedStoryId: "mem_agentic_memory_json_reliability_recovery",
+  },
+  {
+    id: "tight-deadline",
+    query:
+      "Tell me about a time you delivered an important technical project under a tight deadline.",
+    expectedFamilyId: "mem_behavioral_family_deadline_delivery",
+    expectedStoryId: "mem_beaglestone_deadline_delivery_story",
+  },
+  {
+    id: "learn-and-deliver",
+    query:
+      "Describe learning a new language quickly while coordinating across time zones to deliver.",
+    expectedFamilyId: "mem_behavioral_family_deadline_delivery",
+    expectedStoryId: "mem_beaglestone_deadline_delivery_story",
+  },
+  {
+    id: "customer-pushback",
+    query:
+      "Tell me about an unreasonable customer requirement and how you found a maintainable solution.",
+    expectedFamilyId: "mem_behavioral_family_customer_requirements",
+    expectedStoryId: "mem_customer_patch_vfi_story",
+  },
+  {
+    id: "above-and-beyond-customer",
+    query:
+      "Describe a time you went above and beyond to help a customer with a customized request.",
+    expectedFamilyId: "mem_behavioral_family_customer_requirements",
+    expectedStoryId: "mem_customer_patch_vfi_story",
+  },
+  {
+    id: "develop-team-member",
+    query:
+      "Tell me about a time you helped a team member develop their career and become productive.",
+    expectedFamilyId: "mem_behavioral_family_trust_people_development",
+    expectedStoryId: "mem_new_hire_pavan_development_story",
+  },
+  {
+    id: "earn-new-hire-trust",
+    query:
+      "Give me an example of earning trust while mentoring and giving constructive feedback to a new teammate.",
+    expectedFamilyId: "mem_behavioral_family_trust_people_development",
+    expectedStoryId: "mem_new_hire_pavan_development_story",
   },
 ] as const;
 
@@ -259,7 +319,7 @@ export function auditCuratedMemoryEvidence(input: {
     issues,
   });
   const behavioralGoldenQueries = auditBehavioralGoldenQueries({
-    entryIndex,
+    entries,
     issues,
   });
 
@@ -293,7 +353,7 @@ export function renderKmbEvidenceAuditMarkdown(
     `- Fact-evidence / guidance / template / overlay: ${report.roleCounts["fact-evidence"]} / ${report.roleCounts.guidance} / ${report.roleCounts.template} / ${report.roleCounts.overlay}`,
     `- Anchor eligible: ${report.anchorEligibleCount}`,
     `- Autobiographical template closure: ${report.templateReferenceClosure.filter((item) => item.complete).length} / ${report.templateReferenceClosure.length}`,
-    `- Behavioral golden queries reachable: ${report.behavioralGoldenQueries.filter((item) => item.expectedAnchorReachable).length} / ${report.behavioralGoldenQueries.length}`,
+    `- Behavioral golden queries correct: ${report.behavioralGoldenQueries.filter((item) => item.correct).length} / ${report.behavioralGoldenQueries.length}`,
     `- Errors / warnings: ${report.issueCounts.error} / ${report.issueCounts.warning}`,
     "",
     "## Projects",
@@ -316,11 +376,11 @@ export function renderKmbEvidenceAuditMarkdown(
     "",
     "## Behavioral Golden Queries",
     "",
-    "| Query | Expected anchor | Rank | Top anchor | Reachable |",
-    "| --- | --- | ---: | --- | --- |",
+    "| Query | Expected family / story | Selected family / story | Runner-up | Margin | Correct |",
+    "| --- | --- | --- | --- | ---: | --- |",
     ...report.behavioralGoldenQueries.map(
       (item) =>
-        `| ${item.id} | ${item.expectedAnchorId} | ${item.expectedAnchorRank ?? "-"} | ${item.topRankedAnchorId ?? "-"} | ${item.expectedAnchorReachable ? "yes" : "no"} |`
+        `| ${item.id} | ${item.expectedFamilyId} / ${item.expectedStoryId} | ${item.selectedFamilyId ?? "-"} / ${item.selectedStoryId ?? "-"} | ${item.runnerUpFamilyId ?? "-"} | ${item.margin ?? "-"} | ${item.correct ? "yes" : "no"} |`
     ),
     "",
     "## Issues",
@@ -442,56 +502,50 @@ function auditTemplateReferenceClosure(input: {
 }
 
 function auditBehavioralGoldenQueries(input: {
-  entryIndex: Map<string, MemoryEntry>;
+  entries: MemoryEntry[];
   issues: KmbEvidenceAuditIssue[];
 }) {
-  return BEHAVIORAL_EVIDENCE_GOLDEN_QUERIES.flatMap((golden) => {
-    const selector = input.entryIndex.get(golden.expectedSelectorId);
-    if (!selector) return [];
-    const ranked = (selector?.evidenceEntryIds ?? [])
-      .map((entryId) => input.entryIndex.get(entryId))
-      .filter((entry): entry is MemoryEntry => Boolean(entry?.enabled))
-      .filter((entry) => classifyRuntimeMemoryRole(entry).anchorEligible)
-      .map((entry) => ({
-        entry,
-        score: scoreBehavioralGoldenEvidence(golden.query, entry),
-      }))
-      .sort(
-        (left, right) =>
-          right.score - left.score || left.entry.id.localeCompare(right.entry.id)
-      );
-    const expectedIndex = ranked.findIndex(
-      (item) => item.entry.id === golden.expectedAnchorId
-    );
-    const expectedAnchorRank = expectedIndex >= 0 ? expectedIndex + 1 : undefined;
-    const expectedAnchorReachable = Boolean(
-      selector?.enabled &&
-        expectedAnchorRank &&
-        expectedAnchorRank <= BEHAVIORAL_GOLDEN_TOP_K &&
-        ranked[expectedIndex]!.score > 0
-    );
-    if (!expectedAnchorReachable) {
+  if (
+    !input.entries.some((entry) =>
+      entry.tags.includes(BEHAVIORAL_STORY_FAMILY_TAG)
+    )
+  ) {
+    return [];
+  }
+  return BEHAVIORAL_EVIDENCE_GOLDEN_QUERIES.map((golden) => {
+    const selection = selectBehavioralStoryFamily({
+      entries: input.entries,
+      query: golden.query,
+      questionType: "behavioral",
+    });
+    const correct =
+      selection.selected?.family.id === golden.expectedFamilyId &&
+      selection.selected.story.id === golden.expectedStoryId;
+    if (!correct) {
       input.issues.push({
         code: "behavioral-golden-anchor-unreachable",
         severity: "error",
-        entryId: golden.expectedSelectorId,
-        detail: `${golden.id} cannot reach expected anchor ${golden.expectedAnchorId} within linked top-${BEHAVIORAL_GOLDEN_TOP_K}.`,
+        entryId: golden.expectedFamilyId,
+        detail: `${golden.id} selected ${selection.selected?.family.id ?? "none"}/${selection.selected?.story.id ?? "none"}; expected ${golden.expectedFamilyId}/${golden.expectedStoryId}.`,
       });
     }
-    return [{
+    return {
       id: golden.id,
-      expectedSelectorId: golden.expectedSelectorId,
-      expectedAnchorId: golden.expectedAnchorId,
-      topRankedAnchorId: ranked[0]?.entry.id,
-      expectedAnchorRank,
-      expectedAnchorReachable,
-    } satisfies KmbBehavioralGoldenQueryCoverage];
+      expectedFamilyId: golden.expectedFamilyId,
+      expectedStoryId: golden.expectedStoryId,
+      selectedFamilyId: selection.selected?.family.id,
+      selectedStoryId: selection.selected?.story.id,
+      runnerUpFamilyId: selection.runnerUp?.family.id,
+      margin: selection.margin,
+      correct,
+    } satisfies KmbBehavioralGoldenQueryCoverage;
   });
 }
 
 function isAutobiographicalTemplate(entry: MemoryEntry) {
   if (entry.type !== "answer_template") return false;
   return (
+    entry.tags.includes(BEHAVIORAL_STORY_FAMILY_TAG) ||
     FIRST_PERSON_CLAIM.test(entry.content) ||
     AUTOBIOGRAPHICAL_TEMPLATE.test(
       [entry.title, entry.summary, entry.tags.join(" "), entry.content]
@@ -499,52 +553,6 @@ function isAutobiographicalTemplate(entry: MemoryEntry) {
         .join(" ")
     )
   );
-}
-
-function scoreBehavioralGoldenEvidence(query: string, entry: MemoryEntry) {
-  const queryTokens = tokenizeAuditText(query);
-  const titleMatches = countAuditTokenOverlap(
-    queryTokens,
-    tokenizeAuditText(entry.title)
-  );
-  const tagMatches = countAuditTokenOverlap(
-    queryTokens,
-    tokenizeAuditText(entry.tags.join(" "))
-  );
-  const keywordMatches = countAuditTokenOverlap(
-    queryTokens,
-    tokenizeAuditText(entry.keywords.join(" "))
-  );
-  const contentMatches = countAuditTokenOverlap(
-    queryTokens,
-    tokenizeAuditText(
-      [entry.summary, entry.content.slice(0, 600)].filter(Boolean).join(" ")
-    )
-  );
-  return (
-    titleMatches * 8 +
-    tagMatches * 10 +
-    keywordMatches * 6 +
-    Math.min(contentMatches * 2, 12)
-  );
-}
-
-function tokenizeAuditText(value: string) {
-  return new Set(
-    value
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, " ")
-      .split(/\s+/)
-      .filter((token) => token.length > 2)
-  );
-}
-
-function countAuditTokenOverlap(left: Set<string>, right: Set<string>) {
-  let count = 0;
-  for (const token of right) {
-    if (left.has(token)) count += 1;
-  }
-  return count;
 }
 
 function auditEntryLinks(
