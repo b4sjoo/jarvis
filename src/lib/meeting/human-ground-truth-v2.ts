@@ -224,6 +224,12 @@ export interface HumanEvaluationObservedSnapshotV2 {
   contextReadScope?: AdvisorContextReadScope;
   artifactIntent?: SettledAdvisorArtifactIntent;
   primaryAsk?: string;
+  primaryAskTargetSource?:
+    | "runtime-target"
+    | "local-fallback"
+    | "no-output-target"
+    | "unavailable"
+    | "error";
   answerCommitted?: boolean;
   projectId?: string;
   projectName?: string;
@@ -736,9 +742,7 @@ export function buildHumanEvaluationObservedSnapshotV2(
       metadata.advisorJobId
   );
   const advisorOutcome = advisorAttempt.outcome;
-  const primaryAsk = readString(
-    metadata.primaryAskNormalizedText ?? metadata.logicalQuestionNormalizedText
-  );
+  const primaryAskTarget = projectObservedPrimaryAskTargetV2(metadata);
   const answerCommitted = advisorAttempt.answerCommitted;
   const contextReadScope = resolveObservedContextReadScope(
     trace.kind,
@@ -819,7 +823,8 @@ export function buildHumanEvaluationObservedSnapshotV2(
     runtimeAction,
     runtimeOperationId,
     advisorOutcome,
-    primaryAsk,
+    primaryAsk: primaryAskTarget.primaryAsk,
+    primaryAskTargetSource: primaryAskTarget.primaryAskTargetSource,
     answerCommitted,
     contextReadScope,
     artifactIntent,
@@ -835,9 +840,73 @@ export function buildHumanEvaluationObservedSnapshotV2(
       : undefined,
     ...questionTypeObservation,
   };
+  return rehashHumanEvaluationObservedSnapshotV2(traceEvidence);
+}
+
+export function rehashHumanEvaluationObservedSnapshotV2(
+  observed: Omit<HumanEvaluationObservedSnapshotV2, "traceHash"> | HumanEvaluationObservedSnapshotV2
+): HumanEvaluationObservedSnapshotV2 {
+  const { traceHash: _previousTraceHash, ...traceEvidence } = observed as
+    HumanEvaluationObservedSnapshotV2;
   return {
     ...traceEvidence,
     traceHash: fingerprint(stableStringify(traceEvidence)),
+  };
+}
+
+export function projectObservedPrimaryAskTargetV2(
+  metadata: Record<string, unknown>
+): Pick<
+  HumanEvaluationObservedSnapshotV2,
+  "primaryAsk" | "primaryAskTargetSource"
+> {
+  const runtimeTarget = readString(
+    metadata.responseOpportunityDecisionTarget
+  );
+  const responseDecision = readString(
+    metadata.responseOpportunityDecision
+  );
+  const runtimeTargetSourceBacked =
+    metadata.responseOpportunityTargetSpansValid === true ||
+    metadata.responseOpportunityParseValid === true ||
+    readString(metadata.responseOpportunityDecisionTargetSource) ===
+      "runtime-llm";
+  if (runtimeTarget && runtimeTargetSourceBacked) {
+    return {
+      primaryAsk: runtimeTarget,
+      primaryAskTargetSource:
+        responseDecision === "no-output-request"
+          ? "no-output-target"
+          : "runtime-target",
+    };
+  }
+
+  const localTarget = readString(
+    metadata.primaryAskAnswerFocusText ??
+      metadata.primaryAskNormalizedText ??
+      metadata.logicalQuestionNormalizedText
+  );
+  if (localTarget) {
+    return {
+      primaryAsk: localTarget,
+      primaryAskTargetSource: "local-fallback",
+    };
+  }
+
+  const responseObserved =
+    metadata.responseOpportunityEligible === true ||
+    readString(metadata.responseOpportunityDisposition) !== undefined;
+  const responseFailed =
+    Boolean(runtimeTarget && !runtimeTargetSourceBacked) ||
+    metadata.responseOpportunityParseValid === false ||
+    metadata.responseOpportunityLeaseAuthorized === false ||
+    metadata.responseOpportunityTimedOut === true ||
+    ["error", "budget-exhausted"].includes(
+      readString(metadata.responseOpportunityDisposition) ?? ""
+    );
+  return {
+    primaryAskTargetSource:
+      responseObserved && responseFailed ? "error" : "unavailable",
   };
 }
 

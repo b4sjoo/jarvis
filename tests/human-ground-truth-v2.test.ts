@@ -996,7 +996,97 @@ test("projects the observed runtime tuple from trace metadata", () => {
   assert.equal(observed.advisorOutcome, "visible-committed");
   assert.equal(observed.contextReadScope, "active-parent-read");
   assert.equal(observed.artifactIntent, "revise-whiteboard");
+  assert.equal(observed.primaryAsk, "How would retrieval work?");
+  assert.equal(observed.primaryAskTargetSource, "local-fallback");
   assert.match(observed.traceHash, /^\d+:[0-9a-f]+$/);
+});
+
+test("projects a source-backed Response target ahead of the local ask", () => {
+  const trace = buildSettledAttemptTrace({
+    id: "trace_response_target",
+    status: "success",
+  });
+  trace.metadata = {
+    ...trace.metadata,
+    primaryAskNormalizedText: "Tell me about your background.",
+    responseOpportunityDecision: "no-output-request",
+    responseOpportunityDecisionTarget: "How about you?",
+    responseOpportunityTargetSpansValid: true,
+  };
+
+  const observed = buildHumanEvaluationObservedSnapshotV2(trace);
+  assert.equal(observed.primaryAsk, "How about you?");
+  assert.equal(observed.primaryAskTargetSource, "no-output-target");
+});
+
+test("joins a Response target from the exact source-owned LQU", () => {
+  const terminal = buildSettledAttemptTrace({
+    id: "trace_terminal_target_join",
+    status: "success",
+  });
+  const source = buildSettledAttemptTrace({
+    id: "trace_source_target_join",
+    status: "success",
+  });
+  for (const trace of [terminal, source]) {
+    trace.metadata = {
+      ...trace.metadata,
+      currentQuestionSettlementRevision: 2,
+      logicalQuestionUnitRevision: 2,
+      currentQuestionSettlementRuntimeEpoch: 4,
+      effectiveCurrentQuestionSettlementRuntimeEpoch: 4,
+      currentQuestionSettlementSourceHash: "source-target-join",
+      effectiveCurrentQuestionSettlementSourceHash: "source-target-join",
+    };
+  }
+  source.metadata = {
+    ...source.metadata,
+    responseOpportunityDecision: "output-request",
+    responseOpportunityDecisionTarget: "How about you?",
+    responseOpportunityTargetSpansValid: true,
+  };
+
+  const result = materializeHumanEvaluationAttemptProjectionV2({
+    trace: terminal,
+    traces: [terminal, source],
+    currentSessionId: "session_retry",
+    events: [],
+    projections: [],
+  });
+  assert.equal(result.projection?.observed?.primaryAsk, "How about you?");
+  assert.equal(
+    result.projection?.observed?.primaryAskTargetSource,
+    "runtime-target"
+  );
+
+  const conflicting = buildSettledAttemptTrace({
+    id: "trace_conflicting_target_join",
+    status: "success",
+  });
+  conflicting.metadata = {
+    ...conflicting.metadata,
+    currentQuestionSettlementRevision: 2,
+    logicalQuestionUnitRevision: 2,
+    currentQuestionSettlementRuntimeEpoch: 4,
+    effectiveCurrentQuestionSettlementRuntimeEpoch: 4,
+    currentQuestionSettlementSourceHash: "source-target-join",
+    effectiveCurrentQuestionSettlementSourceHash: "source-target-join",
+    responseOpportunityDecision: "output-request",
+    responseOpportunityDecisionTarget: "Tell me about the team.",
+    responseOpportunityTargetSpansValid: true,
+  };
+  const conflictResult = materializeHumanEvaluationAttemptProjectionV2({
+    trace: terminal,
+    traces: [terminal, source, conflicting],
+    currentSessionId: "session_retry",
+    events: [],
+    projections: [],
+  });
+  assert.equal(
+    conflictResult.projection?.observed?.primaryAskTargetSource,
+    "error"
+  );
+  assert.equal(conflictResult.projection?.observed?.primaryAsk, undefined);
 });
 
 test("projects only a same-parent cross-type replacement as retype", () => {

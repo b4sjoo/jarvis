@@ -16,7 +16,7 @@ test("reuses one emitted trace snapshot across evaluation projection refreshes",
   assert.ok(refreshStart >= 0 && refreshEnd > refreshStart);
   assert.match(
     refreshBlock,
-    /\(trace: MeetingTrace, traces: MeetingTrace\[\]\)/
+    /trace: MeetingTrace,[\s\S]*traces: MeetingTrace\[\],[\s\S]*traceIndex\?: HumanEvaluationAttemptEvidenceIndexV2/
   );
   assert.match(
     refreshBlock,
@@ -37,7 +37,11 @@ test("reuses one emitted trace snapshot across evaluation projection refreshes",
   const subscriberBlock = hookSource.slice(subscriberStart, subscriberEnd);
   assert.match(
     subscriberBlock,
-    /refreshHumanEvaluationObservedProjectionForTrace\(trace, traces\)/
+    /const traceIndex = buildHumanEvaluationAttemptEvidenceIndexV2\(traces\);/
+  );
+  assert.match(
+    subscriberBlock,
+    /refreshHumanEvaluationObservedProjectionForTrace\([\s\S]*trace,[\s\S]*traces,[\s\S]*traceIndex[\s\S]*\)/
   );
 
   const lateRefreshStart = hookSource.indexOf(
@@ -57,6 +61,10 @@ test("reuses one emitted trace snapshot across evaluation projection refreshes",
   );
   assert.match(
     lateRefreshBlock,
-    /refreshHumanEvaluationObservedProjectionForTrace\(\s*completedTrace,\s*traces\s*\)/
+    /buildHumanEvaluationAttemptEvidenceIndexV2\(traces\)/
+  );
+  assert.match(
+    lateRefreshBlock,
+    /refreshHumanEvaluationObservedProjectionForTrace\(\s*completedTrace,\s*traces,\s*traceIndex\s*\)/
   );
 });

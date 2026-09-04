@@ -6,17 +6,64 @@ import {
   buildHumanEvaluationObservedSnapshotV2,
   buildHumanGroundTruthSubjectV2,
   deriveHumanEvaluationProjectionV2,
+  projectObservedPrimaryAskTargetV2,
+  rehashHumanEvaluationObservedSnapshotV2,
   upsertHumanEvaluationProjectionV2,
   type HumanEvaluationProjectionV2,
   type HumanGroundTruthEventV2,
 } from "./human-ground-truth-v2.js";
 import type { MeetingTrace } from "./types.js";
 
+interface PrimaryAskJoinIdentity {
+  sessionId: string;
+  runtimeEpoch: number;
+  logicalQuestionUnitId: string;
+  revision: number;
+  sourceHash: string;
+}
+
+type PrimaryAskTargetObservation = ReturnType<
+  typeof projectObservedPrimaryAskTargetV2
+>;
+
+export interface HumanEvaluationAttemptEvidenceIndexV2 {
+  tracesById: ReadonlyMap<string, MeetingTrace>;
+  primaryAskTargetsByIdentity: ReadonlyMap<
+    string,
+    PrimaryAskTargetObservation[]
+  >;
+}
+
+export function buildHumanEvaluationAttemptEvidenceIndexV2(
+  traces: MeetingTrace[]
+): HumanEvaluationAttemptEvidenceIndexV2 {
+  const tracesById = new Map<string, MeetingTrace>();
+  const primaryAskTargetsByIdentity = new Map<
+    string,
+    PrimaryAskTargetObservation[]
+  >();
+  for (const trace of traces) {
+    tracesById.set(trace.id, trace);
+    const metadata = trace.metadata ?? {};
+    const identity = readLogicalQuestionIdentity(metadata);
+    if (!identity) continue;
+    const key = primaryAskJoinIdentityKey(identity);
+    const targets = primaryAskTargetsByIdentity.get(key) ?? [];
+    targets.push(projectObservedPrimaryAskTargetV2(metadata));
+    primaryAskTargetsByIdentity.set(key, targets);
+  }
+  return { tracesById, primaryAskTargetsByIdentity };
+}
+
 export function buildHumanEvaluationAttemptEvidenceV2(input: {
   trace: MeetingTrace;
   traces?: MeetingTrace[];
+  traceIndex?: HumanEvaluationAttemptEvidenceIndexV2;
 }) {
-  const observed = buildHumanEvaluationObservedSnapshotV2(input.trace);
+  const observed = rehashHumanEvaluationObservedSnapshotV2({
+    ...buildHumanEvaluationObservedSnapshotV2(input.trace),
+    ...projectAttemptPrimaryAskTargetV2(input),
+  });
   if (
     input.trace.metadata?.settledExecutionPlanTaskMutationCommand !==
     "replace-parent"
@@ -39,13 +86,14 @@ export function buildHumanEvaluationAttemptEvidenceV2(input: {
   const correctionTrace = resolveLinkedCorrectionLifecycleTrace({
     trace: input.trace,
     traces: input.traces ?? [],
+    traceIndex: input.traceIndex,
   });
   if (!correctionTrace) {
     return {
-      observed: {
+      observed: rehashHumanEvaluationObservedSnapshotV2({
         ...observed,
         parentAction: undefined,
-      },
+      }),
       traceIds: [input.trace.id],
     } as const;
   }
@@ -53,17 +101,132 @@ export function buildHumanEvaluationAttemptEvidenceV2(input: {
   const lifecycleObserved =
     buildHumanEvaluationObservedSnapshotV2(correctionTrace);
   return {
-    observed: {
+    observed: rehashHumanEvaluationObservedSnapshotV2({
       ...observed,
       parentAction: lifecycleObserved.parentAction,
-    },
+    }),
     traceIds: [correctionTrace.id, input.trace.id],
   } as const;
+}
+
+function projectAttemptPrimaryAskTargetV2(input: {
+  trace: MeetingTrace;
+  traces?: MeetingTrace[];
+  traceIndex?: HumanEvaluationAttemptEvidenceIndexV2;
+}) {
+  const direct = projectObservedPrimaryAskTargetV2(
+    input.trace.metadata ?? {}
+  );
+  const identity = readLogicalQuestionIdentity(input.trace.metadata ?? {});
+  if (!identity) return direct;
+
+  const traceIndex =
+    input.traceIndex ??
+    buildHumanEvaluationAttemptEvidenceIndexV2(input.traces ?? [input.trace]);
+  const candidates =
+    traceIndex.primaryAskTargetsByIdentity.get(
+      primaryAskJoinIdentityKey(identity)
+    ) ?? [direct];
+  const runtimeTargets = candidates.filter(
+    (candidate) =>
+      candidate.primaryAsk &&
+      (candidate.primaryAskTargetSource === "runtime-target" ||
+        candidate.primaryAskTargetSource === "no-output-target")
+  );
+  const uniqueRuntimeTargets = Array.from(
+    new Map(
+      runtimeTargets.map((candidate) => [
+        `${candidate.primaryAskTargetSource}:${candidate.primaryAsk}`,
+        candidate,
+      ])
+    ).values()
+  );
+  if (uniqueRuntimeTargets.length === 1) return uniqueRuntimeTargets[0]!;
+  if (uniqueRuntimeTargets.length > 1) {
+    return { primaryAskTargetSource: "error" as const };
+  }
+
+  if (
+    direct.primaryAsk &&
+    direct.primaryAskTargetSource === "local-fallback"
+  ) {
+    return direct;
+  }
+  const localTargets = Array.from(
+    new Set(
+      candidates
+        .filter(
+          (candidate) =>
+            candidate.primaryAskTargetSource === "local-fallback"
+        )
+        .map((candidate) => candidate.primaryAsk)
+        .filter((value): value is string => Boolean(value))
+    )
+  );
+  if (localTargets.length === 1) {
+    return {
+      primaryAsk: localTargets[0],
+      primaryAskTargetSource: "local-fallback" as const,
+    };
+  }
+  if (localTargets.length > 1) {
+    return { primaryAskTargetSource: "error" as const };
+  }
+  return candidates.some(
+    (candidate) => candidate.primaryAskTargetSource === "error"
+  )
+    ? { primaryAskTargetSource: "error" as const }
+    : direct;
+}
+
+function readLogicalQuestionIdentity(metadata: Record<string, unknown>) {
+  const sessionId = readString(
+    metadata.effectiveCurrentQuestionSettlementSessionId ??
+      metadata.currentQuestionSettlementSessionId ??
+      metadata.meetingSessionId
+  );
+  const logicalQuestionUnitId = readString(
+    metadata.effectiveCurrentQuestionSettlementUnitId ??
+      metadata.currentQuestionSettlementUnitId ??
+      metadata.logicalQuestionUnitId
+  );
+  const revision = readNumber(
+    metadata.effectiveCurrentQuestionSettlementRevision ??
+      metadata.currentQuestionSettlementRevision ??
+      metadata.logicalQuestionUnitRevision
+  );
+  const runtimeEpoch = readNumber(
+    metadata.effectiveCurrentQuestionSettlementRuntimeEpoch ??
+      metadata.currentQuestionSettlementRuntimeEpoch ??
+      metadata.runtimeEpoch
+  );
+  const sourceHash = readString(
+    metadata.effectiveCurrentQuestionSettlementSourceHash ??
+      metadata.currentQuestionSettlementSourceHash
+  );
+  return sessionId &&
+    runtimeEpoch !== undefined &&
+    logicalQuestionUnitId &&
+    revision !== undefined &&
+    sourceHash
+    ? { sessionId, runtimeEpoch, logicalQuestionUnitId, revision, sourceHash }
+    : undefined;
+}
+
+function primaryAskJoinIdentityKey(identity: PrimaryAskJoinIdentity) {
+  return [
+    identity.sessionId,
+    identity.runtimeEpoch,
+    identity.logicalQuestionUnitId,
+    identity.revision,
+    identity.sourceHash,
+  ].join("\u001f");
 }
 
 export function materializeHumanEvaluationAttemptProjectionV2(input: {
   trace: MeetingTrace;
   traces?: MeetingTrace[];
+  traceIndex?: HumanEvaluationAttemptEvidenceIndexV2;
   currentSessionId: string;
   events: HumanGroundTruthEventV2[];
   projections: HumanEvaluationProjectionV2[];
@@ -82,6 +245,7 @@ export function materializeHumanEvaluationAttemptProjectionV2(input: {
   const attemptEvidence = buildHumanEvaluationAttemptEvidenceV2({
     trace: input.trace,
     traces: input.traces,
+    traceIndex: input.traceIndex,
   });
   const baseSubject = buildHumanGroundTruthSubjectV2({
     trace: input.trace,
@@ -129,15 +293,16 @@ export function materializeHumanEvaluationAttemptProjectionV2(input: {
 function resolveLinkedCorrectionLifecycleTrace(input: {
   trace: MeetingTrace;
   traces: MeetingTrace[];
+  traceIndex?: HumanEvaluationAttemptEvidenceIndexV2;
 }) {
   const metadata = input.trace.metadata ?? {};
   const correctionTraceId = readString(metadata.parentCorrectionTraceId);
   const correctionId = readString(metadata.manualQuestionTypeCorrectionId);
   if (!correctionTraceId || !correctionId) return undefined;
 
-  const correctionTrace = input.traces.find(
-    (candidate) => candidate.id === correctionTraceId
-  );
+  const correctionTrace =
+    input.traceIndex?.tracesById.get(correctionTraceId) ??
+    input.traces.find((candidate) => candidate.id === correctionTraceId);
   const correctionMetadata = correctionTrace?.metadata ?? {};
   if (
     !correctionTrace ||

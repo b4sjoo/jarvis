@@ -139,8 +139,10 @@ import {
   preserveOrCreateCodingChildPhaseState,
 } from "@/lib/meeting/coding-child-phase";
 import {
+  buildHumanEvaluationAttemptEvidenceIndexV2,
   buildHumanEvaluationAttemptEvidenceV2,
   materializeHumanEvaluationAttemptProjectionV2,
+  type HumanEvaluationAttemptEvidenceIndexV2,
 } from "@/lib/meeting/human-evaluation-attempt-projection";
 import { validateHumanEvaluationAttemptSubjectV2 } from "@/lib/meeting/human-evaluation-attempt";
 import { toHumanEvaluationCollectionProvenance } from "@/lib/meeting/session-evaluation-provenance";
@@ -3794,10 +3796,15 @@ export function useMeetingAssistant() {
   }, []);
 
   const refreshHumanEvaluationObservedProjectionForTrace = useCallback(
-    (trace: MeetingTrace, traces: MeetingTrace[]) => {
+    (
+      trace: MeetingTrace,
+      traces: MeetingTrace[],
+      traceIndex?: HumanEvaluationAttemptEvidenceIndexV2
+    ) => {
       const result = materializeHumanEvaluationAttemptProjectionV2({
         trace,
         traces,
+        traceIndex,
         currentSessionId: contextManagerRef.current.getState().sessionId,
         events: humanGroundTruthEventsV2Ref.current,
         projections: humanEvaluationProjectionsV2Ref.current,
@@ -3823,9 +3830,12 @@ export function useMeetingAssistant() {
         candidate.id === traceId && candidate.status !== "running"
     );
     if (completedTrace) {
+      const traceIndex =
+        buildHumanEvaluationAttemptEvidenceIndexV2(traces);
       refreshHumanEvaluationObservedProjectionForTrace(
         completedTrace,
-        traces
+        traces,
+        traceIndex
       );
       sessionRecordingManagerRef.current?.refreshRecordedTrace(
         completedTrace,
@@ -9293,6 +9303,7 @@ export function useMeetingAssistant() {
   );
 
   const recordCompletedTracesForSession = useCallback((traces: MeetingTrace[]) => {
+    const traceIndex = buildHumanEvaluationAttemptEvidenceIndexV2(traces);
     for (const trace of traces) {
       if (trace.status !== "running") {
         const manager = sessionRecordingManagerRef.current;
@@ -9304,7 +9315,11 @@ export function useMeetingAssistant() {
           manager.recordTrace(trace, getAutoExportTrigger(trace));
         }
       }
-      refreshHumanEvaluationObservedProjectionForTrace(trace, traces);
+      refreshHumanEvaluationObservedProjectionForTrace(
+        trace,
+        traces,
+        traceIndex
+      );
     }
   }, [refreshHumanEvaluationObservedProjectionForTrace]);
 
