@@ -90,6 +90,30 @@ Complexity: O(n).`);
   );
 });
 
+test("keeps fenced pseudocode in Approach when Code is explicitly empty", () => {
+  const parsed = parseMeetingAnswer(`Answer: Use a sliding window.
+Approach: Keep a duplicate-free window.
+
+Pseudocode:
+
+\`\`\`text
+for each right index:
+    move left past the prior duplicate
+\`\`\`
+
+Code: -
+Complexity: O(n) time and O(k) space.`);
+
+  assert.match(parsed.sections.approach ?? "", /Pseudocode:/);
+  assert.match(parsed.sections.approach ?? "", /move left past/);
+  assert.equal(parsed.sections.code, undefined);
+  assert.ok(parsed.recognizedLabels.includes("Code"));
+
+  const reparsed = parseMeetingAnswer(serializeMeetingAnswer(parsed));
+  assert.match(reparsed.sections.approach ?? "", /move left past/);
+  assert.equal(reparsed.sections.code, undefined);
+});
+
 test("supports Markdown labels and infrastructure diagram alias", () => {
   const parsed = parseMeetingAnswer(`## **中文思路:** 先明确写路径。
 **Answer:** Separate the write and read paths.

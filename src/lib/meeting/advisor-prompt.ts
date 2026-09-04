@@ -263,7 +263,7 @@ export function buildAdvisorUserMessage(
         ? "If <previous_suggestion> is empty or only '-', output a single dash."
         : "Do not use a previous generated answer as factual, taxonomy, or context authority.",
       "Retain the active task's canonical answer profile. If <previous_suggestion> contains Code or Whiteboard, preserve that artifact unless the requested action or latest explicit constraint changes it.",
-      "For coding tasks, preserve the Code section unless the latest explicit constraint requires changing it. Do not move code into Approach.",
+      "For coding tasks, preserve the Code section unless the latest explicit constraint requires changing it. Do not move runnable implementation code into Approach. During optimized_pseudocode, keep pseudocode in Approach and output '-' for Code.",
       "For coding tasks, keep 中文思路 in Chinese, but keep Question, Answer, Approach, Complexity, Clarifying question, and Clarifying options in meeting-ready English unless the user explicitly asks to translate the coding answer.",
       ...buildResponseActionInstructions(
         responseAction,
@@ -456,7 +456,7 @@ function buildMeetingAnswerContractInstructions(
       "中文思路: 用中文简洁说明当前 Coding phase 拥有的算法、关键不变量和边界条件。不要在 baseline phase 擅自声称最优。",
       "Question: restate the focused coding problem in meeting-ready English.",
       "Answer: concise English summary of the solution candidate required by <interview_playbook> and <playbook_phase_state>.",
-      "Approach: key reasoning and correctness argument for that same visible candidate in English. It must not describe a different algorithm from Code or Complexity.",
+      "Approach: key reasoning and correctness argument for that same visible candidate in English. During optimized_pseudocode, include the pseudocode here as a fenced text block or ordered steps. It must not describe a different algorithm from Code or Complexity.",
       "Code: when required by <playbook_phase_state>, provide one complete runnable implementation in the trusted selected programming language; otherwise output '-'.",
       "Complexity: exact time and space complexity for the same visible candidate in English.",
       ...clarification,

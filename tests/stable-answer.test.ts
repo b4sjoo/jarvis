@@ -201,6 +201,39 @@ test("projects the Code family into only its phase-authorized sections", () => {
   assert.deepEqual(complexityOnly, ["answer", "complexity"]);
 });
 
+test("commits pseudocode in Approach without advancing the Code revision", () => {
+  const stable = commitStableAnswerRevision({
+    candidate: suggestion(
+      "pseudocode-answer",
+      `Answer: Use a sliding window.
+Approach: Preserve a duplicate-free window.
+
+Pseudocode:
+
+\`\`\`text
+for each right index:
+    move left past the prior duplicate
+\`\`\`
+
+Code: -
+Complexity: O(n) time and O(k) space.`
+    ),
+    authorizedArtifacts: ["answer", "complexity"],
+    taskId: "coding-parent",
+    logicalQuestionUnitId: "coding-question",
+    logicalQuestionRevision: 2,
+  });
+
+  assert.ok(stable);
+  assert.match(
+    stable.suggestion.meetingAnswer?.sections.approach ?? "",
+    /move left past/
+  );
+  assert.equal(stable.suggestion.meetingAnswer?.sections.code, undefined);
+  assert.equal(stable.sections.code.revision, 0);
+  assert.equal(stable.sections.complexity.revision, 1);
+});
+
 test("does not advance an authorized artifact revision when the candidate omits it", () => {
   const first = commitStableAnswerRevision({
     candidate: suggestion(

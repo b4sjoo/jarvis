@@ -705,6 +705,14 @@ test("coding baseline clarifies callable contracts without adding a question sub
   assert.match(contract, /state concise, revisable assumptions/);
 });
 
+test("keeps optimized pseudocode in Approach without granting Code authority", () => {
+  const contract = formatCodingPlaybookPhaseContract("optimized_pseudocode");
+
+  assert.match(contract, /pseudocode in Approach/);
+  assert.match(contract, /fenced text block or ordered steps/);
+  assert.match(contract, /Do not emit Code/);
+});
+
 test("advances coding from baseline to optimized pseudocode on an optimization ask", () => {
   const decision = decidePlaybookPhaseProgression({
     questionType: "coding",

@@ -194,7 +194,10 @@ export function parseMeetingAnswer(
       "Supporting anchor ids",
     ])
   );
-  const extractedCode = extractFirstCodeFence(rawApproach);
+  const hasExplicitCodeSection = recognizedLabels.includes("Code");
+  const extractedCode = hasExplicitCodeSection
+    ? undefined
+    : extractFirstCodeFence(rawApproach);
   const approach = extractedCode
     ? sanitizeMeetingAnswerSection(rawApproach.replace(extractedCode.fence, ""))
     : rawApproach;
@@ -301,6 +304,8 @@ export function serializeMeetingAnswer(parsed: ParsedMeetingAnswer) {
   append("Whiteboard", parsed.sections.whiteboard);
   if (parsed.sections.code?.trim()) {
     parts.push(`Code:\n\`\`\`\n${parsed.sections.code.trimEnd()}\n\`\`\``);
+  } else if (parsed.recognizedLabels.includes("Code")) {
+    parts.push("Code:\n-");
   }
   append("Complexity", parsed.sections.complexity);
   append("Clarifying question", parsed.sections.clarifyingQuestion);
