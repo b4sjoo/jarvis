@@ -27,6 +27,7 @@ export interface VisibleAnswerResponseActionTargetDecision {
   sourceKind?: EffectiveQuestionSourceRecord["sourceKind"];
   sourceObservationIds?: string[];
   sourceRecordId?: string;
+  sourceOwner?: EffectiveQuestionSourceRecord["owner"];
   settlementId?: string;
   settlementSnapshot?: CurrentQuestionSettlementDecision;
   mismatchFacets: string[];
@@ -80,6 +81,17 @@ export function resolveVisibleAnswerResponseActionTarget(input: {
     return reject("visible-answer-parent-changed", "parent");
   }
 
+  const sourceRecords = input.effectiveQuestionSources ?? [];
+  const matchingSourceRecords = sourceRecords.filter(
+    (record) =>
+      record.sessionId === input.meetingContext.sessionId &&
+      record.runtimeEpoch === input.runtimeEpoch &&
+      record.logicalQuestionUnitId === stable.logicalQuestionUnitId &&
+      record.logicalQuestionRevision === stable.logicalQuestionRevision
+  );
+  const sourceRecord = matchingSourceRecords.find(
+    (record) => record.sourceHash === stable.questionSourceHash
+  );
   const current = input.currentLogicalQuestionUnit;
   if (
     current?.sessionId === input.meetingContext.sessionId &&
@@ -90,27 +102,16 @@ export function resolveVisibleAnswerResponseActionTarget(input: {
     return accepted(
       stable,
       current,
-      "current-lqu-matches-visible-answer"
+      "current-lqu-matches-visible-answer",
+      sourceRecord
     );
   }
-
-  const sourceRecords = input.effectiveQuestionSources ?? [];
-  const matchingSourceRecords = sourceRecords.filter(
-    (record) =>
-      record.sessionId === input.meetingContext.sessionId &&
-      record.runtimeEpoch === input.runtimeEpoch &&
-      record.logicalQuestionUnitId === stable.logicalQuestionUnitId &&
-      record.logicalQuestionRevision === stable.logicalQuestionRevision
-  );
   if (matchingSourceRecords.length === 0) {
     return reject(
       "visible-answer-effective-source-missing",
       "effective-source"
     );
   }
-  const sourceRecord = matchingSourceRecords.find(
-    (record) => record.sourceHash === stable.questionSourceHash
-  );
   if (!sourceRecord) {
     return reject(
       "visible-answer-effective-source-mismatch",
@@ -146,6 +147,12 @@ export function formatVisibleAnswerResponseActionTargetForTrace(
     responseActionTargetSourceKind: decision.sourceKind,
     responseActionTargetSourceObservationIds: decision.sourceObservationIds,
     responseActionTargetSourceRecordId: decision.sourceRecordId,
+    responseActionTargetSourceOwnerKind: decision.sourceOwner?.kind,
+    responseActionTargetSourceOwnerParentId: decision.sourceOwner?.parentId,
+    responseActionTargetSourceOwnerChildId:
+      decision.sourceOwner?.kind === "active-child"
+        ? decision.sourceOwner.childId
+        : undefined,
     responseActionTargetSettlementId: decision.settlementId,
     responseActionTargetMismatchFacets: decision.mismatchFacets,
   };
@@ -175,6 +182,9 @@ function accepted(
       ? [...sourceRecord.sourceObservationIds]
       : undefined,
     sourceRecordId: sourceRecord?.recordId,
+    sourceOwner: sourceRecord?.owner
+      ? { ...sourceRecord.owner }
+      : undefined,
     settlementId: stable.settlementId,
     settlementSnapshot: readSettlementSnapshot(stable),
     mismatchFacets: [],

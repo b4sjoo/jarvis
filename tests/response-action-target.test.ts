@@ -209,6 +209,31 @@ test("reads a Screen visible-answer target from its exact effective source recor
   assert.equal(decision.sourceRecordId, "source-record-screen");
 });
 
+test("projects the exact active-child owner from the effective source record", () => {
+  const decision = resolveVisibleAnswerResponseActionTarget({
+    stableAnswer: stable,
+    currentLogicalQuestionUnit: undefined,
+    effectiveQuestionSources: [
+      {
+        ...effectiveVoiceRecord(),
+        owner: {
+          kind: "active-child",
+          parentId: "parent-a",
+          childId: "child-code",
+        },
+      },
+    ],
+    meetingContext: context(),
+    runtimeEpoch: 3,
+  });
+
+  assert.deepEqual(decision.sourceOwner, {
+    kind: "active-child",
+    parentId: "parent-a",
+    childId: "child-code",
+  });
+});
+
 test("rejects a visible answer whose exact effective source is unavailable", () => {
   const decision = resolveVisibleAnswerResponseActionTarget({
     stableAnswer: stable,

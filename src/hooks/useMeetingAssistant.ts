@@ -34146,6 +34146,7 @@ export function useMeetingAssistant() {
         });
         const targetDecision = resolveArtifactRegenerationTarget({
           stableAnswer: stableAnswerRevisionRef.current,
+          visibleSource: visibleTarget,
           activeMeetingTask: meetingContext.activeMeetingTask,
           sessionId: meetingContext.sessionId,
           runtimeEpoch: runtimeEpochRef.current,

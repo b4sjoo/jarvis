@@ -3,6 +3,7 @@ import type {
   ArtifactOnlyAnswerSection,
   StableAnswerRevision,
 } from "./stable-answer.js";
+import type { VisibleAnswerResponseActionTargetDecision } from "./response-action-target.js";
 import {
   normalizeCanonicalQuestionType,
   type CanonicalQuestionType,
@@ -20,6 +21,7 @@ export type ArtifactRegenerationTargetReason =
   | "visible-answer-owner-mismatch"
   | "visible-answer-question-identity-missing"
   | "visible-answer-settlement-missing"
+  | "visible-answer-source-mismatch"
   | "no-regenerable-artifact"
   | "artifact-not-owned-by-current-phase";
 
@@ -74,6 +76,13 @@ export interface CanonicalWhiteboardRegenerationDecision {
 
 export function resolveArtifactRegenerationTarget(input: {
   stableAnswer?: StableAnswerRevision | null;
+  visibleSource?: Pick<
+    VisibleAnswerResponseActionTargetDecision,
+    | "authorized"
+    | "resolvedLogicalQuestionUnitId"
+    | "resolvedLogicalQuestionRevision"
+    | "sourceOwner"
+  >;
   activeMeetingTask?: ActiveMeetingTask;
   sessionId: string;
   runtimeEpoch: number;
@@ -102,6 +111,16 @@ export function resolveArtifactRegenerationTarget(input: {
   if (!stable.settlementId || !stable.settlementSnapshot) {
     return reject("visible-answer-settlement-missing");
   }
+  if (
+    input.visibleSource &&
+    (!input.visibleSource.authorized ||
+      input.visibleSource.resolvedLogicalQuestionUnitId !==
+        stable.logicalQuestionUnitId ||
+      input.visibleSource.resolvedLogicalQuestionRevision !==
+        stable.logicalQuestionRevision)
+  ) {
+    return reject("visible-answer-source-mismatch");
+  }
 
   const settlementSnapshot = stable.settlementSnapshot as {
     questionType?: unknown;
@@ -120,12 +139,15 @@ export function resolveArtifactRegenerationTarget(input: {
   if (activeChild) {
     const childType =
       normalizeCanonicalQuestionType(activeChild.questionType) ?? "unknown";
+    const visibleSourceOwnsActiveChild =
+      input.visibleSource?.sourceOwner?.kind === "active-child" &&
+      input.visibleSource.sourceOwner.parentId === activeTask.parent.id &&
+      input.visibleSource.sourceOwner.childId === activeChild.id;
     const visibleAnswerOwnsCodingChild =
       questionType === "coding" &&
       childType === "coding" &&
       settlementSnapshot.relation === "child-probe" &&
-      stable.suggestion.codeArtifactMutationAuthorized === true &&
-      stable.suggestion.complexityArtifactMutationAuthorized === true;
+      visibleSourceOwnsActiveChild;
     if (
       visibleAnswerOwnsCodingChild &&
       activeChild.phaseState?.phase === "implementation_validation"
