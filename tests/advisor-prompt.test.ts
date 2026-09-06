@@ -200,6 +200,17 @@ test("Back response action restores a previous phase without rolling back artifa
   assert.match(instructions, /Do not create, retype, or re-parent a task/i);
 });
 
+test("Artifact regeneration keeps Coding tests attached to the source-backed implementation", () => {
+  const instructions = buildResponseActionInstructions(
+    "regenerate-artifacts",
+    "coding"
+  ).join("\n");
+
+  assert.match(instructions, /source-backed class, function, language, signature/i);
+  assert.match(instructions, /Do not invent project modules or files/i);
+  assert.match(instructions, /standard-library test or demonstration entry point/i);
+});
+
 test("does not turn unsupported autobiographical premises into hypothetical implementations", () => {
   const message = buildAdvisorUserMessage({
     transcript:
