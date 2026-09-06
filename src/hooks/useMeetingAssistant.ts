@@ -33274,6 +33274,7 @@ export function useMeetingAssistant() {
     const visibleTarget = resolveVisibleAnswerResponseActionTarget({
       stableAnswer: stableAnswerRevisionRef.current,
       currentLogicalQuestionUnit,
+      effectiveQuestionSources: effectiveQuestionSourceLedgerRef.current.list(),
       meetingContext: currentRuntime,
       runtimeEpoch: runtimeEpochRef.current,
     });
@@ -34139,6 +34140,8 @@ export function useMeetingAssistant() {
         const visibleTarget = resolveVisibleAnswerResponseActionTarget({
           stableAnswer: stableAnswerRevisionRef.current,
           currentLogicalQuestionUnit: logicalQuestionUnitRef.current,
+          effectiveQuestionSources:
+            effectiveQuestionSourceLedgerRef.current.list(),
           meetingContext,
           runtimeEpoch: runtimeEpochRef.current,
         });
@@ -34635,6 +34638,8 @@ export function useMeetingAssistant() {
             stableAnswer: stableAnswerRevisionRef.current,
             currentLogicalQuestionUnit:
               logicalQuestionUnitRef.current,
+            effectiveQuestionSources:
+              effectiveQuestionSourceLedgerRef.current.list(),
             meetingContext,
             runtimeEpoch: runtimeEpochRef.current,
           });

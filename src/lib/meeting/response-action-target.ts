@@ -1,17 +1,19 @@
 import type { LogicalQuestionUnit } from "./logical-question-unit.js";
+import type { EffectiveQuestionSourceRecord } from "./effective-question-source-ledger.js";
 import type { StableAnswerRevision } from "./stable-answer.js";
 import type { MeetingContextState } from "./types.js";
 import type { CurrentQuestionSettlementDecision } from "./current-question-settlement.js";
 
 export type VisibleAnswerResponseActionTargetReason =
   | "current-lqu-matches-visible-answer"
-  | "reconstructed-from-visible-answer-sources"
+  | "reconstructed-from-effective-source-record"
   | "visible-answer-missing"
   | "visible-answer-session-mismatch"
   | "visible-answer-runtime-epoch-mismatch"
   | "visible-answer-question-identity-missing"
   | "visible-answer-parent-changed"
-  | "visible-answer-source-turns-unavailable";
+  | "visible-answer-effective-source-missing"
+  | "visible-answer-effective-source-mismatch";
 
 export interface VisibleAnswerResponseActionTargetDecision {
   authorized: boolean;
@@ -22,6 +24,9 @@ export interface VisibleAnswerResponseActionTargetDecision {
   resolvedLogicalQuestionUnitId?: string;
   resolvedLogicalQuestionRevision?: number;
   sourceHash?: string;
+  sourceKind?: EffectiveQuestionSourceRecord["sourceKind"];
+  sourceObservationIds?: string[];
+  sourceRecordId?: string;
   settlementId?: string;
   settlementSnapshot?: CurrentQuestionSettlementDecision;
   mismatchFacets: string[];
@@ -30,6 +35,7 @@ export interface VisibleAnswerResponseActionTargetDecision {
 export function resolveVisibleAnswerResponseActionTarget(input: {
   stableAnswer?: StableAnswerRevision | null;
   currentLogicalQuestionUnit?: LogicalQuestionUnit;
+  effectiveQuestionSources?: EffectiveQuestionSourceRecord[];
   meetingContext: MeetingContextState;
   runtimeEpoch: number;
 }): VisibleAnswerResponseActionTargetDecision {
@@ -88,56 +94,38 @@ export function resolveVisibleAnswerResponseActionTarget(input: {
     );
   }
 
-  const sourceTurnIds = Array.from(
-    new Set(stable.suggestion.basedOnTurnIds.filter(Boolean))
+  const sourceRecords = input.effectiveQuestionSources ?? [];
+  const matchingSourceRecords = sourceRecords.filter(
+    (record) =>
+      record.sessionId === input.meetingContext.sessionId &&
+      record.runtimeEpoch === input.runtimeEpoch &&
+      record.logicalQuestionUnitId === stable.logicalQuestionUnitId &&
+      record.logicalQuestionRevision === stable.logicalQuestionRevision
   );
-  const sourceTurns = sourceTurnIds
-    .map((turnId) =>
-      input.meetingContext.transcriptTurns.find((turn) => turn.id === turnId)
-    )
-    .filter((turn): turn is NonNullable<typeof turn> => Boolean(turn))
-    .sort((left, right) => left.startedAt - right.startedAt);
-  if (sourceTurns.length === 0) {
+  if (matchingSourceRecords.length === 0) {
     return reject(
-      "visible-answer-source-turns-unavailable",
-      "source-turns"
+      "visible-answer-effective-source-missing",
+      "effective-source"
     );
   }
-  const normalizedText = sourceTurns
-    .map((turn) => turn.text.trim())
-    .filter(Boolean)
-    .join(" ")
-    .trim();
-  if (!normalizedText) {
+  const sourceRecord = matchingSourceRecords.find(
+    (record) => record.sourceHash === stable.questionSourceHash
+  );
+  if (!sourceRecord) {
     return reject(
-      "visible-answer-source-turns-unavailable",
-      "source-turns"
+      "visible-answer-effective-source-mismatch",
+      "effective-source-hash"
     );
   }
-  const logicalQuestionUnit: LogicalQuestionUnit = {
-    id: stable.logicalQuestionUnitId,
-    revision: stable.logicalQuestionRevision,
-    sessionId: input.meetingContext.sessionId,
-    runtimeEpoch: input.runtimeEpoch,
-    currentTurnId: sourceTurns[sourceTurns.length - 1].id,
-    sourceTurnIds: sourceTurns.map((turn) => turn.id),
-    sources: sourceTurns.map((turn) => ({
-      turnId: turn.id,
-      text: turn.text,
-      startedAt: turn.startedAt,
-      endedAt: turn.endedAt,
-    })),
-    normalizedText,
-    startedAt: sourceTurns[0].startedAt,
-    updatedAt: sourceTurns[sourceTurns.length - 1].endedAt,
-    compositionReasons: ["visible-answer-response-owner"],
-    boundaryReason: "visible-answer-response-owner",
-    truncated: false,
-  };
+  const logicalQuestionUnit = reconstructEffectiveSourceQuestion(
+    sourceRecord,
+    input.meetingContext
+  );
   return accepted(
     stable,
     logicalQuestionUnit,
-    "reconstructed-from-visible-answer-sources"
+    "reconstructed-from-effective-source-record",
+    sourceRecord
   );
 }
 
@@ -155,6 +143,9 @@ export function formatVisibleAnswerResponseActionTargetForTrace(
     responseActionResolvedLogicalQuestionRevision:
       decision.resolvedLogicalQuestionRevision,
     responseActionTargetSourceHash: decision.sourceHash,
+    responseActionTargetSourceKind: decision.sourceKind,
+    responseActionTargetSourceObservationIds: decision.sourceObservationIds,
+    responseActionTargetSourceRecordId: decision.sourceRecordId,
     responseActionTargetSettlementId: decision.settlementId,
     responseActionTargetMismatchFacets: decision.mismatchFacets,
   };
@@ -166,8 +157,9 @@ function accepted(
   reason: Extract<
     VisibleAnswerResponseActionTargetReason,
     | "current-lqu-matches-visible-answer"
-    | "reconstructed-from-visible-answer-sources"
-  >
+    | "reconstructed-from-effective-source-record"
+  >,
+  sourceRecord?: EffectiveQuestionSourceRecord
 ): VisibleAnswerResponseActionTargetDecision {
   return {
     authorized: true,
@@ -178,9 +170,71 @@ function accepted(
     resolvedLogicalQuestionUnitId: logicalQuestionUnit.id,
     resolvedLogicalQuestionRevision: logicalQuestionUnit.revision,
     sourceHash: stable.questionSourceHash,
+    sourceKind: sourceRecord?.sourceKind,
+    sourceObservationIds: sourceRecord?.sourceObservationIds
+      ? [...sourceRecord.sourceObservationIds]
+      : undefined,
+    sourceRecordId: sourceRecord?.recordId,
     settlementId: stable.settlementId,
     settlementSnapshot: readSettlementSnapshot(stable),
     mismatchFacets: [],
+  };
+}
+
+function reconstructEffectiveSourceQuestion(
+  record: EffectiveQuestionSourceRecord,
+  meetingContext: MeetingContextState
+): LogicalQuestionUnit {
+  const sourceByTurnId = new Map(
+    meetingContext.transcriptTurns.map((turn) => [turn.id, turn])
+  );
+  const sourcesFromRecord = (record.effectiveSourceTexts ?? [])
+    .map((source) => ({
+      turnId: source.turnId,
+      text: source.text.trim(),
+      startedAt: sourceByTurnId.get(source.turnId)?.startedAt ?? record.startedAt,
+      endedAt: sourceByTurnId.get(source.turnId)?.endedAt ?? record.updatedAt,
+    }))
+    .filter((source) => source.text.length > 0);
+  const sourcesFromTurns = record.sourceTurnIds
+    .map((turnId) => sourceByTurnId.get(turnId))
+    .filter((turn): turn is NonNullable<typeof turn> => Boolean(turn))
+    .map((turn) => ({
+      turnId: turn.id,
+      text: turn.text.trim(),
+      startedAt: turn.startedAt,
+      endedAt: turn.endedAt,
+    }))
+    .filter((source) => source.text.length > 0);
+  const fallbackSourceId =
+    record.sourceObservationIds?.at(-1) ?? record.recordId;
+  const sources =
+    sourcesFromRecord.length > 0
+      ? sourcesFromRecord
+      : sourcesFromTurns.length > 0
+        ? sourcesFromTurns
+        : [
+            {
+              turnId: `source-record:${fallbackSourceId}`,
+              text: record.text,
+              startedAt: record.startedAt,
+              endedAt: record.updatedAt,
+            },
+          ];
+  return {
+    id: record.logicalQuestionUnitId,
+    revision: record.logicalQuestionRevision,
+    sessionId: record.sessionId,
+    runtimeEpoch: record.runtimeEpoch,
+    currentTurnId: sources.at(-1)?.turnId ?? `source-record:${fallbackSourceId}`,
+    sourceTurnIds: [...record.sourceTurnIds],
+    sources,
+    normalizedText: record.text,
+    startedAt: record.startedAt,
+    updatedAt: record.updatedAt,
+    compositionReasons: ["visible-answer-effective-source-record"],
+    boundaryReason: "visible-answer-effective-source-record",
+    truncated: false,
   };
 }
 

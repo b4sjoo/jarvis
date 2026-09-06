@@ -7,6 +7,7 @@ import {
 import type { StableAnswerRevision } from "../src/lib/meeting/stable-answer.js";
 import type { MeetingContextState } from "../src/lib/meeting/types.js";
 import type { CurrentQuestionSettlementDecision } from "../src/lib/meeting/current-question-settlement.js";
+import type { EffectiveQuestionSourceRecord } from "../src/lib/meeting/effective-question-source-ledger.js";
 
 const frozenSettlement = {
   settlementId: "settlement-voice",
@@ -101,10 +102,39 @@ function context(parentId = "parent-a"): MeetingContextState {
   };
 }
 
+function effectiveVoiceRecord(): EffectiveQuestionSourceRecord {
+  return {
+    recordId: "source-record-voice",
+    sessionId: "session-a",
+    runtimeEpoch: 3,
+    logicalQuestionUnitId: "question-voice",
+    logicalQuestionRevision: 2,
+    sourceHash: "voice-source-hash",
+    sourceKind: "voice",
+    sourceTurnIds: ["turn-voice"],
+    sourceObservationIds: [],
+    effectiveSourceTexts: [
+      {
+        turnId: "turn-voice",
+        text: "Tell me about a time you earned trust.",
+      },
+    ],
+    text: "Tell me about a time you earned trust.",
+    startedAt: 10,
+    updatedAt: 15,
+    speechAct: "question",
+    disposition: "answer-primary-ask",
+    relation: "followup-parent",
+    owner: { kind: "parent-mainline", parentId: "parent-a" },
+    settledAt: 20,
+  };
+}
+
 test("reconstructs Enhance target from the visible Answer owner", () => {
   const decision = resolveVisibleAnswerResponseActionTarget({
     stableAnswer: stable,
     currentLogicalQuestionUnit: undefined,
+    effectiveQuestionSources: [effectiveVoiceRecord()],
     meetingContext: context(),
     runtimeEpoch: 3,
   });
@@ -117,6 +147,79 @@ test("reconstructs Enhance target from the visible Answer owner", () => {
   );
   assert.equal(decision.sourceHash, "voice-source-hash");
   assert.equal(decision.settlementSnapshot, frozenSettlement);
+});
+
+test("reads a Screen visible-answer target from its exact effective source record", () => {
+  const screenSettlement = {
+    ...frozenSettlement,
+    settlementId: "settlement-screen",
+    logicalQuestionUnitId: "question-screen",
+    revision: 1,
+    sourceKind: "screen" as const,
+    sourceTurnIds: [],
+    sourceObservationIds: ["observation-screen"],
+    sourceHash: "screen-source-hash",
+  } satisfies CurrentQuestionSettlementDecision;
+  const screenStable = {
+    ...stable,
+    logicalQuestionUnitId: "question-screen",
+    logicalQuestionRevision: 1,
+    questionSourceHash: "screen-source-hash",
+    settlementId: "settlement-screen",
+    settlementSnapshot: screenSettlement,
+    suggestion: {
+      ...stable.suggestion,
+      basedOnTurnIds: ["turn-voice"],
+      basedOnObservationIds: ["observation-screen"],
+    },
+  } satisfies StableAnswerRevision;
+  const decision = resolveVisibleAnswerResponseActionTarget({
+    stableAnswer: screenStable,
+    currentLogicalQuestionUnit: undefined,
+    effectiveQuestionSources: [
+      {
+        ...effectiveVoiceRecord(),
+        recordId: "source-record-screen",
+        logicalQuestionUnitId: "question-screen",
+        logicalQuestionRevision: 1,
+        sourceHash: "screen-source-hash",
+        sourceKind: "screen",
+        sourceTurnIds: [],
+        sourceObservationIds: ["observation-screen"],
+        effectiveSourceTexts: [
+          {
+            turnId: "screen:observation-screen",
+            text: "Design a parking reservation system.",
+          },
+        ],
+        text: "Design a parking reservation system.",
+      },
+    ],
+    meetingContext: context(),
+    runtimeEpoch: 3,
+  });
+
+  assert.equal(decision.authorized, true);
+  assert.equal(
+    decision.logicalQuestionUnit?.normalizedText,
+    "Design a parking reservation system."
+  );
+  assert.equal(decision.sourceKind, "screen");
+  assert.deepEqual(decision.sourceObservationIds, ["observation-screen"]);
+  assert.equal(decision.sourceRecordId, "source-record-screen");
+});
+
+test("rejects a visible answer whose exact effective source is unavailable", () => {
+  const decision = resolveVisibleAnswerResponseActionTarget({
+    stableAnswer: stable,
+    currentLogicalQuestionUnit: undefined,
+    effectiveQuestionSources: [],
+    meetingContext: context(),
+    runtimeEpoch: 3,
+  });
+
+  assert.equal(decision.authorized, false);
+  assert.equal(decision.reason, "visible-answer-effective-source-missing");
 });
 
 test("rejects an Enhance target after the visible owner parent changes", () => {
