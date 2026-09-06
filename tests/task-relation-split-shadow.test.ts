@@ -322,6 +322,36 @@ test("feeds affinity semantics into canonical relation without lineage hashes", 
   );
 });
 
+test("treats an omitted affinity as an unknown snapshot, not a stale predecessor", () => {
+  const canonical = buildTaskRelationCanonicalShadowRequest({
+    request: request(),
+    sessionId: "session-a",
+    runtimeEpoch: 4,
+    manualCorrectionRevision: 2,
+    parent: {
+      operationId: "parent-op",
+      outputHash: "parent-hash",
+      adjudication: affinity("parent", "related", 0.99),
+    },
+  });
+
+  const authorized = authorizeTaskRelationCanonicalPredecessors({
+    request: canonical,
+    currentChildOperationId: "child-still-running",
+    currentParentOperationId: "parent-op",
+    currentParentOutputHash: "parent-hash",
+  });
+  assert.equal(authorized.authorized, true);
+
+  const staleParent = authorizeTaskRelationCanonicalPredecessors({
+    request: canonical,
+    currentParentOperationId: "different-parent-op",
+    currentParentOutputHash: "parent-hash",
+  });
+  assert.equal(staleParent.authorized, false);
+  assert.equal(staleParent.reason, "parent-predecessor-operation-mismatch");
+});
+
 test("omits child affinity when topology has no active child", () => {
   const parentOnlyTask = task();
   delete parentOnlyTask.child;
@@ -693,9 +723,11 @@ test("wires provider faults to finalization while stale source ownership fails c
   assert.ok(resolverEnd > resolverStart);
   const resolver = meetingHookSource.slice(resolverStart, resolverEnd);
 
-  assert.match(resolver, /affinity-deadline-expired/);
+  assert.match(resolver, /affinity-cutoff-expired/);
   assert.match(resolver, /canonical-unresolved/);
   assert.match(resolver, /canonical-deadline-expired/);
+  assert.match(resolver, /createOrderedRelationPhaseBudget/);
+  assert.match(resolver, /readAffinityOutcome/);
   assert.match(resolver, /finalizeWithNullHypothesis:\s*true/);
   assert.match(resolver, /cancelForegroundWork\?\.\(\)/);
   assert.match(meetingHookSource, /deadline:\s*foregroundDeadline/);

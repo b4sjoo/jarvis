@@ -1177,30 +1177,41 @@ export function authorizeTaskRelationCanonicalPredecessors(input: {
   currentParentOutputHash?: string;
 }) {
   const reject = (reason: string) => ({ authorized: false as const, reason });
-  if (
-    input.request.childPredecessorOperationId !==
-    input.currentChildOperationId
-  ) {
-    return reject("child-predecessor-operation-mismatch");
-  }
-  if (
-    input.request.childPredecessorOutputHash !==
+  const validate = (
+    label: "child" | "parent",
+    requestOperationId: string | undefined,
+    requestOutputHash: string | undefined,
+    currentOperationId: string | undefined,
+    currentOutputHash: string | undefined
+  ) => {
+    // An omitted predecessor is a deliberate unknown snapshot, not a stale
+    // dependency. Canonical Relation may use it while that affinity continues
+    // in parallel, but must validate every affinity result it actually reads.
+    if (!requestOperationId && !requestOutputHash) return undefined;
+    if (requestOperationId !== currentOperationId) {
+      return `${label}-predecessor-operation-mismatch`;
+    }
+    if (requestOutputHash !== currentOutputHash) {
+      return `${label}-predecessor-output-mismatch`;
+    }
+    return undefined;
+  };
+  const childRejection = validate(
+    "child",
+    input.request.childPredecessorOperationId,
+    input.request.childPredecessorOutputHash,
+    input.currentChildOperationId,
     input.currentChildOutputHash
-  ) {
-    return reject("child-predecessor-output-mismatch");
-  }
-  if (
-    input.request.parentPredecessorOperationId !==
-    input.currentParentOperationId
-  ) {
-    return reject("parent-predecessor-operation-mismatch");
-  }
-  if (
-    input.request.parentPredecessorOutputHash !==
+  );
+  if (childRejection) return reject(childRejection);
+  const parentRejection = validate(
+    "parent",
+    input.request.parentPredecessorOperationId,
+    input.request.parentPredecessorOutputHash,
+    input.currentParentOperationId,
     input.currentParentOutputHash
-  ) {
-    return reject("parent-predecessor-output-mismatch");
-  }
+  );
+  if (parentRejection) return reject(parentRejection);
   return { authorized: true as const, reason: "authorized" };
 }
 

@@ -3,8 +3,10 @@ import test from "node:test";
 import type { ActiveMeetingTask } from "../src/lib/meeting/active-meeting-task.js";
 import {
   coordinateOrderedSettlement,
+  createOrderedRelationPhaseBudget,
   createOrderedSettlementDeadline,
   createOrderedSettlementReleaseGate,
+  readOrderedRelationAffinityRemainingMs,
   readOrderedSettlementRemainingMs,
 } from "../src/lib/meeting/ordered-settlement-coordinator.js";
 import { decideOrderedTaskRelationResolution } from "../src/lib/meeting/task-relation-split-shadow.js";
@@ -35,6 +37,31 @@ test("shares one absolute deadline across ordered settlement stages", () => {
   });
   assert.equal(readOrderedSettlementRemainingMs(deadline, 2_200), 2_800);
   assert.equal(readOrderedSettlementRemainingMs(deadline, 5_100), 0);
+});
+
+test("reserves one bounded Canonical window inside the shared relation deadline", () => {
+  const voiceDeadline = createOrderedSettlementDeadline({
+    startedAt: 1_000,
+    budgetMs: 4_000,
+  });
+  const screenDeadline = createOrderedSettlementDeadline({
+    startedAt: 1_000,
+    budgetMs: 7_000,
+  });
+
+  const voicePhase = createOrderedRelationPhaseBudget(voiceDeadline);
+  const screenPhase = createOrderedRelationPhaseBudget(screenDeadline);
+
+  assert.deepEqual(voicePhase, {
+    affinityCutoffAt: 3_000,
+    canonicalReserveMs: 2_000,
+  });
+  assert.deepEqual(screenPhase, {
+    affinityCutoffAt: 6_000,
+    canonicalReserveMs: 2_000,
+  });
+  assert.equal(readOrderedRelationAffinityRemainingMs(voicePhase, 2_500), 500);
+  assert.equal(readOrderedRelationAffinityRemainingMs(voicePhase, 3_100), 0);
 });
 
 test("releases one canonical child result before the shared deadline", () => {

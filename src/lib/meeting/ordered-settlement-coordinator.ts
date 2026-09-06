@@ -22,6 +22,15 @@ export interface OrderedSettlementDeadline {
   budgetMs: number;
 }
 
+// Reserve enough of the one foreground window for Canonical Relation to make
+// a decision after the parallel affinity proposals have had their first pass.
+export const ORDERED_RELATION_CANONICAL_RESERVE_MS = 2_000;
+
+export interface OrderedRelationPhaseBudget {
+  affinityCutoffAt: number;
+  canonicalReserveMs: number;
+}
+
 export type OrderedSettlementReleaseSource = "settled" | "deadline";
 
 export interface OrderedSettlementReleaseDecision {
@@ -60,6 +69,27 @@ export function readOrderedSettlementRemainingMs(
   now = Date.now()
 ) {
   return Math.max(0, deadline.deadlineAt - now);
+}
+
+export function createOrderedRelationPhaseBudget(
+  deadline: OrderedSettlementDeadline,
+  canonicalReserveMs = ORDERED_RELATION_CANONICAL_RESERVE_MS
+): OrderedRelationPhaseBudget {
+  const boundedCanonicalReserveMs = Math.min(
+    deadline.budgetMs,
+    Math.max(0, canonicalReserveMs)
+  );
+  return {
+    affinityCutoffAt: deadline.deadlineAt - boundedCanonicalReserveMs,
+    canonicalReserveMs: boundedCanonicalReserveMs,
+  };
+}
+
+export function readOrderedRelationAffinityRemainingMs(
+  phaseBudget: Pick<OrderedRelationPhaseBudget, "affinityCutoffAt">,
+  now = Date.now()
+) {
+  return Math.max(0, phaseBudget.affinityCutoffAt - now);
 }
 
 export function createOrderedSettlementReleaseGate(
