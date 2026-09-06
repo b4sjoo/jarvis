@@ -60,6 +60,18 @@ test("changes the coding output contract with the committed phase", () => {
     formatInterviewPlaybookForPrompt(implementation),
     /complete runnable implementation/
   );
+  assert.match(
+    formatInterviewPlaybookForPrompt(implementation),
+    /Scope rule: distinguish current required behavior from optional extensions/i
+  );
+  assert.match(
+    formatInterviewPlaybookForPrompt(implementation),
+    /Do not add concurrency, locks, retries, caching/i
+  );
+  assert.match(
+    formatInterviewPlaybookForPrompt(implementation),
+    /single-file answer self-contained/i
+  );
 });
 
 test("changes project deep-dive guidance with the committed phase", () => {

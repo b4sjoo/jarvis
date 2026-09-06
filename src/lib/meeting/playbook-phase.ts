@@ -451,9 +451,14 @@ export function formatCodingPlaybookPhaseContract(
   phase: InterviewPlaybookPhase
 ) {
   const normalizedPhase = normalizeCodingPhase(phase);
+  const scopeAndEvidenceContract = [
+    "- Scope rule: distinguish current required behavior from optional extensions. Do not add concurrency, locks, retries, caching, framework integration, or other bonus capabilities unless the source requirements need them for correctness or explicitly request them.",
+    "- Keep Answer, Approach, Code, and Complexity about the same visible candidate. If the simplest correct candidate is already optimal, say so instead of inventing a different baseline.",
+  ];
   if (normalizedPhase === "optimized_pseudocode") {
     return [
       "codingPhaseContract:",
+      ...scopeAndEvidenceContract,
       "- Explain the baseline bottleneck, then the optimized data structure, state, or invariant.",
       "- In Approach, write the exact marker `Pseudocode:` followed by a fenced text block or ordered steps, then give boundary conditions, one spoken dry run, and exact target Complexity.",
       "- Do not emit Code in this phase. Preserve any existing Code artifact until implementation_validation replaces it.",
@@ -463,7 +468,10 @@ export function formatCodingPlaybookPhaseContract(
   if (normalizedPhase === "implementation_validation") {
     return [
       "codingPhaseContract:",
+      ...scopeAndEvidenceContract,
       "- Emit a complete runnable implementation in the selected programming language.",
+      "- Match the current visible or source-backed signature, language, return contract, and constraints. Keep a single-file answer self-contained; use only standard-library or source-present modules.",
+      "- When the current request asks for tests or debugging, preserve the implementation contract and give concrete assertions or a runnable local demonstration. Do not invent project files, modules, or APIs.",
       "- Keep Answer concise and spoken; put implementation only in Code.",
       "- Include exact Complexity, key edge cases, and validation or debugging guidance.",
       formatCodingSolutionManifestContract("optimized"),
@@ -471,6 +479,7 @@ export function formatCodingPlaybookPhaseContract(
   }
   return [
     "codingPhaseContract:",
+    ...scopeAndEvidenceContract,
     "- Ask up to three high-yield clarification questions when the callable contract is ambiguous; otherwise state concise, revisable assumptions.",
     "- Establish input/output shape, signature or interface, units, ordering, mutation, duplicate or missing-input behavior, and relevant error semantics.",
     "- For endpoint or API-shaped tasks, clarify request, response, status/error behavior, state, and dependency failures without treating them as a separate question type.",
