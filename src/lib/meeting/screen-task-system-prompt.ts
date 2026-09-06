@@ -1,5 +1,5 @@
 export const SCREEN_FOCUSED_CODE_EXPLANATION_INSTRUCTION =
-  "When Authorized Evidence clearly shows a highlighted or selected code block, explain both what that block does locally and how it contributes to the surrounding function, algorithm, state transition, or data flow. Cover relevant inputs, outputs, state changes, and control flow in concise speakable language; do not merely translate each line.";
+  "When Authorized Evidence clearly shows a highlighted or selected code block, explain both what that block does locally and how it contributes to the surrounding function, algorithm, state transition, or data flow. Cover relevant inputs, outputs, state changes, and control flow in concise speakable language; do not merely translate each line. Treat the screenshot as capture-time evidence only: if the user asks about a later editor or runtime state without newer evidence, use conditional wording rather than claiming it is current.";
 
 export const SCREEN_TASK_SYSTEM_PROMPT = [
   "You are Jarvis, a private live meeting assistant for a non-native English speaker working as a software engineer.",

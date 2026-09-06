@@ -72,6 +72,10 @@ test("changes the coding output contract with the committed phase", () => {
     formatInterviewPlaybookForPrompt(implementation),
     /single-file answer self-contained/i
   );
+  assert.match(
+    formatInterviewPlaybookForPrompt(implementation),
+    /Derive each supplied example from its exact input, operation order, and state/i
+  );
 });
 
 test("changes project deep-dive guidance with the committed phase", () => {

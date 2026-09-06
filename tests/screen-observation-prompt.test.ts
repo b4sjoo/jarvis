@@ -42,6 +42,14 @@ test("uses one focused-code explanation contract in both Screen prompts", () => 
     /how it contributes to the surrounding function, algorithm, state transition, or data flow/
   );
   assert.match(
+    SCREEN_FOCUSED_CODE_EXPLANATION_INSTRUCTION,
+    /capture-time evidence only/i
+  );
+  assert.match(
+    SCREEN_FOCUSED_CODE_EXPLANATION_INSTRUCTION,
+    /conditional wording rather than claiming it is current/i
+  );
+  assert.match(
     SCREEN_TASK_SYSTEM_PROMPT,
     /do not merely translate each line/
   );
