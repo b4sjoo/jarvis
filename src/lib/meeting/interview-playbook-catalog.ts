@@ -168,11 +168,11 @@ export function createInterviewPlaybookFromCatalog(input: {
       reason,
       allowedFamilies: ["behavioral"],
       firstMove:
-        "Use the single supported personal story selected by the Behavioral family contract. Adapt its emphasis to the question, then answer with action, tradeoff, impact, and learning without changing story identity.",
+        "When a supported personal story is selected, adapt its emphasis to the question and answer with action, tradeoff, impact, and learning without changing story identity. Otherwise answer the current judgment directly with a bounded framework or explicitly hypothetical example.",
       clarifyingStrategy:
-        "Ask only if the story choice is genuinely ambiguous; otherwise choose the safest supported story anchor.",
+        "Ask only when a missing fact or story choice materially changes the answer. Do not ask merely because no supported personal story is available for a question that admits bounded analysis.",
       outputContract:
-        "中文思路 should name the selected story anchor and the factual risk to avoid. Answer should be a speakable 60-90 second first-person STAR using supported facts only; keep deeper tradeoff, failure, and retrospective material for follow-ups.",
+        "When a supported story is selected, Answer should be a speakable 60-90 second first-person STAR using supported facts only. Otherwise provide a speakable bounded analysis or explicitly hypothetical example without presenting it as personal experience; keep deeper tradeoff, failure, and retrospective material for follow-ups.",
       followUpPolicy:
         "Follow-ups should preserve the committed story anchor and select the relevant result, tradeoff, failure-recovery, or retrospective angle. Do not restart with a different story unless the interviewer explicitly switches topics.",
       maxEntries: 6,
@@ -264,11 +264,11 @@ export function createInterviewPlaybookFromCatalog(input: {
         "system-design",
       ],
       firstMove:
-        "Anchor on one real project and give a 30-45 second introduction covering the problem, previous limitation, my role and contribution, and supported outcome.",
+        "When the request needs personal implementation facts, anchor on one real project and give a 30-45 second introduction covering supported problem, role, contribution, and outcome. Otherwise answer the requested product or technical judgment directly with bounded analysis or an explicit hypothetical example.",
       clarifyingStrategy:
-        "If the prompt mixes past project and future improvement, ask whether to discuss the existing implementation first or propose a future design.",
+        "Ask whether to discuss the existing implementation or a future design only when that distinction materially changes the answer. Missing project facts alone do not require clarification when bounded analysis remains useful.",
       outputContract:
-        "Answer must be fact-bound and first-person. 中文思路 should name the project anchor, role, design decision, tradeoff, validation, and impact boundary.",
+        "Use fact-bound first-person claims only when supported. For unsupported product judgment, tradeoff, or future improvement, Answer may be a direct bounded analysis or explicitly hypothetical example; do not present it as completed personal work.",
       followUpPolicy:
         "Follow-ups should drill into architecture, tradeoff, debugging, metrics, failure, rollout, or future work for the same project.",
       maxEntries: 7,

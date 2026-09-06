@@ -239,12 +239,10 @@ export function buildFactAnchorDecision({
       requiredFor,
       supportedAnchorIds: [],
       supportedAnchorTitles: candidateTitles,
-      action: candidateTitles.length
-        ? "offer-supported-choices"
-        : "ask-clarification",
+      action: "answer-with-caveats",
       missingAnchorReason: candidateTitles.length
-        ? "Multiple eligible project evidence sets were retrieved, so Jarvis must not choose one silently."
-        : "No eligible project evidence was retrieved for the requested first-person project answer.",
+        ? "Multiple eligible project evidence sets were retrieved. Do not silently choose one for first-person claims; a bounded non-factual answer remains available."
+        : "No eligible project evidence was retrieved for the requested first-person project answer; a bounded non-factual answer remains available.",
       personalEvidence,
       selectedPersonalEvidenceSources: [],
       claimPredicateFamily: "project-overview",
@@ -341,10 +339,10 @@ export function buildFactAnchorDecision({
     requiredFor,
     supportedAnchorIds: [],
     supportedAnchorTitles: projectHint ? [projectHint] : [],
-    action: projectHint ? "offer-supported-choices" : "ask-clarification",
+    action: "answer-with-caveats",
     missingAnchorReason: projectHint
-      ? `The task mentions "${projectHint}", but no curated memory fact anchor was retrieved for it.`
-      : "No curated memory fact anchor was retrieved for this behavioral or project deep-dive answer.",
+      ? `The task mentions "${projectHint}", but no curated memory fact anchor was retrieved for it. A bounded non-factual answer remains available.`
+      : "No curated memory fact anchor was retrieved for this behavioral or project deep-dive answer. A bounded non-factual answer remains available.",
     personalEvidence,
     selectedPersonalEvidenceSources: [],
     claimPredicateFamily: predicateFamily,
@@ -401,6 +399,9 @@ export function formatFactAnchorDecisionForPrompt(
       : undefined,
     decision.action === "answer-with-anchor"
       ? "Anchor scope rule: each first-person mechanism, metric, ownership claim, third-party stance, and absolute result must be directly supported by the allowed anchors. A valid anchor ID does not authorize invented surrounding details."
+      : undefined,
+    decision.action === "answer-with-caveats"
+      ? "Bounded answer rule: directly answer the substantive analysis, tradeoff, or recommendation with explicit hypotheticals when useful. Do not present unsupported first-person experience, project ownership, customer history, metrics, dates, or outcomes as fact. Missing fact evidence alone does not require project selection or clarification."
       : undefined,
     decision.claimSupportDecisions.length
       ? `Allowed claim anchors: ${decision.claimSupportDecisions

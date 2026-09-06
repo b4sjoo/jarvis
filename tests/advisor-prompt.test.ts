@@ -85,6 +85,47 @@ test("lets the coding phase own the visible solution instead of forcing optimal 
   assert.doesNotMatch(message, /summary of the optimal solution/);
 });
 
+test("keeps a no-anchor project judgment available as bounded analysis", () => {
+  const message = buildAdvisorUserMessage(
+    {
+      transcript:
+        "them: How do you decide whether a customer request is noise or product value?",
+      screenContext: "",
+      rollingSummary: "",
+      userProfileContext: "",
+      glossaryText: "",
+      taskRuntime: { revision: 0 },
+      factAnchorDecision: {
+        state: "no-anchor",
+        requiredFor: "project-deep-dive",
+        supportedAnchorIds: [],
+        supportedAnchorTitles: [],
+        action: "answer-with-caveats",
+        personalEvidence: {
+          requirement: "not-required",
+          confidence: 1,
+          confidenceTier: "high",
+          signals: [],
+          counterSignals: [],
+          allowedEvidenceSources: [],
+          mode: "shadow",
+          enforced: false,
+        },
+        selectedPersonalEvidenceSources: [],
+        claimSupportDecisions: [],
+        unsupportedClaimRisk: "high",
+        requirementSource: "settled-question-type",
+        requirementReason: "settled-project-deep-dive-question-type",
+      },
+    },
+    { answerProfile: "compact-spoken" }
+  );
+
+  assert.match(message, /Missing fact evidence limits first-person claims/i);
+  assert.match(message, /directly answer.*explicit hypotheticals/i);
+  assert.match(message, /missing personal anchor alone does not do so/i);
+});
+
 test("blocks numeric QPS when General SD evidence has inventory and ratio only", () => {
   const message = buildAdvisorUserMessage(
     {

@@ -358,7 +358,7 @@ export function formatProjectBindingDecisionForPrompt(
           .join(", ")}`
       : "Eligible choices: none",
     decision.action === "needs-selection"
-      ? "Selection rule: do not choose a project silently. Keep first-person project details fact-neutral and ask the user to select one eligible project."
+      ? "Selection rule: do not choose a project silently for first-person facts. You may still directly answer general analysis, tradeoffs, or explicitly hypothetical examples without selecting a project."
       : undefined,
     decision.action === "invalidate"
       ? "Invalidation rule: do not use the previous project binding or its fact evidence until a compatible project is selected."

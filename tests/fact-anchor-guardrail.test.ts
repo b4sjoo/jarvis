@@ -130,7 +130,7 @@ test("uses caveats when behavioral retrieval only found rubrics or guidance", ()
   assert.match(decision.missingAnchorReason ?? "", /no concrete/i);
 });
 
-test("blocks project deep-dive fabrication when no memory anchor is retrieved", () => {
+test("keeps a bounded project deep-dive answer available when no memory anchor is retrieved", () => {
   const decision = buildFactAnchorDecision({
     questionType: "project-deep-dive",
     memoryContext: makeMemoryResult([]),
@@ -138,7 +138,7 @@ test("blocks project deep-dive fabrication when no memory anchor is retrieved", 
   });
 
   assert.equal(decision.state, "no-anchor");
-  assert.equal(decision.action, "offer-supported-choices");
+  assert.equal(decision.action, "answer-with-caveats");
   assert.deepEqual(decision.supportedAnchorTitles, ["Microsoft MCP"]);
   assert.equal(
     formatFactAnchorDecisionForTrace(decision).factAnchorState,
@@ -156,7 +156,7 @@ test("does not require fact anchors for coding or system design tasks", () => {
   assert.equal(decision.requiredFor, "none");
 });
 
-test("enforces personal project evidence even when taxonomy says coding", () => {
+test("uses caveats for unsupported personal project evidence even when taxonomy says coding", () => {
   const decision = buildFactAnchorDecision({
     questionType: "coding",
     questionText: "What did you implement in this feature?",
@@ -167,7 +167,7 @@ test("enforces personal project evidence even when taxonomy says coding", () => 
   assert.equal(decision.personalEvidence.enforced, true);
   assert.equal(decision.requiredFor, "project-deep-dive");
   assert.equal(decision.state, "no-anchor");
-  assert.equal(decision.action, "ask-clarification");
+  assert.equal(decision.action, "answer-with-caveats");
   assert.equal(decision.unsupportedClaimRisk, "high");
 });
 
@@ -446,7 +446,7 @@ test("keeps fact requirements for hypothetical wording inside a bound project", 
   }
 });
 
-test("offers project choices instead of blending multiple eligible projects", () => {
+test("keeps multiple project candidates out of first-person claims without blocking bounded analysis", () => {
   const decision = buildFactAnchorDecision({
     questionType: "project-deep-dive",
     memoryContext: makeMemoryResult([
@@ -493,7 +493,7 @@ test("offers project choices instead of blending multiple eligible projects", ()
     },
   });
 
-  assert.equal(decision.action, "offer-supported-choices");
+  assert.equal(decision.action, "answer-with-caveats");
   assert.deepEqual(decision.supportedAnchorTitles, [
     "Agentic Memory",
     "Model Interface",
