@@ -4,6 +4,7 @@ import {
   applyInterviewChildProbeTransition,
   commitVisibleUsefulAnswerToParent,
   decideInterviewTaskContinuityBranch,
+  mergeGeneratedChildContinuity,
 } from "../src/lib/meeting/interview-task-continuity.js";
 import type {
   ActiveInterviewChild,
@@ -121,6 +122,69 @@ test("applies a child probe without replacing parent trajectory state", () => {
   assert.equal(next.whiteboardArtifact, parent.whiteboardArtifact);
   assert.equal(next.child, child);
   assert.equal(next.revisions, parent.revisions + 1);
+});
+
+test("keeps source-owned child identity and return capsule when generation refreshes continuity", () => {
+  const sourceOwnedChild: ActiveInterviewChild = {
+    ...makeChild(),
+    returnCapsule: {
+      parentId: "parent-1",
+      parentRevisionAtAttach: 2,
+      createdAt: 2_000,
+      parentPhase: "design_framing",
+      topicCapsule: "Design a RAG system",
+      allowedFactAnchorIds: ["agentic-memory"],
+      artifactCompatibility: {
+        policy: "preserve-parent-artifacts",
+        whiteboardArtifactId: "whiteboard-1",
+      },
+    },
+    phaseState: {
+      phase: "implementation_validation",
+      revision: 4,
+      phaseProgress: { implementation_validation: true },
+      playbook: {
+        id: "coding_algorithm",
+        label: "Coding Algorithm",
+        questionType: "coding",
+        phase: "implementation_validation",
+        confidence: 1,
+        reason: "test",
+        memoryPolicy: { id: "test" },
+        firstMove: "test",
+        clarifyingStrategy: "test",
+        outputContract: "test",
+        followUpPolicy: "test",
+      },
+    },
+    latestScreenObservationId: "screen-source",
+  };
+  const generatedChild: ActiveInterviewChild = {
+    ...makeChild(),
+    id: "generated-child",
+    questionType: "field-knowledge",
+    question: "Generated answer should not replace this source question.",
+    basedOnTurnIds: ["generated-turn"],
+    basedOnObservationIds: ["generated-screen"],
+    compactSummary: "Generated answer summary",
+  };
+
+  const merged = mergeGeneratedChildContinuity({
+    sourceOwnedChild,
+    generatedChild,
+    now: 3_000,
+  });
+
+  assert.equal(merged.id, "child-1");
+  assert.equal(merged.questionType, "coding");
+  assert.equal(merged.question, "Implement the loss function");
+  assert.deepEqual(merged.basedOnTurnIds, ["turn-1"]);
+  assert.deepEqual(merged.basedOnObservationIds, []);
+  assert.equal(merged.latestScreenObservationId, "screen-source");
+  assert.equal(merged.returnCapsule, sourceOwnedChild.returnCapsule);
+  assert.equal(merged.phaseState, sourceOwnedChild.phaseState);
+  assert.equal(merged.compactSummary, "Generated answer summary");
+  assert.equal(merged.updatedAt, 3_000);
 });
 
 test("updates durable useful-answer history only from a visible commit", () => {

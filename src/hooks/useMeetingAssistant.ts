@@ -136,7 +136,6 @@ import {
 } from "@/lib/meeting/active-branch-phase";
 import {
   createCodingChildPhaseState,
-  preserveOrCreateCodingChildPhaseState,
 } from "@/lib/meeting/coding-child-phase";
 import {
   buildHumanEvaluationAttemptEvidenceIndexV2,
@@ -831,6 +830,7 @@ import {
   type PendingInterviewSectionHint,
   type PendingInterviewTaskBoundary,
   applyInterviewChildProbeTransition,
+  mergeGeneratedChildContinuity,
   commitVisibleUsefulAnswerToParent,
   persistTraceHumanEvaluations,
   persistQuestionHumanEvaluations,
@@ -38383,32 +38383,11 @@ function updateInterviewTaskContinuityForAnswer({
     const child =
       sourceTransitionPrecommitted &&
       existingTask.child &&
-      generatedChild
-        ? {
-            ...generatedChild,
-            id: existingTask.child.id,
-            createdAt: existingTask.child.createdAt,
-            phaseState: preserveOrCreateCodingChildPhaseState({
-              questionType: generatedChild.questionType,
-              existing: existingTask.child.phaseState,
-              playbook: generatedChild.phaseState?.playbook,
-            }),
-            basedOnTurnIds: Array.from(
-              new Set([
-                ...existingTask.child.basedOnTurnIds,
-                ...generatedChild.basedOnTurnIds,
-              ])
-            ),
-            basedOnObservationIds: Array.from(
-              new Set([
-                ...existingTask.child.basedOnObservationIds,
-                ...generatedChild.basedOnObservationIds,
-              ])
-            ),
-            latestScreenObservationId:
-              generatedChild.latestScreenObservationId ??
-              existingTask.child.latestScreenObservationId,
-          }
+        ? mergeGeneratedChildContinuity({
+            sourceOwnedChild: existingTask.child,
+            generatedChild,
+            now,
+          })
         : generatedChild;
     const whiteboardArtifact = whiteboardMutationAuthorized
       ? updateWhiteboardArtifactFromAnswer({

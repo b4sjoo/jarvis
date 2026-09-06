@@ -131,6 +131,25 @@ export function applyInterviewChildProbeTransition(input: {
   };
 }
 
+export function mergeGeneratedChildContinuity(input: {
+  sourceOwnedChild: ActiveInterviewChild;
+  generatedChild?: ActiveInterviewChild;
+  now: number;
+}): ActiveInterviewChild {
+  const generated = input.generatedChild;
+  if (!generated) return { ...input.sourceOwnedChild };
+
+  // A source-owned transition has already settled identity, lineage, phase,
+  // and the parent return target. Generation may only refresh its summary.
+  return {
+    ...input.sourceOwnedChild,
+    compactSummary:
+      generated.compactSummary ?? input.sourceOwnedChild.compactSummary,
+    artifactId: generated.artifactId ?? input.sourceOwnedChild.artifactId,
+    updatedAt: input.now,
+  };
+}
+
 export function commitVisibleUsefulAnswerToParent(input: {
   parent?: ActiveInterviewParent;
   taskId: string | null;
