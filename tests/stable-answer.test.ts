@@ -493,3 +493,20 @@ test("manual correction bypasses an active delivery lock", () => {
 
   assert.equal(decision.disposition, "committed");
 });
+
+test("commits a generation already visible before the delivery lock began", () => {
+  const decision = decideStableAnswerCommit({
+    candidate: suggestion("answer-2", "Answer: Continue the same response."),
+    refreshAuthority: {
+      authorized: true,
+      kind: "automatic-substantive",
+      reason: "substantive-turn",
+      hardOverride: false,
+      maySupersedeGeneration: true,
+    },
+    deliveryLockActive: true,
+    sameGenerationVisible: true,
+  });
+
+  assert.equal(decision.disposition, "committed");
+});

@@ -541,10 +541,40 @@ export function isAnswerDeliveryLockActive(
   );
 }
 
+export interface AnswerDeliverySwitchDecision {
+  allowed: boolean;
+  reason:
+    | "delivery-unlocked"
+    | "delivery-hard-override"
+    | "delivery-same-generation-continuity"
+    | "delivery-lock-active";
+}
+
+export function decideAnswerDeliverySwitch(input: {
+  deliveryLockActive: boolean;
+  hardOverride: boolean;
+  sameGenerationVisible?: boolean;
+}): AnswerDeliverySwitchDecision {
+  if (!input.deliveryLockActive) {
+    return { allowed: true, reason: "delivery-unlocked" };
+  }
+  if (input.hardOverride) {
+    return { allowed: true, reason: "delivery-hard-override" };
+  }
+  if (input.sameGenerationVisible) {
+    return {
+      allowed: true,
+      reason: "delivery-same-generation-continuity",
+    };
+  }
+  return { allowed: false, reason: "delivery-lock-active" };
+}
+
 export function decideStableAnswerCommit(input: {
   candidate: AdvisorSuggestion;
   refreshAuthority: RefreshAuthorityDecision;
   deliveryLockActive: boolean;
+  sameGenerationVisible?: boolean;
 }): StableAnswerCommitDecision {
   if (!input.candidate.content.trim() || input.candidate.kind === "silent") {
     return { disposition: "rejected", reason: "empty-candidate" };
@@ -552,7 +582,12 @@ export function decideStableAnswerCommit(input: {
   if (input.candidate.meetingAnswer?.parseStatus === "partial") {
     return { disposition: "rejected", reason: "partial-candidate" };
   }
-  if (input.deliveryLockActive && !input.refreshAuthority.hardOverride) {
+  const deliverySwitch = decideAnswerDeliverySwitch({
+    deliveryLockActive: input.deliveryLockActive,
+    hardOverride: input.refreshAuthority.hardOverride,
+    sameGenerationVisible: input.sameGenerationVisible,
+  });
+  if (!deliverySwitch.allowed) {
     return { disposition: "pending", reason: "delivery-lock-active" };
   }
   return { disposition: "committed", reason: "authorized" };

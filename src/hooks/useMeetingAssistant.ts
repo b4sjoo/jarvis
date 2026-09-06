@@ -14543,6 +14543,21 @@ export function useMeetingAssistant() {
     let stagedAnswerDeliveryFirstChunkAt: number | undefined;
     let stagedAnswerDeliveryFirstVisiblePartialAt: number | undefined;
     let stagedAnswerDeliveryVisible = false;
+    let stagedAnswerDeliveryFirstLockHoldAt: number | undefined;
+    let stagedAnswerDeliveryLastPartialReason:
+      | ReturnType<typeof decideStagedAnswerPartial>["reason"]
+      | undefined;
+    const isStagedAnswerDeliveryLockActive = () =>
+      !options.artifactRegenerationTarget &&
+      !taskBoundaryCommittedBeforeAdvisor &&
+      !sourceOwnedTransitionCommittedFreshParent(
+        sourceOwnedTransitionReceipt
+      ) &&
+      isAnswerDeliveryLockActive(answerDeliveryProgressRef.current, {
+        visibleAnswerRevision: visibleAnswerRevisionRef.current,
+        taskId: stableAnswerRevisionRef.current?.taskId ?? null,
+        microphoneSpeaking: microphoneSpeakingRef.current,
+      });
     const rollbackStagedAnswerDelivery = (reason: string) => {
       if (!stagedAnswerDeliveryVisible) return;
       stagedAnswerDeliveryVisible = false;
@@ -14562,6 +14577,8 @@ export function useMeetingAssistant() {
             firstVisiblePartialAt:
               stagedAnswerDeliveryFirstVisiblePartialAt,
             visibleStreamStarted: true,
+            deliveryLockActive: isStagedAnswerDeliveryLockActive(),
+            partialReason: stagedAnswerDeliveryLastPartialReason,
             rollbackReason: reason,
           })
         );
@@ -14862,6 +14879,8 @@ export function useMeetingAssistant() {
           );
           const automaticVoiceAuthorized =
             automaticVoiceStreamingAuthorized();
+          const deliveryLockActive =
+            isStagedAnswerDeliveryLockActive();
           const stagedPartialDecision = decideStagedAnswerPartial({
             accumulated: stagedPartialContent,
             explicitRequest: stagedAnswerDeliveryExplicitRequest,
@@ -14872,8 +14891,34 @@ export function useMeetingAssistant() {
               (holdAdvisorPartialForFactAnchor &&
                 !stagedPartialContent.trim()) ||
               !responseOpportunityGenerationAuthorized(),
+            deliveryLockActive,
+            hardOverride: advisorJob.refreshAuthority.hardOverride,
             visibleStreamStarted: stagedAnswerDeliveryVisible,
           });
+          stagedAnswerDeliveryLastPartialReason = stagedPartialDecision.reason;
+          if (
+            !stagedPartialDecision.visible &&
+            stagedPartialDecision.reason === "delivery-lock-active" &&
+            !stagedAnswerDeliveryFirstLockHoldAt
+          ) {
+            stagedAnswerDeliveryFirstLockHoldAt = Date.now();
+            if (traceId) {
+              traceStoreRef.current.updateMetadata(
+                traceId,
+                formatStagedAnswerDeliveryForTrace({
+                  explicitRequest: stagedAnswerDeliveryExplicitRequest,
+                  automaticVoiceAuthorized,
+                  chunkCount: stagedAnswerDeliveryChunkCount,
+                  firstChunkAt: stagedAnswerDeliveryFirstChunkAt,
+                  firstVisiblePartialAt:
+                    stagedAnswerDeliveryFirstVisiblePartialAt,
+                  visibleStreamStarted: stagedAnswerDeliveryVisible,
+                  deliveryLockActive,
+                  partialReason: stagedPartialDecision.reason,
+                })
+              );
+            }
+          }
           if (stagedPartialDecision.visible) {
             if (
               stagedPartialDecision.startsVisibleStream ||
@@ -14893,6 +14938,8 @@ export function useMeetingAssistant() {
                       firstVisiblePartialAt:
                         stagedAnswerDeliveryFirstVisiblePartialAt,
                       visibleStreamStarted: true,
+                      deliveryLockActive,
+                      partialReason: stagedPartialDecision.reason,
                     }),
                     factAnchorCompletedSentenceBuffering:
                       factAnchorStreamingPartial.bufferingEnabled,
@@ -15907,6 +15954,7 @@ export function useMeetingAssistant() {
         candidate: nextSuggestion,
         refreshAuthority: advisorJob.refreshAuthority,
         deliveryLockActive,
+        sameGenerationVisible: stagedAnswerDeliveryVisible,
       });
       const canonicalWhiteboardRejection:
         | StableArtifactOnlyCommitDecision
@@ -16513,6 +16561,8 @@ export function useMeetingAssistant() {
             firstVisiblePartialAt:
               stagedAnswerDeliveryFirstVisiblePartialAt,
             visibleStreamStarted: stagedAnswerDeliveryVisible,
+            deliveryLockActive,
+            partialReason: stagedAnswerDeliveryLastPartialReason,
           }),
           ...advisorModelGenerationIdentity,
           ...formatModelGenerationTimingForTrace({

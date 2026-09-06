@@ -93,6 +93,36 @@ test("allows an authorized automatic Voice Answer after a complete section", () 
   assert.equal(decision.startsVisibleStream, true);
 });
 
+test("holds a first automatic display while the existing answer is delivery-locked", () => {
+  const decision = decideStagedAnswerPartial({
+    accumulated: "Answer:\nA new automatic response.",
+    explicitRequest: false,
+    automaticVoiceAuthorized: true,
+    stableAnswerPresent: true,
+    guardrailHeld: false,
+    deliveryLockActive: true,
+    visibleStreamStarted: false,
+  });
+
+  assert.equal(decision.visible, false);
+  assert.equal(decision.reason, "delivery-lock-active");
+});
+
+test("keeps a valid generation visible when its old-answer lock starts later", () => {
+  const decision = decideStagedAnswerPartial({
+    accumulated: "Answer:\nThe same generation continues.",
+    explicitRequest: false,
+    automaticVoiceAuthorized: true,
+    stableAnswerPresent: true,
+    guardrailHeld: false,
+    deliveryLockActive: true,
+    visibleStreamStarted: true,
+  });
+
+  assert.equal(decision.visible, true);
+  assert.equal(decision.reason, "explicit-stream-continued");
+});
+
 test("keeps artifacts out of staged Answer content", () => {
   assert.equal(
     projectStagedAnswerOnlyContent(

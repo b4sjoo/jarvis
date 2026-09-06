@@ -1,7 +1,10 @@
+import { decideAnswerDeliverySwitch } from "./stable-answer.js";
+
 export type StagedAnswerPartialReason =
   | "guardrail-held"
   | "legacy-empty-surface"
   | "legacy-stable-answer-held"
+  | "delivery-lock-active"
   | "explicit-waiting-valid-section"
   | "explicit-first-valid-section"
   | "explicit-stream-continued";
@@ -21,6 +24,8 @@ export function decideStagedAnswerPartial(input: {
   automaticVoiceAuthorized?: boolean;
   stableAnswerPresent: boolean;
   guardrailHeld: boolean;
+  deliveryLockActive?: boolean;
+  hardOverride?: boolean;
   visibleStreamStarted: boolean;
 }): StagedAnswerPartialDecision {
   if (input.guardrailHeld) {
@@ -45,6 +50,19 @@ export function decideStagedAnswerPartial(input: {
           startsVisibleStream: false,
           reason: "legacy-empty-surface",
         };
+  }
+
+  const deliverySwitch = decideAnswerDeliverySwitch({
+    deliveryLockActive: input.deliveryLockActive ?? false,
+    hardOverride: input.hardOverride ?? false,
+    sameGenerationVisible: input.visibleStreamStarted,
+  });
+  if (!deliverySwitch.allowed) {
+    return {
+      visible: false,
+      startsVisibleStream: false,
+      reason: "delivery-lock-active",
+    };
   }
 
   if (input.visibleStreamStarted) {
@@ -90,6 +108,8 @@ export function formatStagedAnswerDeliveryForTrace(input: {
   firstChunkAt?: number;
   firstVisiblePartialAt?: number;
   visibleStreamStarted: boolean;
+  deliveryLockActive?: boolean;
+  partialReason?: StagedAnswerPartialReason;
   rollbackReason?: string;
 }) {
   return {
@@ -100,6 +120,8 @@ export function formatStagedAnswerDeliveryForTrace(input: {
     stagedAnswerDeliveryFirstChunkAt: input.firstChunkAt,
     stagedAnswerDeliveryFirstVisiblePartialAt: input.firstVisiblePartialAt,
     stagedAnswerDeliveryVisibleStreamStarted: input.visibleStreamStarted,
+    stagedAnswerDeliveryLockActive: input.deliveryLockActive,
+    stagedAnswerDeliveryPartialReason: input.partialReason,
     stagedAnswerDeliveryRollbackReason: input.rollbackReason,
   };
 }
