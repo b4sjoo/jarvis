@@ -38382,7 +38382,7 @@ function updateInterviewTaskContinuityForAnswer({
       : undefined;
     const child =
       sourceTransitionPrecommitted &&
-      existingTask.child &&
+      existingTask.child
         ? mergeGeneratedChildContinuity({
             sourceOwnedChild: existingTask.child,
             generatedChild,
