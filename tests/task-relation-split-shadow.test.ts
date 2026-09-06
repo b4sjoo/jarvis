@@ -678,6 +678,41 @@ test("ordered relation resolution prefers matrix, then canonical, then source nu
   assert.equal(preserved.relation, "followup-parent");
 });
 
+test("defers same-type independent new-parent until Canonical or final fallback", () => {
+  const base = {
+    sourceKind: "voice" as const,
+    currentQuestionType: "coding",
+    activeParentQuestionType: "coding",
+    hasActiveChild: false,
+    parentAffinity: affinity("parent", "independent", 0.99),
+  };
+
+  const pending = decideOrderedTaskRelationResolution(base);
+  assert.equal(pending.status, "unresolved");
+  assert.equal(pending.reason, "canonical-missing");
+
+  const canonical = decideOrderedTaskRelationResolution({
+    ...base,
+    canonical: {
+      schemaVersion: 3,
+      relation: "followup-parent",
+      confidence: 0.98,
+      currentQuestionEvidenceSpans: ["What edge cases should we test?"],
+      parentEvidenceSpans: ["Implement an LRU cache"],
+    },
+  });
+  assert.equal(canonical.stage, "canonical-relation");
+  assert.equal(canonical.relation, "followup-parent");
+
+  const fallback = decideOrderedTaskRelationResolution({
+    ...base,
+    finalizeWithNullHypothesis: true,
+  });
+  assert.equal(fallback.stage, "runtime-matrix");
+  assert.equal(fallback.relation, "new-parent");
+  assert.equal(fallback.reason, "same-type-independent-new-parent");
+});
+
 test("normalizes unresolved-like provider outcomes to the active-owner null hypothesis", () => {
   for (const fault of [
     "timeout",

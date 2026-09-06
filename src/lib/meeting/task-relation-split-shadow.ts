@@ -270,7 +270,16 @@ export function decideOrderedTaskRelationResolution(input: {
     childAffinity: input.childAffinity,
     parentAffinity: input.parentAffinity,
   });
-  if (matrix.authorized && matrix.relation) {
+  const deferSameTypeIndependentNewParent =
+    matrix.authorized &&
+    matrix.relation === "new-parent" &&
+    matrix.reason === "same-type-independent-new-parent" &&
+    !input.hasActiveChild;
+  if (
+    matrix.authorized &&
+    matrix.relation &&
+    !deferSameTypeIndependentNewParent
+  ) {
     return {
       status: "resolved",
       stage: "runtime-matrix",
@@ -304,6 +313,19 @@ export function decideOrderedTaskRelationResolution(input: {
         ...input.canonical.currentQuestionEvidenceSpans,
       ],
       parentEvidenceSpans: [...input.canonical.parentEvidenceSpans],
+      matrix,
+    };
+  }
+
+  if (deferSameTypeIndependentNewParent && input.finalizeWithNullHypothesis) {
+    return {
+      status: "resolved",
+      stage: "runtime-matrix",
+      relation: matrix.relation,
+      reason: matrix.reason,
+      confidence: matrix.confidence,
+      currentEvidenceSpans: [...matrix.currentEvidenceSpans],
+      parentEvidenceSpans: [...matrix.parentEvidenceSpans],
       matrix,
     };
   }
