@@ -95,6 +95,7 @@ test("keeps envelope fields out of every runtime LLM prompt", () => {
       { turnId: "turn-current", text: "What would you monitor in production?" },
     ],
     boundedContext: "What would you monitor in production?",
+    boundedContextSourceTurnIds: ["turn-current"],
     contextCapsule: {
       pendingClarification: {
         summary: "Should I focus on monitoring?",

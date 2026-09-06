@@ -11,6 +11,7 @@ import {
   authorizeResponseOpportunityLease,
   buildResponseOpportunityPrompts,
   buildResponseOpportunityRequest,
+  selectResponseOpportunityContextSources,
   createResponseOpportunityLease,
   createResponseOpportunityContextCapsule,
   createResponseOpportunityProposal,
@@ -220,6 +221,62 @@ test("builds a bounded LQU-only request and preserves the terminal tail", () => 
   assert.equal("sourceHash" in modelInput, false);
   assert.equal("turnId" in modelInput.decisionSpans[0], false);
   assert.equal("manualForceAdvise" in modelInput, false);
+});
+
+test("keeps frozen source context out of decision targets but inside bounded context", () => {
+  const logicalUnit = logicalQuestionUnit("How about you?");
+  const withoutContext = buildResponseOpportunityRequest({
+    logicalQuestionUnit: logicalUnit,
+  });
+  const request = buildResponseOpportunityRequest({
+    logicalQuestionUnit: logicalUnit,
+    contextSources: [
+      {
+        turnId: "turn-setup",
+        text: "I have been with the team for three years and build the storage control plane.",
+      },
+    ],
+  });
+
+  assert.deepEqual(
+    request.decisionSpans.map((span) => span.text),
+    ["How about you?"]
+  );
+  assert.match(request.boundedContext, /storage control plane/i);
+  assert.match(request.boundedContext, /How about you\?/i);
+  assert.deepEqual(request.boundedContextSourceTurnIds, [
+    "turn-setup",
+    "turn-current",
+  ]);
+  assert.notEqual(request.sourceHash, withoutContext.sourceHash);
+});
+
+test("reads only the LQU's frozen source-context references in source order", () => {
+  const sources = selectResponseOpportunityContextSources({
+    logicalQuestionUnit: {
+      contextSourceTurnIds: ["turn-setup"],
+      recentLogicalQuestionSourceTurnIds: ["turn-previous"],
+    },
+    transcriptTurns: [
+      { id: "turn-current", text: "How about you?", startedAt: 30 },
+      {
+        id: "turn-setup",
+        text: "Storage needs regional failover.",
+        startedAt: 10,
+      },
+      { id: "turn-unrelated", text: "Ignore this old task.", startedAt: 15 },
+      {
+        id: "turn-previous",
+        text: "We discussed the storage layer.",
+        startedAt: 20,
+      },
+    ],
+  });
+
+  assert.deepEqual(sources, [
+    { turnId: "turn-setup", text: "Storage needs regional failover." },
+    { turnId: "turn-previous", text: "We discussed the storage layer." },
+  ]);
 });
 
 test("uses a source-backed terminal target without discarding bounded context", () => {

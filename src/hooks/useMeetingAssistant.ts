@@ -556,6 +556,7 @@ import {
   authorizeResponseOpportunityLease,
   buildResponseOpportunityPrompts,
   buildResponseOpportunityRequest,
+  selectResponseOpportunityContextSources,
   createResponseOpportunityContextCapsule,
   createResponseOpportunityLease,
   createResponseOpportunityProposal,
@@ -17077,6 +17078,19 @@ export function useMeetingAssistant() {
         }
       };
       const scheduledTaskId = contextState.activeMeetingTask?.id;
+      const readResponseOpportunitySources = (
+        unit: LogicalQuestionUnit
+      ) => {
+        const latestContext = contextManagerRef.current.getState();
+        return {
+          effectiveSources:
+            projectEffectiveLogicalQuestionSources(unit).sources,
+          contextSources: selectResponseOpportunityContextSources({
+            logicalQuestionUnit: unit,
+            transcriptTurns: latestContext.transcriptTurns,
+          }),
+        };
+      };
       const readResponseOpportunityContextCapsule = () => {
         const latestContext = contextManagerRef.current.getState();
         const stableAnswer = stableAnswerRevisionRef.current;
@@ -17108,10 +17122,12 @@ export function useMeetingAssistant() {
       };
       const contextCapsule =
         readResponseOpportunityContextCapsule();
+      const responseOpportunitySources =
+        readResponseOpportunitySources(logicalQuestionUnit);
       const request = buildResponseOpportunityRequest({
         logicalQuestionUnit,
-        effectiveSources:
-          projectEffectiveLogicalQuestionSources(logicalQuestionUnit).sources,
+        effectiveSources: responseOpportunitySources.effectiveSources,
+        contextSources: responseOpportunitySources.contextSources,
         contextCapsule,
       });
       const budgetKey = [
@@ -17207,6 +17223,10 @@ export function useMeetingAssistant() {
           request.decisionSpans.length,
         responseOpportunityBoundedContextChars:
           request.boundedContext.length,
+        responseOpportunityBoundedContextSourceTurnIds:
+          request.boundedContextSourceTurnIds,
+        responseOpportunityBoundedContextSourceCount:
+          request.boundedContextSourceTurnIds.length,
         responseOpportunityContextCapsulePresent: Boolean(
           request.contextCapsule
         ),
@@ -17453,12 +17473,14 @@ export function useMeetingAssistant() {
             settlement.job.lease.logicalQuestionUnitId
               ? logicalQuestionUnitRef.current
               : logicalQuestionUnit;
+          const latestResponseOpportunitySources =
+            readResponseOpportunitySources(latestLogicalQuestionUnit);
           const latestRequest = buildResponseOpportunityRequest({
             logicalQuestionUnit: latestLogicalQuestionUnit,
             effectiveSources:
-              projectEffectiveLogicalQuestionSources(
-                latestLogicalQuestionUnit
-              ).sources,
+              latestResponseOpportunitySources.effectiveSources,
+            contextSources:
+              latestResponseOpportunitySources.contextSources,
             contextCapsule:
               readResponseOpportunityContextCapsule(),
           });
@@ -18455,7 +18477,7 @@ export function useMeetingAssistant() {
         flushStepId,
         "success"
       );
-      appendTranscriptTurnForTrace(
+      const { contextState } = appendTranscriptTurnForTrace(
         pending.turn,
         pending.segment.traceId,
         pending.segment,
@@ -18465,6 +18487,30 @@ export function useMeetingAssistant() {
           turnGateReason: intentDecision.reason,
         }
       );
+      const sourceOwnedSetupCandidate = createSourceOwnedSetupCandidate({
+        turn: pending.turn,
+        sessionId: contextState.sessionId,
+        runtimeEpoch: runtimeEpochRef.current,
+        activeMeetingTask: contextState.activeMeetingTask,
+      });
+      if (sourceOwnedSetupCandidate) {
+        latestSourceOwnedSetupRef.current =
+          appendSourceOwnedSetupCandidate(
+            latestSourceOwnedSetupRef.current,
+            sourceOwnedSetupCandidate
+          );
+        traceStoreRef.current.updateMetadata(pending.segment.traceId, {
+          sourceOwnedSetupCandidateStored: true,
+          sourceOwnedSetupCandidateTurnId: sourceOwnedSetupCandidate.turnId,
+          sourceOwnedSetupCandidateTurnIds:
+            latestSourceOwnedSetupRef.current.sourceTurnIds,
+          sourceOwnedSetupCandidateSpeechAct:
+            sourceOwnedSetupCandidate.speechAct,
+          sourceOwnedSetupCandidateParentId:
+            sourceOwnedSetupCandidate.parentId,
+          sourceOwnedSetupCandidateOrigin: "sentence-buffer-flush",
+        });
+      }
       traceStoreRef.current.finishTrace(pending.segment.traceId, "success");
       return true;
     },

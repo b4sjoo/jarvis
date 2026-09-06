@@ -18,6 +18,8 @@ export const RESPONSE_OPPORTUNITY_MAX_OUTPUT_TOKENS = Math.max(
   Math.ceil(RESPONSE_OPPORTUNITY_MAX_OUTPUT_CHARS / 2) + 16
 );
 export const RESPONSE_OPPORTUNITY_MAX_SOURCE_CHARS = 1_800;
+export const RESPONSE_OPPORTUNITY_MAX_DECISION_SOURCE_CHARS = 1_200;
+export const RESPONSE_OPPORTUNITY_MAX_CONTEXT_SOURCE_CHARS = 600;
 export const RESPONSE_OPPORTUNITY_MAX_CLARIFICATION_CHARS = 280;
 export const RESPONSE_OPPORTUNITY_MAX_DECISION_SPANS = 12;
 export const RESPONSE_OPPORTUNITY_MAX_TARGET_SPANS = 4;
@@ -36,6 +38,7 @@ export interface ResponseOpportunityRequest {
   sourceHash: string;
   decisionSpans: ResponseOpportunityDecisionSpan[];
   boundedContext: string;
+  boundedContextSourceTurnIds: string[];
   contextCapsule?: ResponseOpportunityContextCapsule;
   manualForceAdvise: boolean;
 }
@@ -74,37 +77,42 @@ interface ResponseOpportunityLogicalQuestionUnitInput {
 export function buildResponseOpportunityRequest(input: {
   logicalQuestionUnit: ResponseOpportunityLogicalQuestionUnitInput;
   effectiveSources?: Array<{ turnId: string; text: string }>;
+  contextSources?: Array<{ turnId: string; text: string }>;
   contextCapsule?: ResponseOpportunityContextCapsule;
   manualForceAdvise?: boolean;
 }): ResponseOpportunityRequest {
-  const selectedSources = (
+  const selectedDecisionSources = (
     input.effectiveSources ?? input.logicalQuestionUnit.sources
   ).slice(-2);
-  let remainingChars = RESPONSE_OPPORTUNITY_MAX_SOURCE_CHARS;
-  const boundedSources: ResponseOpportunityDecisionSpan[] = [];
-  for (const [index, source] of selectedSources.entries()) {
-    if (remainingChars <= 0) break;
-    const isCurrent =
-      source.turnId === input.logicalQuestionUnit.currentTurnId;
-    const laterSourceCount = selectedSources.length - index - 1;
-    const reserveForLater = Math.min(
-      remainingChars,
-      laterSourceCount * 600
-    );
-    const available = Math.max(1, remainingChars - reserveForLater);
-    const text = projectBoundedSourceText(
-      source.text,
-      Math.min(available, isCurrent ? 1_200 : 600)
-    );
-    if (!text) continue;
-    boundedSources.push({ turnId: source.turnId, text });
-    remainingChars -= text.length;
-  }
-  const boundedContext = boundedSources
+  const boundedDecisionSources = boundResponseOpportunitySources({
+    sources: selectedDecisionSources,
+    maxChars: RESPONSE_OPPORTUNITY_MAX_DECISION_SOURCE_CHARS,
+    currentTurnId: input.logicalQuestionUnit.currentTurnId,
+  });
+  const decisionTurnIds = new Set(
+    boundedDecisionSources.map((source) => source.turnId)
+  );
+  const boundedSupplementaryContext = boundResponseOpportunitySources({
+    sources: dedupeResponseOpportunitySources(
+      (input.contextSources ?? []).filter(
+        (source) => !decisionTurnIds.has(source.turnId)
+      )
+    ),
+    maxChars: Math.max(
+      0,
+      RESPONSE_OPPORTUNITY_MAX_SOURCE_CHARS -
+        boundedDecisionSources.reduce((total, source) => total + source.text.length, 0)
+    ),
+  });
+  const boundedContextSources = [
+    ...boundedSupplementaryContext,
+    ...boundedDecisionSources,
+  ];
+  const boundedContext = boundedContextSources
     .map((source) => source.text)
     .join("\n")
     .trim();
-  const decisionSpans = boundedSources
+  const decisionSpans = boundedDecisionSources
     .flatMap(splitResponseOpportunityDecisionSpans)
     .slice(-RESPONSE_OPPORTUNITY_MAX_DECISION_SPANS);
   const contextCapsule = cloneResponseOpportunityContextCapsule(
@@ -113,7 +121,8 @@ export function buildResponseOpportunityRequest(input: {
   const sourceHash = hashResponseOpportunityEvidence(
     decisionSpans,
     boundedContext,
-    contextCapsule
+    contextCapsule,
+    boundedContextSources.map((source) => source.turnId)
   );
   return {
     schemaVersion: RESPONSE_OPPORTUNITY_SCHEMA_VERSION,
@@ -124,9 +133,75 @@ export function buildResponseOpportunityRequest(input: {
     sourceHash,
     decisionSpans,
     boundedContext,
+    boundedContextSourceTurnIds: boundedContextSources.map(
+      (source) => source.turnId
+    ),
     ...(contextCapsule ? { contextCapsule } : {}),
     manualForceAdvise: input.manualForceAdvise ?? false,
   };
+}
+
+export function selectResponseOpportunityContextSources(input: {
+  logicalQuestionUnit: {
+    contextSourceTurnIds?: string[];
+    recentLogicalQuestionSourceTurnIds?: string[];
+  };
+  transcriptTurns: Array<{ id: string; text: string; startedAt: number }>;
+}) {
+  const requestedTurnIds = new Set([
+    ...(input.logicalQuestionUnit.contextSourceTurnIds ?? []),
+    ...(input.logicalQuestionUnit.recentLogicalQuestionSourceTurnIds ?? []),
+  ]);
+  return input.transcriptTurns
+    .filter((turn) => requestedTurnIds.has(turn.id))
+    .sort((left, right) => left.startedAt - right.startedAt)
+    .map((turn) => ({ turnId: turn.id, text: turn.text }));
+}
+
+function boundResponseOpportunitySources(input: {
+  sources: Array<{ turnId: string; text: string }>;
+  maxChars: number;
+  currentTurnId?: string;
+}) {
+  let remainingChars = input.maxChars;
+  const reservePerLaterSource = Math.max(
+    1,
+    Math.floor(input.maxChars / Math.max(1, input.sources.length))
+  );
+  const bounded: ResponseOpportunityDecisionSpan[] = [];
+  for (const [index, source] of input.sources.entries()) {
+    if (remainingChars <= 0) break;
+    const laterSourceCount = input.sources.length - index - 1;
+    const reserveForLater = Math.min(
+      remainingChars,
+      laterSourceCount * reservePerLaterSource
+    );
+    const available = Math.max(1, remainingChars - reserveForLater);
+    const text = projectBoundedSourceText(
+      source.text,
+      Math.min(
+        available,
+        source.turnId === input.currentTurnId
+          ? RESPONSE_OPPORTUNITY_MAX_DECISION_SOURCE_CHARS
+          : RESPONSE_OPPORTUNITY_MAX_CONTEXT_SOURCE_CHARS
+      )
+    );
+    if (!text) continue;
+    bounded.push({ turnId: source.turnId, text });
+    remainingChars -= text.length;
+  }
+  return bounded;
+}
+
+function dedupeResponseOpportunitySources(
+  sources: Array<{ turnId: string; text: string }>
+) {
+  const seen = new Set<string>();
+  return sources.filter((source) => {
+    if (!source.turnId || seen.has(source.turnId)) return false;
+    seen.add(source.turnId);
+    return Boolean(source.text.trim());
+  });
 }
 
 export function createResponseOpportunityContextCapsule(input: {
@@ -189,7 +264,8 @@ export function projectResponseOpportunitySemanticPayload(
 export function hashResponseOpportunityEvidence(
   decisionSpans: ResponseOpportunityDecisionSpan[],
   boundedContext: string,
-  contextCapsule?: ResponseOpportunityContextCapsule
+  contextCapsule?: ResponseOpportunityContextCapsule,
+  boundedContextSourceTurnIds: string[] = []
 ) {
   let hash = 2_166_136_261;
   const sourceParts = decisionSpans.flatMap((span) => [
@@ -197,6 +273,7 @@ export function hashResponseOpportunityEvidence(
     span.text,
   ]);
   sourceParts.push(boundedContext);
+  sourceParts.push(...boundedContextSourceTurnIds);
   if (contextCapsule) {
     sourceParts.push(JSON.stringify(contextCapsule));
   }
