@@ -292,8 +292,8 @@ export function buildResponseOpportunityPrompts(
   const systemPrompt = [
       "Decide one thing only: whether the interviewer-owned source evidence currently asks the candidate for an output that Jarvis should help produce.",
       "Return one JSON object only. Do not answer the interview content.",
-      "Use output-request for a question, directive, requested explanation, requested design or code, correction that requires a revised answer, constraint on an active answer, or an explicit phase-control instruction.",
-      "Use no-output-request for greetings, acknowledgements, closings, logistics, or information supplied in response to the candidate's own question when the interviewer does not ask anything back.",
+      "First identify whether any current decisionSpan asks the candidate for an answer, explanation, design, code, revision, constraint response, or phase-control response. If it does, use output-request even when the same span or boundedContext also contains a greeting, acknowledgement, logistics, or polite framing.",
+      "Use no-output-request only when the current decision target contains no request for candidate output: a greeting, acknowledgement, closing, logistics, or information supplied in response to the candidate's own question without an ask back.",
       "Use unclear when the bounded source is incomplete or does not support either conclusion.",
       ...(semanticPayload.pendingClarification
         ? [

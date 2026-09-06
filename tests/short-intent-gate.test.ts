@@ -703,3 +703,25 @@ test("creates a bounded proposal and enforces per-session dedupe", () => {
     "session-limit-exhausted"
   );
 });
+
+test("makes a substantive current request outrank polite framing in the RO prompt", () => {
+  const request = buildResponseOpportunityRequest({
+    logicalQuestionUnit: logicalQuestionUnit(
+      "Hi, and could you explain how you would monitor this service?"
+    ),
+  });
+  const prompts = buildResponseOpportunityPrompts(request);
+
+  assert.match(
+    prompts.systemPrompt,
+    /First identify whether any current decisionSpan asks the candidate/i
+  );
+  assert.match(
+    prompts.systemPrompt,
+    /use output-request even when.*greeting.*polite framing/i
+  );
+  assert.match(
+    prompts.systemPrompt,
+    /Use no-output-request only when.*no request for candidate output/i
+  );
+});
