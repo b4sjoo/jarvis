@@ -12,6 +12,7 @@ import {
   resolveSourceOwnedRuntimeTransition,
   sourceOwnedDurableTransitionSurvivesModelOutcome,
   sourceOwnedTransitionCommittedFreshParent,
+  sourceOwnedTransitionCommittedFreshCodingChildImplementation,
   sourceOwnedTransitionCommittedPhaseIdentityChange,
   sourceOwnedTransitionDurableMutationApplied,
   sourceOwnedTransitionDurablySatisfied,
@@ -13613,13 +13614,10 @@ export function useMeetingAssistant() {
       sourceOwnedTransitionCommittedPhaseIdentityChange(
         sourceOwnedTransitionReceipt
       );
-    const codingChildImplementationCommitted = Boolean(
-      sourceOwnedTransitionReceipt?.runtimeTransition === "attach-child" &&
-        effectiveAdvisorSettlementView.phaseOwnerKind === "child" &&
-        effectiveAdvisorSettlementView.questionType === "coding" &&
-        effectiveAdvisorSettlementView.playbookPhase ===
-          "implementation_validation"
-    );
+    const freshCodingChildImplementationCommitted =
+      sourceOwnedTransitionCommittedFreshCodingChildImplementation(
+        sourceOwnedTransitionReceipt
+      );
     const newParentArtifactAuthority = Boolean(
       taskBoundaryCommittedBeforeAdvisor ||
         sourceOwnedTransitionCommittedFreshParent(
@@ -13639,7 +13637,7 @@ export function useMeetingAssistant() {
         newParentCommitted: newParentArtifactAuthority,
         manualPhaseCommitted: manualPhaseAdvanceCommitted,
         automaticPhaseIdentityTransitionCommitted,
-        codingChildCommitted: codingChildImplementationCommitted,
+        freshCodingChildImplementationCommitted,
         manualCorrection: advisorJob.source === "manual-correction",
         manualArtifactRegeneration: Boolean(
           options.artifactRegenerationTarget
@@ -13774,6 +13772,7 @@ export function useMeetingAssistant() {
           generationArtifactAuthority
         ),
         automaticPhaseIdentityTransitionCommitted,
+        freshCodingChildImplementationCommitted,
         newParentArtifactAuthority,
         modelRequestOptions: advisorModelRequestOptions,
         preparedProgrammingLanguage:

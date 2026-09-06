@@ -123,6 +123,21 @@ export function sourceOwnedTransitionCommittedPhaseIdentityChange(
   );
 }
 
+export function sourceOwnedTransitionCommittedFreshCodingChildImplementation(
+  receipt: SourceOwnedDurableTransitionReceipt | undefined
+) {
+  const result = receipt?.sourceResult;
+  const child = result?.task?.child;
+  return Boolean(
+    sourceOwnedTransitionDurableMutationApplied(receipt) &&
+      result?.candidate.kind === "child-probe" &&
+      result.childAfterId &&
+      result.childAfterId !== result.childBeforeId &&
+      child?.questionType === "coding" &&
+      child.phaseState?.phase === "implementation_validation"
+  );
+}
+
 export function sourceOwnedTransitionDurablySatisfied(
   receipt: SourceOwnedDurableTransitionReceipt | undefined
 ) {

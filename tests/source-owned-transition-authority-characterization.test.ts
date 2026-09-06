@@ -11,10 +11,12 @@ import {
 import {
   commitSourceOwnedTransitionToRuntime,
   resolveSourceOwnedRuntimeTransition,
+  sourceOwnedTransitionCommittedFreshCodingChildImplementation,
   sourceOwnedDurableTransitionSurvivesModelOutcome,
   sourceOwnedTransitionCommittedPhaseIdentityChange,
   sourceOwnedTransitionDurableMutationApplied,
   sourceOwnedTransitionDurablySatisfied,
+  type SourceOwnedDurableTransitionReceipt,
 } from "../src/lib/meeting/source-owned-transition-runtime.js";
 import { createSourceOwnedTransitionCandidate } from "../src/lib/meeting/source-owned-transition-transaction.js";
 import type {
@@ -23,6 +25,38 @@ import type {
 import { setTestTaskRuntime } from "./helpers/meeting-task-runtime.js";
 
 const now = Date.now();
+
+test("grants automatic Coding artifacts only for a fresh committed child", () => {
+  const receipt = (childBeforeId: string | undefined) =>
+    ({
+      sourceResult: {
+        candidate: { kind: "child-probe" },
+        task: {
+          child: {
+            id: "child-coding",
+            questionType: "coding",
+            phaseState: { phase: "implementation_validation" },
+          },
+        },
+        childBeforeId,
+        childAfterId: "child-coding",
+      },
+      runtimeResult: { authorized: true, mutationApplied: true },
+    }) as SourceOwnedDurableTransitionReceipt;
+
+  assert.equal(
+    sourceOwnedTransitionCommittedFreshCodingChildImplementation(
+      receipt(undefined)
+    ),
+    true
+  );
+  assert.equal(
+    sourceOwnedTransitionCommittedFreshCodingChildImplementation(
+      receipt("child-coding")
+    ),
+    false
+  );
+});
 
 test("rejects a stale no-parent Screen preparation against the canonical runtime", () => {
   const manager = new MeetingContextManager();

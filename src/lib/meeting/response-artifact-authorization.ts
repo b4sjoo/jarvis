@@ -49,7 +49,7 @@ export function decideAdvisorArtifactGenerationAuthority(input: {
   newParentCommitted?: boolean;
   manualPhaseCommitted?: boolean;
   automaticPhaseIdentityTransitionCommitted?: boolean;
-  codingChildCommitted?: boolean;
+  freshCodingChildImplementationCommitted?: boolean;
   manualCorrection?: boolean;
   manualArtifactRegeneration?: boolean;
 }): AdvisorArtifactGenerationAuthorityDecision {
@@ -81,7 +81,7 @@ export function decideAdvisorArtifactGenerationAuthority(input: {
       reason: "automatic-phase-identity-transition-committed",
     };
   }
-  if (input.codingChildCommitted) {
+  if (input.freshCodingChildImplementationCommitted) {
     return {
       authority: "artifact-authorized",
       answerOnly: false,
