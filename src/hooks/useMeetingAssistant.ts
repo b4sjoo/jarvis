@@ -967,6 +967,8 @@ const MISSING_AI_MESSAGE =
   "Choose an AI provider in Dev Space to receive live suggestions.";
 const MISSING_VISION_MESSAGE =
   "Choose an image-capable AI provider to analyze screen context.";
+const RUNTIME_RELATION_CONFIGURATION_ERROR =
+  "Runtime relation model configuration failed. Jarvis preserved the current task; check the Runtime or Main Advisor provider settings.";
 const LOCAL_ONLY_UNAVAILABLE_MESSAGE =
   "Local-only meeting mode needs local STT before it can start.";
 const SCREEN_CONTEXT_DISABLED_MESSAGE =
@@ -21095,13 +21097,6 @@ export function useMeetingAssistant() {
           !operationAuthorization.authorized,
       };
       traceStoreRef.current.updateMetadata(input.traceId, metadata);
-      if (clientError) {
-        setState((previous) => ({
-          ...previous,
-          error:
-            "Runtime relation model configuration failed. Jarvis preserved the current task; check the Runtime or Main Advisor provider settings.",
-        }));
-      }
       const terminalDisposition =
         resolveOrderedRelationOperationTerminal({
           operationAuthorized: operationAuthorization.authorized,
@@ -22411,6 +22406,10 @@ export function useMeetingAssistant() {
           "error",
           relationFatalError
         );
+        setState((previous) => ({
+          ...previous,
+          error: RUNTIME_RELATION_CONFIGURATION_ERROR,
+        }));
       };
       const resolveOrderedQuestionType = (
         outcome: QuestionTypeAdjudicationRuntimeOutcome | undefined
@@ -26974,6 +26973,27 @@ export function useMeetingAssistant() {
           currentOperationId:
             screenOperationCoordinatorRef.current.getActiveOperationId(),
         });
+      const presentOwnedScreenTerminal = (error: string | null) => {
+        if (
+          !screenOperationCoordinatorRef.current.owns(screenOperationId) ||
+          screenAnalysisAbortRef.current !== analysisController
+        ) {
+          return false;
+        }
+        analysisController?.abort();
+        if (screenAnalysisAbortRef.current === analysisController) {
+          screenAnalysisAbortRef.current = null;
+        }
+        setState((previous) => ({
+          ...previous,
+          status: runtimeActiveRef.current
+            ? "listening"
+            : idleReturnStatus,
+          partialSuggestion: "",
+          error,
+        }));
+        return true;
+      };
       const rejectStaleScreenOperation = (stage: string) => {
         const decision = readScreenAuthorization();
         const currentContextState =
@@ -28803,12 +28823,16 @@ export function useMeetingAssistant() {
                   "error",
                   "task-relation-client-error"
                 );
+                presentOwnedScreenTerminal(
+                  RUNTIME_RELATION_CONFIGURATION_ERROR
+                );
               } else {
                 traceStoreRef.current.finishTrace(
                   trace.id,
                   "cancelled",
                   resolution.operationAuthorization.reason
                 );
+                presentOwnedScreenTerminal(null);
               }
               return;
             }
@@ -36396,6 +36420,8 @@ export function useMeetingAssistant() {
           error:
             correctionRelationTerminal.disposition === "cancelled"
               ? undefined
+              : correctionRelationTerminal.disposition === "client-error"
+                ? "Runtime relation model configuration failed. The corrected term was kept, but task relation and answer regeneration were not changed. Check the Runtime or Main Advisor provider settings."
               : correctionRelationTerminal.reason,
         };
         traceStoreRef.current.updateMetadata(repairTrace.id, {

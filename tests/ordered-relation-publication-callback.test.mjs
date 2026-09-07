@@ -49,6 +49,10 @@ const withTimeoutSource = findNamedDeclaration(
   sourceFile,
   "withTimeout"
 ).getText(sourceFile);
+const presentOwnedScreenTerminalSource = findNamedDeclaration(
+  sourceFile,
+  "presentOwnedScreenTerminal"
+).initializer.getText(sourceFile);
 
 const identifiers = new Set();
 for (const source of [...callbackSources, withTimeoutSource]) {
@@ -152,6 +156,18 @@ const runtimeModule = await import(
       "lib",
       "meeting",
       "runtime-inference-runtime.js"
+    )
+  )
+);
+const { ScreenOperationCoordinator } = await import(
+  pathToFileURL(
+    path.join(
+      root,
+      ".tmp-tests",
+      "src",
+      "lib",
+      "meeting",
+      "screen-operation-coordinator.js"
     )
   )
 );
@@ -635,6 +651,135 @@ test("uses a Screen operation's own source when no Voice LQU is current", { conc
 
     assert.equal(resolution.operationAuthorization.authorized, true);
     assert.equal(resolution.decision.relation, "followup-parent");
+  } finally {
+    harness.restore();
+  }
+});
+
+test("lets the owning Screen consumer present a Relation client error and leave thinking", { concurrency: false }, async () => {
+  const harness = createHarness();
+  try {
+    let ui = {
+      status: "thinking",
+      partialSuggestion: "partial",
+      error: null,
+    };
+    let stateWrites = 0;
+    let abortCount = 0;
+    const analysisController = {
+      abort: () => {
+        abortCount += 1;
+      },
+    };
+    const coordinator = new ScreenOperationCoordinator();
+    coordinator.claim("screen-operation");
+    Object.assign(harness.environment, {
+      screenOperationCoordinatorRef: { current: coordinator },
+      screenOperationId: "screen-operation",
+      analysisController,
+      screenAnalysisAbortRef: { current: analysisController },
+      runtimeActiveRef: { current: true },
+      idleReturnStatus: "idle",
+      setState: (update) => {
+        stateWrites += 1;
+        ui = update(ui);
+      },
+    });
+    const scope = vm.createContext(harness.environment);
+    const presentTerminal = vm.runInContext(
+      transpile(`(${presentOwnedScreenTerminalSource})`),
+      scope
+    );
+    const relationHandle = {
+      releaseWindowRequested: true,
+      authorizeOperation: () => ({
+        authorized: true,
+        reason: "source-operation-current",
+      }),
+      readAffinityOutcome: () => ({
+        child: { unavailableReason: "no-active-child" },
+        parent: {
+          unavailableReason: "provider-configuration-error",
+          clientError: true,
+        },
+      }),
+      cancelForegroundWork: () => undefined,
+    };
+
+    const resolution =
+      await harness.environment.resolveOrderedTaskRelationWithinWindow({
+        handle: relationHandle,
+        traceId: "trace",
+        currentQuestionType: "coding",
+        sourceKind: "screen",
+        activeMeetingTask: activeTask(),
+        waitBudgetMs: 7_000,
+      });
+
+    assert.equal(resolution.terminalDisposition, "client-error");
+    assert.equal(stateWrites, 0, "the shared resolver must not mutate UI state");
+    assert.equal(
+      presentTerminal("Runtime relation model configuration failed."),
+      true
+    );
+    assert.equal(ui.status, "listening");
+    assert.equal(ui.partialSuggestion, "");
+    assert.equal(ui.error, "Runtime relation model configuration failed.");
+    assert.equal(abortCount, 1);
+    assert.equal(harness.environment.screenAnalysisAbortRef.current, null);
+    assert.equal(coordinator.release("screen-operation"), true);
+  } finally {
+    harness.restore();
+  }
+});
+
+test("does not let an old Screen terminal clear a newer operation", { concurrency: false }, () => {
+  const harness = createHarness();
+  try {
+    let ui = {
+      status: "thinking",
+      partialSuggestion: "new partial",
+      error: null,
+    };
+    let stateWrites = 0;
+    let oldAbortCount = 0;
+    const oldController = {
+      abort: () => {
+        oldAbortCount += 1;
+      },
+    };
+    const newController = { abort: () => undefined };
+    const coordinator = new ScreenOperationCoordinator();
+    coordinator.claim("old-screen-operation");
+    const screenAnalysisAbortRef = { current: oldController };
+    Object.assign(harness.environment, {
+      screenOperationCoordinatorRef: { current: coordinator },
+      screenOperationId: "old-screen-operation",
+      analysisController: oldController,
+      screenAnalysisAbortRef,
+      runtimeActiveRef: { current: true },
+      idleReturnStatus: "idle",
+      setState: (update) => {
+        stateWrites += 1;
+        ui = update(ui);
+      },
+    });
+    const presentOldTerminal = vm.runInContext(
+      transpile(`(${presentOwnedScreenTerminalSource})`),
+      vm.createContext(harness.environment)
+    );
+    coordinator.claim("new-screen-operation");
+    screenAnalysisAbortRef.current = newController;
+
+    assert.equal(presentOldTerminal(null), false);
+    assert.equal(stateWrites, 0);
+    assert.equal(oldAbortCount, 0);
+    assert.deepEqual(ui, {
+      status: "thinking",
+      partialSuggestion: "new partial",
+      error: null,
+    });
+    assert.equal(coordinator.getActiveOperationId(), "new-screen-operation");
   } finally {
     harness.restore();
   }
