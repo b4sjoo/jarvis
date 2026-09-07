@@ -36,6 +36,7 @@ function findNamedDeclaration(file, name) {
 
 const callbackNames = [
   "scheduleTaskRelationSplitRuntime",
+  "scheduleTaskRelationAdjudication",
   "resolveOrderedTaskRelationWithinWindow",
   "scheduleAdvisorAfterQuestionTypeWindow",
 ];
@@ -89,6 +90,7 @@ for (const moduleName of [
   "question-type-adjudication",
   "task-relation-adjudication",
   "task-relation-split-shadow",
+  "task-taxonomy",
   "runtime-inference-runtime",
   "answer-generation-lease",
   "current-question-settlement",
@@ -97,6 +99,7 @@ for (const moduleName of [
   "runtime-inference",
   "runtime-inference-response",
   "runtime-inference-provider-admission",
+  "response-opportunity-generation-gate",
 ]) {
   const loaded = await import(
     pathToFileURL(
@@ -277,6 +280,12 @@ function createHarness() {
     contextManagerRef: { current: { getState: () => state } },
     runtimeEpochRef: { current: 1 },
     manualCorrectionRevisionRef: { current: 0 },
+    manualCorrectionOperationCoordinatorRef: {
+      current: { getActiveOperationId: () => null },
+    },
+    taxonomyAdjudicationSettingsRef: {
+      current: { taskRelationMode: "enforcement" },
+    },
     runtimeActiveRef: { current: true },
     debugModeRef: { current: false },
     logicalQuestionUnitRef: { current: logicalQuestionUnit },
@@ -371,7 +380,17 @@ function relationHandle(harness, operationAuthorization) {
   };
 }
 
-function productionRelationHandle(harness) {
+function productionRelationHandle(
+  harness,
+  {
+    sourceKind = "voice",
+    currentQuestion: suppliedCurrentQuestion,
+    authorizeSourceOperation = () => ({
+      authorized: true,
+      reason: "source-operation-current",
+    }),
+  } = {}
+) {
   const executions = [];
   harness.environment.meetingModelProviderSnapshotRef = { current: {} };
   harness.environment.resolveRuntimeInferenceModelRouteFromSnapshot = () => ({
@@ -403,10 +422,12 @@ function productionRelationHandle(harness) {
     );
     return result.promise;
   };
-  const currentQuestion = imports.createProvisionalCurrentQuestion({
-    logicalQuestionUnit,
-    sourceKind: "voice",
-  });
+  const currentQuestion =
+    suppliedCurrentQuestion ??
+    imports.createProvisionalCurrentQuestion({
+      logicalQuestionUnit,
+      sourceKind,
+    });
   const request = relationModule.buildTaskRelationAdjudicationRequest({
     logicalQuestionUnit,
     activeMeetingTask: harness.environment.contextManagerRef.current.getState()
@@ -416,12 +437,12 @@ function productionRelationHandle(harness) {
   const handle = harness.environment.scheduleTaskRelationSplitRuntime({
     traceId: "trace",
     request,
-    currentQuestion,
     runtimeReleaseRequested: true,
+    authorizeSourceOperation,
   });
   Object.assign(handle, {
     releaseWindowRequested: true,
-    sourceKind: "voice",
+    sourceKind,
     outcome: Promise.resolve({ operationId: handle.operationId }),
   });
   return { handle, executions };
@@ -499,6 +520,127 @@ test("cancels a stale Relation operation before its final Advisor handoff", { co
           ],
         },
       ]
+    );
+  } finally {
+    harness.restore();
+  }
+});
+
+test("retains a provisional Voice affinity result before RO publishes the LQU", { concurrency: false }, async () => {
+  const harness = createHarness();
+  try {
+    harness.environment.logicalQuestionUnitRef.current = {
+      ...logicalQuestionUnit,
+      id: "lqu-previous",
+      currentTurnId: "turn-previous",
+      sourceTurnIds: ["turn-previous"],
+    };
+    const { handle, executions } = productionRelationHandle(harness);
+    await harness.clock.advanceTo(1);
+    assert.equal(executions.length, 1);
+    resolveRelationProvider(
+      executions[0],
+      JSON.stringify({ v: 1, d: "i", c: 0.99, q: "Implement a queue." })
+    );
+    const outcome = await handle.affinityOutcome;
+
+    assert.equal(outcome.parent.adjudication?.decision, "independent");
+    assert.equal(outcome.parent.unavailableReason, undefined);
+  } finally {
+    harness.restore();
+  }
+});
+
+test("uses a Screen operation's own source when no Voice LQU is current", { concurrency: false }, async () => {
+  const harness = createHarness();
+  try {
+    harness.environment.logicalQuestionUnitRef.current = undefined;
+    const screenQuestion = imports.createProvisionalCurrentQuestion({
+      logicalQuestionUnit,
+      sourceKind: "screen",
+      sourceObservationIds: ["screen-observation"],
+    });
+    const { handle, executions } = productionRelationHandle(harness, {
+      sourceKind: "screen",
+      currentQuestion: screenQuestion,
+    });
+    const resolutionPromise =
+      harness.environment.resolveOrderedTaskRelationWithinWindow({
+        handle,
+        traceId: "trace",
+        currentQuestionType: "coding",
+        sourceKind: "screen",
+        activeMeetingTask:
+          harness.environment.contextManagerRef.current.getState()
+            .activeMeetingTask,
+        screenBoundaryPrior: true,
+        screenTypeEvidenceAuthorized: true,
+        waitBudgetMs: 7_000,
+      });
+    await harness.clock.advanceTo(1);
+    assert.equal(executions.length, 1);
+    resolveRelationProvider(
+      executions[0],
+      JSON.stringify({
+        v: 1,
+        d: "r",
+        c: 0.99,
+        q: "Implement a queue.",
+        b: "Implement a cache.",
+      })
+    );
+    await harness.clock.flush();
+    const resolution = await resolutionPromise;
+
+    assert.equal(resolution.operationAuthorization.authorized, true);
+    assert.equal(resolution.decision.relation, "followup-parent");
+  } finally {
+    harness.restore();
+  }
+});
+
+test("validates a model-free first-parent operation before Advisor handoff", { concurrency: false }, async () => {
+  const harness = createHarness();
+  try {
+    harness.environment.contextManagerRef.current.getState().activeMeetingTask =
+      undefined;
+    const gate = deferred();
+    harness.environment.responseOpportunityGenerationGateRef.current = {
+      findOperationId: () => "response-gate",
+      read: () => ({ disposition: "pending" }),
+      wait: () => gate.promise,
+    };
+    const currentQuestion = imports.createProvisionalCurrentQuestion({
+      logicalQuestionUnit,
+      sourceKind: "voice",
+    });
+    const handle = harness.environment.scheduleTaskRelationAdjudication({
+      turn: { speaker: "them", text: "Implement a queue." },
+      traceId: "trace",
+      turnGateAction: "answer-refresh",
+      logicalQuestionUnit,
+      lexical: { type: "coding" },
+      sourceKind: "voice",
+      currentQuestion,
+      authorizeSourceOperation: () => ({
+        authorized: true,
+        reason: "source-operation-current",
+      }),
+    });
+    assert.ok(handle);
+    assert.equal(handle.releaseWindowRequested, false);
+    startVoiceResolution(harness, handle);
+    await harness.clock.advanceTo(100);
+    harness.environment.contextManagerRef.current.getState().activeMeetingTask =
+      activeTask();
+    harness.environment.manualCorrectionRevisionRef.current = 1;
+    gate.resolve({ disposition: "output-authorized" });
+    await harness.clock.advanceTo(300);
+
+    assert.equal(harness.advisorCalls.length, 0);
+    assert.equal(
+      harness.metadata.taskRelationOrderedResolutionOperationCancelled,
+      true
     );
   } finally {
     harness.restore();

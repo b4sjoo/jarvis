@@ -16,6 +16,7 @@ import {
   buildTaskRelationCanonicalShadowPrompts,
   buildTaskRelationCanonicalShadowRequest,
   compareTaskRelationSplitShadow,
+  createTaskRelationOperationIdentity,
   createAblatedCanonicalRelationRequest,
   createShuffledCanonicalRelationRequest,
   createTaskRelationSplitLease,
@@ -25,6 +26,7 @@ import {
   hashTaskRelationSplitOutput,
   parseTaskRelationAffinityOutput,
   parseTaskRelationCanonicalShadowOutput,
+  projectTaskRelationOperationCurrentIdentity,
   revalidateTaskRelationAffinityOutcome,
 } from "../src/lib/meeting/task-relation-split-shadow.js";
 import type { LogicalQuestionUnit } from "../src/lib/meeting/logical-question-unit.js";
@@ -97,6 +99,81 @@ function task(): ActiveMeetingTask {
     },
   };
 }
+
+test("keeps the operation source immutable while reading current topology", () => {
+  const logicalQuestionUnit = unit("Explain the highlighted code.");
+  const currentQuestion = {
+    logicalQuestionUnitId: logicalQuestionUnit.id,
+    revision: logicalQuestionUnit.revision,
+    sessionId: logicalQuestionUnit.sessionId,
+    runtimeEpoch: logicalQuestionUnit.runtimeEpoch,
+    normalizedText: logicalQuestionUnit.normalizedText,
+    sourceTurnIds: [...logicalQuestionUnit.sourceTurnIds],
+    sourceObservationIds: ["screen-current"],
+    sourceKind: "screen" as const,
+    sourceHash: "screen-source-hash",
+    createdAt: logicalQuestionUnit.startedAt,
+    updatedAt: logicalQuestionUnit.updatedAt,
+  };
+  const scheduled = createTaskRelationOperationIdentity({
+    currentQuestion,
+    activeParent: { id: "parent-rag", revisions: 3 },
+    activeChild: { id: "child-code" },
+    manualCorrectionRevision: 4,
+  });
+  const current = projectTaskRelationOperationCurrentIdentity({
+    scheduled,
+    sessionId: "session-a",
+    runtimeEpoch: 4,
+    activeParent: { id: "parent-rag", revisions: 3 },
+    activeChild: { id: "child-code" },
+    manualCorrectionRevision: 4,
+  });
+
+  assert.equal(current.logicalQuestionUnitId, logicalQuestionUnit.id);
+  assert.equal(current.sourceHash, "screen-source-hash");
+  assert.equal(current.sourceSettlementId, scheduled.sourceSettlementId);
+  assert.deepEqual(
+    authorizeTaskRelationSplitIdentity({ scheduled, current }),
+    { authorized: true, reason: "identity-current" }
+  );
+});
+
+test("invalidates an operation only when its runtime or topology expectation changes", () => {
+  const logicalQuestionUnit = unit("Explain the highlighted code.");
+  const scheduled = createTaskRelationOperationIdentity({
+    currentQuestion: {
+      logicalQuestionUnitId: logicalQuestionUnit.id,
+      revision: logicalQuestionUnit.revision,
+      sessionId: logicalQuestionUnit.sessionId,
+      runtimeEpoch: logicalQuestionUnit.runtimeEpoch,
+      normalizedText: logicalQuestionUnit.normalizedText,
+      sourceTurnIds: [...logicalQuestionUnit.sourceTurnIds],
+      sourceObservationIds: [],
+      sourceKind: "voice",
+      sourceHash: "voice-source-hash",
+      createdAt: logicalQuestionUnit.startedAt,
+      updatedAt: logicalQuestionUnit.updatedAt,
+    },
+    manualCorrectionRevision: 4,
+  });
+  const current = projectTaskRelationOperationCurrentIdentity({
+    scheduled,
+    sessionId: "session-a",
+    runtimeEpoch: 4,
+    activeParent: { id: "parent-created-by-correction", revisions: 1 },
+    manualCorrectionRevision: 5,
+  });
+
+  assert.deepEqual(
+    authorizeTaskRelationSplitIdentity({ scheduled, current }),
+    {
+      authorized: false,
+      reason: "identity-mismatch",
+      mismatchedKey: "parentId",
+    }
+  );
+});
 
 function request(
   text = "Back to the RAG system, how should we monitor freshness?"

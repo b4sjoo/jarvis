@@ -1,4 +1,8 @@
 import {
+  createCurrentQuestionSourceSettlementId,
+  type ProvisionalCurrentQuestion,
+} from "./current-question-settlement.js";
+import {
   buildRuntimeInferenceModelInput,
   hashRuntimeSemanticPayload,
   type RuntimeInferenceOperationKind,
@@ -86,6 +90,47 @@ export interface TaskRelationSplitIdentityAuthorization {
   authorized: boolean;
   reason: "identity-current" | "identity-mismatch";
   mismatchedKey?: TaskRelationSplitIdentityKey;
+}
+
+export function createTaskRelationOperationIdentity(input: {
+  currentQuestion: ProvisionalCurrentQuestion;
+  activeParent?: { id: string; revisions?: number };
+  activeChild?: { id: string };
+  manualCorrectionRevision: number;
+}): TaskRelationSplitIdentity {
+  return {
+    sessionId: input.currentQuestion.sessionId,
+    runtimeEpoch: input.currentQuestion.runtimeEpoch,
+    logicalQuestionUnitId: input.currentQuestion.logicalQuestionUnitId,
+    logicalQuestionUnitRevision: input.currentQuestion.revision,
+    sourceSettlementId: createCurrentQuestionSourceSettlementId(
+      input.currentQuestion
+    ),
+    sourceHash: input.currentQuestion.sourceHash,
+    parentId: input.activeParent?.id ?? "",
+    parentRevision: input.activeParent?.revisions ?? -1,
+    childId: input.activeChild?.id,
+    manualCorrectionRevision: input.manualCorrectionRevision,
+  };
+}
+
+export function projectTaskRelationOperationCurrentIdentity(input: {
+  scheduled: TaskRelationSplitIdentity;
+  sessionId: string;
+  runtimeEpoch: number;
+  activeParent?: { id: string; revisions?: number };
+  activeChild?: { id: string };
+  manualCorrectionRevision: number;
+}): TaskRelationSplitIdentity {
+  return {
+    ...input.scheduled,
+    sessionId: input.sessionId,
+    runtimeEpoch: input.runtimeEpoch,
+    parentId: input.activeParent?.id ?? "",
+    parentRevision: input.activeParent?.revisions ?? -1,
+    childId: input.activeChild?.id,
+    manualCorrectionRevision: input.manualCorrectionRevision,
+  };
 }
 
 export function authorizeTaskRelationSplitIdentity(input: {

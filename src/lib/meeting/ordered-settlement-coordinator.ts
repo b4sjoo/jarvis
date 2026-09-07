@@ -33,6 +33,19 @@ export interface OrderedRelationPhaseBudget {
 
 export type OrderedSettlementReleaseSource = "settled" | "deadline";
 
+export type OrderedRelationOperationTerminalDisposition =
+  | "resolved"
+  | "cancelled"
+  | "client-error";
+
+export function resolveOrderedRelationOperationTerminal(input: {
+  operationAuthorized: boolean;
+  clientError: boolean;
+}): OrderedRelationOperationTerminalDisposition {
+  if (!input.operationAuthorized) return "cancelled";
+  return input.clientError ? "client-error" : "resolved";
+}
+
 export interface OrderedSettlementReleaseDecision {
   accepted: boolean;
   source: OrderedSettlementReleaseSource;

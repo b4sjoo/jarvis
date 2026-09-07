@@ -8,8 +8,40 @@ import {
   createOrderedSettlementReleaseGate,
   readOrderedRelationAffinityRemainingMs,
   readOrderedSettlementRemainingMs,
+  resolveOrderedRelationOperationTerminal,
 } from "../src/lib/meeting/ordered-settlement-coordinator.js";
 import { decideOrderedTaskRelationResolution } from "../src/lib/meeting/task-relation-split-shadow.js";
+
+test("resolves one terminal meaning before relation consumers run", () => {
+  assert.equal(
+    resolveOrderedRelationOperationTerminal({
+      operationAuthorized: true,
+      clientError: false,
+    }),
+    "resolved"
+  );
+  assert.equal(
+    resolveOrderedRelationOperationTerminal({
+      operationAuthorized: false,
+      clientError: false,
+    }),
+    "cancelled"
+  );
+  assert.equal(
+    resolveOrderedRelationOperationTerminal({
+      operationAuthorized: true,
+      clientError: true,
+    }),
+    "client-error"
+  );
+  assert.equal(
+    resolveOrderedRelationOperationTerminal({
+      operationAuthorized: false,
+      clientError: true,
+    }),
+    "cancelled"
+  );
+});
 
 test("runs the existing matrix without a Relation handle for a first parent", () => {
   const decision = coordinateOrderedSettlement({
