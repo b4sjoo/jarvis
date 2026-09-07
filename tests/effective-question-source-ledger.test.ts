@@ -347,6 +347,10 @@ test("records only source-owned effective LQU projections", () => {
     record.owner.kind === "active-child" ? record.owner.childId : undefined,
     "child-hnsw"
   );
+  assert.equal(record.currentTurnId, "turn-child-detail");
+  assert.equal(record.answerFocusText, "How does efSearch affect recall?");
+  assert.deepEqual(record.contextSourceTurnIds, []);
+  assert.deepEqual(record.recentLogicalQuestionSourceTurnIds, []);
   ledger.upsert(record);
   ledger.upsert(record);
   assert.equal(ledger.list().length, 1);
@@ -383,6 +387,8 @@ test("records Screen observation identity in the shared effective source ledger"
   assert.equal(record?.sourceKind, "screen");
   assert.deepEqual(record?.sourceTurnIds, []);
   assert.deepEqual(record?.sourceObservationIds, ["screen-1"]);
+  assert.equal(record?.currentTurnId, "screen:screen-1");
+  assert.equal(record?.answerFocusText, "Design a URL shortener.");
   assert.equal(record?.owner.kind, "parent-mainline");
 });
 

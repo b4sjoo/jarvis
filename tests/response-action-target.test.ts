@@ -4,10 +4,42 @@ import test from "node:test";
 import {
   resolveVisibleAnswerResponseActionTarget,
 } from "../src/lib/meeting/response-action-target.js";
+import { getLogicalQuestionAnswerFocusText } from "../src/lib/meeting/logical-question-unit.js";
 import type { StableAnswerRevision } from "../src/lib/meeting/stable-answer.js";
 import type { MeetingContextState } from "../src/lib/meeting/types.js";
-import type { CurrentQuestionSettlementDecision } from "../src/lib/meeting/current-question-settlement.js";
+import {
+  createProvisionalCurrentQuestion,
+  type CurrentQuestionSettlementDecision,
+} from "../src/lib/meeting/current-question-settlement.js";
 import type { EffectiveQuestionSourceRecord } from "../src/lib/meeting/effective-question-source-ledger.js";
+
+const voiceLogicalQuestion = {
+  id: "question-voice",
+  revision: 2,
+  sessionId: "session-a",
+  runtimeEpoch: 3,
+  currentTurnId: "turn-voice",
+  sourceTurnIds: ["turn-voice"],
+  sources: [
+    {
+      turnId: "turn-voice",
+      text: "Tell me about a time you earned trust.",
+      startedAt: 10,
+      endedAt: 15,
+    },
+  ],
+  normalizedText: "Tell me about a time you earned trust.",
+  restoredAnswerFocusText: "Tell me about a time you earned trust.",
+  startedAt: 10,
+  updatedAt: 15,
+  compositionReasons: ["visible-answer-effective-source-record"],
+  boundaryReason: "visible-answer-effective-source-record" as const,
+  truncated: false,
+};
+const voiceSourceHash = createProvisionalCurrentQuestion({
+  logicalQuestionUnit: voiceLogicalQuestion,
+  sourceKind: "voice",
+}).sourceHash;
 
 const frozenSettlement = {
   settlementId: "settlement-voice",
@@ -18,7 +50,7 @@ const frozenSettlement = {
   sourceKind: "voice",
   sourceTurnIds: ["turn-voice"],
   sourceObservationIds: [],
-  sourceHash: "voice-source-hash",
+  sourceHash: voiceSourceHash,
   questionType: "behavioral",
   relation: "followup-parent",
   action: "answer",
@@ -47,7 +79,7 @@ const stable = {
   taskId: "parent-a",
   logicalQuestionUnitId: "question-voice",
   logicalQuestionRevision: 2,
-  questionSourceHash: "voice-source-hash",
+  questionSourceHash: voiceSourceHash,
   settlementId: "settlement-voice",
   settlementSnapshot: frozenSettlement,
   suggestion: {
@@ -109,10 +141,13 @@ function effectiveVoiceRecord(): EffectiveQuestionSourceRecord {
     runtimeEpoch: 3,
     logicalQuestionUnitId: "question-voice",
     logicalQuestionRevision: 2,
-    sourceHash: "voice-source-hash",
+    sourceHash: voiceSourceHash,
     sourceKind: "voice",
+    currentTurnId: "turn-voice",
     sourceTurnIds: ["turn-voice"],
     sourceObservationIds: [],
+    contextSourceTurnIds: [],
+    recentLogicalQuestionSourceTurnIds: [],
     effectiveSourceTexts: [
       {
         turnId: "turn-voice",
@@ -120,6 +155,7 @@ function effectiveVoiceRecord(): EffectiveQuestionSourceRecord {
       },
     ],
     text: "Tell me about a time you earned trust.",
+    answerFocusText: "Tell me about a time you earned trust.",
     startedAt: 10,
     updatedAt: 15,
     speechAct: "question",
@@ -145,11 +181,159 @@ test("reconstructs Enhance target from the visible Answer owner", () => {
     decision.logicalQuestionUnit?.normalizedText,
     "Tell me about a time you earned trust."
   );
-  assert.equal(decision.sourceHash, "voice-source-hash");
+  assert.equal(decision.sourceHash, voiceSourceHash);
   assert.equal(decision.settlementSnapshot, frozenSettlement);
 });
 
+test("restores a full effective source and its original answer focus without rehashing", () => {
+  const semanticText = [
+    "The system serves regional traffic and must preserve tenant isolation.",
+    "x".repeat(1_420),
+    "What would you monitor in production?",
+  ].join(" ");
+  const answerFocusText = "What would you monitor in production?";
+  const logicalQuestionUnit = {
+    id: "question-long-screen",
+    revision: 4,
+    sessionId: "session-a",
+    runtimeEpoch: 3,
+    currentTurnId: "screen:observation-long",
+    sourceTurnIds: [],
+    contextSourceTurnIds: ["turn-setup"],
+    recentLogicalQuestionSourceTurnIds: ["turn-parent"],
+    sources: [
+      {
+        turnId: "screen:observation-long",
+        text: semanticText,
+        startedAt: 10,
+        endedAt: 15,
+      },
+    ],
+    normalizedText: semanticText,
+    restoredAnswerFocusText: answerFocusText,
+    startedAt: 10,
+    updatedAt: 15,
+    compositionReasons: ["visible-answer-effective-source-record"],
+    boundaryReason: "visible-answer-effective-source-record" as const,
+    truncated: false,
+  };
+  const sourceHash = createProvisionalCurrentQuestion({
+    logicalQuestionUnit,
+    sourceKind: "screen",
+    sourceObservationIds: ["observation-long"],
+  }).sourceHash;
+  const settlement = {
+    ...frozenSettlement,
+    settlementId: "settlement-long-screen",
+    logicalQuestionUnitId: logicalQuestionUnit.id,
+    revision: logicalQuestionUnit.revision,
+    sourceKind: "screen" as const,
+    sourceTurnIds: [],
+    sourceObservationIds: ["observation-long"],
+    sourceHash,
+  } satisfies CurrentQuestionSettlementDecision;
+  const decision = resolveVisibleAnswerResponseActionTarget({
+    stableAnswer: {
+      ...stable,
+      logicalQuestionUnitId: logicalQuestionUnit.id,
+      logicalQuestionRevision: logicalQuestionUnit.revision,
+      questionSourceHash: sourceHash,
+      settlementId: settlement.settlementId,
+      settlementSnapshot: settlement,
+    },
+    currentLogicalQuestionUnit: undefined,
+    effectiveQuestionSources: [
+      {
+        ...effectiveVoiceRecord(),
+        recordId: "source-record-long-screen",
+        logicalQuestionUnitId: logicalQuestionUnit.id,
+        logicalQuestionRevision: logicalQuestionUnit.revision,
+        sourceHash,
+        sourceKind: "screen",
+        currentTurnId: logicalQuestionUnit.currentTurnId,
+        sourceTurnIds: [],
+        sourceObservationIds: ["observation-long"],
+        contextSourceTurnIds: ["turn-setup"],
+        recentLogicalQuestionSourceTurnIds: ["turn-parent"],
+        effectiveSourceTexts: [
+          {
+            turnId: logicalQuestionUnit.currentTurnId,
+            text: semanticText,
+          },
+        ],
+        text: semanticText,
+        answerFocusText,
+      },
+    ],
+    meetingContext: context(),
+    runtimeEpoch: 3,
+  });
+
+  assert.equal(decision.authorized, true);
+  assert.equal(decision.logicalQuestionUnit?.normalizedText, semanticText);
+  assert.equal(
+    getLogicalQuestionAnswerFocusText(decision.logicalQuestionUnit),
+    answerFocusText
+  );
+  assert.deepEqual(decision.logicalQuestionUnit?.contextSourceTurnIds, [
+    "turn-setup",
+  ]);
+  assert.deepEqual(
+    decision.logicalQuestionUnit?.recentLogicalQuestionSourceTurnIds,
+    ["turn-parent"]
+  );
+});
+
+test("rejects a legacy effective source that cannot restore its canonical target", () => {
+  const decision = resolveVisibleAnswerResponseActionTarget({
+    stableAnswer: stable,
+    currentLogicalQuestionUnit: undefined,
+    effectiveQuestionSources: [
+      {
+        ...effectiveVoiceRecord(),
+        currentTurnId: undefined,
+      },
+    ],
+    meetingContext: context(),
+    runtimeEpoch: 3,
+  });
+
+  assert.equal(decision.authorized, false);
+  assert.equal(
+    decision.reason,
+    "visible-answer-effective-source-incomplete"
+  );
+});
+
 test("reads a Screen visible-answer target from its exact effective source record", () => {
+  const screenLogicalQuestion = {
+    id: "question-screen",
+    revision: 1,
+    sessionId: "session-a",
+    runtimeEpoch: 3,
+    currentTurnId: "screen:observation-screen",
+    sourceTurnIds: [],
+    sources: [
+      {
+        turnId: "screen:observation-screen",
+        text: "Design a parking reservation system.",
+        startedAt: 10,
+        endedAt: 15,
+      },
+    ],
+    normalizedText: "Design a parking reservation system.",
+    restoredAnswerFocusText: "Design a parking reservation system.",
+    startedAt: 10,
+    updatedAt: 15,
+    compositionReasons: ["visible-answer-effective-source-record"],
+    boundaryReason: "visible-answer-effective-source-record" as const,
+    truncated: false,
+  };
+  const screenSourceHash = createProvisionalCurrentQuestion({
+    logicalQuestionUnit: screenLogicalQuestion,
+    sourceKind: "screen",
+    sourceObservationIds: ["observation-screen"],
+  }).sourceHash;
   const screenSettlement = {
     ...frozenSettlement,
     settlementId: "settlement-screen",
@@ -158,13 +342,13 @@ test("reads a Screen visible-answer target from its exact effective source recor
     sourceKind: "screen" as const,
     sourceTurnIds: [],
     sourceObservationIds: ["observation-screen"],
-    sourceHash: "screen-source-hash",
+    sourceHash: screenSourceHash,
   } satisfies CurrentQuestionSettlementDecision;
   const screenStable = {
     ...stable,
     logicalQuestionUnitId: "question-screen",
     logicalQuestionRevision: 1,
-    questionSourceHash: "screen-source-hash",
+    questionSourceHash: screenSourceHash,
     settlementId: "settlement-screen",
     settlementSnapshot: screenSettlement,
     suggestion: {
@@ -182,10 +366,13 @@ test("reads a Screen visible-answer target from its exact effective source recor
         recordId: "source-record-screen",
         logicalQuestionUnitId: "question-screen",
         logicalQuestionRevision: 1,
-        sourceHash: "screen-source-hash",
+        sourceHash: screenSourceHash,
         sourceKind: "screen",
+        currentTurnId: "screen:observation-screen",
         sourceTurnIds: [],
         sourceObservationIds: ["observation-screen"],
+        contextSourceTurnIds: [],
+        recentLogicalQuestionSourceTurnIds: [],
         effectiveSourceTexts: [
           {
             turnId: "screen:observation-screen",
@@ -193,6 +380,7 @@ test("reads a Screen visible-answer target from its exact effective source recor
           },
         ],
         text: "Design a parking reservation system.",
+        answerFocusText: "Design a parking reservation system.",
       },
     ],
     meetingContext: context(),

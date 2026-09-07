@@ -34,7 +34,10 @@ test("Regenerate activates its one prepared Advisor job before acceptance", () =
     (regenerateSource.match(/buildAdvisorJob\(/g) ?? []).length,
     1
   );
-  assert.match(regenerateSource, /advisorJob,\s*\}\);/);
+  assert.match(
+    regenerateSource,
+    /advisorJob,\s*currentQuestionSettlementOverride:\s*visibleTarget\.settlementSnapshot,\s*\}\);/
+  );
   assert.match(
     regenerateSource,
     /logicalQuestionUnit: visibleTarget\.logicalQuestionUnit/

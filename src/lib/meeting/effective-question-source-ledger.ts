@@ -5,6 +5,7 @@ import type {
   EffectiveCurrentQuestionSettlement,
 } from "./current-question-settlement.js";
 import {
+  getLogicalQuestionAnswerFocusText,
   getLogicalQuestionSemanticEvidenceText,
   type LogicalQuestionUnit,
 } from "./logical-question-unit.js";
@@ -30,11 +31,15 @@ export interface EffectiveQuestionSourceRecord {
   logicalQuestionRevision: number;
   sourceHash: string;
   sourceKind?: CurrentQuestionSettlementDecision["sourceKind"];
+  currentTurnId?: string;
   sourceTurnIds: string[];
   sourceObservationIds?: string[];
+  contextSourceTurnIds?: string[];
+  recentLogicalQuestionSourceTurnIds?: string[];
   correctionIds?: string[];
   effectiveSourceTexts?: Array<{ turnId: string; text: string }>;
   text: string;
+  answerFocusText?: string;
   startedAt: number;
   updatedAt: number;
   speechAct: ReturnType<typeof projectPrimaryAsk>["speechAct"];
@@ -285,9 +290,7 @@ export function createEffectiveQuestionSourceRecord(input: {
   if (!parent) return undefined;
   const text = getLogicalQuestionSemanticEvidenceText(
     input.logicalQuestionUnit
-  )
-    .trim()
-    .slice(0, 1_200);
+  ).trim();
   if (!text) return undefined;
   const projection =
     input.logicalQuestionUnit.primaryAskProjection ??
@@ -318,13 +321,23 @@ export function createEffectiveQuestionSourceRecord(input: {
     logicalQuestionRevision: input.logicalQuestionUnit.revision,
     sourceHash: input.settlement.sourceHash,
     sourceKind: input.settlement.sourceKind,
+    currentTurnId: input.logicalQuestionUnit.currentTurnId,
     sourceTurnIds: [...input.logicalQuestionUnit.sourceTurnIds],
     sourceObservationIds: [...input.settlement.sourceObservationIds],
+    contextSourceTurnIds: [
+      ...(input.logicalQuestionUnit.contextSourceTurnIds ?? []),
+    ],
+    recentLogicalQuestionSourceTurnIds: [
+      ...(input.logicalQuestionUnit.recentLogicalQuestionSourceTurnIds ?? []),
+    ],
     correctionIds: [...sourceProjection.correctionIds],
     effectiveSourceTexts: sourceProjection.effectiveSourceTexts.map(
       (source) => ({ ...source })
     ),
     text,
+    answerFocusText: getLogicalQuestionAnswerFocusText(
+      input.logicalQuestionUnit
+    ),
     startedAt: input.logicalQuestionUnit.startedAt,
     updatedAt: input.logicalQuestionUnit.updatedAt,
     speechAct: projection.speechAct,
@@ -582,6 +595,10 @@ function cloneRecord(record: EffectiveQuestionSourceRecord) {
     ...record,
     sourceTurnIds: [...record.sourceTurnIds],
     sourceObservationIds: [...(record.sourceObservationIds ?? [])],
+    contextSourceTurnIds: [...(record.contextSourceTurnIds ?? [])],
+    recentLogicalQuestionSourceTurnIds: [
+      ...(record.recentLogicalQuestionSourceTurnIds ?? []),
+    ],
     correctionIds: record.correctionIds
       ? [...record.correctionIds]
       : undefined,

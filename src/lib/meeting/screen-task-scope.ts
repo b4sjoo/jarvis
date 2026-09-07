@@ -57,6 +57,7 @@ export type AdvisorScreenSourceReadDisposition =
   | "no-active-parent"
   | "parent-mismatch"
   | "no-screen-binding"
+  | "preferred-observation-unavailable"
   | "observation-not-found"
   | "image-unavailable"
   | "provider-image-unsupported";
@@ -451,6 +452,7 @@ export function resolveAdvisorScreenSourceRead<
   activeMeetingTask?: T;
   screenObservations: ScreenObservation[];
   preferredObservationIds?: string[];
+  requirePreferredObservation?: boolean;
   sourceVoiceTurnIds?: string[];
   providerSupportsImages: boolean;
 }): AdvisorScreenSourceReadDecision {
@@ -490,6 +492,16 @@ export function resolveAdvisorScreenSourceRead<
         (observation) => observation.id === observationId
       )
     );
+  if (
+    input.requirePreferredObservation &&
+    input.preferredObservationIds?.length &&
+    !preferredObservationId
+  ) {
+    return result("preferred-observation-unavailable", {
+      sourceScreenParentId: task.parent.id,
+      selectionSource: "settlement",
+    });
+  }
   const sourceObservationId =
     preferredObservationId ?? task.screen?.observationId;
   const selectionSource = preferredObservationId

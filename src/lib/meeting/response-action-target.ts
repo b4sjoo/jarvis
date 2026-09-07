@@ -2,7 +2,10 @@ import type { LogicalQuestionUnit } from "./logical-question-unit.js";
 import type { EffectiveQuestionSourceRecord } from "./effective-question-source-ledger.js";
 import type { StableAnswerRevision } from "./stable-answer.js";
 import type { MeetingContextState } from "./types.js";
-import type { CurrentQuestionSettlementDecision } from "./current-question-settlement.js";
+import {
+  createProvisionalCurrentQuestion,
+  type CurrentQuestionSettlementDecision,
+} from "./current-question-settlement.js";
 
 export type VisibleAnswerResponseActionTargetReason =
   | "current-lqu-matches-visible-answer"
@@ -13,7 +16,8 @@ export type VisibleAnswerResponseActionTargetReason =
   | "visible-answer-question-identity-missing"
   | "visible-answer-parent-changed"
   | "visible-answer-effective-source-missing"
-  | "visible-answer-effective-source-mismatch";
+  | "visible-answer-effective-source-mismatch"
+  | "visible-answer-effective-source-incomplete";
 
 export interface VisibleAnswerResponseActionTargetDecision {
   authorized: boolean;
@@ -118,10 +122,27 @@ export function resolveVisibleAnswerResponseActionTarget(input: {
       "effective-source-hash"
     );
   }
+  if (!hasCompleteEffectiveSourceRecord(sourceRecord)) {
+    return reject(
+      "visible-answer-effective-source-incomplete",
+      "effective-source-payload"
+    );
+  }
   const logicalQuestionUnit = reconstructEffectiveSourceQuestion(
     sourceRecord,
     input.meetingContext
   );
+  const reconstructedCurrentQuestion = createProvisionalCurrentQuestion({
+    logicalQuestionUnit,
+    sourceKind: sourceRecord.sourceKind ?? "voice",
+    sourceObservationIds: sourceRecord.sourceObservationIds,
+  });
+  if (reconstructedCurrentQuestion.sourceHash !== sourceRecord.sourceHash) {
+    return reject(
+      "visible-answer-effective-source-mismatch",
+      "effective-source-reconstruction-hash"
+    );
+  }
   return accepted(
     stable,
     logicalQuestionUnit,
@@ -192,7 +213,7 @@ function accepted(
 }
 
 function reconstructEffectiveSourceQuestion(
-  record: EffectiveQuestionSourceRecord,
+  record: CompleteEffectiveQuestionSourceRecord,
   meetingContext: MeetingContextState
 ): LogicalQuestionUnit {
   const sourceByTurnId = new Map(
@@ -236,16 +257,42 @@ function reconstructEffectiveSourceQuestion(
     revision: record.logicalQuestionRevision,
     sessionId: record.sessionId,
     runtimeEpoch: record.runtimeEpoch,
-    currentTurnId: sources.at(-1)?.turnId ?? `source-record:${fallbackSourceId}`,
+    currentTurnId: record.currentTurnId,
     sourceTurnIds: [...record.sourceTurnIds],
+    contextSourceTurnIds: [...record.contextSourceTurnIds],
+    recentLogicalQuestionSourceTurnIds: [
+      ...record.recentLogicalQuestionSourceTurnIds,
+    ],
     sources,
     normalizedText: record.text,
+    restoredAnswerFocusText: record.answerFocusText,
     startedAt: record.startedAt,
     updatedAt: record.updatedAt,
     compositionReasons: ["visible-answer-effective-source-record"],
     boundaryReason: "visible-answer-effective-source-record",
     truncated: false,
   };
+}
+
+function hasCompleteEffectiveSourceRecord(
+  record: EffectiveQuestionSourceRecord
+): record is CompleteEffectiveQuestionSourceRecord {
+  return Boolean(
+    record.currentTurnId &&
+      record.sourceKind &&
+      record.text.trim() &&
+      record.answerFocusText?.trim() &&
+      Array.isArray(record.contextSourceTurnIds) &&
+      Array.isArray(record.recentLogicalQuestionSourceTurnIds)
+  );
+}
+
+interface CompleteEffectiveQuestionSourceRecord
+  extends EffectiveQuestionSourceRecord {
+  currentTurnId: string;
+  contextSourceTurnIds: string[];
+  recentLogicalQuestionSourceTurnIds: string[];
+  answerFocusText: string;
 }
 
 function readSettlementSnapshot(

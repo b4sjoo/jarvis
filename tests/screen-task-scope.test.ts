@@ -506,6 +506,37 @@ test("does not attach a screenshot across parent or runtime boundaries", () => {
   );
 });
 
+test("does not substitute an active-branch image for an explicit visible-source action", () => {
+  const decision = resolveAdvisorScreenSourceRead({
+    mode: "screen-anchored",
+    expectedSessionId: "session-1",
+    currentSessionId: "session-1",
+    expectedRuntimeEpoch: 4,
+    currentRuntimeEpoch: 4,
+    expectedParentId: "parent-1",
+    activeMeetingTask: {
+      parent: { id: "parent-1" },
+      screen: { observationId: "observation-new" },
+    },
+    screenObservations: [
+      {
+        id: "observation-new",
+        capturedAt: 1,
+        source: "hotkey",
+        imageBase64: "new-image",
+        changed: true,
+      },
+    ],
+    preferredObservationIds: ["observation-original"],
+    requirePreferredObservation: true,
+    providerSupportsImages: true,
+  });
+
+  assert.equal(decision.disposition, "preferred-observation-unavailable");
+  assert.equal(decision.selectionSource, "settlement");
+  assert.equal(decision.image, undefined);
+});
+
 test("keeps only the current bounded voice question for manual screen recovery", () => {
   const capsule = selectManualScreenVoiceQuestionCapsule({
     sessionId: "session-1",

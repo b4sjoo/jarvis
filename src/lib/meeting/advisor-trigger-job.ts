@@ -118,6 +118,7 @@ export interface AdvisorLogicalQuestionAuthorizationTarget {
     | "runtime-current"
     | "manual-correction-target"
     | "response-recovery-target"
+    | "regenerate-target"
     | "response-action-target"
     | "artifact-regeneration-target"
     | "supersession-protected";
@@ -129,6 +130,7 @@ export function resolveAdvisorLogicalQuestionAuthorizationTarget(input: {
   runtimeCurrent?: LogicalQuestionUnit;
   manualCorrectionTarget?: LogicalQuestionUnit;
   responseRecoveryTarget?: LogicalQuestionUnit;
+  regenerateTarget?: LogicalQuestionUnit;
   responseActionTarget?: LogicalQuestionUnit;
   artifactRegenerationTarget?: LogicalQuestionUnit;
   supersessionProtectedTarget?: LogicalQuestionUnit;
@@ -144,6 +146,13 @@ export function resolveAdvisorLogicalQuestionAuthorizationTarget(input: {
     return {
       source: "response-recovery-target",
       logicalQuestionUnit: input.responseRecoveryTarget,
+    };
+  }
+
+  if (input.jobSource === "regenerate") {
+    return {
+      source: "regenerate-target",
+      logicalQuestionUnit: input.regenerateTarget,
     };
   }
 

@@ -63,6 +63,9 @@ export interface LogicalQuestionUnit {
     decision: "output-request" | "no-output-request";
     sourceTurnIds: string[];
   };
+  // A visible-answer action restores this from the committed effective source
+  // record. It is already-settled evidence, not a second primary-ask inference.
+  restoredAnswerFocusText?: string;
   termCorrectionOverlays?: ActiveQuestionTermCorrection[];
 }
 
@@ -289,6 +292,9 @@ export function getLogicalQuestionAnswerFocusText(
   unit: LogicalQuestionUnit | undefined
 ) {
   if (!unit) return "";
+  if (unit.restoredAnswerFocusText?.trim()) {
+    return unit.restoredAnswerFocusText.trim();
+  }
   if (unit.responseOpportunityTarget?.text.trim()) {
     return unit.responseOpportunityTarget.text.trim();
   }

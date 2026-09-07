@@ -10544,7 +10544,10 @@ export function useMeetingAssistant() {
           }
       : undefined;
     const settlementOwnedQuestionContext =
-      advisorJob.source === "manual-correction" &&
+      (advisorJob.source === "manual-correction" ||
+        advisorJob.source === "regenerate" ||
+        advisorJob.source === "response-action" ||
+        advisorJob.source === "artifact-regeneration") &&
       settlementOverride &&
       advisorJob.logicalQuestionUnit
         ? authorizeSettlementOwnedQuestionContext({
@@ -10619,6 +10622,10 @@ export function useMeetingAssistant() {
           latestManualCorrectionTargetRef.current?.logicalQuestionUnit,
         responseRecoveryTarget:
           latestForceAdviseTargetRef.current?.logicalQuestionUnit,
+        regenerateTarget:
+          advisorJob.source === "regenerate"
+            ? advisorJob.logicalQuestionUnit
+            : undefined,
         responseActionTarget:
           advisorJob.source === "response-action"
             ? advisorJob.logicalQuestionUnit
@@ -13525,6 +13532,13 @@ export function useMeetingAssistant() {
       ? advisorSourceReadContext.activeMeetingTask ??
         settledExecutionPlan.taskSnapshot
       : originalPromptContext.activeMeetingTask;
+    const preferredScreenObservationIds =
+      settledExecutionPlan?.sourceObservationIds ??
+      currentQuestionSettlement?.sourceObservationIds;
+    const explicitVisibleSourceAction =
+      advisorJob.source === "regenerate" ||
+      advisorJob.source === "response-action" ||
+      advisorJob.source === "artifact-regeneration";
     const advisorScreenSourceRead = resolveAdvisorScreenSourceRead({
       mode: advisorPromptMode,
       expectedSessionId: advisorJob.expectedSessionId,
@@ -13536,9 +13550,10 @@ export function useMeetingAssistant() {
         advisorJob.expectedParentId,
       activeMeetingTask: advisorSourceReadTask,
       screenObservations: advisorSourceReadContext.screenObservations,
-      preferredObservationIds:
-        settledExecutionPlan?.sourceObservationIds ??
-        currentQuestionSettlement?.sourceObservationIds,
+      preferredObservationIds: preferredScreenObservationIds,
+      requirePreferredObservation:
+        explicitVisibleSourceAction &&
+        Boolean(preferredScreenObservationIds?.length),
       sourceVoiceTurnIds:
         advisorJob.logicalQuestionUnit?.sourceTurnIds ??
         promptContext.advisorPromptSourceTurnIds,
@@ -13563,6 +13578,26 @@ export function useMeetingAssistant() {
         sourceReadStepId,
         "success"
       );
+    }
+    if (
+      explicitVisibleSourceAction &&
+      preferredScreenObservationIds?.length &&
+      !advisorScreenSourceRead.image
+    ) {
+      const reason = advisorScreenSourceRead.disposition;
+      releaseAdvisorJob(advisorJob, "error", {
+        commitAuthorized: false,
+        commitAuthorizationReason: reason,
+      });
+      if (traceId) {
+        traceStoreRef.current.finishTrace(traceId, "error", reason);
+      }
+      setState((previous) => ({
+        ...previous,
+        error:
+          "The visible Screen source is no longer available for this action. Capture it again before retrying.",
+      }));
+      return;
     }
     const advisorModelGenerationIdentity =
       buildModelGenerationIdentityForTrace({
@@ -33541,6 +33576,7 @@ export function useMeetingAssistant() {
     try {
       await runAdvisor({
         advisorJob,
+        currentQuestionSettlementOverride: visibleTarget.settlementSnapshot,
       });
       const completedTrace = traceStoreRef.current
         .getTraces()

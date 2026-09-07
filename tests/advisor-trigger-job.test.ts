@@ -234,6 +234,43 @@ test("response actions authorize the LQU frozen by the explicit action", () => {
   );
 });
 
+test("Regenerate authorizes the visible LQU rather than ambient runtime current", () => {
+  const visibleQuestion = {
+    id: "screen-question-regenerate",
+    revision: 3,
+    sessionId: "session-a",
+    runtimeEpoch: 1,
+    currentTurnId: "screen:observation-regenerate",
+    sourceTurnIds: [],
+    sources: [
+      {
+        turnId: "screen:observation-regenerate",
+        text: "Implement an LRU cache",
+        startedAt: 10,
+        endedAt: 20,
+      },
+    ],
+    normalizedText: "Implement an LRU cache",
+    startedAt: 10,
+    updatedAt: 20,
+    compositionReasons: ["visible-screen-question"],
+    boundaryReason: "visible-screen-question" as const,
+    truncated: false,
+  };
+
+  assert.deepEqual(
+    resolveAdvisorLogicalQuestionAuthorizationTarget({
+      jobSource: "regenerate",
+      runtimeCurrent: undefined,
+      regenerateTarget: visibleQuestion,
+    }),
+    {
+      source: "regenerate-target",
+      logicalQuestionUnit: visibleQuestion,
+    }
+  );
+});
+
 test("manual type correction regenerates under its corrected human authority", () => {
   const job = createAdvisorTriggerJob({
     source: "manual-correction",
