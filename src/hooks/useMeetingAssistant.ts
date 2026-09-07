@@ -27129,7 +27129,6 @@ export function useMeetingAssistant() {
           });
         }
 
-        analysisController?.abort();
         const runningTrace = traceStoreRef.current
           .getTraces()
           .find((candidate) => candidate.id === trace.id);
