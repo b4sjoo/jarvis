@@ -633,7 +633,10 @@ export function buildSettledAdvisorExecutionPlan(input: {
   requiresVision?: boolean;
   artifactRequest?: {
     hardAnswerOnly?: boolean;
+    newParentCommitted?: boolean;
     manualPhaseCommitted?: boolean;
+    automaticPhaseIdentityTransitionCommitted?: boolean;
+    freshCodingChildImplementationCommitted?: boolean;
     manualCorrection?: boolean;
     artifactRegenerationArtifacts?: readonly AnswerArtifactSection[];
     manualScreen?: {
@@ -827,21 +830,14 @@ export function buildSettledAdvisorExecutionPlan(input: {
     relation = "none";
   }
   const newParentCommitted = Boolean(
-    taskMutationCommittedBeforeAdvisor &&
-      (input.taskBoundaryCommitted ||
-        taskMutationPolicy.kind === "create-parent" ||
-        taskMutationPolicy.kind === "replace-parent")
+    input.taskBoundaryCommitted ||
+      input.artifactRequest?.newParentCommitted
   );
   const automaticPhaseIdentityTransitionCommitted = Boolean(
-    taskMutationCommittedBeforeAdvisor &&
-      taskMutationPolicy.kind === "set-phase" &&
-      !input.artifactRequest?.manualPhaseCommitted
+    input.artifactRequest?.automaticPhaseIdentityTransitionCommitted
   );
   const freshCodingChildImplementationCommitted = Boolean(
-    taskMutationCommittedBeforeAdvisor &&
-      taskMutationPolicy.kind === "attach-child" &&
-      responseOwner.questionType === "coding" &&
-      playbookPhase === "implementation_validation"
+    input.artifactRequest?.freshCodingChildImplementationCommitted
   );
   const artifactGenerationAuthority =
     decideAdvisorArtifactGenerationAuthority({

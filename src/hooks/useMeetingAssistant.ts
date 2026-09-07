@@ -13301,6 +13301,18 @@ export function useMeetingAssistant() {
         authority: advisorJob.runtimeTypeAdjudicationOutputAuthority,
         taskBoundaryCommitted: taskBoundaryCommittedBeforeAdvisor,
       });
+    const automaticPhaseIdentityTransitionCommitted =
+      sourceOwnedTransitionCommittedPhaseIdentityChange(
+        sourceOwnedTransitionReceipt
+      );
+    const freshCodingChildImplementationCommitted =
+      sourceOwnedTransitionCommittedFreshCodingChildImplementation(
+        sourceOwnedTransitionReceipt
+      );
+    const sourceOwnedFreshParentCommitted =
+      sourceOwnedTransitionCommittedFreshParent(
+        sourceOwnedTransitionReceipt
+      );
 
     if (currentQuestionSettlement) {
       if (!settledExecutionPlan) {
@@ -13381,7 +13393,12 @@ export function useMeetingAssistant() {
             hardAnswerOnly:
               advisorJob.source === "force-advise" ||
               runtimeTypeAdjudicationAnswerOnly,
+            newParentCommitted:
+              taskBoundaryCommittedBeforeAdvisor ||
+              sourceOwnedFreshParentCommitted,
             manualPhaseCommitted: manualPhaseAdvanceCommitted,
+            automaticPhaseIdentityTransitionCommitted,
+            freshCodingChildImplementationCommitted,
             manualCorrection:
               advisorJob.source === "manual-correction",
             artifactRegenerationArtifacts:
@@ -13713,19 +13730,9 @@ export function useMeetingAssistant() {
         effectiveAdvisorSettlementView.parent?.sourceQuestionRevision ??
         0,
     };
-    const automaticPhaseIdentityTransitionCommitted =
-      sourceOwnedTransitionCommittedPhaseIdentityChange(
-        sourceOwnedTransitionReceipt
-      );
-    const freshCodingChildImplementationCommitted =
-      sourceOwnedTransitionCommittedFreshCodingChildImplementation(
-        sourceOwnedTransitionReceipt
-      );
     const newParentArtifactAuthority = Boolean(
       taskBoundaryCommittedBeforeAdvisor ||
-        sourceOwnedTransitionCommittedFreshParent(
-          sourceOwnedTransitionReceipt
-        ) ||
+        sourceOwnedFreshParentCommitted ||
         (settledExecutionPlan?.taskMutationCommittedBeforeAdvisor &&
           (settledExecutionPlan.taskMutationPolicy.kind ===
             "create-parent" ||
@@ -29991,6 +29998,19 @@ export function useMeetingAssistant() {
             screenCurrentQuestionSettlement.sourceHash,
           requiresVision: true,
           artifactRequest: {
+            newParentCommitted:
+              screenFreshParentCreated ||
+              sourceOwnedTransitionCommittedFreshParent(
+                screenSourceOwnedTransitionReceipt
+              ),
+            automaticPhaseIdentityTransitionCommitted:
+              sourceOwnedTransitionCommittedPhaseIdentityChange(
+                screenSourceOwnedTransitionReceipt
+              ),
+            freshCodingChildImplementationCommitted:
+              sourceOwnedTransitionCommittedFreshCodingChildImplementation(
+                screenSourceOwnedTransitionReceipt
+              ),
             manualScreen: {
               boundVoicePrimaryAsk:
                 screenSourcePacket.sourceOperationAuthority
