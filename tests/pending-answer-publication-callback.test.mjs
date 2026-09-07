@@ -70,6 +70,9 @@ const callbackSources = {
   readGenerationLeaseSnapshot: findCallbackSource(
     "readGenerationLeaseSnapshot"
   ),
+  terminalizeGenerationLease: findCallbackSource(
+    "terminalizeGenerationLease"
+  ),
   tryCommitPendingAnswer: findCallbackSource("tryCommitPendingAnswer"),
   queuePendingAnswerRevision: findCallbackSource("queuePendingAnswerRevision"),
 };
@@ -289,7 +292,6 @@ function createHarness() {
     },
     schedulePendingAnswerCommit: (...args) => scheduledPendingCommits.push(args),
     publishGenerationResultProjection: () => {},
-    terminalizeGenerationLease: () => {},
     transitionForceAdviseTarget: () => {},
     recordQuestionTypeAdjudicationOutcome: () => {},
     refreshRecordedCompletedTrace: () => {},
@@ -472,5 +474,64 @@ test("rejects pending publication when Preparation changes before unlock", () =>
     );
   } finally {
     harness.restore();
+  }
+});
+
+test("rejects pending publication after its question or manual revision becomes stale", () => {
+  for (const staleCase of ["new-question", "manual-correction"]) {
+    const harness = createHarness();
+    try {
+      const pendingLease = {
+        ...lease(),
+        id: `lease-${staleCase}`,
+      };
+      const queued = harness.environment.queuePendingAnswerRevision({
+        lease: pendingLease,
+        suggestion: suggestion(
+          `visible-${staleCase}`,
+          "Answer: This stale candidate must not become visible."
+        ),
+        authorizedArtifacts: ["answer"],
+        taskId: "parent-a",
+        resultTaskId: "parent-a",
+        sectionOwner: { kind: "parent-mainline", parentId: "parent-a" },
+        taskRevision: 1,
+        logicalQuestionUnitId: "lqu-current",
+        logicalQuestionRevision: 1,
+        sessionId: "session-a",
+        runtimeEpoch: 1,
+        questionSourceHash: `source-${staleCase}`,
+        settlementId: `settlement-${staleCase}`,
+        resetSections: false,
+        reason: "delivery-lock-active",
+        latestUsefulAnswerMutationAuthorized: false,
+        taskRuntimeRevision: 1,
+      });
+      assert.ok(queued);
+
+      if (staleCase === "new-question") {
+        harness.refs.logicalQuestionUnitRef.current = {
+          id: "lqu-new",
+          revision: 1,
+        };
+      } else {
+        harness.refs.manualCorrectionRevisionRef.current = 1;
+      }
+      harness.unlock();
+
+      assert.equal(harness.environment.tryCommitPendingAnswer(), "stale");
+      assert.equal(harness.refs.pendingAnswerRevisionRef.current, null);
+      assert.equal(
+        harness.refs.stableAnswerRevisionRef.current.suggestion.id,
+        "visible-a"
+      );
+      assert.equal(
+        harness.generationResultLedger.getEntry(pendingLease.id)
+          ?.commitDisposition,
+        "rejected"
+      );
+    } finally {
+      harness.restore();
+    }
   }
 });

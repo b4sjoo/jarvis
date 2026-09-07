@@ -326,6 +326,8 @@ function createHarness() {
       advisorCalls.push({ at: clock.now - 10_000, args }),
     recordQuestionTypeAdjudicationOutcome: () => {},
     refreshRecordedCompletedTrace: () => {},
+    RUNTIME_RELATION_CONFIGURATION_ERROR:
+      "Runtime relation model configuration failed. Jarvis preserved the current task; check the Runtime or Main Advisor provider settings.",
     setState: (updater) => events.push({ ui: updater({}) }),
   };
   const context = vm.createContext(environment);
@@ -651,6 +653,55 @@ test("uses a Screen operation's own source when no Voice LQU is current", { conc
 
     assert.equal(resolution.operationAuthorization.authorized, true);
     assert.equal(resolution.decision.relation, "followup-parent");
+  } finally {
+    harness.restore();
+  }
+});
+
+test("lets the Voice operation owner present a Relation client error without handoff", { concurrency: false }, async () => {
+  const harness = createHarness();
+  try {
+    const affinityOutcome = {
+      child: { unavailableReason: "no-active-child" },
+      parent: {
+        unavailableReason: "provider-configuration-error",
+        clientError: true,
+      },
+    };
+    const handle = {
+      releaseWindowRequested: true,
+      sourceKind: "voice",
+      operationId: "voice-client-error",
+      outcome: Promise.resolve({ operationId: "voice-client-error" }),
+      affinityOutcome: Promise.resolve(affinityOutcome),
+      readAffinityOutcome: () => structuredClone(affinityOutcome),
+      cancelForegroundWork: () => undefined,
+      authorizeOperation: () => ({
+        authorized: true,
+        reason: "source-operation-current",
+      }),
+    };
+
+    startVoiceResolution(harness, handle);
+    await harness.clock.advanceTo(300);
+
+    assert.equal(harness.advisorCalls.length, 0);
+    assert.equal(
+      harness.events.some(
+        (event) =>
+          event.ui?.error ===
+          "Runtime relation model configuration failed. Jarvis preserved the current task; check the Runtime or Main Advisor provider settings."
+      ),
+      true
+    );
+    assert.equal(
+      harness.events.some(
+        (event) =>
+          event.finish?.[1] === "error" &&
+          event.finish?.[2] === "task-relation-client-error"
+      ),
+      true
+    );
   } finally {
     harness.restore();
   }

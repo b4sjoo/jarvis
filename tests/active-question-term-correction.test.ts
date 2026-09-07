@@ -221,6 +221,10 @@ test("does not regenerate after a rejected term-correction relation", () => {
     correction.slice(advisorCall - 500, advisorCall + 100),
     /if \(correctionRelationTerminal\)[\s\S]*else \{[\s\S]*await runAdvisor/
   );
+  assert.match(
+    correction,
+    /The corrected term was kept, but task relation and answer regeneration were not changed\./
+  );
 });
 
 test("reverses only a correction owned by the current LQU", () => {
