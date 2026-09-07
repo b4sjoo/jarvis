@@ -4,14 +4,20 @@ import test from "node:test";
 import {
   resolveVisibleAnswerResponseActionTarget,
 } from "../src/lib/meeting/response-action-target.js";
-import { getLogicalQuestionAnswerFocusText } from "../src/lib/meeting/logical-question-unit.js";
+import {
+  getLogicalQuestionAnswerFocusText,
+} from "../src/lib/meeting/logical-question-unit.js";
+import { projectAdvisorTranscriptForLogicalQuestion } from "../src/lib/meeting/logical-question-effective-projection.js";
 import type { StableAnswerRevision } from "../src/lib/meeting/stable-answer.js";
 import type { MeetingContextState } from "../src/lib/meeting/types.js";
 import {
   createProvisionalCurrentQuestion,
   type CurrentQuestionSettlementDecision,
 } from "../src/lib/meeting/current-question-settlement.js";
-import type { EffectiveQuestionSourceRecord } from "../src/lib/meeting/effective-question-source-ledger.js";
+import {
+  createEffectiveQuestionSourceRecord,
+  type EffectiveQuestionSourceRecord,
+} from "../src/lib/meeting/effective-question-source-ledger.js";
 
 const voiceLogicalQuestion = {
   id: "question-voice",
@@ -183,6 +189,96 @@ test("reconstructs Enhance target from the visible Answer owner", () => {
   );
   assert.equal(decision.sourceHash, voiceSourceHash);
   assert.equal(decision.settlementSnapshot, frozenSettlement);
+});
+
+test("preserves term-correction provenance through visible-source reconstruction and rewrite", () => {
+  const correctedLogicalQuestion = {
+    ...voiceLogicalQuestion,
+    normalizedText: "Design a RAG system for document retrieval.",
+    restoredAnswerFocusText: "Design a RAG system for document retrieval.",
+    sources: [
+      {
+        turnId: "turn-voice",
+        text: "Design a RAG system for document retrieval.",
+        startedAt: 10,
+        endedAt: 15,
+      },
+    ],
+  };
+  const correctedSourceHash = createProvisionalCurrentQuestion({
+    logicalQuestionUnit: correctedLogicalQuestion,
+    sourceKind: "voice",
+  }).sourceHash;
+  const correctedSettlement = {
+    ...frozenSettlement,
+    settlementId: "settlement-rag",
+    sourceHash: correctedSourceHash,
+    questionType: "ai-ml-system-design",
+    effective: true,
+    effectiveRevision: 1,
+    rawQuestionType: "ai-ml-system-design",
+    rawRelation: "followup-parent",
+    nullHypothesisApplied: false,
+    effectiveParentId: "parent-a",
+    effectiveParentRevision: 1,
+  } as const;
+  const correctedStable = {
+    ...stable,
+    questionSourceHash: correctedSourceHash,
+    settlementId: correctedSettlement.settlementId,
+    settlementSnapshot: correctedSettlement,
+  };
+  const correctedRecord: EffectiveQuestionSourceRecord = {
+    ...effectiveVoiceRecord(),
+    recordId: "source-record-rag",
+    sourceHash: correctedSourceHash,
+    correctionIds: ["correction-rag"],
+    effectiveSourceTexts: [
+      {
+        turnId: "turn-voice",
+        text: "Design a RAG system for document retrieval.",
+      },
+    ],
+    text: "Design a RAG system for document retrieval.",
+    answerFocusText: "Design a RAG system for document retrieval.",
+  };
+  const meetingContext = context();
+  meetingContext.transcriptTurns[0].text =
+    "Design a car-sharing system for document retrieval.";
+  const decision = resolveVisibleAnswerResponseActionTarget({
+    stableAnswer: correctedStable,
+    currentLogicalQuestionUnit: undefined,
+    effectiveQuestionSources: [correctedRecord],
+    meetingContext,
+    runtimeEpoch: 3,
+  });
+
+  assert.equal(decision.authorized, true);
+  assert.deepEqual(
+    decision.logicalQuestionUnit?.sources[0]?.appliedSpeechCorrectionIds,
+    ["correction-rag"]
+  );
+  const transcript = projectAdvisorTranscriptForLogicalQuestion({
+    turns: meetingContext.transcriptTurns,
+    logicalQuestionUnit: decision.logicalQuestionUnit,
+    sessionId: "session-a",
+    runtimeEpoch: 3,
+  });
+  assert.match(transcript.transcript, /RAG system/);
+  assert.doesNotMatch(transcript.transcript, /car-sharing system/);
+  assert.deepEqual(transcript.correctionIds, ["correction-rag"]);
+
+  const rewritten = createEffectiveQuestionSourceRecord({
+    logicalQuestionUnit: decision.logicalQuestionUnit!,
+    settlement: correctedSettlement,
+    activeMeetingTask: meetingContext.activeMeetingTask,
+    settledAt: 30,
+  });
+  assert.deepEqual(rewritten?.correctionIds, ["correction-rag"]);
+  assert.equal(
+    rewritten?.effectiveSourceTexts?.[0]?.text,
+    "Design a RAG system for document retrieval."
+  );
 });
 
 test("restores a full effective source and its original answer focus without rehashing", () => {

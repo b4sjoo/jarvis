@@ -225,6 +225,9 @@ function reconstructEffectiveSourceQuestion(
       text: source.text.trim(),
       startedAt: sourceByTurnId.get(source.turnId)?.startedAt ?? record.startedAt,
       endedAt: sourceByTurnId.get(source.turnId)?.endedAt ?? record.updatedAt,
+      appliedSpeechCorrectionIds: record.correctionIds?.length
+        ? [...record.correctionIds]
+        : undefined,
     }))
     .filter((source) => source.text.length > 0);
   const sourcesFromTurns = record.sourceTurnIds
@@ -235,6 +238,9 @@ function reconstructEffectiveSourceQuestion(
       text: turn.text.trim(),
       startedAt: turn.startedAt,
       endedAt: turn.endedAt,
+      appliedSpeechCorrectionIds: record.correctionIds?.length
+        ? [...record.correctionIds]
+        : undefined,
     }))
     .filter((source) => source.text.length > 0);
   const fallbackSourceId =
@@ -250,6 +256,9 @@ function reconstructEffectiveSourceQuestion(
               text: record.text,
               startedAt: record.startedAt,
               endedAt: record.updatedAt,
+              appliedSpeechCorrectionIds: record.correctionIds?.length
+                ? [...record.correctionIds]
+                : undefined,
             },
           ];
   return {
