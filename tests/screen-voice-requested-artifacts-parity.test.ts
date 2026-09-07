@@ -221,8 +221,8 @@ for (const parityCase of cases) {
       });
     const screenRequestedArtifacts =
       resolveManualScreenGenerationRequestedArtifacts({
-        requiredArtifacts: phaseDecision.requiredArtifacts,
-        questionType: parityCase.input.questionType,
+        requiredArtifacts: voicePlan.requiredArtifacts,
+        questionType: voicePlan.questionType,
         boundVoicePrimaryAsk: false,
         primaryAskIntent: screenSubtaskIntent,
       });

@@ -636,9 +636,7 @@ import {
   createAdvisorGeneratedContinuityCapsule,
   buildBoundedParentContextHandoff,
   buildCommittedTaskBoundaryParent,
-  buildQuestionTypeConsumerObservation,
   buildEffectiveAdvisorSettlementView,
-  resolveEffectiveInterviewTaskRelation,
   effectiveSettlementAuthorizesSourceTransition,
   settledExecutionPlanAuthorizesTaskContinuity,
   buildSettledAdvisorExecutionPlan,
@@ -26905,6 +26903,9 @@ export function useMeetingAssistant() {
       let screenSourceOwnedTransitionReceipt:
         | SourceOwnedDurableTransitionReceipt
         | undefined;
+      let screenExecutionPlan:
+        | SettledAdvisorExecutionPlan
+        | undefined;
       let screenQuestionTypeOutcomeReceipt:
         | {
             operationId: string;
@@ -29489,7 +29490,7 @@ export function useMeetingAssistant() {
                 askFrame: screenPreflight?.askFrame ?? screenMemoryAskFrame,
                 freshParentCreated: screenPhaseInput.freshParentCreated,
               });
-        const screenRuntimePlaybook =
+        let screenRuntimePlaybook =
           screenBranchPhaseView?.ownerKind === "child"
             ? screenBranchPhaseView.playbook
             : provisionalScreenTaskRelation === "child-probe"
@@ -29903,16 +29904,98 @@ export function useMeetingAssistant() {
           trace.id,
           factAnchorMetadata
         );
-        const screenUsesCodingModel =
-          settledScreenQuestionType === "coding";
-        const screenAnswerProfile = resolveMeetingAnswerProfile(
-          settledScreenQuestionType
-        );
-        const screenModelRoute = resolveMeetingModelRoute({
-          useCodingModel: screenUsesCodingModel,
+        if (!screenCurrentQuestionSettlement || !screenCurrentQuestion) {
+          throw new Error("screen-execution-plan-source-missing");
+        }
+        const screenPlanContext = contextManagerRef.current.getState();
+        const screenPlanProjectAnchor =
+          screenPlanContext.activeMeetingTask?.parent.projectBinding
+            ?.projectName ??
+          screenPlanContext.activeMeetingTask?.parent.projectBinding
+            ?.projectId ??
+          screenPreflight?.projectAnchor;
+        const screenPlanMutationCommand =
+          mapSourceOwnedExecutionPlanCommand(
+            screenSourceOwnedTransitionReceipt
+          ) ??
+          (screenProjectBindingCommitResult.committed
+            ? ({ kind: "update-parent-context" } as const)
+            : undefined);
+        screenExecutionPlan = buildSettledAdvisorExecutionPlan({
+          settlement: screenCurrentQuestionSettlement,
+          activeMeetingTask: screenPlanContext.activeMeetingTask,
+          preBoundaryQuestionType:
+            preflightContextState.activeMeetingTask?.parent.questionType,
+          taskBoundaryCommitted: screenFreshParentCreated,
+          childOwnsResponse:
+            provisionalScreenTaskRelation === "child-probe" &&
+            screenDurableTransitionSatisfiedBeforeModel,
+          providerSnapshot: meetingModelProviderSnapshotRef.current,
+          questionTypePrior:
+            screenPreparationRuntime.questionTypePriorObservation,
+          playbook: screenRuntimePlaybook,
+          memoryUseCase: inferMemoryUseCaseFromQuery(
+            screenPrimaryAskEvidenceText
+          ),
+          askFrame: screenPreflight?.askFrame ?? screenMemoryAskFrame,
+          topicDomain:
+            screenPreflight?.topicDomain ?? screenMemoryTopicDomain,
+          projectAnchor: screenPlanProjectAnchor,
+          contextReadScopeOverride:
+            effectiveScreenSettlementView.contextReadScope,
+          sourceQuestion: screenPrimaryAskEvidenceText,
+          subtaskIntent: screenSubtaskIntent,
+          explicitTaskMutationCommand: screenPlanMutationCommand,
+          taskMutationCommittedBeforeAdvisor: Boolean(
+            screenDurableTransitionSatisfiedBeforeModel ||
+              screenProjectBindingCommitResult.committed
+          ),
+          promptCurrentQuestionSourceHash:
+            screenEvidencePacket.currentQuestion?.sourceHash ??
+            screenCurrentQuestionSettlement.sourceHash,
           requiresVision: true,
-          reason: screenUsesCodingModel ? "screen-coding-task" : "screen-main",
         });
+        const screenExecutionPlanAuthorization =
+          authorizeSettledAdvisorExecutionPlan({
+            plan: screenExecutionPlan,
+            currentSettlement: screenCurrentQuestionSettlement,
+            currentSessionId: screenPlanContext.sessionId,
+            currentRuntimeEpoch: runtimeEpochRef.current,
+            currentLogicalQuestionUnitId:
+              screenCurrentQuestion.logicalQuestionUnitId,
+            currentLogicalQuestionRevision:
+              screenCurrentQuestion.revision,
+            currentSourceHash: screenCurrentQuestion.sourceHash,
+            currentActiveMeetingTask:
+              screenPlanContext.activeMeetingTask,
+          });
+        traceStoreRef.current.updateMetadata(trace.id, {
+          ...formatSettledAdvisorExecutionPlanForTrace(
+            screenExecutionPlan,
+            screenExecutionPlanAuthorization
+          ),
+          settledExecutionPlanAuthorizationStage: "screen-pre-model",
+        });
+        sessionRecordingManagerRef.current?.recordSettledAdvisorExecutionPlan({
+          traceId: trace.id,
+          taskId: screenPlanContext.activeMeetingTask?.id,
+          plan: screenExecutionPlan,
+          authorization: screenExecutionPlanAuthorization,
+          authorizationStage: "screen-pre-model",
+        });
+        if (!screenExecutionPlanAuthorization.authorized) {
+          throw new Error(
+            `screen-execution-plan-${screenExecutionPlanAuthorization.reason}`
+          );
+        }
+        settledAdvisorExecutionPlanRef.current = screenExecutionPlan;
+        screenRuntimePlaybook =
+          screenExecutionPlan.responsePlaybook ?? screenRuntimePlaybook;
+        const screenUsesCodingModel =
+          screenExecutionPlan.questionType === "coding";
+        const screenAnswerProfile =
+          screenExecutionPlan.promptContract.profile;
+        const screenModelRoute = screenExecutionPlan.modelRoute;
         const screenModelRouteMetadata =
           formatMeetingModelRouteForTrace(screenModelRoute);
         const screenModelRequestOptions =
@@ -29936,8 +30019,8 @@ export function useMeetingAssistant() {
           });
         screenGenerationRequestedArtifacts =
           resolveManualScreenGenerationRequestedArtifacts({
-            requiredArtifacts: screenPhaseDecision.requiredArtifacts,
-            questionType: settledScreenQuestionType,
+            requiredArtifacts: screenExecutionPlan.requiredArtifacts,
+            questionType: screenExecutionPlan.questionType,
             boundVoicePrimaryAsk:
               screenSourcePacket.sourceOperationAuthority
                 .boundVoicePrimaryAsk,
@@ -29945,60 +30028,14 @@ export function useMeetingAssistant() {
           });
         const screenGenerationPhaseDecision = {
           ...screenPhaseDecision,
+          phase:
+            screenExecutionPlan.playbookPhase ?? screenPhaseDecision.phase,
           requiredArtifacts: screenGenerationRequestedArtifacts,
         };
         const screenWhiteboardFormatPreference =
-          resolveWhiteboardFormatPreference({
-            questionType: settledScreenQuestionType,
-            artifactIntent: screenGenerationRequestedArtifacts.includes(
-              "whiteboard"
-            )
-              ? "revise-whiteboard"
-              : "none",
-            sourceQuestion: screenPrimaryAskEvidenceText,
-          });
+          screenExecutionPlan.whiteboardFormatPreference;
         const screenQuestionTypeConsumerObservation =
-          buildQuestionTypeConsumerObservation({
-            prior:
-              screenPreparationRuntime.questionTypePriorObservation,
-            committedCurrentQuestionType:
-              screenCurrentQuestionSettlement?.questionType ??
-              settledScreenQuestionType,
-            responseOwnerQuestionType: settledScreenQuestionType,
-            responsePlaybookQuestionType:
-              screenRuntimePlaybook?.questionType,
-            parentTrajectoryPlaybookQuestionType:
-              provisionalScreenTaskRelation === "child-probe"
-                ? preflightContextState.activeMeetingTask?.parent.playbook
-                    ?.questionType
-                : undefined,
-            parentTrajectoryReadOnly:
-              provisionalScreenTaskRelation === "child-probe",
-            kmbPolicyQuestionType: settledScreenQuestionType,
-            kmbPolicyFamilies:
-              screenRuntimePlaybook?.memoryPolicy.allowedFamilies ?? [],
-            factAnchorPolicyQuestionType:
-              settledScreenQuestionType,
-            modelRouteQuestionType: settledScreenQuestionType,
-            answerProfileQuestionType:
-              settledScreenQuestionType,
-            artifactPolicyQuestionType:
-              settledScreenQuestionType,
-            promptContractQuestionType:
-              settledScreenQuestionType,
-            committedCurrentQuestionSourceHash:
-              screenCurrentQuestionSettlement?.sourceHash,
-            questionTypeQuestionSourceHash:
-              screenQuestionIdentity?.sourceHash,
-            relationQuestionSourceHash:
-              screenCurrentQuestion?.sourceHash,
-            kmbQuestionSourceHash:
-              screenEvidencePacket.currentQuestion?.sourceHash,
-            executionPlanQuestionSourceHash:
-              screenCurrentQuestionSettlement?.sourceHash,
-            promptCurrentQuestionSourceHash:
-              screenEvidencePacket.currentQuestion?.sourceHash,
-          });
+          screenExecutionPlan.questionTypeConsumerObservation;
         const screenCapacityEstimationGuardrail =
           resolveCapacityEstimationGuardrail({
             questionType: settledScreenQuestionType,
@@ -30241,10 +30278,7 @@ export function useMeetingAssistant() {
             requestOptions: screenModelRequestOptions,
             executionIdentity: {
               requestId: `screen-solve:${observation.id}`,
-              executionPlanId:
-                screenCurrentQuestionSettlement?.settlementId ??
-                screenExecutionContextState.activeMeetingTask?.id ??
-                observation.id,
+              executionPlanId: screenExecutionPlan.id,
               modelId: readSelectedProviderModelId(
                 screenModelRoute.selectedProvider
               ),
@@ -30975,40 +31009,9 @@ export function useMeetingAssistant() {
             reconciledProjectBindingMetadata
           );
 
-          const effectiveScreenRelation =
-            resolveEffectiveInterviewTaskRelation(
-              screenRelationDecision.relation
-            );
-          const screenResponseOwner = resolveMeetingResponseOwner({
-            preBoundaryType: existingInterviewTask?.stableKind,
-            postBoundaryParentType: existingInterviewTask?.stableKind,
-            proposedQuestionType: settledScreenQuestionType,
-            relation: effectiveScreenRelation,
-            taskBoundaryCommitted:
-              screenFreshParentCreated,
-            childOwnsResponse:
-              screenRelationDecision.relation === "child-probe" &&
-              (!screenSourceOwnedTransitionReceipt ||
-                screenDurableTransitionSatisfiedBeforeModel),
-          });
+          const screenResponseOwner = screenExecutionPlan.responseOwner;
           const screenArtifactAuthorization =
-            authorizeResponseArtifactMutation({
-              parentTaskId: existingInterviewTask?.id,
-              parentQuestionType:
-                existingInterviewTask?.stableKind ??
-                (screenRelationDecision.relation === "new-parent"
-                  ? settledScreenQuestionType
-                  : undefined),
-              responseOwnerQuestionType: screenResponseOwner.questionType,
-              responseOwnerSource: screenResponseOwner.source,
-              relation: effectiveScreenRelation,
-              requiredArtifacts: screenPhaseDecision.requiredArtifacts,
-              creatingParent:
-                !existingInterviewTask &&
-                screenRelationDecision.relation === "new-parent",
-              subtaskIntent: screenSubtaskIntent,
-              codingPhase: screenPhaseDecision.phase,
-            });
+            screenExecutionPlan.artifactPolicy;
           screenParentAuthorizedArtifacts = [
             "answer",
             ...(screenArtifactAuthorization.allowCode

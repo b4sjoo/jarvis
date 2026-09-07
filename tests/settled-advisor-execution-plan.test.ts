@@ -122,6 +122,43 @@ function playbook(
   };
 }
 
+test("keeps Screen vision routing inside the shared execution plan", () => {
+  const codingSettlement = settlement({ sourceKind: "screen" });
+  const currentTask = activeTask("coding");
+  const voicePlan = buildSettledAdvisorExecutionPlan({
+    settlement: codingSettlement,
+    activeMeetingTask: currentTask,
+    taskBoundaryCommitted: true,
+    childOwnsResponse: false,
+    providerSnapshot: providers,
+    playbook: playbook("coding"),
+    memoryUseCase: "coding_interview",
+    askFrame: "direct-answer",
+    topicDomain: "backend",
+    sourceQuestion: "Implement a queue.",
+  });
+  const screenPlan = buildSettledAdvisorExecutionPlan({
+    settlement: codingSettlement,
+    activeMeetingTask: currentTask,
+    taskBoundaryCommitted: true,
+    childOwnsResponse: false,
+    providerSnapshot: providers,
+    playbook: playbook("coding"),
+    memoryUseCase: "coding_interview",
+    askFrame: "direct-answer",
+    topicDomain: "backend",
+    sourceQuestion: "Implement a queue.",
+    requiresVision: true,
+  });
+
+  assert.equal(voicePlan.modelRoute.route, "coding-override");
+  assert.equal(screenPlan.modelRoute.route, "main");
+  assert.equal(
+    screenPlan.modelRoute.fallbackReason,
+    "coding-provider-no-vision"
+  );
+});
+
 test("hides an old project parent behind a committed new-parent settlement", () => {
   const oldProject = activeTask("project-deep-dive", {
     id: "parent-oasis",

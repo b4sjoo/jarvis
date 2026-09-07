@@ -62,3 +62,41 @@ test("publishes a Screen settlement only after its lifecycle receipt", () => {
   );
   assert.match(block, /committed-no-lifecycle-required/);
 });
+
+test("routes settled Screen policy through the shared execution plan", () => {
+  const planStart = source.indexOf(
+    "screenExecutionPlan = buildSettledAdvisorExecutionPlan({"
+  );
+  const providerStart = source.indexOf(
+    "const screenUsesCodingModel =",
+    planStart
+  );
+  const modelStart = source.indexOf(
+    "let screenTaskContent = await withTimeout(",
+    providerStart
+  );
+  const postModelStart = source.indexOf(
+    "const screenResponseOwner = screenExecutionPlan.responseOwner",
+    modelStart
+  );
+  const postModelEnd = source.indexOf(
+    "const screenContinuityRelation",
+    postModelStart
+  );
+  const preModelBlock = source.slice(planStart, modelStart);
+  const postModelBlock = source.slice(postModelStart, postModelEnd);
+
+  assert.ok(planStart >= 0 && providerStart > planStart);
+  assert.ok(modelStart > providerStart);
+  assert.ok(postModelStart > modelStart && postModelEnd > postModelStart);
+  assert.match(preModelBlock, /requiresVision: true/);
+  assert.match(preModelBlock, /screenExecutionPlan\.modelRoute/);
+  assert.match(preModelBlock, /screenExecutionPlan\.requiredArtifacts/);
+  assert.match(
+    preModelBlock,
+    /screenExecutionPlan\.questionTypeConsumerObservation/
+  );
+  assert.match(postModelBlock, /screenExecutionPlan\.artifactPolicy/);
+  assert.doesNotMatch(postModelBlock, /resolveMeetingResponseOwner/);
+  assert.doesNotMatch(postModelBlock, /authorizeResponseArtifactMutation/);
+});

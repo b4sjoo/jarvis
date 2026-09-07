@@ -623,6 +623,7 @@ export function buildSettledAdvisorExecutionPlan(input: {
   expectedActiveMeetingTask?: ActiveMeetingTask;
   responseAuthorityId?: string;
   promptCurrentQuestionSourceHash?: string;
+  requiresVision?: boolean;
   createdAt?: number;
 }): SettledAdvisorExecutionPlan {
   const rawTaskRelation = toInterviewTaskRelation(
@@ -726,6 +727,7 @@ export function buildSettledAdvisorExecutionPlan(input: {
   const modelRoute = resolveMeetingModelRouteFromSnapshot({
     snapshot: input.providerSnapshot,
     useCodingModel,
+    requiresVision: input.requiresVision,
     reason: useCodingModel
       ? `settlement-${input.settlement.settlementId}-coding`
       : `settlement-${input.settlement.settlementId}-main`,
