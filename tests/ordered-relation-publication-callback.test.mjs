@@ -34,6 +34,17 @@ function findNamedDeclaration(file, name) {
   return found;
 }
 
+function findDescendant(node, predicate) {
+  let found;
+  const visit = (candidate) => {
+    if (!found && predicate(candidate)) found = candidate;
+    if (!found) ts.forEachChild(candidate, visit);
+  };
+  visit(node);
+  assert.ok(found, "missing expected production branch");
+  return found;
+}
+
 const callbackNames = [
   "scheduleTaskRelationSplitRuntime",
   "scheduleTaskRelationAdjudication",
@@ -53,6 +64,37 @@ const presentOwnedScreenTerminalSource = findNamedDeclaration(
   sourceFile,
   "presentOwnedScreenTerminal"
 ).initializer.getText(sourceFile);
+const typeCorrectionDeclaration = findNamedDeclaration(
+  sourceFile,
+  "correctActiveQuestionType"
+);
+const typeCorrectionRelationTerminalSource = findDescendant(
+  typeCorrectionDeclaration,
+  (node) =>
+    ts.isIfStatement(node) &&
+    node.expression
+      .getText(sourceFile)
+      .includes('resolution.terminalDisposition !== "resolved"')
+).getText(sourceFile);
+const termCorrectionDeclaration = findNamedDeclaration(
+  sourceFile,
+  "submitSpeechCorrection"
+);
+const termCorrectionRelationTerminalSource = findDescendant(
+  termCorrectionDeclaration,
+  (node) =>
+    ts.isIfStatement(node) &&
+    node.expression
+      .getText(sourceFile)
+      .includes('relationResolution.terminalDisposition !== "resolved"')
+).getText(sourceFile);
+const termCorrectionAdvisorGateSource = findDescendant(
+  termCorrectionDeclaration,
+  (node) =>
+    ts.isIfStatement(node) &&
+    node.expression.getText(sourceFile) === "correctionRelationTerminal" &&
+    node.getText(sourceFile).includes("await runAdvisor")
+).getText(sourceFile);
 
 const identifiers = new Set();
 for (const source of [...callbackSources, withTimeoutSource]) {
@@ -834,6 +876,92 @@ test("does not let an old Screen terminal clear a newer operation", { concurrenc
   } finally {
     harness.restore();
   }
+});
+
+test("terminalizes Type Correction client errors before reading a Relation decision", { concurrency: false }, async () => {
+  let finalized;
+  const metadata = {};
+  const context = vm.createContext({
+    relationAdjudicationWaitDisposition: "pending",
+    correctionTrace: { id: "type-correction-trace" },
+    traceStoreRef: {
+      current: {
+        updateMetadata: (_traceId, next) => Object.assign(metadata, next),
+      },
+    },
+    finalizeCorrection: (input) => {
+      finalized = input;
+    },
+  });
+  const consume = vm.runInContext(
+    transpile(
+      `(async (resolution) => { ${typeCorrectionRelationTerminalSource}; return "continued"; })`
+    ),
+    context
+  );
+  const result = await consume({
+    terminalDisposition: "client-error",
+    operationAuthorization: {
+      authorized: true,
+      reason: "source-operation-current",
+    },
+    decision: { relation: "new-parent" },
+  });
+
+  assert.equal(result, undefined);
+  assert.equal(metadata.manualCorrectionRelationOperationAuthorized, false);
+  assert.equal(metadata.manualCorrectionRelationTerminalDisposition, "client-error");
+  assert.equal(finalized.authorizationFailureReason, "task-relation-client-error");
+  assert.match(finalized.failureMessage, /task type was not changed/);
+});
+
+test("terminalizes Term Correction client errors without starting Advisor", { concurrency: false }, async () => {
+  const guardContext = vm.createContext({});
+  const consumeGuard = vm.runInContext(
+    transpile(
+      `(async (relationResolution) => { let correctionRelationTerminal; try { ${termCorrectionRelationTerminalSource}; return { continued: true, correctionRelationTerminal }; } catch (error) { return { continued: false, correctionRelationTerminal, error }; } })`
+    ),
+    guardContext
+  );
+  const guarded = await consumeGuard({
+    terminalDisposition: "client-error",
+    operationAuthorization: {
+      authorized: true,
+      reason: "source-operation-current",
+    },
+    decision: { relation: "new-parent" },
+  });
+  assert.equal(guarded.continued, false);
+  assert.equal(guarded.correctionRelationTerminal.disposition, "client-error");
+  assert.equal(
+    guarded.correctionRelationTerminal.reason,
+    "task-relation-client-error"
+  );
+
+  let advisorCalls = 0;
+  const finished = [];
+  const gateContext = vm.createContext({
+    correctionRelationTerminal: guarded.correctionRelationTerminal,
+    repairTrace: { id: "term-correction-trace" },
+    traceStoreRef: {
+      current: {
+        finishTrace: (...args) => finished.push(args),
+      },
+    },
+    runAdvisor: async () => {
+      advisorCalls += 1;
+    },
+  });
+  const consumeAdvisorGate = vm.runInContext(
+    transpile(`(async () => { ${termCorrectionAdvisorGateSource} })`),
+    gateContext
+  );
+  await consumeAdvisorGate();
+
+  assert.equal(advisorCalls, 0);
+  assert.deepEqual(finished, [
+    ["term-correction-trace", "error", "task-relation-client-error"],
+  ]);
 });
 
 test("validates a model-free first-parent operation before Advisor handoff", { concurrency: false }, async () => {
