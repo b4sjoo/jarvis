@@ -6,6 +6,7 @@ import {
   sourceOwnedTransitionSurvivesModelOutcome,
   resolveLatestScreenObservationId,
 } from "../src/lib/meeting/source-owned-transition-transaction.js";
+import { mergeGeneratedChildContinuity } from "../src/lib/meeting/interview-task-continuity.js";
 import {
   decideInterviewerAssumptionAuthorization,
   decidePlaybookPhaseProgression,
@@ -147,6 +148,118 @@ test("preserves active child identity for a settled same-branch follow-up", () =
     parent.child?.returnCapsule
   );
   assert.equal(result.task?.whiteboardArtifact, parent.whiteboardArtifact);
+});
+
+test("carries one source-owned child through generation, follow-up, and parent resume", () => {
+  const parent = makeParent();
+  const attachCandidate = createSourceOwnedTransitionCandidate({
+    sessionId: "session-a",
+    runtimeEpoch: 3,
+    source: "voice",
+    sourceTurnIds: ["turn-child-root"],
+    logicalQuestionUnitId: "lqu-child-root",
+    logicalQuestionRevision: 1,
+    existingTask: parent,
+    relation: "child-probe",
+    authoritySource: "accepted-transcript",
+    mutationAuthorized: true,
+    questionType: "coding",
+    question: "Implement the loss function.",
+    subtaskIntent: "implementation-probe",
+    playbook: makePlaybook(
+      "coding_algorithm",
+      "coding",
+      "implementation_validation"
+    ),
+    now: 100,
+  });
+  assert.ok(attachCandidate);
+  const attached = prepareSourceOwnedTransition({
+    candidate: attachCandidate,
+    currentTask: parent,
+    currentSessionId: "session-a",
+    currentRuntimeEpoch: 3,
+    now: 110,
+  });
+  assert.ok(attached.task?.child);
+
+  const generated = mergeGeneratedChildContinuity({
+    sourceOwnedChild: attached.task.child,
+    generatedChild: {
+      ...attached.task.child,
+      compactSummary: "Implemented the loss function with the required edge cases.",
+      updatedAt: 120,
+    },
+    now: 120,
+  });
+  const afterGeneration = { ...attached.task, child: generated };
+  const followupCandidate = createSourceOwnedTransitionCandidate({
+    sessionId: "session-a",
+    runtimeEpoch: 3,
+    source: "voice",
+    sourceTurnIds: ["turn-child-followup"],
+    logicalQuestionUnitId: "lqu-child-followup",
+    logicalQuestionRevision: 1,
+    existingTask: afterGeneration,
+    preserveChildId: generated.id,
+    relation: "child-probe",
+    authoritySource: "committed-settlement",
+    mutationAuthorized: true,
+    questionType: "coding",
+    question: "What happens for an empty input?",
+    subtaskIntent: "implementation-probe",
+    playbook: makePlaybook(
+      "coding_algorithm",
+      "coding",
+      "implementation_validation"
+    ),
+    now: 130,
+  });
+  assert.ok(followupCandidate);
+  const followed = prepareSourceOwnedTransition({
+    candidate: followupCandidate,
+    currentTask: afterGeneration,
+    currentSessionId: "session-a",
+    currentRuntimeEpoch: 3,
+    now: 140,
+  });
+  assert.equal(followed.task?.child?.id, generated.id);
+  assert.equal(
+    followed.task?.child?.returnCapsule,
+    generated.returnCapsule
+  );
+  assert.equal(
+    followed.task?.child?.phaseState?.phase,
+    "implementation_validation"
+  );
+
+  const resumeCandidate = createSourceOwnedTransitionCandidate({
+    sessionId: "session-a",
+    runtimeEpoch: 3,
+    source: "voice",
+    sourceTurnIds: ["turn-resume"],
+    logicalQuestionUnitId: "lqu-resume",
+    logicalQuestionRevision: 1,
+    existingTask: followed.task,
+    relation: "resume-parent",
+    authoritySource: "committed-settlement",
+    mutationAuthorized: true,
+    questionType: parent.stableKind,
+    question: "Back to the RAG architecture.",
+    now: 150,
+  });
+  assert.ok(resumeCandidate);
+  const resumed = prepareSourceOwnedTransition({
+    candidate: resumeCandidate,
+    currentTask: followed.task,
+    currentSessionId: "session-a",
+    currentRuntimeEpoch: 3,
+    now: 160,
+  });
+  assert.equal(resumed.task?.child, undefined);
+  assert.equal(resumed.task?.id, parent.id);
+  assert.equal(resumed.task?.playbookPhase, parent.playbookPhase);
+  assert.equal(resumed.task?.whiteboardArtifact, parent.whiteboardArtifact);
 });
 
 test("rejects child preservation after the effective owner changes", () => {
