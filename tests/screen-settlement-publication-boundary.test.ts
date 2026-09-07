@@ -100,3 +100,28 @@ test("routes settled Screen policy through the shared execution plan", () => {
   assert.doesNotMatch(postModelBlock, /resolveMeetingResponseOwner/);
   assert.doesNotMatch(postModelBlock, /authorizeResponseArtifactMutation/);
 });
+
+test("does not let a rejected Screen relation reach the local fallback", () => {
+  const waitStart = source.indexOf(
+    "await resolveOrderedTaskRelationWithinWindow({",
+    source.indexOf("const captureScreenContext = useCallback")
+  );
+  const terminalGuard = source.indexOf(
+    'if (resolution.terminalDisposition !== "resolved")',
+    waitStart
+  );
+  const decisionRead = source.indexOf(
+    "screenFirstBatchRelationRelease = resolution.decision.matrix",
+    waitStart
+  );
+  const fallbackStart = source.indexOf(
+    "if (\n          !screenDirectRelationAuthority",
+    decisionRead
+  );
+  const errorReturn = source.lastIndexOf("return;", fallbackStart);
+
+  assert.ok(waitStart >= 0);
+  assert.ok(terminalGuard > waitStart && terminalGuard < decisionRead);
+  assert.ok(fallbackStart > decisionRead);
+  assert.ok(errorReturn > decisionRead && errorReturn < fallbackStart);
+});

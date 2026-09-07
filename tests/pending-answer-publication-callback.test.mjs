@@ -38,13 +38,58 @@ function findCallbackSource(name) {
   return declaration.initializer.arguments[0].getText(sourceFile);
 }
 
+function findFunctionSource(name) {
+  let declaration;
+  const visit = (node) => {
+    if (
+      ts.isFunctionDeclaration(node) &&
+      node.name?.getText(sourceFile) === name
+    ) {
+      declaration = node;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  assert.ok(declaration, `missing ${name}`);
+  return declaration.getText(sourceFile);
+}
+
 const callbackSources = {
+  prepareStableAnswerPublication: findCallbackSource(
+    "prepareStableAnswerPublication"
+  ),
+  installPreparedStableAnswerPublication: findCallbackSource(
+    "installPreparedStableAnswerPublication"
+  ),
+  rollbackPreparedStableAnswerPublication: findCallbackSource(
+    "rollbackPreparedStableAnswerPublication"
+  ),
+  finalizeStableAnswerPublication: findCallbackSource(
+    "finalizeStableAnswerPublication"
+  ),
+  readGenerationLeaseSnapshot: findCallbackSource(
+    "readGenerationLeaseSnapshot"
+  ),
   tryCommitPendingAnswer: findCallbackSource("tryCommitPendingAnswer"),
   queuePendingAnswerRevision: findCallbackSource("queuePendingAnswerRevision"),
 };
+const helperSources = {
+  prepareGenerationDerivedTaskRuntimeTransition: findFunctionSource(
+    "prepareGenerationDerivedTaskRuntimeTransition"
+  ),
+  isCacheableReliableSuggestion: findFunctionSource(
+    "isCacheableReliableSuggestion"
+  ),
+  withLatestReliableSuggestion: findFunctionSource(
+    "withLatestReliableSuggestion"
+  ),
+};
 
 const identifiers = new Set();
-for (const source of Object.values(callbackSources)) {
+for (const source of [
+  ...Object.values(callbackSources),
+  ...Object.values(helperSources),
+]) {
   const file = parse(source);
   const visit = (node) => {
     if (ts.isIdentifier(node)) identifiers.add(node.text);
@@ -80,6 +125,11 @@ for (const moduleName of [
   "stable-answer",
   "answer-generation-lease",
   "meeting-answer",
+  "generation-result-ledger",
+  "manual-question-type-correction",
+  "visual-evidence-recovery",
+  "bounded-recent-history",
+  "suggestion-task",
 ]) {
   const loaded = await import(
     pathToFileURL(
@@ -112,6 +162,18 @@ const meetingAnswerModule = await import(
 const parseMeetingAnswer = meetingAnswerModule.parseMeetingAnswer;
 const commitStableAnswerRevision = stableAnswerModule.commitStableAnswerRevision;
 assert.ok(parseMeetingAnswer && commitStableAnswerRevision);
+const generationResultModule = await import(
+  pathToFileURL(
+    path.join(
+      root,
+      ".tmp-tests",
+      "src",
+      "lib",
+      "meeting",
+      "generation-result-ledger.js"
+    )
+  )
+);
 
 function suggestion(id, content) {
   return {
@@ -177,6 +239,10 @@ function createHarness() {
     preparationRuntimeContextRef: {
       current: { preparationContextRevision: 0 },
     },
+    manualCorrectionTargetHistoryRef: { current: [] },
+    latestManualCorrectionTargetRef: { current: undefined },
+    pendingAnswerResolutionCommitByTraceRef: { current: new Map() },
+    recentAdvisorContinuityRef: { current: [] },
   };
   const taskRuntime = { revision: 1 };
   const contextState = {
@@ -195,10 +261,13 @@ function createHarness() {
   };
   const uiUpdates = [];
   const scheduledPendingCommits = [];
-  let installed = 0;
-  let finalized = 0;
   let id = 0;
-  const ledgerEvents = [];
+  const generationResultLedger =
+    new generationResultModule.GenerationResultLedger();
+  const generationDerivedCommitCoordinator =
+    new generationResultModule.GenerationDerivedCommitCoordinator(
+      generationResultLedger
+    );
   const environment = {
     ...imports,
     Date,
@@ -213,86 +282,20 @@ function createHarness() {
       },
     },
     generationResultLedgerRef: {
-      current: {
-        recordCandidateValidation: (...args) => ledgerEvents.push(["candidate", ...args]),
-        recordCommitDisposition: (...args) => ledgerEvents.push(["commit", ...args]),
-      },
+      current: generationResultLedger,
     },
     generationDerivedCommitCoordinatorRef: {
-      current: {
-        markPending: () => ({ commitDisposition: "pending" }),
-        commitStaged: (input) => {
-          const prepared = input.publication.prepare();
-          const value = input.publication.install(prepared);
-          return { committed: true, reason: "authorized", value };
-        },
-      },
+      current: generationDerivedCommitCoordinator,
     },
-    readGenerationLeaseSnapshot: ({
-      authorizedArtifacts,
-      candidateMutatedArtifacts,
-      logicalQuestionUnitId,
-      logicalQuestionRevision,
-    }) => ({
-      sessionId: contextState.sessionId,
-      runtimeEpoch: refs.runtimeEpochRef.current,
-      preparationContextRevision:
-        refs.preparationRuntimeContextRef.current.preparationContextRevision,
-      taskId: "parent-a",
-      taskRevision: 1,
-      logicalQuestionUnitId,
-      logicalQuestionRevision,
-      visibleAnswerRevision: refs.visibleAnswerRevisionRef.current,
-      manualCorrectionRevision: refs.manualCorrectionRevisionRef.current,
-      responseActionRevision: refs.responseActionRevisionRef.current,
-      artifactOwnerId: "parent-a",
-      authorizedArtifacts,
-      candidateMutatedArtifacts,
-    }),
     schedulePendingAnswerCommit: (...args) => scheduledPendingCommits.push(args),
     publishGenerationResultProjection: () => {},
     terminalizeGenerationLease: () => {},
     transitionForceAdviseTarget: () => {},
     recordQuestionTypeAdjudicationOutcome: () => {},
     refreshRecordedCompletedTrace: () => {},
-    prepareGenerationDerivedTaskRuntimeTransition: () => ({
-      transition: undefined,
-      latestUsefulAnswerCommitted: false,
-      latestUsefulAnswerChars: 0,
-    }),
-    prepareStableAnswerPublication: (stable, options) => ({
-      stable,
-      options,
-      pending: refs.pendingAnswerRevisionRef.current,
-      previousStable: refs.stableAnswerRevisionRef.current,
-      previousVisibleAnswerRevision: refs.visibleAnswerRevisionRef.current,
-      previousManualCorrectionTargetHistory: [],
-      nextManualCorrectionTargetHistory: [],
-      previousPendingAnswerRevision: refs.pendingAnswerRevisionRef.current,
-      previousAnswerDeliveryProgress: refs.answerDeliveryProgressRef.current,
-    }),
-    installPreparedStableAnswerPublication: (prepared) => {
-      installed += 1;
-      refs.stableAnswerRevisionRef.current = prepared.stable;
-      refs.visibleAnswerRevisionRef.current = prepared.stable.revision;
-      refs.pendingAnswerRevisionRef.current = null;
-      refs.answerDeliveryProgressRef.current = null;
-      return prepared.stable;
-    },
-    rollbackPreparedStableAnswerPublication: () => true,
-    finalizeStableAnswerPublication: (prepared) => {
-      finalized += 1;
-      uiState = {
-        ...uiState,
-        latestSuggestion: prepared.stable.suggestion,
-        latestReliableSuggestion: prepared.stable.suggestion,
-        partialSuggestion: "",
-        answerDelivery: {
-          visibleAnswerRevision: prepared.stable.revision,
-        },
-      };
-      uiUpdates.push({ ...uiState });
-    },
+    clearPendingAnswerCommitTimer: () => {},
+    finalizeAnswerRecoveryAdjudication: () => {},
+    scheduleAdvisorResponseConsistencyShadow: () => {},
     toAnswerDeliveryPresentation: ({ visibleAnswerRevision }) => ({
       visibleAnswerRevision,
     }),
@@ -310,6 +313,9 @@ function createHarness() {
     },
   };
   const context = vm.createContext(environment);
+  for (const source of Object.values(helperSources)) {
+    vm.runInContext(transpile(source), context);
+  }
   for (const [name, source] of Object.entries(callbackSources)) {
     environment[name] = vm.runInContext(transpile(`(${source})`), context);
   }
@@ -321,13 +327,7 @@ function createHarness() {
     },
     uiUpdates,
     scheduledPendingCommits,
-    ledgerEvents,
-    get installed() {
-      return installed;
-    },
-    get finalized() {
-      return finalized;
-    },
+    generationResultLedger,
     unlock() {
       refs.microphoneSpeakingRef.current = false;
       refs.answerDeliveryProgressRef.current = null;
@@ -386,19 +386,19 @@ test("runs pending delivery callbacks once from lock through final unlock public
     assert.ok(queued);
     assert.equal(harness.refs.pendingAnswerRevisionRef.current, queued);
     assert.equal(harness.refs.stableAnswerRevisionRef.current.revision, 1);
-    assert.equal(harness.installed, 0);
     assert.equal(harness.scheduledPendingCommits.length, 1);
     assert.equal(harness.uiState.partialSuggestion, "");
+    assert.equal(
+      harness.generationResultLedger.getEntry("lease-b")?.commitDisposition,
+      "pending"
+    );
 
     assert.equal(harness.environment.tryCommitPendingAnswer(), "waiting");
-    assert.equal(harness.installed, 0);
     assert.equal(harness.refs.pendingAnswerRevisionRef.current, queued);
     assert.equal(harness.refs.stableAnswerRevisionRef.current.revision, 1);
 
     harness.unlock();
     assert.equal(harness.environment.tryCommitPendingAnswer(), "committed");
-    assert.equal(harness.installed, 1);
-    assert.equal(harness.finalized, 1);
     assert.equal(harness.refs.pendingAnswerRevisionRef.current, null);
     assert.equal(harness.refs.stableAnswerRevisionRef.current.revision, 2);
     assert.equal(
@@ -406,8 +406,70 @@ test("runs pending delivery callbacks once from lock through final unlock public
       "New answer after delivery lock."
     );
     assert.equal(harness.environment.tryCommitPendingAnswer(), "none");
-    assert.equal(harness.installed, 1);
-    assert.equal(harness.finalized, 1);
+    assert.equal(
+      harness.generationResultLedger.getEntry("lease-b")?.commitDisposition,
+      "committed"
+    );
+    assert.equal(
+      harness.uiUpdates.filter(
+        (state) => state.latestSuggestion?.id === "visible-b"
+      ).length,
+      1
+    );
+  } finally {
+    harness.restore();
+  }
+});
+
+test("rejects pending publication when Preparation changes before unlock", () => {
+  const harness = createHarness();
+  try {
+    const pendingLease = { ...lease(), id: "lease-preparation-stale" };
+    const queued = harness.environment.queuePendingAnswerRevision({
+      lease: pendingLease,
+      suggestion: suggestion(
+        "visible-stale",
+        "Answer: This candidate must not become visible."
+      ),
+      authorizedArtifacts: ["answer"],
+      taskId: "parent-a",
+      resultTaskId: "parent-a",
+      sectionOwner: { kind: "parent-mainline", parentId: "parent-a" },
+      taskRevision: 1,
+      logicalQuestionUnitId: "lqu-current",
+      logicalQuestionRevision: 1,
+      sessionId: "session-a",
+      runtimeEpoch: 1,
+      questionSourceHash: "source-stale",
+      settlementId: "settlement-stale",
+      resetSections: false,
+      reason: "delivery-lock-active",
+      latestUsefulAnswerMutationAuthorized: false,
+      taskRuntimeRevision: 1,
+    });
+    assert.ok(queued);
+
+    harness.refs.preparationRuntimeContextRef.current.preparationContextRevision =
+      1;
+    harness.unlock();
+    assert.equal(harness.environment.tryCommitPendingAnswer(), "stale");
+    assert.equal(harness.refs.stableAnswerRevisionRef.current.revision, 1);
+    assert.equal(
+      harness.refs.stableAnswerRevisionRef.current.suggestion.id,
+      "visible-a"
+    );
+    assert.equal(harness.refs.pendingAnswerRevisionRef.current, null);
+    assert.equal(
+      harness.generationResultLedger.getEntry(pendingLease.id)
+        ?.commitDisposition,
+      "rejected"
+    );
+    assert.equal(
+      harness.uiUpdates.some(
+        (state) => state.latestSuggestion?.id === "visible-stale"
+      ),
+      false
+    );
   } finally {
     harness.restore();
   }

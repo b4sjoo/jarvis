@@ -28803,6 +28803,12 @@ export function useMeetingAssistant() {
                   "error",
                   "task-relation-client-error"
                 );
+              } else {
+                traceStoreRef.current.finishTrace(
+                  trace.id,
+                  "cancelled",
+                  resolution.operationAuthorization.reason
+                );
               }
               return;
             }

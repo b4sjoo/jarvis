@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   applyActiveQuestionTermCorrection,
@@ -193,6 +194,32 @@ test("authorizes only the current manual correction revision", () => {
       currentManualCorrectionRevision: 6,
     }).reason,
     "manual-correction-revision-mismatch"
+  );
+});
+
+test("does not regenerate after a rejected term-correction relation", () => {
+  const source = readFileSync("src/hooks/useMeetingAssistant.ts", "utf8");
+  const correction = source.slice(
+    source.indexOf("  const submitSpeechCorrection = useCallback"),
+    source.indexOf("  const deactivateSpeechCorrection = useCallback")
+  );
+  const relationWait = correction.indexOf(
+    "await resolveOrderedTaskRelationWithinWindow({"
+  );
+  const terminalGuard = correction.indexOf(
+    'if (relationResolution.terminalDisposition !== "resolved")',
+    relationWait
+  );
+  const advisorCall = correction.indexOf("await runAdvisor({", terminalGuard);
+
+  assert.ok(relationWait >= 0 && terminalGuard > relationWait);
+  assert.match(
+    correction.slice(terminalGuard, advisorCall),
+    /correctionRelationTerminal[\s\S]*correctionCurrentOnlyFallback: false/
+  );
+  assert.match(
+    correction.slice(advisorCall - 500, advisorCall + 100),
+    /if \(correctionRelationTerminal\)[\s\S]*else \{[\s\S]*await runAdvisor/
   );
 });
 

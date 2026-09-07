@@ -204,6 +204,36 @@ test("hands a no-parent Screen correction to Advisor from its committed source",
   );
 });
 
+test("stops manual correction before consuming a rejected relation", () => {
+  const source = readFileSync("src/hooks/useMeetingAssistant.ts", "utf8");
+  const correction = source.slice(
+    source.indexOf("  const correctActiveQuestionType = useCallback"),
+    source.indexOf("  const resolveCurrentSuggestionQuestionLineage")
+  );
+  const relationWait = correction.indexOf(
+    "await resolveOrderedTaskRelationWithinWindow({"
+  );
+  const terminalGuard = correction.indexOf(
+    'if (resolution.terminalDisposition !== "resolved")',
+    relationWait
+  );
+  const relationRead = correction.indexOf(
+    "orderedCorrectionRelation = resolution.decision",
+    relationWait
+  );
+
+  assert.ok(relationWait >= 0);
+  assert.ok(terminalGuard > relationWait && terminalGuard < relationRead);
+  assert.match(
+    correction.slice(terminalGuard, relationRead),
+    /finalizeCorrection\([\s\S]*return;/
+  );
+  assert.match(
+    correction.slice(relationRead),
+    /manualCorrectionRelationWaitError[\s\S]*throw error;/
+  );
+});
+
 test("keeps the current parent when correction-owned relation adjudication abstains", () => {
   const unit = makeLogicalQuestion(
     "question-followup",
