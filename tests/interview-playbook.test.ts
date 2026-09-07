@@ -122,8 +122,16 @@ test("changes project deep-dive guidance with the committed phase", () => {
     /viable alternatives/
   );
   assert.match(
+    formatInterviewPlaybookForPrompt(architecture),
+    /Include my ownership only when the current ask needs it/i
+  );
+  assert.match(
     formatInterviewPlaybookForPrompt(validation),
     /tests, traces, rollout checks/
+  );
+  assert.match(
+    formatInterviewPlaybookForPrompt(validation),
+    /Describe how I debugged it only when the current ask needs personal experience/i
   );
   assert.match(
     formatInterviewPlaybookForPrompt(impact),

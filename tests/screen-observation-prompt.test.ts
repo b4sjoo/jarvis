@@ -56,6 +56,12 @@ test("keeps Screen project deep dives available for bounded product judgment", (
     source,
     /only when eligible fact-evidence supports a relevant story/i
   );
+  assert.match(
+    source,
+    /When one reading of the current ask follows the Authorized Evidence, answer it directly/i
+  );
+  assert.match(source, /a missing personal anchor alone is not enough/i);
+  assert.doesNotMatch(source, /If askFrame is ambiguous[\s\S]*do not guess/i);
 });
 
 test("uses one focused-code explanation contract in both Screen prompts", () => {

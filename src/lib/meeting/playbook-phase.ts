@@ -514,7 +514,7 @@ export function formatProjectDeepDivePhaseContract(
   if (phase === "architecture_decision") {
     return [
       "projectDeepDivePhaseContract:",
-      "- Explain the architecture or decision currently being probed, my ownership, the viable alternatives, and the decisive tradeoff.",
+      "- Explain the architecture or decision currently being probed, the viable alternatives, and the decisive tradeoff. Include my ownership only when the current ask needs it and eligible project evidence supports it.",
       "- Keep the explanation logically layered and meeting-ready. Do not restart the project overview.",
       "- Use only project-compatible evidence; distinguish implemented behavior from a future improvement.",
     ].join("\n");
@@ -522,7 +522,7 @@ export function formatProjectDeepDivePhaseContract(
   if (phase === "validation_reliability") {
     return [
       "projectDeepDivePhaseContract:",
-      "- Explain the concrete failure or risk, how I debugged or validated it, the evidence used, and the recovery or reliability mechanism.",
+      "- Explain the concrete failure or risk, the evidence and validation method, and the recovery or reliability mechanism. Describe how I debugged it only when the current ask needs personal experience and eligible project evidence supports it.",
       "- Prefer tests, traces, rollout checks, and observed behavior over generic best practices.",
       "- Do not invent validation, metrics, incidents, or mechanisms that are absent from supported project evidence.",
     ].join("\n");
