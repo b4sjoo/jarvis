@@ -19960,7 +19960,7 @@ export function useMeetingAssistant() {
       taskId?: string;
       request: TaskRelationAdjudicationRequest;
       runtimeReleaseRequested?: boolean;
-      authorizeSourceOperation?: ReadTaskRelationSourceOperationAuthorization;
+      authorizeSourceOperation: ReadTaskRelationSourceOperationAuthorization;
     }): TaskRelationSplitScheduleHandle | undefined => {
       const evaluationActive =
         debugModeRef.current ||
@@ -20278,8 +20278,8 @@ export function useMeetingAssistant() {
               : taskRelationParentAffinityRuntimeRef.current?.getCurrentOperationId(),
         });
       const authorizeOperation = (): TaskRelationOperationAuthorization => {
-        const sourceAuthorization = authorizeSourceOperation?.();
-        if (sourceAuthorization && !sourceAuthorization.authorized) {
+        const sourceAuthorization = authorizeSourceOperation();
+        if (!sourceAuthorization.authorized) {
           return sourceAuthorization;
         }
         const authorization = authorizeTaskRelationSplitIdentity({
@@ -28913,7 +28913,7 @@ export function useMeetingAssistant() {
               Date.now() - waitStartedAt
             );
             screenRelationSettlementWaitDisposition =
-              "ordered-chain-error-unresolved";
+              "ordered-chain-internal-error";
             traceStoreRef.current.updateMetadata(trace.id, {
               taskRelationScreenReleaseAuthorized: false,
               taskRelationScreenReleaseReason: "release-window-closed",

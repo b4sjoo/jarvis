@@ -855,7 +855,8 @@ test("wires provider faults to finalization while stale source ownership fails c
     meetingHookSource,
     /readOrderedSettlementRemainingMs\(foregroundDeadline\)/
   );
-  assert.match(meetingHookSource, /ordered-chain-error-unresolved/);
+  assert.match(meetingHookSource, /ordered-chain-internal-error/);
+  assert.doesNotMatch(meetingHookSource, /ordered-chain-error-unresolved/);
   assert.match(
     meetingHookSource,
     /rejectStaleScreenOperation\("post-relation-settlement"\)/

@@ -535,7 +535,21 @@ test("retains a provisional Voice affinity result before RO publishes the LQU", 
       currentTurnId: "turn-previous",
       sourceTurnIds: ["turn-previous"],
     };
-    const { handle, executions } = productionRelationHandle(harness);
+    const { handle, executions } = productionRelationHandle(harness, {
+      authorizeSourceOperation: () => {
+        const current = harness.environment.logicalQuestionUnitRef.current;
+        const authorized =
+          current?.id === logicalQuestionUnit.id &&
+          current?.revision === logicalQuestionUnit.revision;
+        return {
+          authorized,
+          reason: authorized
+            ? "logical-question-current"
+            : "logical-question-id-mismatch",
+          mismatchedKey: authorized ? undefined : "source",
+        };
+      },
+    });
     await harness.clock.advanceTo(1);
     assert.equal(executions.length, 1);
     resolveRelationProvider(
@@ -546,6 +560,33 @@ test("retains a provisional Voice affinity result before RO publishes the LQU", 
 
     assert.equal(outcome.parent.adjudication?.decision, "independent");
     assert.equal(outcome.parent.unavailableReason, undefined);
+    harness.environment.logicalQuestionUnitRef.current = logicalQuestionUnit;
+    const resolutionPromise =
+      harness.environment.resolveOrderedTaskRelationWithinWindow({
+        handle,
+        traceId: "trace",
+        currentQuestionType: "coding",
+        sourceKind: "voice",
+        activeMeetingTask:
+          harness.environment.contextManagerRef.current.getState()
+            .activeMeetingTask,
+        waitBudgetMs: 4_000,
+      });
+    await harness.clock.advanceTo(2);
+    assert.equal(executions.length, 2);
+    resolveRelationProvider(
+      executions[1],
+      JSON.stringify({
+        schemaVersion: 3,
+        relation: "new-parent",
+        confidence: 0.99,
+        currentQuestionEvidenceSpans: ["Implement a queue."],
+        parentEvidenceSpans: [],
+      })
+    );
+    const resolution = await resolutionPromise;
+    assert.equal(resolution.terminalDisposition, "resolved");
+    assert.equal(resolution.decision.relation, "new-parent");
   } finally {
     harness.restore();
   }
