@@ -82,6 +82,10 @@ test("changes the coding output contract with the committed phase", () => {
   );
   assert.match(
     formatInterviewPlaybookForPrompt(implementation),
+    /explicitly asks to debug, repair, or satisfy a changed constraint/i
+  );
+  assert.match(
+    formatInterviewPlaybookForPrompt(implementation),
     /Derive each supplied example from its exact input, operation order, and state/i
   );
 });

@@ -186,6 +186,18 @@ test("keeps visible Coding behavior fixed when regenerating artifacts with tests
   );
 });
 
+test("lets an authorized Coding repair change a defective implementation", () => {
+  const instructions = buildResponseActionInstructions(
+    "regenerate-artifacts",
+    "coding"
+  ).join("\n");
+
+  assert.match(instructions, /When the Coding request asks for tests/i);
+  assert.match(instructions, /debug, repair, or satisfy a changed constraint/i);
+  assert.match(instructions, /update the authorized implementation only as required/i);
+  assert.doesNotMatch(instructions, /asks for tests or debugging/i);
+});
+
 test("Narrow and Enhance contracts preserve task identity and reject generated authority", () => {
   const narrow = buildResponseActionInstructions(
     "narrow-context",

@@ -45,7 +45,8 @@ export function buildResponseActionInstructions(
       "Do not change the visible Answer, Question, Approach, Clarifying question, task identity, relation, or playbook phase.",
       "For Design, emit one complete replacement Whiteboard. For Coding, emit complete Code and exact Complexity together.",
       "Existing Artifacts are continuity for a full replacement, not evidence that changes the interview question.",
-      "For Coding, treat the visible source-backed Code as the test target: retain its language, class/function, signature, input/output, return contract, algorithm, and expected behavior. Do not silently change the implementation or expected result to make a test pass. Do not invent project modules or files; a single-file implementation may include a standard-library test or demonstration entry point when the request asks for tests.",
+      "When the Coding request asks for tests, treat the visible source-backed Code as the test target: retain its language, class/function, signature, input/output, return contract, algorithm, and expected behavior. Do not silently change the implementation or expected result to make a test pass. Do not invent project modules or files; a single-file implementation may include a standard-library test or demonstration entry point.",
+      "When the Coding request explicitly asks to debug, repair, or satisfy a changed constraint, update the authorized implementation only as required by that request and keep Code and Complexity consistent. Do not preserve a known defect merely because prior Code is visible.",
       "Do not describe the Regenerate Artifacts action in the generated sections.",
     ];
   }
