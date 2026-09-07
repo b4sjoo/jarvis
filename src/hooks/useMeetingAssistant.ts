@@ -31069,6 +31069,7 @@ export function useMeetingAssistant() {
                 candidate: nextSuggestion,
                 authorizedArtifacts: screenPresentationAuthorizedArtifacts,
                 taskId: screenCommitTaskId,
+                sectionOwner: screenSectionOwner,
                 logicalQuestionUnitId:
                   screenGenerationLease?.logicalQuestionUnitId ?? null,
                 logicalQuestionRevision:
