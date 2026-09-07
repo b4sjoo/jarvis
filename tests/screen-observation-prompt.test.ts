@@ -31,6 +31,33 @@ test("limits Screen visual claims to evidence supplied in the request", () => {
   assert.match(SCREEN_TASK_SYSTEM_PROMPT, /answer any supported non-visual part/);
 });
 
+test("does not force a first-person Behavioral story without supporting evidence", () => {
+  assert.match(
+    SCREEN_TASK_SYSTEM_PROMPT,
+    /eligible fact evidence supports a relevant story/i
+  );
+  assert.match(
+    SCREEN_TASK_SYSTEM_PROMPT,
+    /bounded framework or explicit hypothetical example/i
+  );
+});
+
+test("keeps Screen project deep dives available for bounded product judgment", () => {
+  const source = readFileSync(
+    "src/lib/meeting/screen-observation.service.ts",
+    "utf8"
+  );
+
+  assert.match(
+    source,
+    /current product or technical judgment directly with a bounded analysis/i
+  );
+  assert.match(
+    source,
+    /only when eligible fact-evidence supports a relevant story/i
+  );
+});
+
 test("uses one focused-code explanation contract in both Screen prompts", () => {
   const source = readFileSync(
     "src/lib/meeting/screen-observation.service.ts",

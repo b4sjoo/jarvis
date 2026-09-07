@@ -74,6 +74,14 @@ test("changes the coding output contract with the committed phase", () => {
   );
   assert.match(
     formatInterviewPlaybookForPrompt(implementation),
+    /implementation as the test target/i
+  );
+  assert.match(
+    formatInterviewPlaybookForPrompt(implementation),
+    /Do not silently change the implementation or expected result/i
+  );
+  assert.match(
+    formatInterviewPlaybookForPrompt(implementation),
     /Derive each supplied example from its exact input, operation order, and state/i
   );
 });
@@ -96,6 +104,14 @@ test("changes project deep-dive guidance with the committed phase", () => {
   assert.match(
     formatInterviewPlaybookForPrompt(narrative),
     /30-45 second spoken introduction/
+  );
+  assert.match(
+    formatInterviewPlaybookForPrompt(narrative),
+    /product judgment, tradeoff, or future improvement/i
+  );
+  assert.match(
+    formatInterviewPlaybookForPrompt(narrative),
+    /instead of restarting the project introduction/i
   );
   assert.match(
     formatInterviewPlaybookForPrompt(architecture),

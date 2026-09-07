@@ -173,6 +173,19 @@ test("formats the bounded response-action context scope", () => {
   assert.match(formatted, /Selected turn ids: turn-current/);
 });
 
+test("keeps visible Coding behavior fixed when regenerating artifacts with tests", () => {
+  const instructions = buildResponseActionInstructions(
+    "regenerate-artifacts",
+    "coding"
+  ).join("\n");
+
+  assert.match(instructions, /visible source-backed Code as the test target/i);
+  assert.match(
+    instructions,
+    /Do not silently change the implementation or expected result/i
+  );
+});
+
 test("Narrow and Enhance contracts preserve task identity and reject generated authority", () => {
   const narrow = buildResponseActionInstructions(
     "narrow-context",
@@ -206,7 +219,8 @@ test("Artifact regeneration keeps Coding tests attached to the source-backed imp
     "coding"
   ).join("\n");
 
-  assert.match(instructions, /source-backed class, function, language, signature/i);
+  assert.match(instructions, /visible source-backed Code as the test target/i);
+  assert.match(instructions, /language, class\/function, signature, input\/output/i);
   assert.match(instructions, /Do not invent project modules or files/i);
   assert.match(instructions, /standard-library test or demonstration entry point/i);
 });

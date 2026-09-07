@@ -476,7 +476,7 @@ export function formatCodingPlaybookPhaseContract(
       ...sourceEvidenceContract,
       "- Emit a complete runnable implementation in the selected programming language.",
       "- Match the current visible or source-backed signature, language, return contract, and constraints. Keep a single-file answer self-contained; use only standard-library or source-present modules.",
-      "- When the current request asks for tests or debugging, preserve the implementation contract and give concrete assertions or a runnable local demonstration. Do not invent project files, modules, or APIs.",
+      "- When the current request asks for tests or debugging, treat the current visible or source-backed implementation as the test target. Preserve its language, class/function, signature, input/output, return contract, algorithm, and expected behavior; do not silently change the implementation or expected result to make a test pass. Give concrete assertions or a runnable local demonstration. Do not invent project files, modules, or APIs.",
       "- Keep Answer concise and spoken; put implementation only in Code.",
       "- Include exact Complexity, key edge cases, and validation or debugging guidance.",
       formatCodingSolutionManifestContract("optimized"),
@@ -536,9 +536,9 @@ export function formatProjectDeepDivePhaseContract(
   }
   return [
     "projectDeepDivePhaseContract:",
-    "- Give a 30-45 second spoken introduction: problem, previous limitation, my role and contribution, and supported outcome.",
-    "- Stay at the project level unless the interviewer asks for an internal mechanism or decision.",
-    "- Establish one clear project anchor and do not borrow facts from another project.",
+    "- When the current ask needs supported personal project facts, give a 30-45 second spoken introduction: problem, previous limitation, my role and contribution, and supported outcome.",
+    "- For a product judgment, tradeoff, or future improvement that does not need personal facts, answer that current judgment directly with a bounded analysis or explicit hypothetical example instead of restarting the project introduction.",
+    "- Use one clear project anchor only for first-person facts; do not borrow facts from another project or require an anchor for a non-factual analysis.",
   ].join("\n");
 }
 

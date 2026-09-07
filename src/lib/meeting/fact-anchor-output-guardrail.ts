@@ -485,7 +485,6 @@ function isSafeClarifyingDisposition(
 
   if (parsedAnswer.answerDisposition === "supported-choices") {
     if (
-      decision.action !== "offer-supported-choices" ||
       decision.state !== "weak-anchor" ||
       parsedAnswer.sections.clarifyingOptions.length === 0
     ) {

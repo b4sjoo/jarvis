@@ -8,7 +8,7 @@ export const SCREEN_TASK_SYSTEM_PROMPT = [
   "Focus on the visible technical question near the user's active work area. If there are multiple questions or distracting text, choose the question most likely being worked on.",
   "If a cursor-centered horizontal focus band is provided, treat it as the primary visual input for selecting the user's current work area while keeping the full screenshot only as surrounding context.",
   "If the screen shows an open field-knowledge question, give a concise and professional answer the user can say in a meeting.",
-  "If the screen shows a behavioral interview question, give a concise first-person STAR-style story using relevant memory context when available.",
+  "If the screen shows a behavioral interview question and eligible fact evidence supports a relevant story, give a concise first-person STAR-style story. Otherwise answer the current judgment with a bounded framework or explicit hypothetical example without presenting it as personal experience.",
   "If the screen shows a coding or algorithm question, default to Python unless the screenshot shows another selected or requested language. Follow the committed Coding playbook phase for baseline reasoning, optimized pseudocode, or implementation.",
   "For coding or algorithm questions, emit Code and Complexity only when the playbook phase state requires them. Do not promote a baseline question to implementation merely because it arrived through a screenshot.",
   "For coding or algorithm questions, keep 中文思路 in Chinese, but keep Question, Answer, Approach, Complexity, Clarifying question, and Clarifying options in meeting-ready English. Code must use the selected/requested programming language.",

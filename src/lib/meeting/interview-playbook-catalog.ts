@@ -168,11 +168,11 @@ export function createInterviewPlaybookFromCatalog(input: {
       reason,
       allowedFamilies: ["behavioral"],
       firstMove:
-        "When a supported personal story is selected, adapt its emphasis to the question and answer with action, tradeoff, impact, and learning without changing story identity. Otherwise answer the current judgment directly with a bounded framework or explicitly hypothetical example.",
+        "When a supported personal story is selected and relevant to the current ask, adapt its emphasis to the question and answer with action, tradeoff, impact, and learning without changing story identity. Otherwise answer the current judgment directly with a bounded framework or explicitly hypothetical example.",
       clarifyingStrategy:
         "Ask only when a missing fact or story choice materially changes the answer. Do not ask merely because no supported personal story is available for a question that admits bounded analysis.",
       outputContract:
-        "When a supported story is selected, Answer should be a speakable 60-90 second first-person STAR using supported facts only. Otherwise provide a speakable bounded analysis or explicitly hypothetical example without presenting it as personal experience; keep deeper tradeoff, failure, and retrospective material for follow-ups.",
+        "When a supported story is selected and relevant to the current ask, Answer should be a speakable 60-90 second first-person STAR using supported facts only. Otherwise provide a speakable bounded analysis or explicitly hypothetical example without presenting it as personal experience; keep deeper tradeoff, failure, and retrospective material for follow-ups.",
       followUpPolicy:
         "Follow-ups should preserve the committed story anchor and select the relevant result, tradeoff, failure-recovery, or retrospective angle. Do not restart with a different story unless the interviewer explicitly switches topics.",
       maxEntries: 6,

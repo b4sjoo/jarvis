@@ -584,7 +584,7 @@ Supporting anchor IDs: -`);
 test("uses only verified weak-anchor choices", () => {
   const decision = makeDecision({
     state: "weak-anchor",
-    action: "offer-supported-choices",
+    action: "answer-with-caveats",
     supportedAnchorIds: [],
     supportedAnchorTitles: ["Agentic Memory", "AOS cleanup"],
     requiredFor: "project-deep-dive",
