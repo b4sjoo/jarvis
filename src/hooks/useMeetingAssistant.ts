@@ -26897,6 +26897,7 @@ export function useMeetingAssistant() {
         | AnswerSufficiencyDecision
         | undefined;
       let screenAnswerSufficiencyQuestion = "";
+      let screenTerminalError: string | null | undefined;
       let pendingLatePreflightRepair:
         | LateScreenPreflightRepairRequest
         | undefined;
@@ -26986,8 +26987,9 @@ export function useMeetingAssistant() {
           currentOperationId:
             screenOperationCoordinatorRef.current.getActiveOperationId(),
         });
-      const presentOwnedScreenTerminal = (error: string | null) => {
+      const finalizeOwnedScreenOperation = () => {
         if (
+          !analysisController ||
           !screenOperationCoordinatorRef.current.owns(screenOperationId) ||
           screenAnalysisAbortRef.current !== analysisController
         ) {
@@ -27003,8 +27005,15 @@ export function useMeetingAssistant() {
             ? "listening"
             : idleReturnStatus,
           partialSuggestion: "",
-          error,
+          ...(screenTerminalError !== undefined
+            ? { error: screenTerminalError }
+            : {}),
         }));
+        traceStoreRef.current.updateMetadata(trace.id, {
+          screenOperationTerminalCleanupApplied: true,
+          screenOperationTerminalCleanupOwner:
+            "screen-operation-and-controller",
+        });
         return true;
       };
       const rejectStaleScreenOperation = (stage: string) => {
@@ -27088,6 +27097,7 @@ export function useMeetingAssistant() {
         ) {
           return false;
         }
+        screenTerminalError ??= null;
 
         recordScreenQuestionTypeOutcome({
           stage: screenModelCompletedAt ? "model-complete" : "release",
@@ -28836,16 +28846,15 @@ export function useMeetingAssistant() {
                   "error",
                   "task-relation-client-error"
                 );
-                presentOwnedScreenTerminal(
-                  RUNTIME_RELATION_CONFIGURATION_ERROR
-                );
+                screenTerminalError =
+                  RUNTIME_RELATION_CONFIGURATION_ERROR;
               } else {
                 traceStoreRef.current.finishTrace(
                   trace.id,
                   "cancelled",
                   resolution.operationAuthorization.reason
                 );
-                presentOwnedScreenTerminal(null);
+                screenTerminalError = null;
               }
               return;
             }
@@ -28970,12 +28979,8 @@ export function useMeetingAssistant() {
               taskRelationAdjudicationWaitError:
                 error instanceof Error ? error.message : String(error),
             });
-            setState((previous) => ({
-              ...previous,
-              status: idleReturnStatus,
-              error:
-                "Runtime relation coordination failed. Jarvis kept the current task; retry the screenshot.",
-            }));
+            screenTerminalError =
+              "Runtime relation coordination failed. Jarvis kept the current task; retry the screenshot.";
             traceStoreRef.current.finishTrace(
               trace.id,
               "error",
@@ -29302,22 +29307,12 @@ export function useMeetingAssistant() {
               modelCompleted: false,
               reason: transitionRejectionReason,
             });
-            analysisController?.abort(
-              transitionRejectionReason
-            );
-            if (screenAnalysisAbortRef.current === analysisController) {
-              screenAnalysisAbortRef.current = null;
-            }
+            screenTerminalError = `Screen task transition failed: ${transitionRejectionReason}. Try again.`;
             traceStoreRef.current.finishTrace(
               trace.id,
               "cancelled",
               transitionRejectionReason
             );
-            setState((previous) => ({
-              ...previous,
-              partialSuggestion: "",
-              error: `Screen task transition failed: ${transitionRejectionReason}. Try again.`,
-            }));
             return;
           }
 
@@ -30897,8 +30892,6 @@ export function useMeetingAssistant() {
           ...screenModelRouteMetadata,
           ...screenMeetingAnswerMetadata,
         });
-        screenAnalysisAbortRef.current = null;
-
         contextManagerRef.current.updateScreenObservation(observation.id, {
           analysisPromptSource: autoPrompt
             ? "screenshot-auto-prompt"
@@ -31823,6 +31816,7 @@ export function useMeetingAssistant() {
         traceStoreRef.current.finishTrace(trace.id, "success");
       } catch (error) {
         if (pendingLatePreflightRepair) {
+          screenTerminalError = null;
           recordScreenQuestionTypeOutcome({
             stage: "model-complete",
             disposition: "cancelled-by-runtime-boundary",
@@ -31840,17 +31834,6 @@ export function useMeetingAssistant() {
               traceId: trace.id,
             });
           }
-          analysisController?.abort(
-            "late-valid-screen-preflight-repair"
-          );
-          if (screenAnalysisAbortRef.current === analysisController) {
-            screenAnalysisAbortRef.current = null;
-          }
-          setState((previous) => ({
-            ...previous,
-            partialSuggestion: "",
-            error: null,
-          }));
           const runningTrace = traceStoreRef.current
             .getTraces()
             .find((candidate) => candidate.id === trace.id);
@@ -31887,6 +31870,12 @@ export function useMeetingAssistant() {
               ? error.message
               : "screen-execution-error",
         });
+        screenTerminalError =
+          error instanceof Error && error.name === "AbortError"
+            ? null
+            : error instanceof Error
+              ? error.message
+              : "Failed to capture screen context.";
         if (!screenCaptureSucceeded) {
           const failedCaptureSupersession =
             decideManualScreenAdvisorSupersession({
@@ -31941,17 +31930,6 @@ export function useMeetingAssistant() {
             traceId: trace.id,
           });
         }
-        analysisController?.abort();
-        const ownsCurrentScreenOperation =
-          screenAnalysisAbortRef.current === analysisController;
-        if (ownsCurrentScreenOperation) {
-          screenAnalysisAbortRef.current = null;
-          setState((previous) => ({
-            ...previous,
-            partialSuggestion: "",
-          }));
-        }
-
         const runtimeDecision = readScreenAuthorization();
         if (!runtimeDecision.authorized) {
           rejectStaleScreenOperation("error-boundary");
@@ -32014,15 +31992,8 @@ export function useMeetingAssistant() {
         );
         traceStoreRef.current.finishTrace(trace.id, "error", error);
 
-        setState((previous) => ({
-          ...previous,
-          status: runtimeActiveRef.current ? "listening" : "error",
-          error:
-            error instanceof Error
-              ? error.message
-              : "Failed to capture screen context.",
-        }));
       } finally {
+        finalizeOwnedScreenOperation();
         screenOperationCoordinatorRef.current.release(screenOperationId);
         const repair = pendingLatePreflightRepair;
         if (repair) {

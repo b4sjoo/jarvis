@@ -60,9 +60,9 @@ const withTimeoutSource = findNamedDeclaration(
   sourceFile,
   "withTimeout"
 ).getText(sourceFile);
-const presentOwnedScreenTerminalSource = findNamedDeclaration(
+const finalizeOwnedScreenOperationSource = findNamedDeclaration(
   sourceFile,
-  "presentOwnedScreenTerminal"
+  "finalizeOwnedScreenOperation"
 ).initializer.getText(sourceFile);
 const typeCorrectionDeclaration = findNamedDeclaration(
   sourceFile,
@@ -95,15 +95,60 @@ const termCorrectionAdvisorGateSource = findDescendant(
     node.expression.getText(sourceFile) === "correctionRelationTerminal" &&
     node.getText(sourceFile).includes("await runAdvisor")
 ).getText(sourceFile);
+const captureScreenDeclaration = findNamedDeclaration(
+  sourceFile,
+  "captureScreenContext"
+);
+const readScreenAuthorizationSource = findNamedDeclaration(
+  sourceFile,
+  "readScreenAuthorization"
+).initializer.getText(sourceFile);
+const rejectStaleScreenOperationSource = findNamedDeclaration(
+  sourceFile,
+  "rejectStaleScreenOperation"
+).initializer.getText(sourceFile);
+const clearScreenStagedPartialSource = findNamedDeclaration(
+  sourceFile,
+  "clearScreenStagedPartial"
+).initializer.getText(sourceFile);
+const postModelScreenStaleGuardSource = findDescendant(
+  captureScreenDeclaration,
+  (node) =>
+    ts.isIfStatement(node) &&
+    node.expression.getText(sourceFile) ===
+      'rejectStaleScreenOperation("post-model")'
+).getText(sourceFile);
+const captureScreenFinallySource = findDescendant(
+  captureScreenDeclaration,
+  (node) =>
+    ts.isTryStatement(node) &&
+    Boolean(node.finallyBlock) &&
+    node.finallyBlock
+      .getText(sourceFile)
+      .includes("screenOperationCoordinatorRef.current.release(screenOperationId)")
+).finallyBlock.getText(sourceFile);
 
 const identifiers = new Set();
-for (const source of [...callbackSources, withTimeoutSource]) {
+for (const source of [
+  ...callbackSources,
+  withTimeoutSource,
+  readScreenAuthorizationSource,
+  rejectStaleScreenOperationSource,
+  clearScreenStagedPartialSource,
+]) {
   const file = parse(source);
   const visit = (node) => {
     if (ts.isIdentifier(node)) identifiers.add(node.text);
     ts.forEachChild(node, visit);
   };
   visit(file);
+}
+for (const name of [
+  "buildRuntimeCommitSnapshot",
+  "createRuntimeCommitToken",
+  "createAnswerGenerationLease",
+]) {
+  identifiers.add(name);
 }
 
 const imports = {};
@@ -146,6 +191,9 @@ for (const moduleName of [
   "runtime-inference-response",
   "runtime-inference-provider-admission",
   "response-opportunity-generation-gate",
+  "runtime-commit-authorization",
+  "source-owned-transition-runtime",
+  "stable-answer",
 ]) {
   const loaded = await import(
     pathToFileURL(
@@ -773,14 +821,16 @@ test("lets the owning Screen consumer present a Relation client error and leave 
       screenAnalysisAbortRef: { current: analysisController },
       runtimeActiveRef: { current: true },
       idleReturnStatus: "idle",
+      screenTerminalError: "Runtime relation model configuration failed.",
+      trace: { id: "screen-client-error-trace" },
       setState: (update) => {
         stateWrites += 1;
         ui = update(ui);
       },
     });
     const scope = vm.createContext(harness.environment);
-    const presentTerminal = vm.runInContext(
-      transpile(`(${presentOwnedScreenTerminalSource})`),
+    const finalizeOperation = vm.runInContext(
+      transpile(`(${finalizeOwnedScreenOperationSource})`),
       scope
     );
     const relationHandle = {
@@ -811,10 +861,7 @@ test("lets the owning Screen consumer present a Relation client error and leave 
 
     assert.equal(resolution.terminalDisposition, "client-error");
     assert.equal(stateWrites, 0, "the shared resolver must not mutate UI state");
-    assert.equal(
-      presentTerminal("Runtime relation model configuration failed."),
-      true
-    );
+    assert.equal(finalizeOperation(), true);
     assert.equal(ui.status, "listening");
     assert.equal(ui.partialSuggestion, "");
     assert.equal(ui.error, "Runtime relation model configuration failed.");
@@ -852,19 +899,21 @@ test("does not let an old Screen terminal clear a newer operation", { concurrenc
       screenAnalysisAbortRef,
       runtimeActiveRef: { current: true },
       idleReturnStatus: "idle",
+      screenTerminalError: null,
+      trace: { id: "old-screen-terminal-trace" },
       setState: (update) => {
         stateWrites += 1;
         ui = update(ui);
       },
     });
-    const presentOldTerminal = vm.runInContext(
-      transpile(`(${presentOwnedScreenTerminalSource})`),
+    const finalizeOldOperation = vm.runInContext(
+      transpile(`(${finalizeOwnedScreenOperationSource})`),
       vm.createContext(harness.environment)
     );
     coordinator.claim("new-screen-operation");
     screenAnalysisAbortRef.current = newController;
 
-    assert.equal(presentOldTerminal(null), false);
+    assert.equal(finalizeOldOperation(), false);
     assert.equal(stateWrites, 0);
     assert.equal(oldAbortCount, 0);
     assert.deepEqual(ui, {
@@ -876,6 +925,131 @@ test("does not let an old Screen terminal clear a newer operation", { concurrenc
   } finally {
     harness.restore();
   }
+});
+
+test("ends an owned Screen after post-model Preparation staleness", { concurrency: false }, () => {
+  const coordinator = new ScreenOperationCoordinator();
+  coordinator.claim("screen-operation");
+  const controller = new AbortController();
+  const contextState = {
+    sessionId: "screen-session",
+    activeMeetingTask: {
+      parent: { id: "screen-parent", revisions: 1 },
+    },
+  };
+  const runtimeSnapshot = imports.buildRuntimeCommitSnapshot({
+    runtimeEpoch: 1,
+    contextState,
+  });
+  const runtimeToken = imports.createRuntimeCommitToken({
+    operationId: "screen-operation",
+    pipeline: "screen",
+    snapshot: runtimeSnapshot,
+  });
+  const generationLease = imports.createAnswerGenerationLease({
+    sessionId: contextState.sessionId,
+    runtimeEpoch: 1,
+    preparationContextRevision: 0,
+    taskId: "screen-parent",
+    taskRevision: 1,
+    logicalQuestionUnitId: "screen-question",
+    logicalQuestionRevision: 1,
+    baseVisibleAnswerRevision: 1,
+    sourceTurnIds: [],
+    manualCorrectionRevision: 0,
+    responseActionRevision: 0,
+    modelRoute: "main",
+    artifactOwnerId: "screen-parent",
+    requestedArtifacts: ["answer"],
+  });
+  let ui = {
+    status: "thinking",
+    partialSuggestion: "current partial",
+    error: null,
+  };
+  const terminalReasons = [];
+  const environment = {
+    ...imports,
+    screenOperationCoordinatorRef: { current: coordinator },
+    screenOperationId: "screen-operation",
+    screenRuntimeToken: runtimeToken,
+    readRuntimeCommitSnapshot: () => runtimeSnapshot,
+    contextManagerRef: {
+      current: {
+        getState: () => contextState,
+      },
+    },
+    screenGenerationLease: generationLease,
+    runtimeEpochRef: { current: 1 },
+    visibleAnswerRevisionRef: { current: 1 },
+    manualCorrectionRevisionRef: { current: 0 },
+    responseActionRevisionRef: { current: 0 },
+    preparationRuntimeContextRef: {
+      current: { preparationContextRevision: 1 },
+    },
+    screenGenerationRequestedArtifacts: ["answer"],
+    screenSourceOwnedTransitionReceipt: undefined,
+    screenModelCompletedAt: 2_000,
+    screenResponseCandidate: undefined,
+    analysisController: controller,
+    screenAnalysisAbortRef: { current: controller },
+    screenStagedVisible: false,
+    screenStagedChunkCount: 0,
+    screenStagedFirstChunkAt: undefined,
+    screenStagedFirstVisiblePartialAt: undefined,
+    trace: { id: "screen-trace" },
+    traceStoreRef: {
+      current: {
+        updateMetadata: () => undefined,
+        getTraces: () => [
+          { id: "screen-trace", status: "running", steps: [] },
+        ],
+        finishTrace: (_traceId, _status, reason) =>
+          terminalReasons.push(reason),
+      },
+    },
+    recordScreenQuestionTypeOutcome: () => undefined,
+    terminalizeGenerationLease: (input) =>
+      terminalReasons.push(input.reason),
+    setState: (update) => {
+      ui = update(ui);
+    },
+    runtimeActiveRef: { current: true },
+    idleReturnStatus: "idle",
+    screenTerminalError: undefined,
+    pendingLatePreflightRepair: undefined,
+  };
+  const context = vm.createContext(environment);
+  environment.finalizeOwnedScreenOperation = vm.runInContext(
+    transpile(`(${finalizeOwnedScreenOperationSource})`),
+    context
+  );
+  environment.readScreenAuthorization = vm.runInContext(
+    transpile(`(${readScreenAuthorizationSource})`),
+    context
+  );
+  environment.clearScreenStagedPartial = vm.runInContext(
+    transpile(`(${clearScreenStagedPartialSource})`),
+    context
+  );
+  environment.rejectStaleScreenOperation = vm.runInContext(
+    transpile(`(${rejectStaleScreenOperationSource})`),
+    context
+  );
+  const runPostModelGuard = vm.runInContext(
+    transpile(
+      `(() => { try { ${postModelScreenStaleGuardSource}; return "continued"; } finally ${captureScreenFinallySource} })`
+    ),
+    context
+  );
+
+  assert.equal(runPostModelGuard(), undefined);
+  assert.equal(coordinator.getActiveOperationId(), null);
+  assert.equal(controller.signal.aborted, true);
+  assert.equal(environment.screenAnalysisAbortRef.current, null);
+  assert.equal(ui.status, "listening");
+  assert.equal(ui.partialSuggestion, "");
+  assert.ok(terminalReasons.includes("preparation-context-revision-mismatch"));
 });
 
 test("terminalizes Type Correction client errors before reading a Relation decision", { concurrency: false }, async () => {
