@@ -193,14 +193,15 @@ test("builds a bounded LQU-only request and preserves the terminal tail", () => 
 
   assert.deepEqual(
     request.decisionSpans.map((span) => span.turnId),
-    ["turn-previous", "turn-current"]
+    ["turn-current"]
   );
-  assert.equal(request.decisionSpans.length, 2);
+  assert.equal(request.decisionSpans.length, 1);
   assert.equal(
     request.decisionSpans.at(-1)?.text.endsWith(terminalAsk),
     true
   );
   assert.equal(request.boundedContext.endsWith(terminalAsk), true);
+  assert.match(request.boundedContext, /Earlier bounded source/);
   assert.equal("activeTask" in request, false);
   assert.equal("questionType" in request, false);
   assert.equal("contextTurns" in request, false);
@@ -213,9 +214,9 @@ test("builds a bounded LQU-only request and preserves the terminal tail", () => 
   };
   assert.deepEqual(
     modelInput.decisionSpans.map((span) => span.index),
-    [0, 1]
+    [0]
   );
-  assert.equal(modelInput.decisionSpans[0].text, "Earlier bounded source");
+  assert.equal(modelInput.decisionSpans[0].text.endsWith(terminalAsk), true);
   assert.equal(modelInput.boundedContext, request.boundedContext);
   assert.equal("logicalQuestionUnitId" in modelInput, false);
   assert.equal("sourceHash" in modelInput, false);
@@ -249,6 +250,20 @@ test("keeps frozen source context out of decision targets but inside bounded con
     "turn-current",
   ]);
   assert.notEqual(request.sourceHash, withoutContext.sourceHash);
+});
+
+test("reserves the current ask before bounded earlier source context", () => {
+  const current = `begin ${"x".repeat(400)} MUST KEEP MIDDLE REQUIREMENT ${"x".repeat(450)} end?`;
+  const request = buildResponseOpportunityRequest({
+    logicalQuestionUnit: logicalQuestionUnit(current, "p".repeat(600)),
+  });
+
+  assert.equal(request.decisionSpans.length, 1);
+  assert.equal(request.decisionSpans[0].turnId, "turn-current");
+  assert.match(request.decisionSpans[0].text, /MUST KEEP MIDDLE REQUIREMENT/);
+  assert.match(request.boundedContext, /MUST KEEP MIDDLE REQUIREMENT/);
+  assert.match(request.boundedContext, /^p{600}/);
+  assert.ok(request.boundedContext.length <= 1_800);
 });
 
 test("reads only the LQU's frozen source-context references in source order", () => {
@@ -320,21 +335,21 @@ test("uses a source-backed terminal target without discarding bounded context", 
   );
 });
 
-test("restores selected decision spans to their original source order", () => {
+test("keeps prior LQU text as context instead of granting it a decision target", () => {
   const request = buildResponseOpportunityRequest({
     logicalQuestionUnit: logicalQuestionUnit(
       "What should I build?",
       "The service must support regional failover."
     ),
   });
-  assert.equal(request.decisionSpans.length, 2);
+  assert.equal(request.decisionSpans.length, 1);
 
   const parsed = parseResponseOpportunityOutput(
     JSON.stringify({
       v: 4,
       d: "o",
       c: 0.96,
-      t: [1, 0],
+      t: [0],
       r: "ask",
     }),
     request
@@ -344,12 +359,10 @@ test("restores selected decision spans to their original source order", () => {
 
   assert.deepEqual(
     parsed.value.targetSpans.map((span) => span.turnId),
-    ["turn-previous", "turn-current"]
+    ["turn-current"]
   );
-  assert.equal(
-    parsed.value.decisionTarget,
-    "The service must support regional failover. What should I build?"
-  );
+  assert.equal(parsed.value.decisionTarget, "What should I build?");
+  assert.match(request.boundedContext, /regional failover/);
 });
 
 test("preserves a no-output decision with its reusable target", () => {

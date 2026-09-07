@@ -81,9 +81,18 @@ export function buildResponseOpportunityRequest(input: {
   contextCapsule?: ResponseOpportunityContextCapsule;
   manualForceAdvise?: boolean;
 }): ResponseOpportunityRequest {
-  const selectedDecisionSources = (
-    input.effectiveSources ?? input.logicalQuestionUnit.sources
-  ).slice(-2);
+  const effectiveSources =
+    input.effectiveSources ?? input.logicalQuestionUnit.sources;
+  const selectedDecisionSources = selectCurrentResponseOpportunitySources({
+    sources: effectiveSources,
+    currentTurnId: input.logicalQuestionUnit.currentTurnId,
+  });
+  const currentSourceIds = new Set(
+    selectedDecisionSources.map((source) => source.turnId)
+  );
+  const priorLogicalQuestionSources = effectiveSources.filter(
+    (source) => !currentSourceIds.has(source.turnId)
+  );
   const boundedDecisionSources = boundResponseOpportunitySources({
     sources: selectedDecisionSources,
     maxChars: RESPONSE_OPPORTUNITY_MAX_DECISION_SOURCE_CHARS,
@@ -94,14 +103,20 @@ export function buildResponseOpportunityRequest(input: {
   );
   const boundedSupplementaryContext = boundResponseOpportunitySources({
     sources: dedupeResponseOpportunitySources(
-      (input.contextSources ?? []).filter(
+      [...(input.contextSources ?? []), ...priorLogicalQuestionSources].filter(
         (source) => !decisionTurnIds.has(source.turnId)
       )
     ),
-    maxChars: Math.max(
-      0,
-      RESPONSE_OPPORTUNITY_MAX_SOURCE_CHARS -
-        boundedDecisionSources.reduce((total, source) => total + source.text.length, 0)
+    maxChars: Math.min(
+      RESPONSE_OPPORTUNITY_MAX_CONTEXT_SOURCE_CHARS,
+      Math.max(
+        0,
+        RESPONSE_OPPORTUNITY_MAX_SOURCE_CHARS -
+          boundedDecisionSources.reduce(
+            (total, source) => total + source.text.length,
+            0
+          )
+      )
     ),
   });
   const boundedContextSources = [
@@ -139,6 +154,16 @@ export function buildResponseOpportunityRequest(input: {
     ...(contextCapsule ? { contextCapsule } : {}),
     manualForceAdvise: input.manualForceAdvise ?? false,
   };
+}
+
+function selectCurrentResponseOpportunitySources(input: {
+  sources: Array<{ turnId: string; text: string }>;
+  currentTurnId: string;
+}) {
+  const current = input.sources.filter(
+    (source) => source.turnId === input.currentTurnId
+  );
+  return current.length ? [current.at(-1)!] : input.sources.slice(-1);
 }
 
 export function selectResponseOpportunityContextSources(input: {

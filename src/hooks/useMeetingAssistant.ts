@@ -17205,13 +17205,22 @@ export function useMeetingAssistant() {
         unit: LogicalQuestionUnit
       ) => {
         const latestContext = contextManagerRef.current.getState();
+        const rawContextSources = selectResponseOpportunityContextSources({
+          logicalQuestionUnit: unit,
+          transcriptTurns: latestContext.transcriptTurns,
+        });
+        const contextProjection = projectEffectiveSourceTurnGroup({
+          sources: rawContextSources,
+          effectiveRecords: effectiveQuestionSourceLedgerRef.current.list(),
+          logicalQuestionUnit: unit,
+          sessionId: latestContext.sessionId,
+          runtimeEpoch: runtimeEpochRef.current,
+        });
         return {
           effectiveSources:
             projectEffectiveLogicalQuestionSources(unit).sources,
-          contextSources: selectResponseOpportunityContextSources({
-            logicalQuestionUnit: unit,
-            transcriptTurns: latestContext.transcriptTurns,
-          }),
+          contextSources: contextProjection.sources,
+          contextProjection,
         };
       };
       const readResponseOpportunityContextCapsule = () => {
@@ -17350,6 +17359,12 @@ export function useMeetingAssistant() {
           request.boundedContextSourceTurnIds,
         responseOpportunityBoundedContextSourceCount:
           request.boundedContextSourceTurnIds.length,
+        responseOpportunityEffectiveContextReplacedTurnIds:
+          responseOpportunitySources.contextProjection.replacedTurnIds,
+        responseOpportunityEffectiveContextCorrectionIds:
+          responseOpportunitySources.contextProjection.correctionIds,
+        responseOpportunityEffectiveContextLogicalQuestionUnitIds:
+          responseOpportunitySources.contextProjection.logicalQuestionUnitIds,
         responseOpportunityContextCapsulePresent: Boolean(
           request.contextCapsule
         ),
