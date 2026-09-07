@@ -10,8 +10,6 @@ import {
   parseMeetingAnswer,
   serializeMeetingAnswer,
 } from "./meeting-answer.js";
-import type { ResponseArtifactMutationAuthorization } from "./response-artifact-authorization.js";
-import type { SettledAdvisorArtifactIntent } from "./settled-advisor-execution-plan.js";
 import { calculateWordEquivalent } from "./transcript-fusion.js";
 import type {
   AdvisorSuggestion,
@@ -174,29 +172,6 @@ const ANSWER_GROUP_KEYS = [
   "approach",
   "clarifyingQuestion",
 ] as const;
-
-export function resolveAuthorizedAnswerArtifacts(input: {
-  artifactPolicy: ResponseArtifactMutationAuthorization;
-  artifactIntent: SettledAdvisorArtifactIntent;
-}): AnswerArtifactSection[] {
-  const authorized: AnswerArtifactSection[] = ["answer"];
-  const codeFamilyRevision =
-    input.artifactIntent === "revise-code" ||
-    input.artifactIntent === "revise-complexity";
-  if (codeFamilyRevision && input.artifactPolicy.allowCode) {
-    authorized.push("code");
-  }
-  if (codeFamilyRevision && input.artifactPolicy.allowComplexity) {
-    authorized.push("complexity");
-  }
-  if (
-    input.artifactIntent === "revise-whiteboard" &&
-    input.artifactPolicy.allowWhiteboard
-  ) {
-    authorized.push("whiteboard");
-  }
-  return authorized;
-}
 
 export function commitStableAnswerRevision(input: {
   current?: StableAnswerRevision | null;

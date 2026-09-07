@@ -486,7 +486,6 @@ import {
   parseMeetingTraceMetrics,
   prewarmWhiteboardRenderValidator,
   resolveMeetingAnswerProfile,
-  resolveAuthorizedAnswerArtifacts,
   resolveAdvisorGenerationRequestedArtifacts,
   formatManualPhaseArtifactContractForTrace,
   observeAdvisorResponseConsistency,
@@ -509,7 +508,6 @@ import {
   formatPlaybookPhaseDecisionForTrace,
   resolvePlaybookRequiredArtifacts,
   resolveManualScreenPlaybookSubtaskIntent,
-  resolveManualScreenGenerationRequestedArtifacts,
   authorizeManualScreenPresentationArtifacts,
   formatScreenPresentationArtifactAuthorityForTrace,
   formatInterviewPlaybookForTrace,
@@ -13297,6 +13295,13 @@ export function useMeetingAssistant() {
     );
     refreshAdvisorEvidencePacket();
 
+    const runtimeTypeAdjudicationAnswerOnly =
+      runtimeTypeAdjudicationOutputAuthorized &&
+      runtimeTypeAdjudicationLimitsGenerationToAnswer({
+        authority: advisorJob.runtimeTypeAdjudicationOutputAuthority,
+        taskBoundaryCommitted: taskBoundaryCommittedBeforeAdvisor,
+      });
+
     if (currentQuestionSettlement) {
       if (!settledExecutionPlan) {
         const sourceOwnedExecutionPlanCommand =
@@ -13372,6 +13377,16 @@ export function useMeetingAssistant() {
             advisorJob.runtimeTypeAdjudicationOutputAuthority?.id,
           promptCurrentQuestionSourceHash:
             advisorEvidencePacket.currentQuestion?.sourceHash,
+          artifactRequest: {
+            hardAnswerOnly:
+              advisorJob.source === "force-advise" ||
+              runtimeTypeAdjudicationAnswerOnly,
+            manualPhaseCommitted: manualPhaseAdvanceCommitted,
+            manualCorrection:
+              advisorJob.source === "manual-correction",
+            artifactRegenerationArtifacts:
+              options.artifactRegenerationTarget?.artifactFamilies,
+          },
         });
       }
       if (
@@ -13698,12 +13713,6 @@ export function useMeetingAssistant() {
         effectiveAdvisorSettlementView.parent?.sourceQuestionRevision ??
         0,
     };
-    const runtimeTypeAdjudicationAnswerOnly =
-      runtimeTypeAdjudicationOutputAuthorized &&
-      runtimeTypeAdjudicationLimitsGenerationToAnswer({
-        authority: advisorJob.runtimeTypeAdjudicationOutputAuthority,
-        taskBoundaryCommitted: taskBoundaryCommittedBeforeAdvisor,
-      });
     const automaticPhaseIdentityTransitionCommitted =
       sourceOwnedTransitionCommittedPhaseIdentityChange(
         sourceOwnedTransitionReceipt
@@ -13724,6 +13733,7 @@ export function useMeetingAssistant() {
               "replace-parent"))
     );
     const generationArtifactAuthority =
+      settledExecutionPlan?.artifactGenerationAuthority ??
       decideAdvisorArtifactGenerationAuthority({
         hardAnswerOnly:
           advisorJob.source === "force-advise" ||
@@ -13737,21 +13747,17 @@ export function useMeetingAssistant() {
           options.artifactRegenerationTarget
         ),
       });
-    generationAuthorizedArtifacts = options.artifactRegenerationTarget
-      ? [...options.artifactRegenerationTarget.artifactFamilies]
-      : resolveAdvisorGenerationRequestedArtifacts({
-          forceAnswerOnly: generationArtifactAuthority.answerOnly,
-          runtimeTypeAdjudicationAnswerOnly,
-          settledPlanArtifacts: settledExecutionPlan
-            ? resolveAuthorizedAnswerArtifacts({
-                artifactPolicy: settledExecutionPlan.artifactPolicy,
-                artifactIntent: settledExecutionPlan.artifactIntent,
-              })
-            : undefined,
-          committedManualPhaseArtifacts: manualPhaseAdvanceCommitted
-            ? playbookPhaseDecision.requiredArtifacts
-            : undefined,
-        });
+    generationAuthorizedArtifacts = settledExecutionPlan
+      ? [...settledExecutionPlan.requestedArtifacts]
+      : options.artifactRegenerationTarget
+        ? [...options.artifactRegenerationTarget.artifactFamilies]
+        : resolveAdvisorGenerationRequestedArtifacts({
+            forceAnswerOnly: generationArtifactAuthority.answerOnly,
+            runtimeTypeAdjudicationAnswerOnly,
+            committedManualPhaseArtifacts: manualPhaseAdvanceCommitted
+              ? playbookPhaseDecision.requiredArtifacts
+              : undefined,
+          });
     const generationPlaybookPhaseDecision =
       options.artifactRegenerationTarget
         ? {
@@ -29984,6 +29990,13 @@ export function useMeetingAssistant() {
             screenEvidencePacket.currentQuestion?.sourceHash ??
             screenCurrentQuestionSettlement.sourceHash,
           requiresVision: true,
+          artifactRequest: {
+            manualScreen: {
+              boundVoicePrimaryAsk:
+                screenSourcePacket.sourceOperationAuthority
+                  .boundVoicePrimaryAsk,
+            },
+          },
         });
         const screenExecutionPlanAuthorization =
           authorizeSettledAdvisorExecutionPlan({
@@ -30047,15 +30060,9 @@ export function useMeetingAssistant() {
             promptContractVersion:
               MEETING_ADVISOR_PROMPT_CONTRACT_VERSION,
           });
-        screenGenerationRequestedArtifacts =
-          resolveManualScreenGenerationRequestedArtifacts({
-            requiredArtifacts: screenExecutionPlan.requiredArtifacts,
-            questionType: screenExecutionPlan.questionType,
-            boundVoicePrimaryAsk:
-              screenSourcePacket.sourceOperationAuthority
-                .boundVoicePrimaryAsk,
-            primaryAskIntent: screenSubtaskIntent,
-          });
+        screenGenerationRequestedArtifacts = [
+          ...screenExecutionPlan.requestedArtifacts,
+        ];
         const screenGenerationPhaseDecision = {
           ...screenPhaseDecision,
           phase:
@@ -33244,6 +33251,9 @@ export function useMeetingAssistant() {
               topic: parentAfter.topic,
             },
             taskMutationCommittedBeforeAdvisor: true,
+            artifactRequest: {
+              manualCorrection: true,
+            },
           });
           const lifecycleCommit = commitCorrectionLifecycleWithManager({
             manager: contextManagerRef.current,
@@ -36658,6 +36668,9 @@ export function useMeetingAssistant() {
                     topic: correctedSemanticEvidenceText,
                   },
                   taskMutationCommittedBeforeAdvisor: true,
+                  artifactRequest: {
+                    manualCorrection: true,
+                  },
                 });
               const lifecycleCommit =
                 commitCorrectionLifecycleWithManager({

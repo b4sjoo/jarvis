@@ -25,7 +25,6 @@ import {
   projectPrimaryAsk,
 } from "../src/lib/meeting/primary-ask-projection.js";
 import { buildSettledAdvisorExecutionPlan } from "../src/lib/meeting/settled-advisor-execution-plan.js";
-import { resolveAuthorizedAnswerArtifacts } from "../src/lib/meeting/stable-answer.js";
 import {
   inferCanonicalQuestionTypeFromText,
   normalizeCanonicalQuestionType,
@@ -233,10 +232,7 @@ function characterizeAcceptedTurn(text: string): CharacterizationDigest {
     questionType,
     relation: settlement.relation,
     playbookPhase: plan.playbookPhase,
-    requestedArtifacts: resolveAuthorizedAnswerArtifacts({
-      artifactPolicy: plan.artifactPolicy,
-      artifactIntent: plan.artifactIntent,
-    }),
+    requestedArtifacts: plan.requestedArtifacts,
   };
 }
 

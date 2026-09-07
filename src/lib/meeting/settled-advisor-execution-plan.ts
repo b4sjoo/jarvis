@@ -23,8 +23,13 @@ import {
 } from "./meeting-model-route.js";
 import {
   authorizeResponseArtifactMutation,
+  decideAdvisorArtifactGenerationAuthority,
+  resolveAdvisorGenerationRequestedArtifacts,
+  resolveArtifactPolicySections,
+  type AdvisorArtifactGenerationAuthorityDecision,
   type ResponseArtifactMutationAuthorization,
 } from "./response-artifact-authorization.js";
+import { resolveManualScreenGenerationRequestedArtifacts } from "./screen-artifact-authority.js";
 import {
   buildQuestionTypeConsumerObservation,
   formatQuestionTypeConsumerObservationForTrace,
@@ -161,6 +166,8 @@ export interface SettledAdvisorExecutionPlan {
   playbookId?: SelectedInterviewPlaybook["id"];
   playbookPhase?: InterviewPlaybookPhase;
   requiredArtifacts: AnswerArtifactSection[];
+  requestedArtifacts: AnswerArtifactSection[];
+  artifactGenerationAuthority: AdvisorArtifactGenerationAuthorityDecision;
   memoryPolicy: SettledAdvisorMemoryPolicy;
   factAnchorPolicy: SettledAdvisorFactAnchorPolicy;
   promptContract: SettledAdvisorPromptContract;
@@ -624,6 +631,15 @@ export function buildSettledAdvisorExecutionPlan(input: {
   responseAuthorityId?: string;
   promptCurrentQuestionSourceHash?: string;
   requiresVision?: boolean;
+  artifactRequest?: {
+    hardAnswerOnly?: boolean;
+    manualPhaseCommitted?: boolean;
+    manualCorrection?: boolean;
+    artifactRegenerationArtifacts?: readonly AnswerArtifactSection[];
+    manualScreen?: {
+      boundVoicePrimaryAsk: boolean;
+    };
+  };
   createdAt?: number;
 }): SettledAdvisorExecutionPlan {
   const rawTaskRelation = toInterviewTaskRelation(
@@ -810,6 +826,55 @@ export function buildSettledAdvisorExecutionPlan(input: {
     relationApplicable = false;
     relation = "none";
   }
+  const newParentCommitted = Boolean(
+    taskMutationCommittedBeforeAdvisor &&
+      (input.taskBoundaryCommitted ||
+        taskMutationPolicy.kind === "create-parent" ||
+        taskMutationPolicy.kind === "replace-parent")
+  );
+  const automaticPhaseIdentityTransitionCommitted = Boolean(
+    taskMutationCommittedBeforeAdvisor &&
+      taskMutationPolicy.kind === "set-phase" &&
+      !input.artifactRequest?.manualPhaseCommitted
+  );
+  const freshCodingChildImplementationCommitted = Boolean(
+    taskMutationCommittedBeforeAdvisor &&
+      taskMutationPolicy.kind === "attach-child" &&
+      responseOwner.questionType === "coding" &&
+      playbookPhase === "implementation_validation"
+  );
+  const artifactGenerationAuthority =
+    decideAdvisorArtifactGenerationAuthority({
+      hardAnswerOnly: input.artifactRequest?.hardAnswerOnly,
+      newParentCommitted,
+      manualPhaseCommitted:
+        input.artifactRequest?.manualPhaseCommitted,
+      automaticPhaseIdentityTransitionCommitted,
+      freshCodingChildImplementationCommitted,
+      manualCorrection: input.artifactRequest?.manualCorrection,
+      manualArtifactRegeneration: Boolean(
+        input.artifactRequest?.artifactRegenerationArtifacts?.length
+      ),
+      manualScreenCapture: Boolean(input.artifactRequest?.manualScreen),
+    });
+  const requestedArtifacts = input.artifactRequest
+    ?.artifactRegenerationArtifacts?.length
+    ? [...new Set(input.artifactRequest.artifactRegenerationArtifacts)]
+    : input.artifactRequest?.manualScreen
+      ? resolveManualScreenGenerationRequestedArtifacts({
+          requiredArtifacts,
+          questionType: responseOwner.questionType,
+          boundVoicePrimaryAsk:
+            input.artifactRequest.manualScreen.boundVoicePrimaryAsk,
+          primaryAskIntent: input.subtaskIntent ?? "unknown",
+        })
+      : resolveAdvisorGenerationRequestedArtifacts({
+          forceAnswerOnly: artifactGenerationAuthority.answerOnly,
+          settledPlanArtifacts: resolveArtifactPolicySections({
+            artifactPolicy,
+            artifactIntent,
+          }),
+        });
   const expectedParentId =
     input.expectedActiveMeetingTask?.parent.id ??
     input.activeMeetingTask?.parent.id ??
@@ -841,6 +906,9 @@ export function buildSettledAdvisorExecutionPlan(input: {
     projectAnchor: input.projectAnchor,
     artifactDisposition: artifactPolicy.disposition,
     requiredArtifacts,
+    requestedArtifacts,
+    artifactGenerationAuthority:
+      artifactGenerationAuthority.authority,
     responseIntent,
     contextReadScope,
     artifactIntent,
@@ -940,6 +1008,8 @@ export function buildSettledAdvisorExecutionPlan(input: {
       : responsePlaybook?.id,
     playbookPhase,
     requiredArtifacts,
+    requestedArtifacts,
+    artifactGenerationAuthority,
     memoryPolicy: {
       questionType: responseOwner.questionType,
       useCase: memoryUseCase,
@@ -1016,6 +1086,9 @@ export function rebaseSettledAdvisorExecutionPlanAfterOwnedParentMutation(
       projectAnchor: rebased.memoryPolicy.projectAnchor,
       artifactDisposition: rebased.artifactPolicy.disposition,
       requiredArtifacts: rebased.requiredArtifacts,
+      requestedArtifacts: rebased.requestedArtifacts,
+      artifactGenerationAuthority:
+        rebased.artifactGenerationAuthority.authority,
       responseIntent: rebased.responseIntent,
       contextReadScope: rebased.contextReadScope,
       artifactIntent: rebased.artifactIntent,
@@ -1209,6 +1282,12 @@ export function formatSettledAdvisorExecutionPlanForTrace(
     settledExecutionPlanParentTrajectoryPlaybookPhase:
       plan.parentTrajectoryPlaybook?.phase,
     settledExecutionPlanRequiredArtifacts: plan.requiredArtifacts,
+    settledExecutionPlanRequestedArtifacts:
+      plan.requestedArtifacts,
+    settledExecutionPlanArtifactGenerationAuthority:
+      plan.artifactGenerationAuthority.authority,
+    settledExecutionPlanArtifactGenerationReason:
+      plan.artifactGenerationAuthority.reason,
     settledExecutionPlanMemoryUseCase: plan.memoryPolicy.useCase,
     settledExecutionPlanMemoryQuestionType:
       plan.memoryPolicy.questionType,
@@ -1454,6 +1533,8 @@ function createExecutionPlanId(input: {
   projectAnchor?: string;
   artifactDisposition: string;
   requiredArtifacts: AnswerArtifactSection[];
+  requestedArtifacts: AnswerArtifactSection[];
+  artifactGenerationAuthority: string;
   responseIntent: SettledAdvisorResponseIntent;
   contextReadScope: AdvisorContextReadScope;
   artifactIntent: SettledAdvisorArtifactIntent;
@@ -1481,6 +1562,8 @@ function createExecutionPlanId(input: {
       input.projectAnchor ?? "",
       input.artifactDisposition,
       input.requiredArtifacts.join(","),
+      input.requestedArtifacts.join(","),
+      input.artifactGenerationAuthority,
       input.responseIntent,
       input.contextReadScope,
       input.artifactIntent,

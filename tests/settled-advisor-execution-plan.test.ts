@@ -159,6 +159,111 @@ test("keeps Screen vision routing inside the shared execution plan", () => {
   );
 });
 
+test("freezes manual Screen presentation bounds separately from task writes", () => {
+  const implementationPlaybook = {
+    ...playbook("coding"),
+    phase: "implementation_validation" as const,
+  };
+  const task: ActiveMeetingTask = {
+    ...activeTask("general-system-design", {
+      playbook: playbook("general-system-design"),
+      playbookPhase: "design_framing",
+    }),
+    child: {
+      id: "child-code",
+      createdAt: 30,
+      updatedAt: 30,
+      questionType: "coding",
+      relation: "child-probe",
+      intent: "unknown",
+      question: "Implement the cache.",
+      basedOnTurnIds: [],
+      basedOnObservationIds: ["screen-code"],
+      phaseState: {
+        phase: "implementation_validation",
+        revision: 1,
+        playbook: implementationPlaybook,
+        phaseProgress: {},
+      },
+    },
+  };
+  const childSettlement = settlement({
+    sourceKind: "screen",
+    sourceTurnIds: [],
+    sourceObservationIds: ["screen-code"],
+    questionType: "coding",
+    relation: "child-probe",
+    parentMutationAuthorized: false,
+  });
+  const common = {
+    settlement: childSettlement,
+    activeMeetingTask: task,
+    preBoundaryQuestionType: "general-system-design",
+    taskBoundaryCommitted: false,
+    childOwnsResponse: true,
+    providerSnapshot: providers,
+    playbook: implementationPlaybook,
+    memoryUseCase: "coding_interview" as const,
+    askFrame: "direct-answer" as const,
+    topicDomain: "backend" as const,
+    sourceQuestion: "Implement the cache.",
+    subtaskIntent: "unknown" as const,
+  };
+  const voicePlan = buildSettledAdvisorExecutionPlan(common);
+  const screenPlan = buildSettledAdvisorExecutionPlan({
+    ...common,
+    artifactRequest: {
+      manualScreen: { boundVoicePrimaryAsk: false },
+    },
+  });
+
+  assert.equal(screenPlan.artifactPolicy.allowCode, false);
+  assert.deepEqual(voicePlan.requestedArtifacts, ["answer"]);
+  assert.deepEqual(screenPlan.requestedArtifacts, [
+    "answer",
+    "code",
+    "complexity",
+  ]);
+  assert.equal(
+    screenPlan.artifactGenerationAuthority.reason,
+    "manual-screen-capture-authority"
+  );
+  assert.deepEqual(
+    formatSettledAdvisorExecutionPlanForTrace(screenPlan)
+      .settledExecutionPlanRequestedArtifacts,
+    screenPlan.requestedArtifacts
+  );
+});
+
+test("bounds a Voice-owned Screen recovery inside the shared plan", () => {
+  const implementationPlaybook = {
+    ...playbook("coding"),
+    phase: "implementation_validation" as const,
+  };
+  const plan = buildSettledAdvisorExecutionPlan({
+    settlement: settlement({ sourceKind: "screen" }),
+    activeMeetingTask: activeTask("coding", {
+      playbook: implementationPlaybook,
+      playbookPhase: "implementation_validation",
+    }),
+    taskBoundaryCommitted: false,
+    childOwnsResponse: false,
+    providerSnapshot: providers,
+    playbook: implementationPlaybook,
+    memoryUseCase: "coding_interview",
+    askFrame: "direct-answer",
+    topicDomain: "backend",
+    sourceQuestion: "Explain lines 35 through 38.",
+    subtaskIntent: "concept-probe",
+    artifactRequest: {
+      manualScreen: { boundVoicePrimaryAsk: true },
+    },
+  });
+
+  assert.deepEqual(plan.requiredArtifacts, ["answer", "code", "complexity"]);
+  assert.deepEqual(plan.requestedArtifacts, ["answer"]);
+});
+
 test("hides an old project parent behind a committed new-parent settlement", () => {
   const oldProject = activeTask("project-deep-dive", {
     id: "parent-oasis",

@@ -91,7 +91,11 @@ test("routes settled Screen policy through the shared execution plan", () => {
   assert.ok(postModelStart > modelStart && postModelEnd > postModelStart);
   assert.match(preModelBlock, /requiresVision: true/);
   assert.match(preModelBlock, /screenExecutionPlan\.modelRoute/);
-  assert.match(preModelBlock, /screenExecutionPlan\.requiredArtifacts/);
+  assert.match(preModelBlock, /screenExecutionPlan\.requestedArtifacts/);
+  assert.doesNotMatch(
+    source,
+    /resolveManualScreenGenerationRequestedArtifacts/
+  );
   assert.match(
     preModelBlock,
     /screenExecutionPlan\.questionTypeConsumerObservation/

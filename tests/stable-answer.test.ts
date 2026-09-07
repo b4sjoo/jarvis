@@ -8,10 +8,10 @@ import {
   decideStableAnswerCommit,
   formatStableAnswerCommitForTrace,
   isAnswerDeliveryLockActive,
-  resolveAuthorizedAnswerArtifacts,
   updateAnswerDeliveryProgress,
 } from "../src/lib/meeting/stable-answer.js";
 import { parseMeetingAnswer } from "../src/lib/meeting/meeting-answer.js";
+import { resolveArtifactPolicySections } from "../src/lib/meeting/response-artifact-authorization.js";
 import type {
   AdvisorSuggestion,
   TranscriptTurn,
@@ -361,7 +361,7 @@ test("requires a complete Coding Artifact family and exact visible owner", () =>
 });
 
 test("projects the Code family into only its phase-authorized sections", () => {
-  const authorized = resolveAuthorizedAnswerArtifacts({
+  const authorized = resolveArtifactPolicySections({
     artifactPolicy: {
       disposition: "parent-owner-authorized",
       reason: "test",
@@ -379,7 +379,7 @@ test("projects the Code family into only its phase-authorized sections", () => {
 
   assert.deepEqual(authorized, ["answer", "code"]);
 
-  const complexityOnly = resolveAuthorizedAnswerArtifacts({
+  const complexityOnly = resolveArtifactPolicySections({
     artifactPolicy: {
       disposition: "parent-owner-authorized",
       reason: "test",

@@ -324,6 +324,9 @@ test("keeps same-phase responses Answer-only and preserves committed phase autho
   const manualPhase = decideAdvisorArtifactGenerationAuthority({
     manualPhaseCommitted: true,
   });
+  const manualScreen = decideAdvisorArtifactGenerationAuthority({
+    manualScreenCapture: true,
+  });
 
   assert.deepEqual(
     [samePhase.authority, samePhase.answerOnly],
@@ -336,6 +339,10 @@ test("keeps same-phase responses Answer-only and preserves committed phase autho
   );
   assert.deepEqual(
     [manualPhase.authority, manualPhase.answerOnly],
+    ["artifact-authorized", false]
+  );
+  assert.deepEqual(
+    [manualScreen.authority, manualScreen.answerOnly],
     ["artifact-authorized", false]
   );
 });

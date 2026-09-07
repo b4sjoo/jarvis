@@ -52,6 +52,7 @@ export function decideAdvisorArtifactGenerationAuthority(input: {
   freshCodingChildImplementationCommitted?: boolean;
   manualCorrection?: boolean;
   manualArtifactRegeneration?: boolean;
+  manualScreenCapture?: boolean;
 }): AdvisorArtifactGenerationAuthorityDecision {
   if (input.hardAnswerOnly) {
     return {
@@ -72,6 +73,13 @@ export function decideAdvisorArtifactGenerationAuthority(input: {
       authority: "artifact-authorized",
       answerOnly: false,
       reason: "manual-artifact-regeneration-authority",
+    };
+  }
+  if (input.manualScreenCapture) {
+    return {
+      authority: "artifact-authorized",
+      answerOnly: false,
+      reason: "manual-screen-capture-authority",
     };
   }
   if (input.automaticPhaseIdentityTransitionCommitted) {
@@ -160,6 +168,34 @@ export function resolveAdvisorGenerationRequestedArtifacts(input: {
   if (!requestedArtifacts?.length) return ["answer"];
 
   return [...new Set(requestedArtifacts)];
+}
+
+export function resolveArtifactPolicySections(input: {
+  artifactPolicy: ResponseArtifactMutationAuthorization;
+  artifactIntent:
+    | "none"
+    | "preserve"
+    | "revise-code"
+    | "revise-complexity"
+    | "revise-whiteboard";
+}): AnswerArtifactSection[] {
+  const authorized: AnswerArtifactSection[] = ["answer"];
+  const codeFamilyRevision =
+    input.artifactIntent === "revise-code" ||
+    input.artifactIntent === "revise-complexity";
+  if (codeFamilyRevision && input.artifactPolicy.allowCode) {
+    authorized.push("code");
+  }
+  if (codeFamilyRevision && input.artifactPolicy.allowComplexity) {
+    authorized.push("complexity");
+  }
+  if (
+    input.artifactIntent === "revise-whiteboard" &&
+    input.artifactPolicy.allowWhiteboard
+  ) {
+    authorized.push("whiteboard");
+  }
+  return authorized;
 }
 
 export function formatManualPhaseArtifactContractForTrace(input: {

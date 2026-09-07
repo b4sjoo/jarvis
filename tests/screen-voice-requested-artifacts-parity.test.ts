@@ -6,12 +6,7 @@ import type { CurrentQuestionSettlementDecision } from "../src/lib/meeting/curre
 import { selectInterviewPlaybook } from "../src/lib/meeting/interview-playbook.js";
 import type { MeetingModelProviderSnapshot } from "../src/lib/meeting/meeting-model-route.js";
 import { decidePlaybookPhaseProgression } from "../src/lib/meeting/playbook-phase.js";
-import {
-  resolveManualScreenGenerationRequestedArtifacts,
-  resolveManualScreenPlaybookSubtaskIntent,
-} from "../src/lib/meeting/screen-artifact-authority.js";
 import { buildSettledAdvisorExecutionPlan } from "../src/lib/meeting/settled-advisor-execution-plan.js";
-import { resolveAuthorizedAnswerArtifacts } from "../src/lib/meeting/stable-answer.js";
 import type { CanonicalQuestionType } from "../src/lib/meeting/task-taxonomy.js";
 import type {
   InterviewPlaybookPhase,
@@ -39,7 +34,8 @@ interface ArtifactParityCase {
     subtaskIntent?: InterviewSubtaskIntent;
   };
   expected: {
-    requestedArtifacts: AnswerArtifactSection[];
+    voiceRequestedArtifacts: AnswerArtifactSection[];
+    screenRequestedArtifacts: AnswerArtifactSection[];
   };
 }
 
@@ -51,7 +47,10 @@ const cases: ArtifactParityCase[] = [
       relation: "new-parent",
       question: "Tell me about a difficult disagreement.",
     },
-    expected: { requestedArtifacts: ["answer"] },
+    expected: {
+      voiceRequestedArtifacts: ["answer"],
+      screenRequestedArtifacts: ["answer"],
+    },
   },
   {
     id: "coding-baseline",
@@ -60,7 +59,10 @@ const cases: ArtifactParityCase[] = [
       relation: "new-parent",
       question: "Solve longest substring without repeating characters.",
     },
-    expected: { requestedArtifacts: ["answer"] },
+    expected: {
+      voiceRequestedArtifacts: ["answer"],
+      screenRequestedArtifacts: ["answer"],
+    },
   },
   {
     id: "coding-optimized-pseudocode",
@@ -72,7 +74,10 @@ const cases: ArtifactParityCase[] = [
       phaseProgress: { baseline_reasoning: true },
       subtaskIntent: "complexity-probe",
     },
-    expected: { requestedArtifacts: ["answer", "complexity"] },
+    expected: {
+      voiceRequestedArtifacts: ["answer"],
+      screenRequestedArtifacts: ["answer", "complexity"],
+    },
   },
   {
     id: "coding-implementation-phase",
@@ -87,7 +92,8 @@ const cases: ArtifactParityCase[] = [
       },
     },
     expected: {
-      requestedArtifacts: ["answer", "code", "complexity"],
+      voiceRequestedArtifacts: ["answer"],
+      screenRequestedArtifacts: ["answer", "code", "complexity"],
     },
   },
   {
@@ -104,7 +110,8 @@ const cases: ArtifactParityCase[] = [
       subtaskIntent: "implementation-probe",
     },
     expected: {
-      requestedArtifacts: ["answer", "code", "complexity"],
+      voiceRequestedArtifacts: ["answer"],
+      screenRequestedArtifacts: ["answer", "code", "complexity"],
     },
   },
   {
@@ -117,7 +124,10 @@ const cases: ArtifactParityCase[] = [
       phaseProgress: { baseline_reasoning: true },
       subtaskIntent: "complexity-probe",
     },
-    expected: { requestedArtifacts: ["answer", "complexity"] },
+    expected: {
+      voiceRequestedArtifacts: ["answer"],
+      screenRequestedArtifacts: ["answer", "complexity"],
+    },
   },
   {
     id: "general-system-design-whiteboard",
@@ -126,7 +136,10 @@ const cases: ArtifactParityCase[] = [
       relation: "new-parent",
       question: "Design a URL shortener.",
     },
-    expected: { requestedArtifacts: ["answer", "whiteboard"] },
+    expected: {
+      voiceRequestedArtifacts: ["answer", "whiteboard"],
+      screenRequestedArtifacts: ["answer", "whiteboard"],
+    },
   },
   {
     id: "ai-ml-system-design-whiteboard",
@@ -135,7 +148,10 @@ const cases: ArtifactParityCase[] = [
       relation: "new-parent",
       question: "Design a RAG system for trip planning.",
     },
-    expected: { requestedArtifacts: ["answer", "whiteboard"] },
+    expected: {
+      voiceRequestedArtifacts: ["answer", "whiteboard"],
+      screenRequestedArtifacts: ["answer", "whiteboard"],
+    },
   },
   {
     id: "project-deep-dive-answer",
@@ -144,7 +160,10 @@ const cases: ArtifactParityCase[] = [
       relation: "new-parent",
       question: "Why did you choose NDJSON for Oasis?",
     },
-    expected: { requestedArtifacts: ["answer"] },
+    expected: {
+      voiceRequestedArtifacts: ["answer"],
+      screenRequestedArtifacts: ["answer"],
+    },
   },
   {
     id: "field-knowledge-answer",
@@ -153,7 +172,10 @@ const cases: ArtifactParityCase[] = [
       relation: "new-parent",
       question: "How does HNSW search work?",
     },
-    expected: { requestedArtifacts: ["answer"] },
+    expected: {
+      voiceRequestedArtifacts: ["answer"],
+      screenRequestedArtifacts: ["answer"],
+    },
   },
   {
     id: "unknown-current-only-answer",
@@ -162,12 +184,15 @@ const cases: ArtifactParityCase[] = [
       relation: "unknown",
       question: "Could you explain that?",
     },
-    expected: { requestedArtifacts: ["answer"] },
+    expected: {
+      voiceRequestedArtifacts: ["answer"],
+      screenRequestedArtifacts: ["answer"],
+    },
   },
 ];
 
 for (const parityCase of cases) {
-  test(`keeps Voice and Screen requested artifacts aligned: ${parityCase.id}`, () => {
+  test(`compiles Voice and Screen requested artifacts independently: ${parityCase.id}`, () => {
     const phaseDecision = decidePlaybookPhaseProgression({
       questionType: parityCase.input.questionType,
       currentPhase: parityCase.input.currentPhase,
@@ -209,38 +234,38 @@ for (const parityCase of cases) {
       subtaskIntent: parityCase.input.subtaskIntent,
       createdAt: 100,
     });
-    const voiceRequestedArtifacts = resolveAuthorizedAnswerArtifacts({
-      artifactPolicy: voicePlan.artifactPolicy,
-      artifactIntent: voicePlan.artifactIntent,
+    const screenPlan = buildSettledAdvisorExecutionPlan({
+      settlement: {
+        ...currentSettlement,
+        sourceKind: "screen",
+        sourceTurnIds: [],
+        sourceObservationIds: ["screen-parity"],
+      },
+      activeMeetingTask: task,
+      taskBoundaryCommitted: parityCase.input.relation === "new-parent",
+      childOwnsResponse: false,
+      providerSnapshot: providers,
+      playbook: phasedPlaybook,
+      memoryUseCase: "meeting_assistant",
+      askFrame: "direct-answer",
+      topicDomain: "backend",
+      sourceQuestion: parityCase.input.question,
+      subtaskIntent: parityCase.input.subtaskIntent,
+      artifactRequest: {
+        manualScreen: { boundVoicePrimaryAsk: false },
+      },
+      createdAt: 100,
     });
-    const screenSubtaskIntent =
-      resolveManualScreenPlaybookSubtaskIntent({
-        questionType: parityCase.input.questionType,
-        inferredIntent: parityCase.input.subtaskIntent,
-        boundVoicePrimaryAsk: false,
-      });
-    const screenRequestedArtifacts =
-      resolveManualScreenGenerationRequestedArtifacts({
-        requiredArtifacts: voicePlan.requiredArtifacts,
-        questionType: voicePlan.questionType,
-        boundVoicePrimaryAsk: false,
-        primaryAskIntent: screenSubtaskIntent,
-      });
 
     assert.deepEqual(
-      voiceRequestedArtifacts,
-      parityCase.expected.requestedArtifacts,
+      voicePlan.requestedArtifacts,
+      parityCase.expected.voiceRequestedArtifacts,
       `${parityCase.id}: unexpected Voice requestedArtifacts`
     );
     assert.deepEqual(
-      screenRequestedArtifacts,
-      parityCase.expected.requestedArtifacts,
+      screenPlan.requestedArtifacts,
+      parityCase.expected.screenRequestedArtifacts,
       `${parityCase.id}: unexpected Screen requestedArtifacts`
-    );
-    assert.deepEqual(
-      screenRequestedArtifacts,
-      voiceRequestedArtifacts,
-      `${parityCase.id}: Voice/Screen requestedArtifacts diverged`
     );
   });
 }
