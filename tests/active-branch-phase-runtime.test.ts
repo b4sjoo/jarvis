@@ -443,12 +443,16 @@ test("reduces and commits a child-owned phase mutation without changing parent p
     memoryUseCase: "coding_interview",
     askFrame: "direct-answer",
     topicDomain: "backend",
+    subtaskIntent: "implementation-probe",
     explicitTaskMutationCommand: {
       kind: "set-phase",
       owner: { kind: "child", id: "child-code" },
       phase: "implementation_validation",
     },
     taskMutationCommittedBeforeAdvisor: true,
+    artifactRequest: {
+      automaticPhaseIdentityTransitionCommitted: true,
+    },
   });
   const transaction = createTaskLifecycleTransaction({
     plan,
@@ -467,6 +471,11 @@ test("reduces and commits a child-owned phase mutation without changing parent p
   });
   assert.equal(reduction.authorized, true);
   assert.equal(reduction.mutationApplied, true);
+  assert.deepEqual(plan.requestedArtifacts, [
+    "answer",
+    "code",
+    "complexity",
+  ]);
   assert.equal(reduction.parent?.playbookPhase, "design_framing");
   assert.equal(
     reduction.parent?.child?.phaseState?.phase,

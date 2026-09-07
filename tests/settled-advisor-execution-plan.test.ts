@@ -1633,11 +1633,15 @@ test("freezes an explicit phase advance independently from response and artifact
       owner: { kind: "parent", id: "parent-a" },
       phase: "design_framing",
     },
+    artifactRequest: {
+      manualPhaseCommitted: true,
+    },
   });
 
   assert.equal(plan.responseIntent, "advise");
   assert.equal(plan.contextReadScope, "active-parent-read");
   assert.equal(plan.artifactIntent, "revise-whiteboard");
+  assert.deepEqual(plan.requestedArtifacts, ["answer", "whiteboard"]);
   assert.deepEqual(plan.taskMutationPolicy, {
     kind: "set-phase",
     owner: { kind: "parent", id: "parent-a" },
@@ -1695,6 +1699,9 @@ test("freezes phase-owned Coding artifact authority across Manual Next", () => {
         owner: { kind: "parent", id: "parent-a" },
         phase: current.phase,
       },
+      artifactRequest: {
+        manualPhaseCommitted: true,
+      },
     });
 
     assert.equal(plan.playbookPhase, current.phase);
@@ -1704,12 +1711,47 @@ test("freezes phase-owned Coding artifact authority across Manual Next", () => {
       plan.artifactPolicy.allowComplexity,
       current.allowComplexity
     );
+    assert.deepEqual(plan.requestedArtifacts, current.required);
     assert.deepEqual(plan.taskMutationPolicy, {
       kind: "set-phase",
       owner: { kind: "parent", id: "parent-a" },
       phase: current.phase,
     });
   }
+});
+
+test("freezes an explicit Artifact regeneration request in the Plan", () => {
+  const codingPlaybook = {
+    ...playbook("coding"),
+    phase: "implementation_validation" as const,
+  };
+  const plan = buildSettledAdvisorExecutionPlan({
+    settlement: settlement({
+      questionType: "coding",
+      relation: "followup-parent",
+      parentMutationAuthorized: false,
+    }),
+    activeMeetingTask: activeTask("coding", {
+      playbook: codingPlaybook,
+      playbookPhase: "implementation_validation",
+    }),
+    taskBoundaryCommitted: false,
+    childOwnsResponse: false,
+    providerSnapshot: providers,
+    playbook: codingPlaybook,
+    memoryUseCase: "coding_interview",
+    askFrame: "direct-answer",
+    topicDomain: "backend",
+    artifactRequest: {
+      artifactRegenerationArtifacts: ["code", "complexity"],
+    },
+  });
+
+  assert.deepEqual(plan.requestedArtifacts, ["code", "complexity"]);
+  assert.equal(
+    plan.artifactGenerationAuthority.reason,
+    "manual-artifact-regeneration-authority"
+  );
 });
 
 test("freezes an authorized bounded recent history read without changing mutation policy", () => {
