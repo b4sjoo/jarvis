@@ -131,6 +131,39 @@ const captureScreenFinallySource = findDescendant(
       .getText(sourceFile)
       .includes("screenOperationCoordinatorRef.current.release(screenOperationId)")
 ).finallyBlock.getText(sourceFile);
+const runAdvisorDeclaration = findNamedDeclaration(sourceFile, "runAdvisor");
+const advisorScreenSourceReadDeclaration = findDescendant(
+  runAdvisorDeclaration,
+  (node) =>
+    ts.isVariableDeclaration(node) &&
+    node.name.getText(sourceFile) === "advisorScreenSourceRead"
+);
+const advisorScreenSourceReadSource =
+  advisorScreenSourceReadDeclaration.initializer.getText(sourceFile);
+const advisorStreamSuggestionCall = findDescendant(
+  runAdvisorDeclaration,
+  (node) =>
+    ts.isCallExpression(node) &&
+    node.expression
+      .getText(sourceFile)
+      .includes("advisorEngineRef.current.streamSuggestion")
+);
+const advisorStreamRequest = advisorStreamSuggestionCall.arguments[0];
+assert.ok(ts.isObjectLiteralExpression(advisorStreamRequest));
+const advisorStreamRequestProperty = (name) => {
+  const property = advisorStreamRequest.properties.find(
+    (candidate) =>
+      ts.isPropertyAssignment(candidate) &&
+      candidate.name.getText(sourceFile) === name
+  );
+  assert.ok(property, `missing Advisor stream request property ${name}`);
+  return property.initializer.getText(sourceFile);
+};
+const advisorStreamModeSource = advisorStreamRequestProperty("mode");
+const advisorStreamResponseActionSource =
+  advisorStreamRequestProperty("responseAction");
+const advisorStreamSourceImagesSource =
+  advisorStreamRequestProperty("sourceImages");
 
 const identifiers = new Set();
 for (const source of [
@@ -265,6 +298,30 @@ const { ScreenOperationCoordinator } = await import(
       "lib",
       "meeting",
       "screen-operation-coordinator.js"
+    )
+  )
+);
+const screenScopeModule = await import(
+  pathToFileURL(
+    path.join(
+      root,
+      ".tmp-tests",
+      "src",
+      "lib",
+      "meeting",
+      "screen-task-scope.js"
+    )
+  )
+);
+const advisorPromptModule = await import(
+  pathToFileURL(
+    path.join(
+      root,
+      ".tmp-tests",
+      "src",
+      "lib",
+      "meeting",
+      "advisor-prompt.js"
     )
   )
 );
@@ -602,6 +659,132 @@ function startVoiceResolution(harness, handle) {
     triggerTurnId: "turn-current",
   });
 }
+
+test("carries an exact Screen source through the production Advisor request fields", { concurrency: false }, () => {
+  const task = {
+    id: "screen-parent",
+    runtimeRevision: 3,
+    source: "screen",
+    parent: {
+      id: "screen-parent",
+      questionType: "coding",
+      topic: "Implement an LRU cache.",
+      playbookPhase: "optimized_pseudocode",
+      phaseProgress: { baseline_reasoning: true },
+      supportedFactAnchors: [],
+      revisions: 3,
+      createdAt: 1,
+      updatedAt: 3,
+    },
+    screen: {
+      activeScreenTaskId: "canonical-screen:screen-original",
+      observationId: "screen-newer",
+      basedOnObservationId: "screen-newer",
+    },
+  };
+  const observations = [
+    {
+      id: "screen-original",
+      capturedAt: 1,
+      source: "hotkey",
+      imageBase64: "original-image",
+      imageMediaType: "image/jpeg",
+      changed: true,
+    },
+    {
+      id: "screen-newer",
+      capturedAt: 2,
+      source: "hotkey",
+      imageBase64: "newer-image",
+      imageMediaType: "image/jpeg",
+      changed: true,
+    },
+  ];
+
+  for (const current of [
+    {
+      advisorPromptMode: "response-action",
+      source: "response-action",
+      responseAction: "next-phase",
+    },
+    {
+      advisorPromptMode: "regenerate",
+      source: "regenerate",
+      responseAction: undefined,
+    },
+  ]) {
+    const environment = {
+      resolveAdvisorScreenSourceRead:
+        screenScopeModule.resolveAdvisorScreenSourceRead,
+      advisorPromptMode: current.advisorPromptMode,
+      advisorJob: {
+        source: current.source,
+        expectedSessionId: "session-a",
+        expectedParentId: "screen-parent",
+        runtimeCommitToken: { runtimeEpoch: 4 },
+        logicalQuestionUnit: { sourceTurnIds: [] },
+      },
+      advisorSourceReadContext: {
+        sessionId: "session-a",
+        screenObservations: observations,
+      },
+      runtimeEpochRef: { current: 4 },
+      advisorSourceReadTask: task,
+      preferredScreenObservationIds: ["screen-original"],
+      explicitVisibleSourceAction: true,
+      promptContext: { advisorPromptSourceTurnIds: [] },
+      advisorModelRoute: { provider: { curl: "{{IMAGE}}" } },
+      options: { responseAction: current.responseAction },
+    };
+    const context = vm.createContext(environment);
+    const screenRead = vm.runInContext(
+      transpile(`(() => ${advisorScreenSourceReadSource})()`),
+      context
+    );
+    environment.advisorScreenSourceRead = screenRead;
+    const request = vm.runInContext(
+      transpile(`({
+        mode: ${advisorStreamModeSource},
+        responseAction: ${advisorStreamResponseActionSource},
+        sourceImages: ${advisorStreamSourceImagesSource}
+      })`),
+      context
+    );
+
+    assert.equal(screenRead.disposition, "attached");
+    assert.equal(screenRead.sourceScreenObservationId, "screen-original");
+    assert.equal(request.mode, current.advisorPromptMode);
+    assert.equal(request.responseAction, current.responseAction);
+    assert.equal(request.sourceImages.length, 1);
+    assert.equal(request.sourceImages[0].base64, "original-image");
+    assert.equal(request.sourceImages[0].mediaType, "image/jpeg");
+
+    const prompt = advisorPromptModule.buildAdvisorUserMessage(
+      {
+        transcript: "",
+        screenContext: "Implement an LRU cache.",
+        taskRuntime: { revision: 3 },
+        activeMeetingTask: task,
+        rollingSummary: "",
+        userProfileContext: "",
+        glossaryText: "",
+      },
+      {
+        mode: request.mode,
+        responseAction: request.responseAction,
+        answerProfile: "coding",
+        currentSuggestion: "Answer: Explain the current phase.",
+      }
+    );
+    assert.match(prompt, new RegExp(`<mode>\\n${current.advisorPromptMode}\\n</mode>`));
+    if (current.responseAction) {
+      assert.match(
+        prompt,
+        new RegExp(`<response_action>\\n${current.responseAction}\\n</response_action>`)
+      );
+    }
+  }
+});
 
 test("cancels a stale Relation operation before its final Advisor handoff", { concurrency: false }, async () => {
   const harness = createHarness();

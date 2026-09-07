@@ -468,7 +468,11 @@ export function resolveAdvisorScreenSourceRead<
     ...extra,
   });
 
-  if (input.mode !== "screen-anchored") {
+  const requiresPreferredObservation = Boolean(
+    input.requirePreferredObservation &&
+      input.preferredObservationIds?.length
+  );
+  if (input.mode !== "screen-anchored" && !requiresPreferredObservation) {
     return result("not-screen-anchored");
   }
   if (input.expectedSessionId !== input.currentSessionId) {
@@ -493,8 +497,7 @@ export function resolveAdvisorScreenSourceRead<
       )
     );
   if (
-    input.requirePreferredObservation &&
-    input.preferredObservationIds?.length &&
+    requiresPreferredObservation &&
     !preferredObservationId
   ) {
     return result("preferred-observation-unavailable", {

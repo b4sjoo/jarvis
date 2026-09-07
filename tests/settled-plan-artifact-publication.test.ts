@@ -4,8 +4,10 @@ import type { ActiveMeetingTask } from "../src/lib/meeting/active-meeting-task.j
 import type { CurrentQuestionSettlementDecision } from "../src/lib/meeting/current-question-settlement.js";
 import { selectInterviewPlaybook } from "../src/lib/meeting/interview-playbook.js";
 import { parseMeetingAnswer } from "../src/lib/meeting/meeting-answer.js";
+import { buildAdvisorUserMessage } from "../src/lib/meeting/advisor-prompt.js";
 import type { MeetingModelProviderSnapshot } from "../src/lib/meeting/meeting-model-route.js";
 import { authorizeManualScreenPresentationArtifacts } from "../src/lib/meeting/screen-artifact-authority.js";
+import { resolveAdvisorScreenSourceRead } from "../src/lib/meeting/screen-task-scope.js";
 import { buildSettledAdvisorExecutionPlan } from "../src/lib/meeting/settled-advisor-execution-plan.js";
 import { commitStableAnswerRevision } from "../src/lib/meeting/stable-answer.js";
 import type {
@@ -240,4 +242,144 @@ test("does not let parsed Code expand a Voice-owned Screen recovery Plan", () =>
     stable!.suggestion.meetingAnswer!.sections.code!,
     /invented_replacement/
   );
+});
+
+test("publishes a phase-owned response action from its exact Screen source", () => {
+  const playbook = implementationPlaybook();
+  const task: ActiveMeetingTask = {
+    id: "coding-parent",
+    runtimeRevision: 3,
+    source: "screen",
+    parent: {
+      id: "coding-parent",
+      questionType: "coding",
+      topic: "Implement an LRU cache.",
+      playbookPhase: "implementation_validation",
+      phaseProgress: {
+        baseline_reasoning: true,
+        optimized_pseudocode: true,
+      },
+      supportedFactAnchors: [],
+      revisions: 3,
+      createdAt: 1,
+      updatedAt: 3,
+    },
+    screen: {
+      activeScreenTaskId: "canonical-screen:screen-original",
+      observationId: "screen-newer",
+      basedOnObservationId: "screen-newer",
+    },
+  };
+  const exactSource = resolveAdvisorScreenSourceRead({
+    mode: "response-action",
+    expectedSessionId: "session-a",
+    currentSessionId: "session-a",
+    expectedRuntimeEpoch: 1,
+    currentRuntimeEpoch: 1,
+    expectedParentId: "coding-parent",
+    activeMeetingTask: task,
+    screenObservations: [
+      {
+        id: "screen-original",
+        capturedAt: 1,
+        source: "hotkey",
+        imageBase64: "original-image",
+        imageMediaType: "image/jpeg",
+        changed: true,
+      },
+      {
+        id: "screen-newer",
+        capturedAt: 2,
+        source: "hotkey",
+        imageBase64: "newer-image",
+        imageMediaType: "image/jpeg",
+        changed: true,
+      },
+    ],
+    preferredObservationIds: ["screen-original"],
+    requirePreferredObservation: true,
+    providerSupportsImages: true,
+  });
+  assert.equal(exactSource.disposition, "attached");
+  assert.equal(exactSource.image?.base64, "original-image");
+
+  const prompt = buildAdvisorUserMessage(
+    {
+      transcript: "",
+      screenContext: "Implement an LRU cache.",
+      taskRuntime: { revision: 3 },
+      activeMeetingTask: task,
+      interviewPlaybook: playbook,
+      rollingSummary: "",
+      userProfileContext: "",
+      glossaryText: "",
+    },
+    {
+      mode: "response-action",
+      responseAction: "next-phase",
+      answerProfile: "coding",
+      currentSuggestion: "Answer: Start with the baseline.",
+    }
+  );
+  assert.match(prompt, /<mode>\nresponse-action\n<\/mode>/);
+  assert.match(prompt, /<response_action>\nnext-phase\n<\/response_action>/);
+
+  const plan = buildSettledAdvisorExecutionPlan({
+    settlement: {
+      ...settlement(),
+      relation: "followup-parent",
+      parentMutationAuthorized: false,
+      sourceObservationIds: ["screen-original"],
+    },
+    activeMeetingTask: task,
+    taskBoundaryCommitted: false,
+    childOwnsResponse: false,
+    providerSnapshot: providers,
+    playbook,
+    memoryUseCase: "coding_interview",
+    askFrame: "direct-answer",
+    topicDomain: "backend",
+    explicitTaskMutationCommand: {
+      kind: "set-phase",
+      owner: { kind: "parent", id: "coding-parent" },
+      phase: "implementation_validation",
+    },
+    artifactRequest: { manualPhaseCommitted: true },
+    requiresVision: true,
+    createdAt: 3,
+  });
+  const candidate = suggestion(
+    "phase-candidate",
+    "Validate the implementation against misses and eviction.",
+    "def get(key): return cache.get(key, -1)"
+  );
+  const selection = authorizeManualScreenPresentationArtifacts({
+    requestedArtifacts: plan.requestedArtifacts,
+    parsedAnswer: candidate.meetingAnswer!,
+  });
+  const stable = commitStableAnswerRevision({
+    candidate,
+    authorizedArtifacts: selection.authorizedArtifacts,
+    taskId: "coding-parent",
+    sectionOwner: { kind: "parent-mainline", parentId: "coding-parent" },
+    logicalQuestionUnitId: plan.logicalQuestionUnitId,
+    logicalQuestionRevision: plan.logicalQuestionRevision,
+    sessionId: plan.sessionId,
+    runtimeEpoch: plan.runtimeEpoch,
+    questionSourceHash: plan.sourceHash,
+    settlementId: plan.settlementId,
+    committedAt: 5,
+  });
+
+  assert.deepEqual(plan.requestedArtifacts, [
+    "answer",
+    "code",
+    "complexity",
+  ]);
+  assert.deepEqual(selection.authorizedArtifacts, [
+    "answer",
+    "code",
+    "complexity",
+  ]);
+  assert.match(stable!.suggestion.meetingAnswer!.sections.code!, /cache\.get/);
 });

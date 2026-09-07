@@ -452,6 +452,154 @@ test("prefers an exact settlement observation over the active branch screen", ()
   assert.equal(decision.image?.base64, "recovery-image");
 });
 
+test("reads an exact Screen source for response actions without changing their mode", () => {
+  const base = {
+    expectedSessionId: "session-1",
+    currentSessionId: "session-1",
+    expectedRuntimeEpoch: 4,
+    currentRuntimeEpoch: 4,
+    expectedParentId: "parent-1",
+    activeMeetingTask: {
+      parent: { id: "parent-1" },
+      screen: { observationId: "screen-newer" },
+    },
+    screenObservations: [
+      {
+        id: "screen-original",
+        capturedAt: 1,
+        source: "hotkey" as const,
+        imageBase64: "original-image",
+        imageMediaType: "image/jpeg",
+        changed: true,
+      },
+      {
+        id: "screen-newer",
+        capturedAt: 2,
+        source: "hotkey" as const,
+        imageBase64: "newer-image",
+        imageMediaType: "image/jpeg",
+        changed: true,
+      },
+    ],
+    preferredObservationIds: ["screen-original"],
+    requirePreferredObservation: true,
+    providerSupportsImages: true,
+  };
+
+  for (const mode of ["response-action", "regenerate"] as const) {
+    const decision = resolveAdvisorScreenSourceRead({ ...base, mode });
+    assert.equal(decision.disposition, "attached");
+    assert.equal(decision.selectionSource, "settlement");
+    assert.equal(decision.sourceScreenObservationId, "screen-original");
+    assert.equal(decision.image?.base64, "original-image");
+  }
+});
+
+test("keeps exact Screen source boundaries for response actions", () => {
+  const base = {
+    mode: "response-action" as const,
+    expectedSessionId: "session-1",
+    currentSessionId: "session-1",
+    expectedRuntimeEpoch: 4,
+    currentRuntimeEpoch: 4,
+    expectedParentId: "parent-1",
+    activeMeetingTask: {
+      parent: { id: "parent-1" },
+      screen: { observationId: "screen-newer" },
+    },
+    screenObservations: [
+      {
+        id: "screen-original",
+        capturedAt: 1,
+        source: "hotkey" as const,
+        imageBase64: "original-image",
+        changed: true,
+      },
+      {
+        id: "screen-newer",
+        capturedAt: 2,
+        source: "hotkey" as const,
+        imageBase64: "newer-image",
+        changed: true,
+      },
+    ],
+    preferredObservationIds: ["screen-original"],
+    requirePreferredObservation: true,
+    providerSupportsImages: true,
+  };
+
+  assert.equal(
+    resolveAdvisorScreenSourceRead({
+      ...base,
+      requirePreferredObservation: false,
+    }).disposition,
+    "not-screen-anchored"
+  );
+  assert.equal(
+    resolveAdvisorScreenSourceRead({
+      ...base,
+      preferredObservationIds: [],
+    }).disposition,
+    "not-screen-anchored"
+  );
+  assert.equal(
+    resolveAdvisorScreenSourceRead({
+      ...base,
+      screenObservations: base.screenObservations.slice(1),
+    }).disposition,
+    "preferred-observation-unavailable"
+  );
+  assert.equal(
+    resolveAdvisorScreenSourceRead({
+      ...base,
+      currentSessionId: "session-2",
+    }).disposition,
+    "session-mismatch"
+  );
+  assert.equal(
+    resolveAdvisorScreenSourceRead({
+      ...base,
+      currentRuntimeEpoch: 5,
+    }).disposition,
+    "runtime-epoch-mismatch"
+  );
+  assert.equal(
+    resolveAdvisorScreenSourceRead({
+      ...base,
+      expectedParentId: "parent-2",
+    }).disposition,
+    "parent-mismatch"
+  );
+  assert.equal(
+    resolveAdvisorScreenSourceRead({
+      ...base,
+      providerSupportsImages: false,
+    }).disposition,
+    "provider-image-unsupported"
+  );
+  assert.equal(
+    resolveAdvisorScreenSourceRead({
+      ...base,
+      screenObservations: [
+        { ...base.screenObservations[0], imageBase64: "" },
+        base.screenObservations[1],
+      ],
+    }).disposition,
+    "image-unavailable"
+  );
+  assert.equal(
+    resolveAdvisorScreenSourceRead({
+      ...base,
+      activeMeetingTask: undefined,
+    }).disposition,
+    "no-active-parent"
+  );
+  assert.equal(
+    resolveAdvisorScreenSourceRead(base).disposition,
+    "attached"
+  );
+});
+
 test("does not attach a screenshot across parent or runtime boundaries", () => {
   const base = {
     mode: "screen-anchored" as const,
