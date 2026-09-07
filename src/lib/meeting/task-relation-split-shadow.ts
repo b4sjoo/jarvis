@@ -51,6 +51,121 @@ export interface TaskRelationSplitIdentity {
   manualCorrectionRevision: number;
 }
 
+export interface TaskRelationSplitAffinityResult {
+  operationId?: string;
+  outputHash?: string;
+  identity?: TaskRelationSplitIdentity;
+  settledAt?: number;
+  adjudication?: TaskRelationAffinityAdjudication;
+  unavailableReason?: string;
+  clientError?: boolean;
+}
+
+export interface TaskRelationSplitAffinityOutcome {
+  child: TaskRelationSplitAffinityResult;
+  parent: TaskRelationSplitAffinityResult;
+}
+
+const TASK_RELATION_SPLIT_IDENTITY_KEYS = [
+  "sessionId",
+  "runtimeEpoch",
+  "logicalQuestionUnitId",
+  "logicalQuestionUnitRevision",
+  "sourceSettlementId",
+  "sourceHash",
+  "parentId",
+  "parentRevision",
+  "childId",
+  "manualCorrectionRevision",
+] as const;
+
+export function filterTaskRelationAffinityOutcomeAtCutoff(
+  outcome: TaskRelationSplitAffinityOutcome,
+  cutoffAt: number
+): TaskRelationSplitAffinityOutcome {
+  const filter = (result: TaskRelationSplitAffinityResult) => {
+    if (!result.adjudication) {
+      return cloneTaskRelationSplitAffinityResult(result);
+    }
+    if (
+      result.settledAt !== undefined &&
+      result.settledAt <= cutoffAt
+    ) {
+      return cloneTaskRelationSplitAffinityResult(result);
+    }
+    return {
+      ...cloneTaskRelationSplitAffinityResult(result),
+      adjudication: undefined,
+      unavailableReason:
+        result.settledAt === undefined
+          ? "affinity-cutoff-unobserved"
+          : "affinity-settled-after-cutoff",
+    };
+  };
+  return {
+    child: filter(outcome.child),
+    parent: filter(outcome.parent),
+  };
+}
+
+export function revalidateTaskRelationAffinityOutcome(input: {
+  outcome: TaskRelationSplitAffinityOutcome;
+  readCurrentIdentity: (
+    scheduled: TaskRelationSplitIdentity
+  ) => TaskRelationSplitIdentity;
+  readCurrentOperationId: (
+    affinityKind: TaskRelationAffinityKind
+  ) => string | undefined;
+}): TaskRelationSplitAffinityOutcome {
+  const validate = (result: TaskRelationSplitAffinityResult) => {
+    if (!result.adjudication || !result.identity) {
+      return cloneTaskRelationSplitAffinityResult(result);
+    }
+    const affinityKind = result.adjudication.affinityKind;
+    if (input.readCurrentOperationId(affinityKind) !== result.operationId) {
+      return {
+        ...cloneTaskRelationSplitAffinityResult(result),
+        adjudication: undefined,
+        unavailableReason: "affinity-operation-stale",
+      };
+    }
+    const current = input.readCurrentIdentity(result.identity);
+    const mismatchedKey = TASK_RELATION_SPLIT_IDENTITY_KEYS.find(
+      (key) => result.identity?.[key] !== current[key]
+    );
+    if (mismatchedKey) {
+      return {
+        ...cloneTaskRelationSplitAffinityResult(result),
+        adjudication: undefined,
+        unavailableReason: `affinity-${mismatchedKey}-stale`,
+      };
+    }
+    return cloneTaskRelationSplitAffinityResult(result);
+  };
+  return {
+    child: validate(input.outcome.child),
+    parent: validate(input.outcome.parent),
+  };
+}
+
+export function cloneTaskRelationSplitAffinityResult(
+  result: TaskRelationSplitAffinityResult
+): TaskRelationSplitAffinityResult {
+  return {
+    ...result,
+    ...(result.identity ? { identity: { ...result.identity } } : {}),
+    ...(result.adjudication
+      ? {
+          adjudication: {
+            ...result.adjudication,
+            currentEvidenceSpans: [...result.adjudication.currentEvidenceSpans],
+            branchEvidenceSpans: [...result.adjudication.branchEvidenceSpans],
+          },
+        }
+      : {}),
+  };
+}
+
 export interface TaskRelationRecentSemanticEvidence {
   index: number;
   text: string;

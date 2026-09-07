@@ -199,17 +199,21 @@ import {
   buildTaskRelationCanonicalShadowPrompts,
   buildTaskRelationCanonicalShadowRequest,
   compareTaskRelationSplitShadow,
+  cloneTaskRelationSplitAffinityResult,
   createTaskRelationSplitLease,
   decideOrderedTaskRelationResolution,
+  filterTaskRelationAffinityOutcomeAtCutoff,
   formatFirstBatchRelationReleaseForTrace,
   formatOrderedTaskRelationResolutionForTrace,
   projectOrderedTaskRelationAdjudication,
+  revalidateTaskRelationAffinityOutcome,
   SCREEN_ORDERED_RELATION_FOREGROUND_BUDGET_MS,
   VOICE_ORDERED_RELATION_FOREGROUND_BUDGET_MS,
   type FirstBatchRelationReleaseDecision,
   type OrderedTaskRelationResolutionDecision,
-  type TaskRelationAffinityAdjudication,
   type TaskRelationAffinityRequest,
+  type TaskRelationSplitAffinityOutcome,
+  type TaskRelationSplitAffinityResult,
   type TaskRelationCanonicalShadowAdjudication,
   type TaskRelationCanonicalShadowRequest,
   type TaskRelationSplitIdentity,
@@ -2516,6 +2520,12 @@ interface TaskRelationAdjudicationScheduleHandle {
   outcome: Promise<TaskRelationAdjudicationRuntimeOutcome>;
   affinityOutcome?: Promise<TaskRelationSplitAffinityOutcome>;
   readAffinityOutcome?: () => TaskRelationSplitAffinityOutcome;
+  freezeAffinityOutcome?: (
+    cutoffAt: number
+  ) => TaskRelationSplitAffinityOutcome;
+  revalidateAffinityOutcome?: (
+    outcome: TaskRelationSplitAffinityOutcome
+  ) => TaskRelationSplitAffinityOutcome;
   canonicalOutcome?: Promise<TaskRelationSplitCanonicalResult>;
   startCanonical?: (
     input: {
@@ -2530,19 +2540,6 @@ interface TaskRelationAdjudicationScheduleHandle {
   sourceKind?: "voice" | "screen" | "mixed";
 }
 
-interface TaskRelationSplitAffinityResult {
-  operationId?: string;
-  outputHash?: string;
-  adjudication?: TaskRelationAffinityAdjudication;
-  unavailableReason?: string;
-  clientError?: boolean;
-}
-
-interface TaskRelationSplitAffinityOutcome {
-  child: TaskRelationSplitAffinityResult;
-  parent: TaskRelationSplitAffinityResult;
-}
-
 interface TaskRelationSplitCanonicalResult {
   operationId?: string;
   outputHash?: string;
@@ -2555,6 +2552,12 @@ interface TaskRelationSplitScheduleHandle {
   operationId: string;
   affinityOutcome: Promise<TaskRelationSplitAffinityOutcome>;
   readAffinityOutcome: () => TaskRelationSplitAffinityOutcome;
+  freezeAffinityOutcome: (
+    cutoffAt: number
+  ) => TaskRelationSplitAffinityOutcome;
+  revalidateAffinityOutcome: (
+    outcome: TaskRelationSplitAffinityOutcome
+  ) => TaskRelationSplitAffinityOutcome;
   canonicalOutcome: Promise<TaskRelationSplitCanonicalResult>;
   startCanonical: (
     input: {
@@ -19895,6 +19898,7 @@ export function useMeetingAssistant() {
         if (!affinityRequest) {
           return Promise.resolve({
             unavailableReason: "no-active-child",
+            settledAt: startedAt,
           });
         }
         const operationKind = affinityRequest.operationKind;
@@ -20112,6 +20116,8 @@ export function useMeetingAssistant() {
               resolve({
                 operationId: lease.operationId,
                 outputHash: result?.outputHash,
+                identity: { ...lease.identity },
+                settledAt: settlement.completedAt,
                 adjudication,
                 unavailableReason,
                 clientError:
@@ -20141,9 +20147,25 @@ export function useMeetingAssistant() {
         }
       );
       const readAffinityOutcome = (): TaskRelationSplitAffinityOutcome => ({
-        child: { ...childAffinity },
-        parent: { ...parentAffinity },
+        child: cloneTaskRelationSplitAffinityResult(childAffinity),
+        parent: cloneTaskRelationSplitAffinityResult(parentAffinity),
       });
+      const freezeAffinityOutcome = (cutoffAt: number) =>
+        filterTaskRelationAffinityOutcomeAtCutoff(
+          readAffinityOutcome(),
+          cutoffAt
+        );
+      const revalidateAffinityOutcome = (
+        outcome: TaskRelationSplitAffinityOutcome
+      ) =>
+        revalidateTaskRelationAffinityOutcome({
+          outcome,
+          readCurrentIdentity,
+          readCurrentOperationId: (affinityKind) =>
+            affinityKind === "child"
+              ? taskRelationChildAffinityRuntimeRef.current?.getCurrentOperationId()
+              : taskRelationParentAffinityRuntimeRef.current?.getCurrentOperationId(),
+        });
       const affinityOutcome = Promise.all([
         childAffinityOutcome,
         parentAffinityOutcome,
@@ -20151,12 +20173,15 @@ export function useMeetingAssistant() {
       let resolveCanonicalOutcome:
         | ((outcome: TaskRelationSplitCanonicalResult) => void)
         | undefined;
+      let rejectCanonicalOutcome: ((reason?: unknown) => void) | undefined;
       const canonicalOutcome = new Promise<TaskRelationSplitCanonicalResult>(
-        (resolve) => {
+        (resolve, reject) => {
           resolveCanonicalOutcome = resolve;
+          rejectCanonicalOutcome = reject;
         }
       );
       let canonicalStarted = false;
+      let foregroundClosed = false;
       const startCanonical = ({
         foreground,
         affinityOutcome: frozenAffinityOutcome,
@@ -20164,6 +20189,11 @@ export function useMeetingAssistant() {
         foreground: boolean;
         affinityOutcome?: TaskRelationSplitAffinityOutcome;
       }) => {
+        if (foreground && foregroundClosed) {
+          return Promise.resolve({
+            unavailableReason: "foreground-window-closed",
+          });
+        }
         if (canonicalStarted) return canonicalOutcome;
         canonicalStarted = true;
         const { child, parent } =
@@ -20439,10 +20469,7 @@ export function useMeetingAssistant() {
         });
       })
           .catch((error) => {
-            resolveCanonicalOutcome?.({
-              unavailableReason:
-                error instanceof Error ? error.message : String(error),
-            });
+            rejectCanonicalOutcome?.(error);
           });
         return canonicalOutcome;
       };
@@ -20452,9 +20479,15 @@ export function useMeetingAssistant() {
             foreground: false,
             affinityOutcome: completeAffinityOutcome,
           })
-        );
+        ).catch((error) => {
+          traceStoreRef.current.updateMetadata(traceId, {
+            taskRelationSplitCanonicalInternalError:
+              error instanceof Error ? error.message : String(error),
+          });
+        });
       }
       const cancelForegroundWork = () => {
+        foregroundClosed = true;
         if (
           childAffinityOperationId &&
           taskRelationChildAffinityRuntimeRef.current?.getCurrentOperationId() ===
@@ -20481,6 +20514,8 @@ export function useMeetingAssistant() {
         operationId: orderedOperationId,
         affinityOutcome,
         readAffinityOutcome,
+        freezeAffinityOutcome,
+        revalidateAffinityOutcome,
         canonicalOutcome,
         startCanonical,
         cancelForegroundWork,
@@ -20625,6 +20660,8 @@ export function useMeetingAssistant() {
         }),
         affinityOutcome: splitHandle?.affinityOutcome,
         readAffinityOutcome: splitHandle?.readAffinityOutcome,
+        freezeAffinityOutcome: splitHandle?.freezeAffinityOutcome,
+        revalidateAffinityOutcome: splitHandle?.revalidateAffinityOutcome,
         canonicalOutcome: splitHandle?.canonicalOutcome,
         startCanonical: splitHandle?.startCanonical,
         cancelForegroundWork: splitHandle?.cancelForegroundWork,
@@ -20676,15 +20713,39 @@ export function useMeetingAssistant() {
         });
       const phaseBudget = createOrderedRelationPhaseBudget(deadline);
       let affinityOutcome = input.handle.readAffinityOutcome?.();
+      let affinitySnapshotFrozen = false;
       let canonicalOutcome: TaskRelationSplitCanonicalResult | undefined;
       let waitDisposition = "affinity-unavailable";
       const readRemainingBudget = () =>
         readOrderedSettlementRemainingMs(deadline);
       const readAffinityRemainingBudget = () =>
         readOrderedRelationAffinityRemainingMs(phaseBudget);
+      const freezeAffinityOutcome = () => {
+        if (!affinitySnapshotFrozen) {
+          const observed =
+            input.handle.freezeAffinityOutcome?.(
+              phaseBudget.affinityCutoffAt
+            ) ??
+            filterTaskRelationAffinityOutcomeAtCutoff(
+              input.handle.readAffinityOutcome?.() ?? {
+                child: { unavailableReason: "affinity-unavailable" },
+                parent: { unavailableReason: "affinity-unavailable" },
+              },
+              phaseBudget.affinityCutoffAt
+            );
+          affinityOutcome = observed;
+          affinitySnapshotFrozen = true;
+        }
+        return input.handle.revalidateAffinityOutcome?.(
+          affinityOutcome ?? {
+            child: { unavailableReason: "affinity-unavailable" },
+            parent: { unavailableReason: "affinity-unavailable" },
+          }
+        ) ?? affinityOutcome;
+      };
       if (input.handle.affinityOutcome && readAffinityRemainingBudget() > 0) {
         try {
-          affinityOutcome = await withTimeout(
+          await withTimeout(
             input.handle.affinityOutcome,
             Math.max(1, readAffinityRemainingBudget()),
             "Ordered relation affinity window expired."
@@ -20697,11 +20758,10 @@ export function useMeetingAssistant() {
           ) {
             throw error;
           }
-          affinityOutcome = input.handle.readAffinityOutcome?.() ?? affinityOutcome;
           waitDisposition = "affinity-cutoff-expired";
         }
       }
-      affinityOutcome = input.handle.readAffinityOutcome?.() ?? affinityOutcome;
+      affinityOutcome = freezeAffinityOutcome();
       let decision = decideOrderedTaskRelationResolution({
         sourceKind: input.sourceKind,
         currentQuestionType: input.currentQuestionType,
@@ -20717,7 +20777,7 @@ export function useMeetingAssistant() {
           input.screenTypeEvidenceAuthorized,
       });
       const canonicalPromise =
-        decision.status === "unresolved"
+        decision.status === "unresolved" && readRemainingBudget() > 0
           ? input.handle.startCanonical?.({
               foreground: true,
               affinityOutcome,
@@ -20725,7 +20785,9 @@ export function useMeetingAssistant() {
           : undefined;
       if (decision.status === "unresolved") {
         waitDisposition =
-          waitDisposition === "affinity-unavailable"
+          !canonicalPromise
+            ? "canonical-skipped-no-budget"
+            : waitDisposition === "affinity-unavailable"
             ? "canonical-started-without-affinity"
             : "canonical-started-after-affinity";
       }
@@ -20769,6 +20831,12 @@ export function useMeetingAssistant() {
         });
       }
       if (decision.status === "unresolved") {
+        affinityOutcome = input.handle.revalidateAffinityOutcome?.(
+          affinityOutcome ?? {
+            child: { unavailableReason: "affinity-unavailable" },
+            parent: { unavailableReason: "affinity-unavailable" },
+          }
+        ) ?? affinityOutcome;
         decision = decideOrderedTaskRelationResolution({
           sourceKind: input.sourceKind,
           currentQuestionType: input.currentQuestionType,
@@ -20786,9 +20854,10 @@ export function useMeetingAssistant() {
           finalizeWithNullHypothesis: true,
         });
       }
-      const foregroundTimedOut =
-        waitDisposition === "canonical-deadline-expired";
-      if (foregroundTimedOut) {
+      const foregroundClosed =
+        waitDisposition === "canonical-deadline-expired" ||
+        readRemainingBudget() === 0;
+      if (foregroundClosed) {
         input.handle.cancelForegroundWork?.();
       }
       const clientError = Boolean(
@@ -20826,7 +20895,7 @@ export function useMeetingAssistant() {
             : canonicalOutcome?.unavailableReason,
         taskRelationOrderedResolutionClientError: clientError,
         taskRelationOrderedResolutionLateWorkCancelled:
-          foregroundTimedOut,
+          foregroundClosed,
       };
       traceStoreRef.current.updateMetadata(input.traceId, metadata);
       if (clientError) {
@@ -22441,14 +22510,19 @@ export function useMeetingAssistant() {
         | undefined;
       let typeSettled = !questionTypeWindowRequested;
       let relationSettled = false;
-      let relationResolutionStarted = false;
+      let relationResolutionPromise:
+        | Promise<{
+            decision: OrderedTaskRelationResolutionDecision;
+          }>
+        | undefined;
+      let relationFatalError: string | undefined;
+      let deadlineFinalizationRequested = false;
       let responseOpportunitySettled =
         !responseOpportunityGateOperationId ||
         responseOpportunityGate?.disposition !== "pending";
 
       const startRelationResolution = () => {
-        if (relationResolutionStarted) return;
-        relationResolutionStarted = true;
+        if (relationResolutionPromise) return relationResolutionPromise;
         const effectiveType = resolveOrderedQuestionType(
           settledTypeOutcome
         ).questionType;
@@ -22468,9 +22542,15 @@ export function useMeetingAssistant() {
               ? "local-coordinator-fallback"
               : "relation-handle-not-required",
           });
-          return;
+          relationResolutionPromise = Promise.resolve({
+            decision: coordinated.relation,
+            affinityOutcome: undefined,
+            canonicalOutcome: undefined,
+            metadata: {},
+          });
+          return relationResolutionPromise;
         }
-        void resolveOrderedTaskRelationWithinWindow({
+        relationResolutionPromise = resolveOrderedTaskRelationWithinWindow({
           handle: taskRelationHandle,
           traceId: input.traceId,
           currentQuestionType: effectiveType,
@@ -22479,39 +22559,46 @@ export function useMeetingAssistant() {
             contextManagerRef.current.getState().activeMeetingTask,
           waitBudgetMs: VOICE_ORDERED_RELATION_FOREGROUND_BUDGET_MS,
           deadline: foregroundDeadline,
-        }).then(
+        });
+        void relationResolutionPromise.then(
           (resolution) => {
             settledOrderedRelation = resolution.decision;
             relationSettled = true;
             releaseWhenSettled();
           },
           (error) => {
-            settledOrderedRelation = decideOrderedTaskRelationResolution({
-              sourceKind: taskRelationHandle.sourceKind ?? "voice",
-              currentQuestionType: effectiveType,
-              activeParentQuestionType:
-                contextManagerRef.current.getState().activeMeetingTask?.parent
-                  .questionType,
-              activeChildQuestionType:
-                contextManagerRef.current.getState().activeMeetingTask?.child
-                  ?.questionType,
-              hasActiveChild: Boolean(
-                contextManagerRef.current.getState().activeMeetingTask?.child
-              ),
-              finalizeWithNullHypothesis: true,
-            });
-            relationSettled = true;
+            relationFatalError =
+              error instanceof Error ? error.message : String(error);
+            taskRelationHandle.cancelForegroundWork?.();
+            if (waitTimer !== undefined) window.clearTimeout(waitTimer);
             traceStoreRef.current.updateMetadata(input.traceId, {
-              taskRelationOrderedResolutionInternalError:
-                error instanceof Error ? error.message : String(error),
+              taskRelationOrderedResolutionInternalError: relationFatalError,
+              taskRelationOrderedResolutionFailureDisposition: "fail-fast",
             });
-            releaseWhenSettled();
+            setState((previous) => ({
+              ...previous,
+              error:
+                "Runtime relation coordination failed. Jarvis did not replace the current task; retry or use an explicit correction.",
+            }));
+            traceStoreRef.current.finishTrace(
+              input.traceId,
+              "error",
+              relationFatalError
+            );
           }
         );
+        return relationResolutionPromise;
       };
 
       const releaseWhenSettled = () => {
-        if (foregroundReleaseGate.isReleased() || !typeSettled) return;
+        if (
+          foregroundReleaseGate.isReleased() ||
+          relationFatalError ||
+          deadlineFinalizationRequested ||
+          !typeSettled
+        ) {
+          return;
+        }
         startRelationResolution();
         const firstParentNeedsCommittedOutputRequest =
           !contextManagerRef.current.getState().activeMeetingTask?.parent;
@@ -22536,24 +22623,37 @@ export function useMeetingAssistant() {
 
       if (foregroundWaitBudgetMs > 0 && !foregroundReleaseGate.isReleased()) {
         waitTimer = window.setTimeout(() => {
-          const fallbackType = resolveOrderedQuestionType(
-            settledTypeOutcome
-          ).questionType;
-          const coordinated = coordinateOrderedSettlement({
-            sourceKind: taskRelationHandle?.sourceKind ?? "voice",
-            currentQuestionType: fallbackType,
-            activeMeetingTask:
-              contextManagerRef.current.getState().activeMeetingTask,
-            orderedRelation: settledOrderedRelation,
-          });
-          traceStoreRef.current.updateMetadata(input.traceId, {
-            ...formatOrderedSettlementCoordinatorForTrace(coordinated),
-          });
-          dispatchAdvisor(
-            settledTypeOutcome,
-            coordinated.relation,
-            "deadline-expired-fail-open",
-            "deadline"
+          if (foregroundReleaseGate.isReleased() || relationFatalError) return;
+          deadlineFinalizationRequested = true;
+          typeSettled = true;
+          const relationResolution = startRelationResolution();
+          void relationResolution?.then(
+            (resolution) => {
+              if (foregroundReleaseGate.isReleased() || relationFatalError) {
+                return;
+              }
+              settledOrderedRelation = resolution.decision;
+              relationSettled = true;
+              const coordinated = coordinateOrderedSettlement({
+                sourceKind: taskRelationHandle?.sourceKind ?? "voice",
+                currentQuestionType: resolveOrderedQuestionType(
+                  settledTypeOutcome
+                ).questionType,
+                activeMeetingTask:
+                  contextManagerRef.current.getState().activeMeetingTask,
+                orderedRelation: settledOrderedRelation,
+              });
+              traceStoreRef.current.updateMetadata(input.traceId, {
+                ...formatOrderedSettlementCoordinatorForTrace(coordinated),
+              });
+              dispatchAdvisor(
+                settledTypeOutcome,
+                coordinated.relation,
+                "deadline-expired-finalized",
+                "deadline"
+              );
+            },
+            () => undefined
           );
         }, readOrderedSettlementRemainingMs(foregroundDeadline));
       }
@@ -22561,7 +22661,11 @@ export function useMeetingAssistant() {
       if (questionTypeHandle && questionTypeWindowRequested) {
         void questionTypeHandle.outcome.then(
         (outcome) => {
-          if (!foregroundReleaseGate.isReleased()) {
+          if (
+            !foregroundReleaseGate.isReleased() &&
+            !deadlineFinalizationRequested &&
+            !relationFatalError
+          ) {
             settledTypeOutcome = outcome;
             typeSettled = true;
             releaseWhenSettled();

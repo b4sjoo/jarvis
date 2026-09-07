@@ -20,9 +20,11 @@ import {
   createTaskRelationSplitLease,
   decideFirstBatchRelationRelease,
   decideOrderedTaskRelationResolution,
+  filterTaskRelationAffinityOutcomeAtCutoff,
   hashTaskRelationSplitOutput,
   parseTaskRelationAffinityOutput,
   parseTaskRelationCanonicalShadowOutput,
+  revalidateTaskRelationAffinityOutcome,
 } from "../src/lib/meeting/task-relation-split-shadow.js";
 import type { LogicalQuestionUnit } from "../src/lib/meeting/logical-question-unit.js";
 
@@ -759,12 +761,17 @@ test("wires provider faults to finalization while stale source ownership fails c
   const resolver = meetingHookSource.slice(resolverStart, resolverEnd);
 
   assert.match(resolver, /affinity-cutoff-expired/);
+  assert.match(resolver, /freezeAffinityOutcome/);
+  assert.match(resolver, /revalidateAffinityOutcome/);
   assert.match(resolver, /canonical-unresolved/);
   assert.match(resolver, /canonical-deadline-expired/);
+  assert.match(resolver, /canonical-skipped-no-budget/);
   assert.match(resolver, /createOrderedRelationPhaseBudget/);
-  assert.match(resolver, /readAffinityOutcome/);
   assert.match(resolver, /finalizeWithNullHypothesis:\s*true/);
   assert.match(resolver, /cancelForegroundWork\?\.\(\)/);
+  assert.match(meetingHookSource, /deadlineFinalizationRequested = true/);
+  assert.match(meetingHookSource, /const relationResolution = startRelationResolution\(\)/);
+  assert.match(meetingHookSource, /void relationResolution\?\.then/);
   assert.match(meetingHookSource, /deadline:\s*foregroundDeadline/);
   assert.match(
     meetingHookSource,
@@ -802,6 +809,61 @@ test("ordered relation null hypothesis treats authoritative unbound Screen as a 
   });
   assert.equal(activeChild.relation, "child-probe");
   assert.equal(activeChild.reason, "screen-preserve-active-child");
+});
+
+test("freezes only Affinity results that existed at the coordinator cutoff", () => {
+  const requests = buildTaskRelationAffinityRequests({
+    request: request(),
+    sessionId: "session-a",
+    runtimeEpoch: 4,
+    manualCorrectionRevision: 0,
+  });
+  const outcome = filterTaskRelationAffinityOutcomeAtCutoff(
+    {
+      child: { unavailableReason: "no-active-child" },
+      parent: {
+        operationId: "parent-op",
+        identity: requests.parent.identity,
+        settledAt: 2_500,
+        adjudication: affinity("parent", "related", 0.99),
+      },
+    },
+    2_000
+  );
+
+  assert.equal(outcome.parent.adjudication, undefined);
+  assert.equal(outcome.parent.unavailableReason, "affinity-settled-after-cutoff");
+});
+
+test("does not reauthorize an Affinity candidate after manual correction changes its lease", () => {
+  const requests = buildTaskRelationAffinityRequests({
+    request: request(),
+    sessionId: "session-a",
+    runtimeEpoch: 4,
+    manualCorrectionRevision: 0,
+  });
+  const outcome = revalidateTaskRelationAffinityOutcome({
+    outcome: {
+      child: { unavailableReason: "no-active-child" },
+      parent: {
+        operationId: "parent-op",
+        identity: requests.parent.identity,
+        settledAt: 1_000,
+        adjudication: affinity("parent", "independent", 0.99),
+      },
+    },
+    readCurrentOperationId: () => "parent-op",
+    readCurrentIdentity: (identity) => ({
+      ...identity,
+      manualCorrectionRevision: identity.manualCorrectionRevision + 1,
+    }),
+  });
+
+  assert.equal(outcome.parent.adjudication, undefined);
+  assert.equal(
+    outcome.parent.unavailableReason,
+    "affinity-manualCorrectionRevision-stale"
+  );
 });
 
 function affinity(
