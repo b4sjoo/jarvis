@@ -394,6 +394,106 @@ test("rejects retained Code that belongs to a different child even when visible 
   assert.equal(decision.reason, "artifact-section-owner-mismatch");
 });
 
+test("authorizes a child whose identical Artifact text was published under its own owner", () => {
+  const activeTask = task("ai-ml-system-design", "design_framing");
+  activeTask.child = {
+    id: "child-code",
+    createdAt: 2,
+    updatedAt: 2,
+    questionType: "coding",
+    relation: "child-probe",
+    intent: "implementation-probe",
+    question: "Implement the reranker.",
+    basedOnTurnIds: ["turn-code"],
+    basedOnObservationIds: [],
+    phaseState: {
+      playbook: {
+        id: "coding_algorithm",
+        label: "Coding Algorithm",
+        phase: "implementation_validation",
+        questionType: "coding",
+        confidence: 1,
+        reason: "test",
+        memoryPolicy: { id: "test" },
+        firstMove: "test",
+        clarifyingStrategy: "test",
+        outputContract: "test",
+        followUpPolicy: "test",
+      },
+      phase: "implementation_validation",
+      phaseProgress: { implementation_validation: true },
+      revision: 2,
+    },
+  };
+  const visible = stable("coding", "child-probe");
+  visible.suggestion.meetingAnswer = parseMeetingAnswer(
+    "Answer: Current child answer.\nCode:\n```python\ndef solve():\n    return 1\n```\nComplexity: O(n)."
+  );
+  visible.sections = {
+    answer: {
+      revision: 2,
+      owner: {
+        kind: "active-child",
+        parentId: "parent-a",
+        childId: "child-code",
+      },
+      sourceSuggestionId: "child-code-publication",
+      updatedAt: 20,
+    },
+    code: {
+      revision: 3,
+      owner: {
+        kind: "active-child",
+        parentId: "parent-a",
+        childId: "child-code",
+      },
+      sourceSuggestionId: "child-code-publication",
+      updatedAt: 20,
+    },
+    complexity: {
+      revision: 3,
+      owner: {
+        kind: "active-child",
+        parentId: "parent-a",
+        childId: "child-code",
+      },
+      sourceSuggestionId: "child-code-publication",
+      updatedAt: 20,
+    },
+    whiteboard: {
+      revision: 0,
+      owner: null,
+      sourceSuggestionId: "child-code-publication",
+      updatedAt: 20,
+    },
+  };
+
+  const decision = resolveArtifactRegenerationTarget({
+    stableAnswer: visible,
+    visibleSource: {
+      authorized: true,
+      resolvedLogicalQuestionUnitId: "lqu-a",
+      resolvedLogicalQuestionRevision: 1,
+      sourceOwner: {
+        kind: "active-child",
+        parentId: "parent-a",
+        childId: "child-code",
+      },
+    },
+    activeMeetingTask: activeTask,
+    sessionId: "session-a",
+    runtimeEpoch: 2,
+  });
+
+  assert.equal(decision.authorized, true);
+  assert.deepEqual(decision.target?.sectionOwner, {
+    kind: "active-child",
+    parentId: "parent-a",
+    childId: "child-code",
+  });
+  assert.deepEqual(decision.target?.artifactFamilies, ["code", "complexity"]);
+});
+
 test("rejects a visible Answer owned by another parent", () => {
   const activeTask = task("general-system-design", "design_framing");
   activeTask.parent.id = "parent-new";

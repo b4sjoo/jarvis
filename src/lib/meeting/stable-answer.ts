@@ -263,13 +263,23 @@ export function commitStableAnswerRevision(input: {
     "whiteboard",
   ] as const) {
     const previous = current?.sections[section];
-    const mutated = sectionWasMutated({
+    const contentMutated = sectionWasMutated({
       section,
       current: current?.suggestion.meetingAnswer,
       candidate: candidateAnswer,
       merged: parsed,
       authorized,
     });
+    const published = sectionWasPublished({
+      section,
+      candidate: candidateAnswer,
+      authorized,
+    });
+    const ownerChanged =
+      published &&
+      hasStableAnswerSectionContent(parsed, section) &&
+      !sameStableAnswerSectionOwner(previous?.owner, sectionOwner);
+    const mutated = contentMutated || ownerChanged;
     sectionRevisions[section] = mutated
       ? {
           revision: (previous?.revision ?? 0) + 1,
@@ -458,6 +468,20 @@ function hasStableAnswerSectionContent(
   section: AnswerArtifactSection
 ) {
   return Boolean(answer.sections[section]?.trim());
+}
+
+function sectionWasPublished(input: {
+  section: AnswerArtifactSection;
+  candidate: ParsedMeetingAnswer;
+  authorized: Set<AnswerArtifactSection>;
+}) {
+  if (!input.authorized.has(input.section)) return false;
+  if (input.section === "answer") {
+    return ANSWER_GROUP_KEYS.some((key) =>
+      Boolean(input.candidate.sections[key]?.trim())
+    ) || Boolean(input.candidate.answerDisposition);
+  }
+  return Boolean(input.candidate.sections[input.section]?.trim());
 }
 
 function stableArtifactSectionsBelongToOwner(input: {

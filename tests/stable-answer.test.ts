@@ -133,6 +133,115 @@ test("keeps retained Code with its original child and rejects a different child 
   assert.equal(rejected.reason, "artifact-section-owner-mismatch");
 });
 
+test("transfers authorized identical Code and Complexity to a new child owner", () => {
+  const childA = {
+    kind: "active-child" as const,
+    parentId: "coding-parent",
+    childId: "child-a",
+  };
+  const childB = {
+    kind: "active-child" as const,
+    parentId: "coding-parent",
+    childId: "child-b",
+  };
+  const first = commitStableAnswerRevision({
+    candidate: suggestion(
+      "child-a-code",
+      "Answer: Child A implementation.\nCode:\n```python\ndef solve():\n    return 1\n```\nComplexity: O(n)."
+    ),
+    authorizedArtifacts: ["answer", "code", "complexity"],
+    taskId: "coding-parent",
+    sectionOwner: childA,
+    logicalQuestionUnitId: "question-a",
+    logicalQuestionRevision: 1,
+    committedAt: 100,
+  });
+  assert.ok(first);
+
+  const second = commitStableAnswerRevision({
+    current: first,
+    candidate: suggestion(
+      "child-b-code",
+      "Answer: Child B implementation.\nCode:\n```python\ndef solve():\n    return 1\n```\nComplexity: O(n)."
+    ),
+    authorizedArtifacts: ["answer", "code", "complexity"],
+    taskId: "coding-parent",
+    sectionOwner: childB,
+    logicalQuestionUnitId: "question-b",
+    logicalQuestionRevision: 1,
+    committedAt: 200,
+  });
+  assert.ok(second);
+  assert.deepEqual(second.sections.code.owner, childB);
+  assert.deepEqual(second.sections.complexity.owner, childB);
+  assert.equal(second.sections.code.revision, first.sections.code.revision + 1);
+  assert.equal(
+    second.sections.complexity.revision,
+    first.sections.complexity.revision + 1
+  );
+  assert.deepEqual(
+    collectStableAnswerMutatedArtifacts(first, second),
+    ["answer", "code", "complexity"]
+  );
+
+  const regenerated = commitStableArtifactOnlyRevision({
+    current: second,
+    candidate: suggestion(
+      "child-b-regeneration",
+      "Answer: Hidden.\nCode:\n```python\ndef solve():\n    return 2\n```\nComplexity: O(n)."
+    ),
+    authorizedArtifacts: ["code", "complexity"],
+    expectedVisibleAnswerRevision: second.revision,
+    expectedTaskId: "coding-parent",
+    expectedLogicalQuestionUnitId: "question-b",
+    expectedLogicalQuestionRevision: 1,
+    sectionOwner: childB,
+    committedAt: 300,
+  });
+  assert.equal(regenerated.disposition, "committed");
+  assert.deepEqual(regenerated.stable?.sections.code.owner, childB);
+  assert.deepEqual(regenerated.stable?.sections.complexity.owner, childB);
+});
+
+test("keeps a same-owner identical Artifact candidate as a no-change publication", () => {
+  const child = {
+    kind: "active-child" as const,
+    parentId: "coding-parent",
+    childId: "child-a",
+  };
+  const first = commitStableAnswerRevision({
+    candidate: suggestion(
+      "child-a-code",
+      "Answer: Child A implementation.\nCode:\n```python\ndef solve():\n    return 1\n```\nComplexity: O(n)."
+    ),
+    authorizedArtifacts: ["answer", "code", "complexity"],
+    taskId: "coding-parent",
+    sectionOwner: child,
+    logicalQuestionUnitId: "question-a",
+    logicalQuestionRevision: 1,
+  });
+  assert.ok(first);
+  const same = commitStableAnswerRevision({
+    current: first,
+    candidate: suggestion(
+      "child-a-same-code",
+      "Answer: Child A implementation.\nCode:\n```python\ndef solve():\n    return 1\n```\nComplexity: O(n)."
+    ),
+    authorizedArtifacts: ["answer", "code", "complexity"],
+    taskId: "coding-parent",
+    sectionOwner: child,
+    logicalQuestionUnitId: "question-a",
+    logicalQuestionRevision: 2,
+  });
+  assert.ok(same);
+  assert.equal(same.sections.code.revision, first.sections.code.revision);
+  assert.equal(
+    same.sections.complexity.revision,
+    first.sections.complexity.revision
+  );
+  assert.deepEqual(same.sections.code.owner, child);
+});
+
 test("allows an implementation child to generate its first Code without retained provenance", () => {
   const child = {
     kind: "active-child" as const,
