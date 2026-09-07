@@ -3,6 +3,7 @@ import type {
   ArtifactOnlyAnswerSection,
   StableAnswerRevision,
 } from "./stable-answer.js";
+import type { EffectiveQuestionSourceOwner } from "./effective-question-source-ledger.js";
 import type { VisibleAnswerResponseActionTargetDecision } from "./response-action-target.js";
 import {
   normalizeCanonicalQuestionType,
@@ -23,7 +24,8 @@ export type ArtifactRegenerationTargetReason =
   | "visible-answer-settlement-missing"
   | "visible-answer-source-mismatch"
   | "no-regenerable-artifact"
-  | "artifact-not-owned-by-current-phase";
+  | "artifact-not-owned-by-current-phase"
+  | "artifact-section-owner-mismatch";
 
 export interface ArtifactRegenerationTarget {
   sessionId: string;
@@ -41,6 +43,7 @@ export interface ArtifactRegenerationTarget {
   phaseOwnerKind: "parent" | "child";
   phaseOwnerId: string;
   phaseOwnerRevision: number;
+  sectionOwner: EffectiveQuestionSourceOwner;
   artifactFamilies: ArtifactOnlyAnswerSection[];
 }
 
@@ -134,6 +137,13 @@ export function resolveArtifactRegenerationTarget(input: {
     normalizeCanonicalQuestionType(activeTask.parent.questionType) ??
     "unknown";
   const activeChild = activeTask.child;
+  const sectionOwner: EffectiveQuestionSourceOwner = activeChild
+    ? {
+        kind: "active-child",
+        parentId: activeTask.parent.id,
+        childId: activeChild.id,
+      }
+    : { kind: "parent-mainline", parentId: activeTask.parent.id };
   let artifactFamilies: ArtifactOnlyAnswerSection[] | undefined;
 
   if (activeChild) {
@@ -170,6 +180,17 @@ export function resolveArtifactRegenerationTarget(input: {
     return reject("no-regenerable-artifact");
   }
 
+  if (
+    artifactFamilies &&
+    !retainedArtifactSectionsBelongToOwner({
+      stable,
+      artifactFamilies,
+      owner: sectionOwner,
+    })
+  ) {
+    return reject("artifact-section-owner-mismatch");
+  }
+
   return {
     authorized: true,
     reason: "authorized",
@@ -195,9 +216,30 @@ export function resolveArtifactRegenerationTarget(input: {
         activeChild?.phaseState?.revision ??
         activeTask.parent.revisions ??
         0,
+      sectionOwner,
       artifactFamilies,
     },
   };
+}
+
+function retainedArtifactSectionsBelongToOwner(input: {
+  stable: StableAnswerRevision;
+  artifactFamilies: ArtifactOnlyAnswerSection[];
+  owner: EffectiveQuestionSourceOwner;
+}) {
+  return input.artifactFamilies.every((family) => {
+    const content = input.stable.suggestion.meetingAnswer?.sections[family];
+    if (!content?.trim()) return true;
+    const sectionOwner = input.stable.sections[family]?.owner;
+    return Boolean(
+      sectionOwner &&
+        sectionOwner.kind === input.owner.kind &&
+        sectionOwner.parentId === input.owner.parentId &&
+        (sectionOwner.kind === "parent-mainline" ||
+          (input.owner.kind === "active-child" &&
+            sectionOwner.childId === input.owner.childId))
+    );
+  });
 }
 
 export function formatArtifactRegenerationTargetForTrace(
@@ -223,6 +265,13 @@ export function formatArtifactRegenerationTargetForTrace(
     artifactRegenerationPhaseOwnerId: decision.target?.phaseOwnerId,
     artifactRegenerationPhaseOwnerRevision:
       decision.target?.phaseOwnerRevision,
+    artifactRegenerationSectionOwnerKind: decision.target?.sectionOwner.kind,
+    artifactRegenerationSectionOwnerParentId:
+      decision.target?.sectionOwner.parentId,
+    artifactRegenerationSectionOwnerChildId:
+      decision.target?.sectionOwner.kind === "active-child"
+        ? decision.target.sectionOwner.childId
+        : undefined,
     artifactRegenerationRequestedArtifacts:
       decision.target?.artifactFamilies,
   };

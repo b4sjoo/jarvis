@@ -168,6 +168,7 @@ import {
   EffectiveQuestionSourceLedger,
   resolveRevisionStableTopologyBinding,
   selectOwnerScopedRelationEvidence,
+  type EffectiveQuestionSourceOwner,
 } from "@/lib/meeting/effective-question-source-ledger";
 import {
   projectAdvisorTranscriptForLogicalQuestion,
@@ -247,6 +248,7 @@ import {
   AdvisorResponseChallengeCoordinator,
   AdvisorResponseFingerprintCache,
   PendingAnswerRevision,
+  StableAnswerSectionOwner,
   StableArtifactOnlyCommitDecision,
   StableAnswerRevision,
   RuntimeCommitToken,
@@ -983,6 +985,28 @@ interface PendingGenerationAnswerRevision extends PendingAnswerRevision {
   resultTaskId: string | null;
   taskRuntimeRevision: number;
   taskRuntimeTransition?: GenerationTaskRuntimeTransition;
+}
+
+function resolveStableAnswerSectionOwner(input: {
+  activeMeetingTask?: ActiveMeetingTask;
+  artifactRegenerationTarget?: Pick<
+    ArtifactRegenerationTarget,
+    "sectionOwner"
+  >;
+}): EffectiveQuestionSourceOwner | null {
+  if (input.artifactRegenerationTarget) {
+    return { ...input.artifactRegenerationTarget.sectionOwner };
+  }
+  const task = input.activeMeetingTask;
+  if (!task) return null;
+  if (task.child) {
+    return {
+      kind: "active-child",
+      parentId: task.parent.id,
+      childId: task.child.id,
+    };
+  }
+  return { kind: "parent-mainline", parentId: task.parent.id };
 }
 
 interface PreparedStableAnswerPublication {
@@ -4985,6 +5009,7 @@ export function useMeetingAssistant() {
       candidate: pending.suggestion,
       authorizedArtifacts: pending.authorizedArtifacts,
       taskId: pending.resultTaskId,
+      sectionOwner: pending.sectionOwner,
       logicalQuestionUnitId: pending.logicalQuestionUnitId,
       logicalQuestionRevision: pending.logicalQuestionRevision,
       sessionId: pending.sessionId,
@@ -5265,6 +5290,7 @@ export function useMeetingAssistant() {
       authorizedArtifacts: AnswerArtifactSection[];
       taskId: string | null;
       resultTaskId: string | null;
+      sectionOwner: StableAnswerSectionOwner;
       taskRevision: number | null;
       logicalQuestionUnitId: string | null;
       logicalQuestionRevision: number | null;
@@ -5289,6 +5315,7 @@ export function useMeetingAssistant() {
         candidate: input.suggestion,
         authorizedArtifacts: input.authorizedArtifacts,
         taskId: input.resultTaskId,
+        sectionOwner: input.sectionOwner,
         logicalQuestionUnitId: input.logicalQuestionUnitId,
         logicalQuestionRevision: input.logicalQuestionRevision,
         sessionId: input.sessionId,
@@ -5411,6 +5438,7 @@ export function useMeetingAssistant() {
         baseVisibleAnswerRevision: visibleAnswerRevisionRef.current,
         taskId: input.taskId,
         resultTaskId: input.resultTaskId,
+        sectionOwner: input.sectionOwner,
         taskRevision: input.taskRevision,
         logicalQuestionUnitId: input.logicalQuestionUnitId,
         logicalQuestionRevision: input.logicalQuestionRevision,
@@ -15908,6 +15936,10 @@ export function useMeetingAssistant() {
       const artifactPublicationBase = options.artifactRegenerationTarget
         ? stableAnswerRevisionRef.current
         : undefined;
+      const publicationSectionOwner = resolveStableAnswerSectionOwner({
+        activeMeetingTask: contextState.activeMeetingTask,
+        artifactRegenerationTarget: options.artifactRegenerationTarget,
+      });
       const generatedTaskMetadata = continuity.task
         ? {
             taskId: continuity.task.id,
@@ -16027,6 +16059,7 @@ export function useMeetingAssistant() {
                 options.artifactRegenerationTarget.logicalQuestionRevision,
               expectedSettlementId:
                 options.artifactRegenerationTarget.settlementId,
+              sectionOwner: publicationSectionOwner,
             })
           : undefined;
       const candidateStableAnswer =
@@ -16041,6 +16074,7 @@ export function useMeetingAssistant() {
                 continuity.task?.id ??
                 contextState.activeMeetingTask?.parent.id ??
                 null,
+              sectionOwner: publicationSectionOwner,
               logicalQuestionUnitId:
                 advisorJob.logicalQuestionUnit?.id ?? null,
               logicalQuestionRevision:
@@ -16101,6 +16135,7 @@ export function useMeetingAssistant() {
                 continuity.task?.id ??
                 contextState.activeMeetingTask?.parent.id ??
                 null,
+              sectionOwner: publicationSectionOwner,
               taskRevision:
                 contextState.activeMeetingTask?.parent.revisions ?? null,
               logicalQuestionUnitId:
@@ -31009,6 +31044,9 @@ export function useMeetingAssistant() {
           updatedContextState.activeMeetingTask?.parent.id ??
           previousStableAnswer?.taskId ??
           null;
+        const screenSectionOwner = resolveStableAnswerSectionOwner({
+          activeMeetingTask: updatedContextState.activeMeetingTask,
+        });
         const candidateStableAnswer =
           screenStableCommitDecision.disposition === "committed"
             ? commitStableAnswerRevision({

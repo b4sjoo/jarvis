@@ -453,7 +453,9 @@ function stable(): StableAnswerRevision {
 function section(revision = 1) {
   return {
     revision,
-    ownerId: "parent-1",
+    owner: revision > 0
+      ? { kind: "parent-mainline" as const, parentId: "parent-1" }
+      : null,
     sourceSuggestionId: "answer-1",
     updatedAt: 121,
   };

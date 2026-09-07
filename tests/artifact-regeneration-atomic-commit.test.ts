@@ -166,6 +166,7 @@ function prepareFixture() {
       phaseOwnerKind: "parent",
       phaseOwnerId: "parent-1",
       phaseOwnerRevision: 3,
+      sectionOwner: { kind: "parent-mainline", parentId: "parent-1" },
       artifactFamilies: ["whiteboard"],
     },
     currentParent,

@@ -11,6 +11,7 @@ import type { ActiveMeetingTask } from "../src/lib/meeting/active-meeting-task.j
 import type { StableAnswerRevision } from "../src/lib/meeting/stable-answer.js";
 import type { CurrentQuestionSettlementDecision } from "../src/lib/meeting/current-question-settlement.js";
 import type { ActiveInterviewParent } from "../src/lib/meeting/types.js";
+import { parseMeetingAnswer } from "../src/lib/meeting/meeting-answer.js";
 
 function settlement(
   questionType: CurrentQuestionSettlementDecision["questionType"],
@@ -296,6 +297,101 @@ test("rejects a Coding child artifact action from a different visible child sour
 
   assert.equal(decision.authorized, false);
   assert.equal(decision.reason, "no-regenerable-artifact");
+});
+
+test("rejects retained Code that belongs to a different child even when visible source is current", () => {
+  const activeTask = task("ai-ml-system-design", "design_framing");
+  activeTask.child = {
+    id: "child-code",
+    createdAt: 2,
+    updatedAt: 2,
+    questionType: "coding",
+    relation: "child-probe",
+    intent: "implementation-probe",
+    question: "Implement the reranker.",
+    basedOnTurnIds: ["turn-code"],
+    basedOnObservationIds: [],
+    phaseState: {
+      playbook: {
+        id: "coding_algorithm",
+        label: "Coding Algorithm",
+        phase: "implementation_validation",
+        questionType: "coding",
+        confidence: 1,
+        reason: "test",
+        memoryPolicy: { id: "test" },
+        firstMove: "test",
+        clarifyingStrategy: "test",
+        outputContract: "test",
+        followUpPolicy: "test",
+      },
+      phase: "implementation_validation",
+      phaseProgress: { implementation_validation: true },
+      revision: 1,
+    },
+  };
+  const visible = stable("coding", "child-probe");
+  visible.suggestion.meetingAnswer = parseMeetingAnswer(
+    "Answer: Current child answer.\nCode:\n```python\ndef lru():\n    return 1\n```\nComplexity: O(1)."
+  );
+  visible.sections = {
+    answer: {
+      revision: 2,
+      owner: {
+        kind: "active-child",
+        parentId: "parent-a",
+        childId: "child-code",
+      },
+      sourceSuggestionId: "answer-current",
+      updatedAt: 20,
+    },
+    code: {
+      revision: 1,
+      owner: {
+        kind: "active-child",
+        parentId: "parent-a",
+        childId: "child-old",
+      },
+      sourceSuggestionId: "answer-old",
+      updatedAt: 10,
+    },
+    complexity: {
+      revision: 1,
+      owner: {
+        kind: "active-child",
+        parentId: "parent-a",
+        childId: "child-old",
+      },
+      sourceSuggestionId: "answer-old",
+      updatedAt: 10,
+    },
+    whiteboard: {
+      revision: 0,
+      owner: null,
+      sourceSuggestionId: "answer-old",
+      updatedAt: 10,
+    },
+  };
+
+  const decision = resolveArtifactRegenerationTarget({
+    stableAnswer: visible,
+    visibleSource: {
+      authorized: true,
+      resolvedLogicalQuestionUnitId: "lqu-a",
+      resolvedLogicalQuestionRevision: 1,
+      sourceOwner: {
+        kind: "active-child",
+        parentId: "parent-a",
+        childId: "child-code",
+      },
+    },
+    activeMeetingTask: activeTask,
+    sessionId: "session-a",
+    runtimeEpoch: 2,
+  });
+
+  assert.equal(decision.authorized, false);
+  assert.equal(decision.reason, "artifact-section-owner-mismatch");
 });
 
 test("rejects a visible Answer owned by another parent", () => {

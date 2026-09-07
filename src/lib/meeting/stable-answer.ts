@@ -5,6 +5,7 @@ import {
   type RefreshAuthorityDecision,
   type RuntimeTypeAdjudicationOutputAuthority,
 } from "./answer-generation-lease.js";
+import type { EffectiveQuestionSourceOwner } from "./effective-question-source-ledger.js";
 import {
   parseMeetingAnswer,
   serializeMeetingAnswer,
@@ -20,10 +21,12 @@ import type {
 
 export interface StableAnswerSectionRevision {
   revision: number;
-  ownerId: string | null;
+  owner: EffectiveQuestionSourceOwner | null;
   sourceSuggestionId: string;
   updatedAt: number;
 }
+
+export type StableAnswerSectionOwner = EffectiveQuestionSourceOwner | null;
 
 export type StableAnswerSettlementSnapshot = object;
 
@@ -82,6 +85,7 @@ export interface PendingAnswerRevision {
   reason: string;
   resetSections: boolean;
   latestUsefulAnswerMutationAuthorized: boolean;
+  sectionOwner?: StableAnswerSectionOwner;
   advisorJobId?: string;
   advisorJobSource?: string;
   runtimeTypeAdjudicationOutputAuthority?: RuntimeTypeAdjudicationOutputAuthority;
@@ -124,6 +128,7 @@ export type StableArtifactOnlyCommitReason =
   | "logical-question-revision-mismatch"
   | "settlement-mismatch"
   | "unsupported-artifact-family"
+  | "artifact-section-owner-mismatch"
   | "artifact-candidate-missing"
   | "artifact-candidate-invalid"
   | "artifact-candidate-no-change"
@@ -205,6 +210,7 @@ export function commitStableAnswerRevision(input: {
   questionSourceHash?: string;
   settlementId?: string;
   settlementSnapshot?: StableAnswerSettlementSnapshot;
+  sectionOwner?: StableAnswerSectionOwner;
   resetSections?: boolean;
   revision?: number;
   committedAt?: number;
@@ -225,6 +231,10 @@ export function commitStableAnswerRevision(input: {
       ? undefined
       : input.current ?? undefined;
   const authorized = new Set(input.authorizedArtifacts);
+  const sectionOwner = normalizeStableAnswerSectionOwner(
+    input.sectionOwner,
+    input.taskId
+  );
   const mergedAnswer = mergeParsedAnswer({
     current: current?.suggestion.meetingAnswer,
     candidate: candidateAnswer,
@@ -263,13 +273,15 @@ export function commitStableAnswerRevision(input: {
     sectionRevisions[section] = mutated
       ? {
           revision: (previous?.revision ?? 0) + 1,
-          ownerId: input.taskId,
+          owner: hasStableAnswerSectionContent(parsed, section)
+            ? cloneStableAnswerSectionOwner(sectionOwner)
+            : null,
           sourceSuggestionId: input.candidate.id,
           updatedAt: now,
         }
       : previous ?? {
           revision: 0,
-          ownerId: input.taskId,
+          owner: null,
           sourceSuggestionId: input.candidate.id,
           updatedAt: now,
         };
@@ -312,6 +324,7 @@ export function commitStableArtifactOnlyRevision(input: {
   expectedLogicalQuestionUnitId: string | null;
   expectedLogicalQuestionRevision: number | null;
   expectedSettlementId?: string;
+  sectionOwner?: StableAnswerSectionOwner;
   committedAt?: number;
 }): StableArtifactOnlyCommitDecision {
   const authorizedArtifacts = Array.from(
@@ -360,6 +373,16 @@ export function commitStableArtifactOnlyRevision(input: {
   ) {
     return reject("unsupported-artifact-family");
   }
+  if (
+    input.sectionOwner &&
+    !stableArtifactSectionsBelongToOwner({
+      stable: current,
+      sections: authorizedArtifacts,
+      owner: input.sectionOwner,
+    })
+  ) {
+    return reject("artifact-section-owner-mismatch");
+  }
   const candidateAnswer = input.candidate.meetingAnswer;
   if (
     !candidateAnswer ||
@@ -390,6 +413,7 @@ export function commitStableArtifactOnlyRevision(input: {
     questionSourceHash: current.questionSourceHash,
     settlementId: current.settlementId,
     settlementSnapshot: current.settlementSnapshot,
+    sectionOwner: input.sectionOwner,
     revision: current.revision + 1,
     committedAt: input.committedAt,
   });
@@ -411,6 +435,54 @@ export function commitStableArtifactOnlyRevision(input: {
     authorizedArtifacts,
     mutatedArtifacts,
   };
+}
+
+function normalizeStableAnswerSectionOwner(
+  owner: StableAnswerSectionOwner | undefined,
+  taskId: string | null
+): StableAnswerSectionOwner {
+  if (owner) return cloneStableAnswerSectionOwner(owner);
+  return taskId
+    ? { kind: "parent-mainline", parentId: taskId }
+    : null;
+}
+
+function cloneStableAnswerSectionOwner(
+  owner: StableAnswerSectionOwner
+): StableAnswerSectionOwner {
+  return owner ? { ...owner } : null;
+}
+
+function hasStableAnswerSectionContent(
+  answer: ParsedMeetingAnswer,
+  section: AnswerArtifactSection
+) {
+  return Boolean(answer.sections[section]?.trim());
+}
+
+function stableArtifactSectionsBelongToOwner(input: {
+  stable: StableAnswerRevision;
+  sections: ArtifactOnlyAnswerSection[];
+  owner: EffectiveQuestionSourceOwner;
+}) {
+  return input.sections.every((section) => {
+    const content = input.stable.suggestion.meetingAnswer?.sections[section];
+    if (!content?.trim()) return true;
+    return sameStableAnswerSectionOwner(
+      input.stable.sections[section]?.owner,
+      input.owner
+    );
+  });
+}
+
+export function sameStableAnswerSectionOwner(
+  left: StableAnswerSectionOwner | undefined,
+  right: StableAnswerSectionOwner | undefined
+) {
+  if (!left || !right) return left === right;
+  return left.kind === right.kind && left.parentId === right.parentId &&
+    (left.kind === "parent-mainline" ||
+      (right.kind === "active-child" && left.childId === right.childId));
 }
 
 function cloneSettlementSnapshot(
@@ -645,9 +717,36 @@ export function formatStableAnswerCommitForTrace(input: {
       .map((artifact) => `${artifact}:not-authorized`),
     stableAnswerRevision: input.stable?.revision,
     answerSectionRevision: input.stable?.sections.answer.revision,
+    answerSectionOwnerKind: input.stable?.sections.answer.owner?.kind,
+    answerSectionOwnerParentId:
+      input.stable?.sections.answer.owner?.parentId,
+    answerSectionOwnerChildId:
+      input.stable?.sections.answer.owner?.kind === "active-child"
+        ? input.stable.sections.answer.owner.childId
+        : undefined,
     codeSectionRevision: input.stable?.sections.code.revision,
+    codeSectionOwnerKind: input.stable?.sections.code.owner?.kind,
+    codeSectionOwnerParentId: input.stable?.sections.code.owner?.parentId,
+    codeSectionOwnerChildId:
+      input.stable?.sections.code.owner?.kind === "active-child"
+        ? input.stable.sections.code.owner.childId
+        : undefined,
     complexitySectionRevision: input.stable?.sections.complexity.revision,
+    complexitySectionOwnerKind: input.stable?.sections.complexity.owner?.kind,
+    complexitySectionOwnerParentId:
+      input.stable?.sections.complexity.owner?.parentId,
+    complexitySectionOwnerChildId:
+      input.stable?.sections.complexity.owner?.kind === "active-child"
+        ? input.stable.sections.complexity.owner.childId
+        : undefined,
     whiteboardSectionRevision: input.stable?.sections.whiteboard.revision,
+    whiteboardSectionOwnerKind: input.stable?.sections.whiteboard.owner?.kind,
+    whiteboardSectionOwnerParentId:
+      input.stable?.sections.whiteboard.owner?.parentId,
+    whiteboardSectionOwnerChildId:
+      input.stable?.sections.whiteboard.owner?.kind === "active-child"
+        ? input.stable.sections.whiteboard.owner.childId
+        : undefined,
     answerDwellMs: input.previousCommittedAt
       ? Math.max(0, now - input.previousCommittedAt)
       : undefined,

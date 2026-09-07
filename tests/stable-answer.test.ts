@@ -79,6 +79,94 @@ Complexity: O(n squared).`
   assert.equal(second.sections.complexity.revision, 1);
 });
 
+test("keeps retained Code with its original child and rejects a different child artifact update", () => {
+  const childA = {
+    kind: "active-child" as const,
+    parentId: "coding-parent",
+    childId: "child-a",
+  };
+  const childB = {
+    kind: "active-child" as const,
+    parentId: "coding-parent",
+    childId: "child-b",
+  };
+  const first = commitStableAnswerRevision({
+    candidate: suggestion(
+      "child-a-code",
+      "Answer: Child A implementation.\nCode:\n```python\ndef lru():\n    return 1\n```\nComplexity: O(1)."
+    ),
+    authorizedArtifacts: ["answer", "code", "complexity"],
+    taskId: "coding-parent",
+    sectionOwner: childA,
+    logicalQuestionUnitId: "question-a",
+    logicalQuestionRevision: 1,
+  });
+  assert.ok(first);
+  const answerOnly = commitStableAnswerRevision({
+    current: first,
+    candidate: suggestion("child-b-answer", "Answer: Child B follow-up."),
+    authorizedArtifacts: ["answer"],
+    taskId: "coding-parent",
+    sectionOwner: childB,
+    logicalQuestionUnitId: "question-b",
+    logicalQuestionRevision: 1,
+  });
+  assert.ok(answerOnly);
+  assert.deepEqual(answerOnly.sections.code.owner, childA);
+  assert.deepEqual(answerOnly.sections.answer.owner, childB);
+
+  const rejected = commitStableArtifactOnlyRevision({
+    current: answerOnly,
+    candidate: suggestion(
+      "child-b-regeneration",
+      "Answer: Hidden.\nCode:\n```python\ndef binary_search():\n    return 2\n```\nComplexity: O(log n)."
+    ),
+    authorizedArtifacts: ["code", "complexity"],
+    expectedVisibleAnswerRevision: answerOnly.revision,
+    expectedTaskId: "coding-parent",
+    expectedLogicalQuestionUnitId: "question-b",
+    expectedLogicalQuestionRevision: 1,
+    sectionOwner: childB,
+  });
+
+  assert.equal(rejected.disposition, "rejected");
+  assert.equal(rejected.reason, "artifact-section-owner-mismatch");
+});
+
+test("allows an implementation child to generate its first Code without retained provenance", () => {
+  const child = {
+    kind: "active-child" as const,
+    parentId: "coding-parent",
+    childId: "child-new",
+  };
+  const answerOnly = commitStableAnswerRevision({
+    candidate: suggestion("child-new-answer", "Answer: Ready to implement."),
+    authorizedArtifacts: ["answer"],
+    taskId: "coding-parent",
+    sectionOwner: child,
+    logicalQuestionUnitId: "question-new",
+    logicalQuestionRevision: 1,
+  });
+  assert.ok(answerOnly);
+  assert.equal(answerOnly.sections.code.owner, null);
+
+  const generated = commitStableArtifactOnlyRevision({
+    current: answerOnly,
+    candidate: suggestion(
+      "child-new-code",
+      "Answer: Hidden.\nCode:\n```python\ndef solve():\n    return 1\n```\nComplexity: O(n)."
+    ),
+    authorizedArtifacts: ["code", "complexity"],
+    expectedVisibleAnswerRevision: answerOnly.revision,
+    expectedTaskId: "coding-parent",
+    expectedLogicalQuestionUnitId: "question-new",
+    expectedLogicalQuestionRevision: 1,
+    sectionOwner: child,
+  });
+  assert.equal(generated.disposition, "committed");
+  assert.deepEqual(generated.stable?.sections.code.owner, child);
+});
+
 test("publishes a Whiteboard without replacing the visible Answer", () => {
   const current = commitStableAnswerRevision({
     candidate: suggestion(
