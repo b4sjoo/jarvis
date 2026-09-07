@@ -9,6 +9,7 @@ import {
 } from "../src/lib/meeting/task-relation-adjudication.js";
 import {
   authorizeTaskRelationSplitLease,
+  authorizeTaskRelationSplitIdentity,
   authorizeTaskRelationCanonicalPredecessors,
   buildTaskRelationAffinityPrompts,
   buildTaskRelationAffinityRequests,
@@ -863,6 +864,52 @@ test("does not reauthorize an Affinity candidate after manual correction changes
   assert.equal(
     outcome.parent.unavailableReason,
     "affinity-manualCorrectionRevision-stale"
+  );
+});
+
+test("treats the original Relation operation as stale after any identity change", () => {
+  const requests = buildTaskRelationAffinityRequests({
+    request: request(),
+    sessionId: "session-a",
+    runtimeEpoch: 4,
+    manualCorrectionRevision: 0,
+  });
+  for (const [mismatchedKey, current] of [
+    [
+      "manualCorrectionRevision",
+      {
+        ...requests.parent.identity,
+        manualCorrectionRevision: 1,
+      },
+    ],
+    [
+      "sourceHash",
+      {
+        ...requests.parent.identity,
+        sourceHash: "source-corrected",
+      },
+    ],
+    [
+      "parentRevision",
+      {
+        ...requests.parent.identity,
+        parentRevision: requests.parent.identity.parentRevision + 1,
+      },
+    ],
+  ] as const) {
+    const authorization = authorizeTaskRelationSplitIdentity({
+      scheduled: requests.parent.identity,
+      current,
+    });
+    assert.equal(authorization.authorized, false, mismatchedKey);
+    assert.equal(authorization.mismatchedKey, mismatchedKey);
+  }
+  assert.deepEqual(
+    authorizeTaskRelationSplitIdentity({
+      scheduled: requests.parent.identity,
+      current: { ...requests.parent.identity },
+    }),
+    { authorized: true, reason: "identity-current" }
   );
 });
 

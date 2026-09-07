@@ -79,6 +79,31 @@ const TASK_RELATION_SPLIT_IDENTITY_KEYS = [
   "manualCorrectionRevision",
 ] as const;
 
+export type TaskRelationSplitIdentityKey =
+  (typeof TASK_RELATION_SPLIT_IDENTITY_KEYS)[number];
+
+export interface TaskRelationSplitIdentityAuthorization {
+  authorized: boolean;
+  reason: "identity-current" | "identity-mismatch";
+  mismatchedKey?: TaskRelationSplitIdentityKey;
+}
+
+export function authorizeTaskRelationSplitIdentity(input: {
+  scheduled: TaskRelationSplitIdentity;
+  current: TaskRelationSplitIdentity;
+}): TaskRelationSplitIdentityAuthorization {
+  const mismatchedKey = TASK_RELATION_SPLIT_IDENTITY_KEYS.find(
+    (key) => input.scheduled[key] !== input.current[key]
+  );
+  return mismatchedKey
+    ? {
+        authorized: false,
+        reason: "identity-mismatch",
+        mismatchedKey,
+      }
+    : { authorized: true, reason: "identity-current" };
+}
+
 export function filterTaskRelationAffinityOutcomeAtCutoff(
   outcome: TaskRelationSplitAffinityOutcome,
   cutoffAt: number
@@ -129,15 +154,15 @@ export function revalidateTaskRelationAffinityOutcome(input: {
         unavailableReason: "affinity-operation-stale",
       };
     }
-    const current = input.readCurrentIdentity(result.identity);
-    const mismatchedKey = TASK_RELATION_SPLIT_IDENTITY_KEYS.find(
-      (key) => result.identity?.[key] !== current[key]
-    );
-    if (mismatchedKey) {
+    const identityAuthorization = authorizeTaskRelationSplitIdentity({
+      scheduled: result.identity,
+      current: input.readCurrentIdentity(result.identity),
+    });
+    if (!identityAuthorization.authorized) {
       return {
         ...cloneTaskRelationSplitAffinityResult(result),
         adjudication: undefined,
-        unavailableReason: `affinity-${mismatchedKey}-stale`,
+        unavailableReason: `affinity-${identityAuthorization.mismatchedKey}-stale`,
       };
     }
     return cloneTaskRelationSplitAffinityResult(result);

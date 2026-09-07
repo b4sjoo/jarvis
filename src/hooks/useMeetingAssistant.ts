@@ -194,6 +194,7 @@ import {
 import { reverseActiveQuestionTermCorrection } from "@/lib/meeting/term-correction-reversal";
 import {
   authorizeTaskRelationSplitLease,
+  authorizeTaskRelationSplitIdentity,
   authorizeTaskRelationCanonicalPredecessors,
   buildTaskRelationAffinityPrompts,
   buildTaskRelationAffinityRequests,
@@ -640,6 +641,7 @@ import {
   commitTaskBoundaryCandidate,
   createTaskBoundaryCandidate,
   createProvisionalCurrentQuestion,
+  createCurrentQuestionSourceSettlementId,
   authorizeSettlementOwnedQuestionContext,
   formatSettlementOwnedQuestionContextForTrace,
   resolveCurrentQuestionSourceKind,
@@ -2550,6 +2552,7 @@ interface TaskRelationAdjudicationScheduleHandle {
   revalidateAffinityOutcome?: (
     outcome: TaskRelationSplitAffinityOutcome
   ) => TaskRelationSplitAffinityOutcome;
+  authorizeOperation?: () => TaskRelationOperationAuthorization;
   canonicalOutcome?: Promise<TaskRelationSplitCanonicalResult>;
   startCanonical?: (
     input: {
@@ -2562,6 +2565,12 @@ interface TaskRelationAdjudicationScheduleHandle {
   deterministicProposal?: CurrentQuestionSettlementProposal;
   localQuestionType?: CanonicalQuestionType;
   sourceKind?: "voice" | "screen" | "mixed";
+}
+
+interface TaskRelationOperationAuthorization {
+  authorized: boolean;
+  reason: string;
+  mismatchedKey?: string;
 }
 
 interface TaskRelationSplitCanonicalResult {
@@ -2582,6 +2591,7 @@ interface TaskRelationSplitScheduleHandle {
   revalidateAffinityOutcome: (
     outcome: TaskRelationSplitAffinityOutcome
   ) => TaskRelationSplitAffinityOutcome;
+  authorizeOperation: () => TaskRelationOperationAuthorization;
   canonicalOutcome: Promise<TaskRelationSplitCanonicalResult>;
   startCanonical: (
     input: {
@@ -19928,11 +19938,13 @@ export function useMeetingAssistant() {
       traceId,
       taskId,
       request,
+      currentQuestion,
       runtimeReleaseRequested = false,
     }: {
       traceId: string;
       taskId?: string;
       request: TaskRelationAdjudicationRequest;
+      currentQuestion: ProvisionalCurrentQuestion;
       runtimeReleaseRequested?: boolean;
     }): TaskRelationSplitScheduleHandle | undefined => {
       const evaluationActive =
@@ -19966,10 +19978,27 @@ export function useMeetingAssistant() {
       ): TaskRelationSplitIdentity => {
         const current = contextManagerRef.current.getState();
         const activeTask = current.activeMeetingTask;
+        const currentLogicalQuestion = logicalQuestionUnitRef.current;
+        const currentQuestionIdentity = currentLogicalQuestion
+          ? createProvisionalCurrentQuestion({
+              logicalQuestionUnit: currentLogicalQuestion,
+              sourceKind: currentQuestion.sourceKind,
+              sourceObservationIds: currentQuestion.sourceObservationIds,
+            })
+          : undefined;
         return {
           ...scheduled,
-          sessionId: current.sessionId,
-          runtimeEpoch: runtimeEpochRef.current,
+          sessionId: currentQuestionIdentity?.sessionId ?? current.sessionId,
+          runtimeEpoch:
+            currentQuestionIdentity?.runtimeEpoch ?? runtimeEpochRef.current,
+          logicalQuestionUnitId:
+            currentQuestionIdentity?.logicalQuestionUnitId ?? "",
+          logicalQuestionUnitRevision:
+            currentQuestionIdentity?.revision ?? -1,
+          sourceSettlementId: currentQuestionIdentity
+            ? createCurrentQuestionSourceSettlementId(currentQuestionIdentity)
+            : "",
+          sourceHash: currentQuestionIdentity?.sourceHash ?? "",
           parentId: activeTask?.parent.id ?? "",
           parentRevision: activeTask?.parent.revisions ?? -1,
           childId: activeTask?.child?.id,
@@ -20251,6 +20280,17 @@ export function useMeetingAssistant() {
               ? taskRelationChildAffinityRuntimeRef.current?.getCurrentOperationId()
               : taskRelationParentAffinityRuntimeRef.current?.getCurrentOperationId(),
         });
+      const authorizeOperation = (): TaskRelationOperationAuthorization => {
+        const authorization = authorizeTaskRelationSplitIdentity({
+          scheduled: splitRequests.parent.identity,
+          current: readCurrentIdentity(splitRequests.parent.identity),
+        });
+        return {
+          authorized: authorization.authorized,
+          reason: authorization.reason,
+          mismatchedKey: authorization.mismatchedKey,
+        };
+      };
       const affinityOutcome = Promise.all([
         childAffinityOutcome,
         parentAffinityOutcome,
@@ -20601,6 +20641,7 @@ export function useMeetingAssistant() {
         readAffinityOutcome,
         freezeAffinityOutcome,
         revalidateAffinityOutcome,
+        authorizeOperation,
         canonicalOutcome,
         startCanonical,
         cancelForegroundWork,
@@ -20730,6 +20771,7 @@ export function useMeetingAssistant() {
         traceId,
         taskId: activeMeetingTask.id,
         request,
+        currentQuestion,
         runtimeReleaseRequested: releaseWindowRequested,
       });
       const immediateHandle = (
@@ -20747,6 +20789,7 @@ export function useMeetingAssistant() {
         readAffinityOutcome: splitHandle?.readAffinityOutcome,
         freezeAffinityOutcome: splitHandle?.freezeAffinityOutcome,
         revalidateAffinityOutcome: splitHandle?.revalidateAffinityOutcome,
+        authorizeOperation: splitHandle?.authorizeOperation,
         canonicalOutcome: splitHandle?.canonicalOutcome,
         startCanonical: splitHandle?.startCanonical,
         cancelForegroundWork: splitHandle?.cancelForegroundWork,
@@ -20945,6 +20988,11 @@ export function useMeetingAssistant() {
       if (foregroundClosed) {
         input.handle.cancelForegroundWork?.();
       }
+      const operationAuthorization =
+        input.handle.authorizeOperation?.() ?? {
+          authorized: true,
+          reason: "operation-not-required",
+        };
       const clientError = Boolean(
         affinityOutcome?.child.clientError ||
           affinityOutcome?.parent.clientError ||
@@ -20981,6 +21029,14 @@ export function useMeetingAssistant() {
         taskRelationOrderedResolutionClientError: clientError,
         taskRelationOrderedResolutionLateWorkCancelled:
           foregroundClosed,
+        taskRelationOrderedResolutionOperationAuthorized:
+          operationAuthorization.authorized,
+        taskRelationOrderedResolutionOperationReason:
+          operationAuthorization.reason,
+        taskRelationOrderedResolutionOperationMismatchedKey:
+          operationAuthorization.mismatchedKey,
+        taskRelationOrderedResolutionOperationCancelled:
+          !operationAuthorization.authorized,
       };
       traceStoreRef.current.updateMetadata(input.traceId, metadata);
       if (clientError) {
@@ -20994,6 +21050,7 @@ export function useMeetingAssistant() {
         decision,
         affinityOutcome,
         canonicalOutcome,
+        operationAuthorization,
         metadata,
       };
     },
@@ -22226,6 +22283,41 @@ export function useMeetingAssistant() {
         input.logicalQuestionUnit
       );
       let waitTimer: number | undefined;
+      let relationOperationInvalidatedReason: string | undefined;
+      const cancelInvalidatedRelationOperation = (
+        authorization: TaskRelationOperationAuthorization
+      ) => {
+        if (relationOperationInvalidatedReason) return;
+        relationOperationInvalidatedReason =
+          `task-relation-operation-${
+            authorization.mismatchedKey ?? "identity"
+          }-stale`;
+        taskRelationHandle?.cancelForegroundWork?.();
+        if (waitTimer !== undefined) window.clearTimeout(waitTimer);
+        const metadata = {
+          taskRelationOrderedResolutionOperationAuthorized: false,
+          taskRelationOrderedResolutionOperationReason:
+            authorization.reason,
+          taskRelationOrderedResolutionOperationMismatchedKey:
+            authorization.mismatchedKey,
+          taskRelationOrderedResolutionOperationCancelled: true,
+          taskRelationOrderedResolutionFailureDisposition:
+            "stale-operation-cancelled",
+        };
+        traceStoreRef.current.updateMetadata(input.traceId, metadata);
+        sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+          stage: "task-relation-operation-cancelled",
+          traceId: input.traceId,
+          taskId:
+            contextManagerRef.current.getState().activeMeetingTask?.id,
+          ...metadata,
+        });
+        traceStoreRef.current.finishTrace(
+          input.traceId,
+          "cancelled",
+          relationOperationInvalidatedReason
+        );
+      };
       const resolveOrderedQuestionType = (
         outcome: QuestionTypeAdjudicationRuntimeOutcome | undefined
       ) => {
@@ -22250,6 +22342,17 @@ export function useMeetingAssistant() {
         waitDisposition: string,
         releaseSource: OrderedSettlementReleaseSource
       ) => {
+        const operationAuthorization =
+          relationWindowRequested
+            ? taskRelationHandle?.authorizeOperation?.() ?? {
+                authorized: true,
+                reason: "operation-not-required",
+              }
+            : { authorized: true, reason: "operation-not-required" };
+        if (!operationAuthorization.authorized) {
+          cancelInvalidatedRelationOperation(operationAuthorization);
+          return;
+        }
         const releaseDecision = foregroundReleaseGate.tryRelease({
           source: releaseSource,
         });
@@ -22598,6 +22701,7 @@ export function useMeetingAssistant() {
       let relationResolutionPromise:
         | Promise<{
             decision: OrderedTaskRelationResolutionDecision;
+            operationAuthorization: TaskRelationOperationAuthorization;
           }>
         | undefined;
       let relationFatalError: string | undefined;
@@ -22629,6 +22733,10 @@ export function useMeetingAssistant() {
           });
           relationResolutionPromise = Promise.resolve({
             decision: coordinated.relation,
+            operationAuthorization: {
+              authorized: true,
+              reason: "operation-not-required",
+            },
             affinityOutcome: undefined,
             canonicalOutcome: undefined,
             metadata: {},
@@ -22647,6 +22755,12 @@ export function useMeetingAssistant() {
         });
         void relationResolutionPromise.then(
           (resolution) => {
+            if (!resolution.operationAuthorization.authorized) {
+              cancelInvalidatedRelationOperation(
+                resolution.operationAuthorization
+              );
+              return;
+            }
             settledOrderedRelation = resolution.decision;
             relationSettled = true;
             releaseWhenSettled();
@@ -22679,6 +22793,7 @@ export function useMeetingAssistant() {
         if (
           foregroundReleaseGate.isReleased() ||
           relationFatalError ||
+          relationOperationInvalidatedReason ||
           deadlineFinalizationRequested ||
           !typeSettled
         ) {
@@ -22708,13 +22823,29 @@ export function useMeetingAssistant() {
 
       if (foregroundWaitBudgetMs > 0 && !foregroundReleaseGate.isReleased()) {
         waitTimer = window.setTimeout(() => {
-          if (foregroundReleaseGate.isReleased() || relationFatalError) return;
+          if (
+            foregroundReleaseGate.isReleased() ||
+            relationFatalError ||
+            relationOperationInvalidatedReason
+          ) {
+            return;
+          }
           deadlineFinalizationRequested = true;
           typeSettled = true;
           const relationResolution = startRelationResolution();
           void relationResolution?.then(
             (resolution) => {
-              if (foregroundReleaseGate.isReleased() || relationFatalError) {
+              if (
+                foregroundReleaseGate.isReleased() ||
+                relationFatalError ||
+                relationOperationInvalidatedReason
+              ) {
+                return;
+              }
+              if (!resolution.operationAuthorization.authorized) {
+                cancelInvalidatedRelationOperation(
+                  resolution.operationAuthorization
+                );
                 return;
               }
               settledOrderedRelation = resolution.decision;
