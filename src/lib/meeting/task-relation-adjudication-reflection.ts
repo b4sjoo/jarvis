@@ -108,7 +108,7 @@ export interface TaskRelationLatencyMetric {
 
 export interface TaskRelationAdjudicationReflectionReport {
   version: 1;
-  derivationVersion: "task152-offline-v4";
+  derivationVersion: "task152-offline-v5";
   diagnostics: Array<{ traceId: string; reason: string }>;
   inputRecords: number;
   duplicateRecords: number;
@@ -155,8 +155,16 @@ export interface TaskRelationAdjudicationReflectionReport {
     candidateRelation: Record<string, number>;
     latencyMs: TaskRelationLatencyMetric;
     unmatchedEvaluationCount: number;
+    coveredLegacyEvaluationCount: number;
   };
   rows: TaskRelationAdjudicationReflectionRow[];
+  coveredLegacyEvaluations: Array<{
+    evaluationId: string;
+    questionId: string;
+    traceIds: string[];
+    truthSubjectId: string;
+    truthEventIds: string[];
+  }>;
   unmatchedEvaluations: Array<{
     evaluationId: string;
     questionId: string;
@@ -449,11 +457,31 @@ export function buildTaskRelationAdjudicationReflectionReport(input: {
   const contextOwnerRows = productRows.filter(
     (row) => row.contextOwnerCorrect !== undefined
   );
+  // V1 has no independent source revision. Coverage therefore requires the
+  // exact V2 subject plus a source-verified, confirmed truth on a reader row.
+  const coveredLegacyEvaluations = input.evaluations.flatMap(evaluation => {
+    if (!evaluation.expectedRelation || matchedEvaluationIds.has(evaluation.id)) return [];
+    const verified = rows.filter(row => row.truthSubjectId && row.truthDiagnostic === "confirmed-human-truth" &&
+      row.expectedRelation && (input.projections ?? []).some(projection =>
+        projection.sessionId === evaluation.sessionId &&
+        projection.subject.questionId === evaluation.questionId &&
+        projection.subject.attemptId !== undefined &&
+        evaluation.traceIds.includes(projection.subject.attemptId) &&
+        projection.subject.traceIds.includes(projection.subject.attemptId) &&
+        row.truthEventIds.includes(projection.activeFacts["expected-task-settlement"]?.eventId ?? "")
+      ));
+    const subjectIds = new Set(verified.map(row => row.truthSubjectId!));
+    if (subjectIds.size !== 1) return [];
+    return [{ evaluationId: evaluation.id, questionId: evaluation.questionId,
+      traceIds: [...evaluation.traceIds], truthSubjectId: [...subjectIds][0],
+      truthEventIds: [...new Set(verified.flatMap(row => row.truthEventIds))].sort() }];
+  });
+  const coveredIds = new Set(coveredLegacyEvaluations.map(row => row.evaluationId));
   const unmatchedEvaluations = input.evaluations
     .filter(
       (evaluation) =>
         evaluation.expectedRelation &&
-        !matchedEvaluationIds.has(evaluation.id)
+        !matchedEvaluationIds.has(evaluation.id) && !coveredIds.has(evaluation.id)
     )
     .map((evaluation) => ({
       evaluationId: evaluation.id,
@@ -465,7 +493,7 @@ export function buildTaskRelationAdjudicationReflectionReport(input: {
 
   return {
     version: 1,
-    derivationVersion: "task152-offline-v4",
+    derivationVersion: "task152-offline-v5",
     metricContract: { candidateUnit: "Child/Parent/Canonical operation identity; legacy Direct separate", productUnit: "confirmed human attempt/source subject", exclusions: ["Unknown parse is not invalid", "Candidate is not Ordered or durable effect", "Missing/conflicting identity or truth is unscored"] },
     inputRecords: input.decisions.length,
     duplicateRecords: input.decisions.length - new Set(input.decisions.map(decision => JSON.stringify(decision))).size,
@@ -576,9 +604,11 @@ export function buildTaskRelationAdjudicationReflectionReport(input: {
         rows.map((row) => row.durationMs).filter(isNumber)
       ),
       unmatchedEvaluationCount: unmatchedEvaluations.length,
+      coveredLegacyEvaluationCount: coveredLegacyEvaluations.length,
     },
     rows,
     unmatchedEvaluations,
+    coveredLegacyEvaluations,
   };
 }
 
@@ -611,6 +641,7 @@ export function renderTaskRelationAdjudicationReflectionMarkdown(
     `- Runtime mutation applied: ${metrics.mutationApplied}`,
     `- Latency P50 / P95: ${formatMs(metrics.latencyMs.p50Ms)} / ${formatMs(metrics.latencyMs.p95Ms)}`,
     `- Unmatched expected-relation labels: ${metrics.unmatchedEvaluationCount}`,
+    `- V2-covered legacy labels (not scored again): ${metrics.coveredLegacyEvaluationCount}`,
     "",
     "## Rows",
     "",
