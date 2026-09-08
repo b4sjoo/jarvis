@@ -610,7 +610,8 @@ function isRevisionStableParentOrigin(
     settlement.parentMutationAuthorized || !settlement.responseAuthorized ||
     settlement.action !== "answer"
   ) return false;
-  // Effective ownership was validated when the stable binding was consumed.
+  // Effective ownership comes from canonical origin projection or a consumed
+  // stable binding; effectiveParentId is not a dedicated consumption receipt.
   // Raw proposals still need canonical origin identity, never just the relation label.
   if (
     isEffectiveCurrentQuestionSettlement(settlement) &&

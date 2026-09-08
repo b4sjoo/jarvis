@@ -480,3 +480,180 @@ test("manual Plan authorization rejects identity and owner changes before commit
     assert.equal(authorizeSettledAdvisorExecutionPlan({ ...input, ...mismatch }).authorized, false);
   }
 });
+
+function currentOnlyAnswerFixture(sourceKind: "voice" | "screen") {
+  const unit = buildManualScreenLogicalQuestionUnit({
+    packet: resolveManualScreenSourcePacket({
+      screenObservationId: "current-only-screen",
+      screenPreflightQuestion: "Design a RAG system.",
+    }),
+    sessionId: "session", runtimeEpoch: 3, createdAt: 100,
+  })!;
+  if (sourceKind === "voice") {
+    unit.id = "current-only-voice";
+    unit.currentTurnId = "voice-turn";
+    unit.sourceTurnIds = ["voice-turn"];
+    unit.sources = [{ turnId: "voice-turn", text: unit.normalizedText, startedAt: 100, endedAt: 100 }];
+  }
+  const currentQuestion = createProvisionalCurrentQuestion({
+    logicalQuestionUnit: unit, sourceKind,
+    sourceObservationIds: sourceKind === "screen" ? ["current-only-screen"] : [],
+  });
+  const settlement = settleCurrentQuestion({
+    currentQuestion,
+    deterministicProposal: {
+      ...currentQuestion, source: "deterministic-fast-path",
+      questionType: "unknown", relation: "unknown", action: "answer",
+      confidence: 0, typeEvidenceAuthorized: false,
+      relationEvidenceAuthorized: false, actionEvidenceAuthorized: true,
+      reasons: ["type-unresolved"],
+    },
+    manualCorrectionRevision: 0,
+    policy: { allowRuntimeTypeAdjudication: false, allowLlmActionRepair: false, runtimeMutationAuthorized: true, questionComplete: true, commitParent: false },
+  });
+  const view = buildEffectiveAdvisorSettlementView({
+    settlement, taskRuntimeRevision: 0,
+    fallback: { questionType: "unknown", relation: "unknown" },
+  });
+  assert.equal(view.currentOnly, true);
+  assert.equal(settlement.responseAuthorized, true);
+  assert.equal(createEffectiveQuestionSourceRecord({
+    logicalQuestionUnit: unit, settlement: view.effectiveSettlement!,
+  }), undefined);
+  const content = "Answer: Start with retrieval and reranking.";
+  const stable = commitStableAnswerRevision({
+    candidate: {
+      id: "current-only-answer", kind: "answer", content,
+      meetingAnswer: parseMeetingAnswer(content), createdAt: 110,
+      basedOnTurnIds: unit.sourceTurnIds,
+      basedOnObservationIds: currentQuestion.sourceObservationIds,
+      confidence: "medium",
+    },
+    authorizedArtifacts: ["answer"], taskId: null,
+    logicalQuestionUnitId: unit.id, logicalQuestionRevision: unit.revision,
+    sessionId: "session", runtimeEpoch: 3,
+    questionSourceHash: settlement.sourceHash,
+    settlementId: settlement.settlementId,
+    settlementSnapshot: view.effectiveSettlement,
+  })!;
+  assert.ok(stable);
+  const context: MeetingContextState = {
+    sessionId: "session", startedAt: 0,
+    transcriptTurns: sourceKind === "voice" ? [{
+      id: "voice-turn", text: unit.normalizedText, speaker: "them",
+      startedAt: 100, endedAt: 100, isFinal: true, source: "system-audio",
+    }] : [],
+    screenObservations: sourceKind === "screen" ? [{
+      id: "current-only-screen", capturedAt: 100,
+      source: "full-screen", changed: true,
+    }] : [],
+    taskRuntime: { revision: 0 },
+    rollingSummary: "", userProfileContext: "", glossary: [],
+  };
+  return { unit, stable, context, settlement };
+}
+
+for (const sourceKind of ["voice", "screen"] as const) {
+test(`real Regenerate callback ${sourceKind === "voice" ? "accepts exact current-only Voice" : "rejects current-only Screen"} without a parent ledger`, async () => {
+  const f = currentOnlyAnswerFixture(sourceKind);
+  const calls: any[] = [];
+  const events: any[] = [];
+  const environment: any = {
+    ...responseTargets, ...manual, projectObservedAdvisorAttempt,
+    contextManagerRef: { current: { getState: () => f.context } },
+    logicalQuestionUnitRef: { current: f.unit },
+    stableAnswerRevisionRef: { current: f.stable },
+    effectiveQuestionSourceLedgerRef: { current: new EffectiveQuestionSourceLedger() },
+    runtimeEpochRef: { current: 3 }, state: { status: "listening" },
+    currentSuggestionText: f.stable.suggestion.content,
+    createMeetingId: () => "manual-regenerate",
+    recordManualRuntimeAction: (event: any) => events.push(event),
+    flushPendingSentenceCompletion: () => undefined,
+    resolveCurrentSuggestionQuestionLineage: () => undefined,
+    setState: () => undefined,
+    buildAdvisorJob: (options: any) => ({ ...options, traceId: "regenerate" }),
+    activateAdvisorJob: () => true,
+    runAdvisor: async (options: any) => { calls.push(options); },
+    traceStoreRef: { current: { getTraces: () => [{
+      id: "regenerate", status: "success", metadata: { advisorOutputCommittedToUi: true },
+    }] } },
+  };
+  environment.isManualRuntimeActionBusy = evaluate(
+    `(${declaration("isManualRuntimeActionBusy").getText(hook)})`, {}
+  );
+  const node = declaration("regenerateSuggestion") as ts.VariableDeclaration;
+  const regenerate = evaluate(
+    `(${(node.initializer as ts.CallExpression).arguments[0].getText(hook)})`, environment
+  );
+  await regenerate();
+  if (sourceKind === "screen") {
+    assert.equal(calls.length, 0);
+    assert.equal(events.at(-1).terminalDisposition, "stale");
+    assert.equal(events.at(-1).reason, "visible-answer-effective-source-missing");
+    return;
+  }
+  assert.equal(calls.length, 1, JSON.stringify(events));
+  assert.equal(calls[0].advisorJob.logicalQuestionUnit, f.unit);
+  assert.equal(calls[0].currentQuestionSettlementOverride, f.stable.settlementSnapshot);
+  assert.equal(events.filter((event) => event.stage === "accepted").length, 1);
+  assert.equal(events.at(-1).terminalDisposition, "completed");
+});
+}
+
+test("current-only exception cannot admit Screen, mismatched Voice or a retired owner", () => {
+  for (const source of ["voice", "screen"] as const) {
+    const f = currentOnlyAnswerFixture(source);
+    const input = {
+      stableAnswer: f.stable, currentLogicalQuestionUnit: f.unit,
+      effectiveQuestionSources: [], meetingContext: f.context, runtimeEpoch: 3,
+    };
+    if (source === "screen") {
+      assert.equal(responseTargets.resolveVisibleAnswerResponseActionTarget(input).authorized, false);
+    }
+    for (const current of [
+      { ...f.unit, revision: 2 }, { ...f.unit, id: "another-question" },
+      { ...f.unit, sessionId: "another-session" }, { ...f.unit, runtimeEpoch: 4 },
+    ]) {
+      assert.equal(responseTargets.resolveVisibleAnswerResponseActionTarget({ ...input, currentLogicalQuestionUnit: current }).authorized, false);
+    }
+    assert.equal(responseTargets.resolveVisibleAnswerResponseActionTarget({
+      ...input, stableAnswer: { ...f.stable, taskId: "retired-parent" },
+    }).authorized, false);
+    const previousOwnedSource = screenFixture().ledger.list()[0];
+    assert.equal(responseTargets.resolveVisibleAnswerResponseActionTarget({
+      ...input, effectiveQuestionSources: [{
+        ...previousOwnedSource, logicalQuestionUnitId: f.unit.id,
+        logicalQuestionRevision: 2,
+      }],
+    }).authorized, false);
+    assert.equal(responseTargets.resolveVisibleAnswerResponseActionTarget({
+      ...input, currentLogicalQuestionUnit: { ...f.unit, normalizedText: "A different source." },
+    }).authorized, false);
+  }
+});
+
+test("fresh uncommitted new-parent projection never proves owned origin", () => {
+  const f = screenFixture();
+  const task = { ...f.task, parent: { ...f.task.parent, sourceQuestionUnitId: "another-origin" } };
+  for (const activeMeetingTask of [task, undefined]) {
+  for (const parentMutationAuthorized of [true, false]) {
+    const view = buildEffectiveAdvisorSettlementView({
+      settlement: { ...f.settlement, parentMutationAuthorized },
+      activeMeetingTask, taskRuntimeRevision: 1,
+      fallback: { questionType: "coding", relation: "new-parent" },
+    });
+    assert.equal(view.effectiveSettlement?.effectiveParentId, undefined);
+    const plan = buildSettledAdvisorExecutionPlan({
+      settlement: view.effectiveSettlement!, activeMeetingTask,
+      taskBoundaryCommitted: false, childOwnsResponse: false,
+      providerSnapshot: { providers: [], selectedProvider: { provider: "main", variables: {} }, codingProvider: { provider: "main", variables: {} } },
+      memoryUseCase: "meeting_assistant", askFrame: "hypothetical-design", topicDomain: "unknown",
+    });
+    assert.equal(plan.contextReadScope, "current-only");
+    assert.equal(plan.taskRelation, "none");
+    assert.equal(plan.taskMutationPolicy.kind, "preserve");
+    assert.equal(plan.artifactPolicy.allowLatestUsefulAnswer, false);
+    assert.equal(plan.artifactPolicy.allowCode, false);
+  }
+  }
+});

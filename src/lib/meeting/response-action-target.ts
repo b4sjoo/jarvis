@@ -169,7 +169,24 @@ export function resolveVisibleAnswerResponseActionTarget(input: {
       "superseded-revision"
     );
   }
-  if (input.effectiveQuestionSources) {
+  const currentMatchesVisibleAnswer =
+    current?.sessionId === input.meetingContext.sessionId &&
+    current.runtimeEpoch === input.runtimeEpoch &&
+    current.id === stable.logicalQuestionUnitId &&
+    current.revision === stable.logicalQuestionRevision;
+  const settlementSnapshot = readSettlementSnapshot(stable);
+  // A parentless Voice answer has no owner-ledger entry. Its exact live LQU
+  // remains the source; Screen and previously bound questions still need the ledger.
+  const unboundCurrentVoice = Boolean(
+    currentMatchesVisibleAnswer && !stable.taskId && !activeParentId &&
+    settlementSnapshot?.sourceKind === "voice" &&
+    !sourceRecords.some((record) =>
+      record.sessionId === input.meetingContext.sessionId &&
+      record.runtimeEpoch === input.runtimeEpoch &&
+      record.logicalQuestionUnitId === stable.logicalQuestionUnitId
+    )
+  );
+  if (input.effectiveQuestionSources && !unboundCurrentVoice) {
     if (!sourceRecord) {
       return matchingSourceRecords.length
         ? reject("visible-answer-effective-source-mismatch", "effective-source-hash")
@@ -189,18 +206,15 @@ export function resolveVisibleAnswerResponseActionTarget(input: {
       return reject("visible-answer-parent-changed", "source-owner");
     }
   }
-  if (
-    current?.sessionId === input.meetingContext.sessionId &&
-    current.runtimeEpoch === input.runtimeEpoch &&
-    current.id === stable.logicalQuestionUnitId &&
-    current.revision === stable.logicalQuestionRevision
-  ) {
+  if (currentMatchesVisibleAnswer) {
+    const currentSource = sourceRecord ??
+      (unboundCurrentVoice ? settlementSnapshot : undefined);
     if (
-      sourceRecord && createProvisionalCurrentQuestion({
+      currentSource && createProvisionalCurrentQuestion({
         logicalQuestionUnit: current,
-        sourceKind: sourceRecord.sourceKind ?? "voice",
-        sourceObservationIds: sourceRecord.sourceObservationIds,
-      }).sourceHash !== sourceRecord.sourceHash
+        sourceKind: currentSource.sourceKind ?? "voice",
+        sourceObservationIds: currentSource.sourceObservationIds,
+      }).sourceHash !== currentSource.sourceHash
     ) {
       return reject("visible-answer-effective-source-mismatch", "current-source-hash");
     }
