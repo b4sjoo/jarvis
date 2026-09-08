@@ -32967,7 +32967,6 @@ export function useMeetingAssistant() {
       return;
     }
     const advisorJob = buildAdvisorJob({
-      force: true,
       mode: "regenerate",
       currentSuggestion: currentSuggestionText,
       advisorJobSource: "regenerate",
@@ -33011,6 +33010,7 @@ export function useMeetingAssistant() {
     });
     try {
       await runAdvisor({
+        force: true,
         advisorJob,
         currentQuestionSettlementOverride: visibleTarget.settlementSnapshot,
       });

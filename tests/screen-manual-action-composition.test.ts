@@ -26,6 +26,12 @@ import { projectObservedAdvisorAttempt } from "../src/lib/meeting/observed-advis
 import { buildHumanEvaluationObservedSnapshotV2 } from "../src/lib/meeting/human-ground-truth-v2.js";
 import { commitSourceOwnedTransitionToRuntime, resolveSourceOwnedRuntimeTransition } from "../src/lib/meeting/source-owned-transition-runtime.js";
 import type { MeetingTaskRuntimeState } from "../src/lib/meeting/active-meeting-task.js";
+import * as advisorJobs from "../src/lib/meeting/advisor-trigger-job.js";
+import * as advisorIntent from "../src/lib/meeting/advisor-turn-intent.js";
+import * as runtimeCommit from "../src/lib/meeting/runtime-commit-authorization.js";
+import * as logicalOwnership from "../src/lib/meeting/logical-question-ownership.js";
+import { decideRefreshAuthority } from "../src/lib/meeting/answer-generation-lease.js";
+import { resolveResponseOpportunityRefreshAuthority } from "../src/lib/meeting/response-opportunity-generation-gate.js";
 
 const hook = ts.createSourceFile("hook.ts", readFileSync("src/hooks/useMeetingAssistant.ts", "utf8"), ts.ScriptTarget.Latest, true);
 function declaration(name: string): ts.FunctionDeclaration | ts.VariableDeclaration {
@@ -304,6 +310,218 @@ function actionHarness(f = screenFixture()) {
   };
   return { f, context, events, plans, observations, traces, runtimeCommands, stableRef, currentRef, apply: callback("applyResponseAction"), regenerate: callback("regenerateSuggestion"), environment };
 }
+
+// Keep the real callback/factory and executor admission in one test path. Only
+// host state and Provider output are controlled; the existing Plan/output fixture follows.
+function withRegenerateExecution(h: ReturnType<typeof actionHarness>) {
+  const env = h.environment;
+  const outputs = env.runAdvisor;
+  const admissions: any[] = [];
+  let generated = 0;
+  const control = {
+    beforeExecution: (_job: any) => {},
+    provider: async () => {},
+    runtimeActive: true,
+  };
+  Object.assign(env, advisorJobs, advisorIntent, runtimeCommit, logicalOwnership, {
+    decideRefreshAuthority, resolveResponseOpportunityRefreshAuthority,
+    recentAdvisorContinuityRef: { current: [] },
+    responseActionRevisionRef: { current: 0 }, manualCorrectionRevisionRef: { current: 0 },
+    currentQuestionLineageRef: { current: undefined },
+    activeAdvisorJobRef: { current: undefined },
+    runtimeActiveRef: { get current() { return control.runtimeActive; } },
+    responseOpportunityGenerationGateRef: { current: { findOperationId: () => undefined, read: () => undefined } },
+  });
+  env.contextManagerRef.current.buildAdvisorPromptContext = () => ({
+    transcript: h.context.transcriptTurns.map(t => `${t.speaker}: ${t.text}`).join("\n"),
+    latestTurn: h.context.transcriptTurns.at(-1),
+    screenContext: h.f.unit.normalizedText, taskRuntime: h.context.taskRuntime,
+    activeMeetingTask: h.context.activeMeetingTask, rollingSummary: "", userProfileContext: "", glossaryText: "",
+  });
+  const callbackNode = declaration("buildAdvisorJob") as ts.VariableDeclaration;
+  env.buildAdvisorJob = evaluate(`(${(callbackNode.initializer as ts.CallExpression).arguments[0].getText(hook)})`, env);
+  env.activateAdvisorJob = (job: any) => { env.activeAdvisorJobRef.current = job; return true; };
+  const initializer = (name: string, scope: any) => {
+    const node = declaration(name) as ts.VariableDeclaration;
+    return evaluate(`(${node.initializer!.getText(hook)})`, scope);
+  };
+  for (const name of ["hasAdvisorActiveTask", "evaluateThemTurnForAdvisor"]) {
+    env[name] = evaluate(`(${declaration(name).getText(hook)})`, env);
+  }
+  env.runAdvisor = async (options: any) => {
+    if (!options.advisorJob) return outputs(options);
+    const advisorJob = options.advisorJob;
+    assert.equal(advisorJob.source, "regenerate");
+    assert.equal("force" in advisorJob, false);
+    control.beforeExecution(advisorJob);
+    const scope: any = {
+      ...env, options, advisorJob,
+      latestTurn: advisorJob.promptContextSnapshot.latestTurn,
+      promptContext: advisorJob.promptContextSnapshot,
+      traceId: advisorJob.traceId,
+      effectiveRuntimeCommitToken: advisorJob.runtimeCommitToken,
+      latestManualCorrectionTargetRef: { current: undefined },
+      latestForceAdviseTargetRef: { current: undefined },
+      pendingAdvisorGenerationSupersessionRef: { current: undefined },
+      settledExecutionPlan: undefined, answerGenerationLease: undefined,
+      readRuntimeCommitSnapshot: () => runtimeCommit.buildRuntimeCommitSnapshot({ runtimeEpoch: env.runtimeEpochRef.current, contextState: h.context }),
+      trySameOwnerAnswerCommitRebase: () => { throw new Error("fixture does not exercise a revision rebase"); },
+      terminalizeAuthorizationRejection: () => {}, updateForceAdviseTargetForAdvisorOutcome: () => {},
+      finishRunningAdvisorJobTrace: (job: any, status: string, metadata: any, reason: string) => {
+        env.traceStoreRef.current.updateMetadata(job.traceId, metadata);
+        env.traceStoreRef.current.finishTrace(job.traceId, status, reason);
+      },
+      releaseAdvisorJob: (job: any, outcome: string) => {
+        env.traceStoreRef.current.updateMetadata(job.traceId, { advisorJobOutcome: outcome });
+      },
+    };
+    for (const name of ["force", "logicalQuestionLease", "readLogicalQuestionAuthorizationTarget", "readCommitDecision", "rejectStaleCommit"]) {
+      scope[name] = initializer(name, scope);
+    }
+    if (scope.rejectStaleCommit("pre-execution")) return;
+    let inactiveGuard: ts.IfStatement | undefined;
+    const findInactiveGuard = (node: ts.Node) => {
+      if (ts.isIfStatement(node) && node.expression.getText(hook) === "!runtimeActiveRef.current && !force") inactiveGuard ??= node;
+      ts.forEachChild(node, findInactiveGuard);
+    };
+    findInactiveGuard(hook);
+    assert.ok(inactiveGuard, "production inactive-audio gate");
+    if (evaluate(`(() => { ${inactiveGuard.getText(hook)}; return false; })()`, scope) !== false) return;
+    for (const name of ["inferredTurnIntentDecision", "hasExplicitAction", "executionAuthorization"]) {
+      scope[name] = initializer(name, scope);
+    }
+    admissions.push(scope.executionAuthorization);
+    env.traceStoreRef.current.updateMetadata(advisorJob.traceId, {
+      advisorExecutionAuthorized: scope.executionAuthorization.authorized,
+      advisorExecutionAuthorizationReason: scope.executionAuthorization.reason,
+    });
+    if (!scope.executionAuthorization.authorized) {
+      scope.releaseAdvisorJob(advisorJob, "suppressed");
+      env.traceStoreRef.current.finishTrace(advisorJob.traceId, "success");
+      return;
+    }
+    generated += 1;
+    await control.provider();
+    if (scope.rejectStaleCommit("post-model")) return;
+    return outputs(options);
+  };
+  return { control, admissions, generated: () => generated };
+}
+
+test("G1 pure Screen Regenerate passes the real factory and executor gate", async () => {
+  const h = actionHarness();
+  await h.apply("next-phase");
+  await h.apply("next-phase");
+  const before = h.stableRef.current;
+  const execution = withRegenerateExecution(h);
+  await h.regenerate();
+  assert.equal(execution.generated(), 1, JSON.stringify(h.events));
+  assert.equal(execution.admissions[0].reason, "force-bypass");
+  assert.equal(h.events.at(-1).terminalDisposition, "completed");
+  assert.equal(h.stableRef.current.logicalQuestionUnitId, before.logicalQuestionUnitId);
+  assert.equal(h.stableRef.current.logicalQuestionRevision, before.logicalQuestionRevision);
+  assert.equal(h.stableRef.current.taskId, before.taskId);
+  assert.equal(h.stableRef.current.suggestion.meetingAnswer?.sections.code, before.suggestion.meetingAnswer?.sections.code);
+  assert.equal(h.stableRef.current.suggestion.meetingAnswer?.sections.complexity, before.suggestion.meetingAnswer?.sections.complexity);
+  assert.equal(h.plans.at(-1)?.taskRelation, "new-parent");
+  assert.equal(h.plans.at(-1)?.questionType, "coding");
+  assert.deepEqual(h.plans.at(-1)?.requestedArtifacts, ["answer"]);
+  assert.equal(h.context.taskRuntime.parent?.playbookPhase, "implementation_validation");
+});
+
+test("G1 historical question or acknowledgement does not decide manual Regenerate admission", async () => {
+  for (const text of ["What is HNSW?", "Okay, thanks."]) {
+    const h = actionHarness();
+    h.context.transcriptTurns.push({ id: "old-them", speaker: "them", text, startedAt: 1, endedAt: 2, isFinal: true, source: "system-audio" });
+    const execution = withRegenerateExecution(h);
+    await h.regenerate();
+    assert.equal(execution.generated(), 1, text);
+    assert.equal(execution.admissions[0].reason, "force-bypass");
+  }
+});
+
+test("G2 force does not admit missing, superseded or retired Screen sources", async () => {
+  for (const invalidation of ["missing", "revision", "parent", "epoch", "session"] as const) {
+    const h = actionHarness();
+    const execution = withRegenerateExecution(h);
+    const stable = h.stableRef.current;
+    if (invalidation === "missing") h.f.ledger.clear();
+    if (invalidation === "revision") h.currentRef.current = { ...h.f.unit, revision: 2 };
+    if (invalidation === "parent") h.context.activeMeetingTask!.parent.id = "replacement-parent";
+    if (invalidation === "epoch") h.environment.runtimeEpochRef.current = 4;
+    if (invalidation === "session") h.context.sessionId = "replacement-session";
+    await h.regenerate();
+    assert.equal(execution.generated(), 0, invalidation);
+    assert.equal(h.stableRef.current, stable, invalidation);
+    assert.equal(h.events.at(-1).terminalDisposition, "stale", invalidation);
+  }
+});
+
+test("G2 real executor rejects an epoch or job-owner change after factory handoff", async () => {
+  for (const change of ["epoch", "job"] as const) {
+    const h = actionHarness();
+    const execution = withRegenerateExecution(h);
+    execution.control.beforeExecution = () => {
+      if (change === "epoch") h.environment.runtimeEpochRef.current = 4;
+      else h.environment.activeAdvisorJobRef.current = { id: "newer-job" };
+    };
+    const before = h.stableRef.current;
+    await h.regenerate();
+    assert.equal(execution.generated(), 0);
+    assert.equal(h.stableRef.current, before);
+    assert.equal(h.plans.length, 0);
+    assert.notEqual(h.events.at(-1).terminalDisposition, "completed");
+  }
+});
+
+test("G4 explicit Regenerate can execute with inactive audio and a valid current source", async () => {
+  const h = actionHarness();
+  const execution = withRegenerateExecution(h);
+  execution.control.runtimeActive = false;
+  await h.regenerate();
+  assert.equal(execution.generated(), 1);
+  assert.equal(h.events.at(-1).terminalDisposition, "completed");
+  assert.equal(execution.control.runtimeActive, false);
+});
+
+test("G4 provider failure and cancellation preserve the previous stable answer", async () => {
+  const failed = actionHarness();
+  const failureExecution = withRegenerateExecution(failed);
+  const previous = failed.stableRef.current;
+  failureExecution.control.provider = async () => { throw new Error("controlled-provider-failure"); };
+  await assert.rejects(failed.regenerate(), /controlled-provider-failure/);
+  assert.equal(failureExecution.generated(), 1);
+  assert.equal(failed.stableRef.current, previous);
+  assert.equal(failed.events.at(-1).terminalDisposition, "failed");
+
+  const cancelled = actionHarness();
+  const cancellationExecution = withRegenerateExecution(cancelled);
+  const stable = cancelled.stableRef.current;
+  cancellationExecution.control.provider = async () => { cancelled.environment.runtimeEpochRef.current = 4; };
+  await cancelled.regenerate();
+  assert.equal(cancellationExecution.generated(), 1);
+  assert.equal(cancelled.stableRef.current, stable);
+  assert.equal(cancelled.plans.length, 0);
+  assert.notEqual(cancelled.events.at(-1).terminalDisposition, "completed");
+});
+
+test("G5 an identical Code candidate can commit changed Complexity without a cosmetic Code revision", async () => {
+  const h = actionHarness();
+  await h.apply("next-phase");
+  await h.apply("next-phase");
+  const before = h.stableRef.current;
+  const code = before.suggestion.meetingAnswer!.sections.code;
+  const content = `Answer: This text must not replace the answer.\nCode:\n${code}\nComplexity: O(n) time and O(k) auxiliary space for distinct characters.`;
+  const candidate = { ...before.suggestion, id: "same-code-new-complexity", content, meetingAnswer: parseMeetingAnswer(content) };
+  assert.equal(candidate.meetingAnswer.sections.code, code);
+  const result = commitStableArtifactOnlyRevision({ current: before, candidate, authorizedArtifacts: ["code", "complexity"], expectedVisibleAnswerRevision: before.revision, expectedTaskId: before.taskId, expectedLogicalQuestionUnitId: before.logicalQuestionUnitId, expectedLogicalQuestionRevision: before.logicalQuestionRevision, expectedSettlementId: before.settlementId });
+  assert.equal(result.disposition, "committed");
+  assert.ok(result.stable);
+  assert.equal(result.stable.sections.code.revision, before.sections.code.revision);
+  assert.equal(result.stable.sections.complexity.revision, before.sections.complexity.revision + 1);
+  assert.equal(result.stable.sections.answer.revision, before.sections.answer.revision);
+  assert.equal(result.stable.suggestion.meetingAnswer?.sections.answer, before.suggestion.meetingAnswer?.sections.answer);
+});
 
 test("real manual ingress composes Next Next Back Regenerate and Artifacts without replacing Screen identity", async () => {
   const h = actionHarness();
@@ -593,6 +811,7 @@ test(`real Regenerate callback ${sourceKind === "voice" ? "accepts exact current
     return;
   }
   assert.equal(calls.length, 1, JSON.stringify(events));
+  assert.equal(calls[0].force, true);
   assert.equal(calls[0].advisorJob.logicalQuestionUnit, f.unit);
   assert.equal(calls[0].currentQuestionSettlementOverride, f.stable.settlementSnapshot);
   assert.equal(events.filter((event) => event.stage === "accepted").length, 1);
