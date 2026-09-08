@@ -12452,9 +12452,6 @@ export function useMeetingAssistant() {
         promptContext.activeMeetingTask?.parent.playbookPhase ??
         promptContext.taskRuntime.parent?.playbookPhase,
     };
-    let advisorQuestionType =
-      currentQuestionSettlement?.questionType ??
-      advisorTaskSignals.questionType;
     // COMMITTED_SETTLEMENT_CONSUMER_BARRIER
     let effectiveAdvisorSettlementView =
       buildEffectiveAdvisorSettlementView({
@@ -12489,7 +12486,7 @@ export function useMeetingAssistant() {
         );
       }
     }
-    advisorQuestionType = effectiveAdvisorSettlementView.questionType;
+    let advisorQuestionType = effectiveAdvisorSettlementView.questionType;
     let advisorAnswerProfile = resolveMeetingAnswerProfile(
       advisorQuestionType
     );
