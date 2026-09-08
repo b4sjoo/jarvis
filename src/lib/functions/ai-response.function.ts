@@ -341,6 +341,7 @@ async function* fetchAIResponseAttemptEvents(
         });
         return;
       }
+      eventBuilder.observeProviderMetadata(json);
       const candidateContent = getByPath(
         json,
         provider?.responseContentPath || ""
@@ -391,6 +392,7 @@ async function* fetchAIResponseAttemptEvents(
         }
         try {
           const parsed = JSON.parse(streamEvent.data);
+          eventBuilder.observeProviderMetadata(parsed);
           const delta = getStreamingContent(
             parsed,
             provider?.responseContentPath || ""

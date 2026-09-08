@@ -71,6 +71,13 @@ export interface NormalizedAIResponseRetryPolicy {
   retryableFailureClasses: AIResponseFailureClass[];
 }
 
+export interface AIResponseTokenUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  reasoningTokens?: number;
+}
+
 export interface AIResponseTerminalOutcome {
   requestId: string;
   attemptId: string;
@@ -98,6 +105,8 @@ export interface AIResponseTerminalOutcome {
   observedContentChars?: number;
   observedContentHash?: string;
   completionSignal?: AIResponseCompletionSignal;
+  nativeFinishReason?: string;
+  tokenUsage?: AIResponseTokenUsage;
   text?: string;
 }
 
@@ -150,6 +159,7 @@ export class AIResponseEventBuilder {
   private chunkCount = 0;
   private text = "";
   private finished = false;
+  private diagnostics: Pick<AIResponseTerminalOutcome, "nativeFinishReason" | "tokenUsage"> = {};
 
   constructor(
     providerId: string,
@@ -163,6 +173,38 @@ export class AIResponseEventBuilder {
 
   get hasContent() {
     return this.text.length > 0;
+  }
+
+  observeProviderMetadata(value: unknown) {
+    if (this.finished) return;
+    const data = providerRecord(value);
+    if (!data) return;
+    const choice = Array.isArray(data.choices) ? providerRecord(data.choices[0]) : undefined;
+    const candidate = Array.isArray(data.candidates) ? providerRecord(data.candidates[0]) : undefined;
+    const message = providerRecord(data.message);
+    const delta = providerRecord(data.delta);
+    const reason = choice?.finish_reason ?? data.stop_reason ?? delta?.stop_reason ?? candidate?.finishReason;
+    if (typeof reason === "string" && reason.length > 0) {
+      this.diagnostics.nativeFinishReason = reason;
+    }
+    const usage = providerRecord(data.usage) ?? providerRecord(message?.usage);
+    const geminiUsage = providerRecord(data.usageMetadata);
+    const outputDetails = providerRecord(usage?.completion_tokens_details) ?? providerRecord(usage?.output_tokens_details);
+    const counts: AIResponseTokenUsage = {};
+    const values = {
+      inputTokens: usage?.prompt_tokens ?? usage?.input_tokens ?? geminiUsage?.promptTokenCount,
+      outputTokens: usage?.completion_tokens ?? usage?.output_tokens ?? geminiUsage?.candidatesTokenCount,
+      totalTokens: usage?.total_tokens ?? geminiUsage?.totalTokenCount,
+      reasoningTokens: outputDetails?.reasoning_tokens ?? geminiUsage?.thoughtsTokenCount,
+    };
+    for (const key of Object.keys(values) as Array<keyof AIResponseTokenUsage>) {
+      const count = values[key];
+      if (typeof count === "number" && Number.isSafeInteger(count) && count >= 0) counts[key] = count;
+    }
+    // Streaming usage frames are cumulative snapshots, not additive deltas.
+    if (Object.keys(counts).length) {
+      this.diagnostics.tokenUsage = { ...this.diagnostics.tokenUsage, ...counts };
+    }
   }
 
   content(content: string, emittedAt = Date.now()): AIResponseEvent {
@@ -205,6 +247,7 @@ export class AIResponseEventBuilder {
       type: "terminal",
       outcome: {
         ...input,
+        ...this.diagnostics,
         ...this.identity,
         final: true,
         disposition: "accepted",
@@ -222,6 +265,12 @@ export class AIResponseEventBuilder {
       },
     };
   }
+}
+
+function providerRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
 }
 
 function hashObservedAIResponseContent(value: string) {

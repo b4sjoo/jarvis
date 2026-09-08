@@ -75,6 +75,8 @@ export function formatRuntimeInferenceProviderOutcomeForTrace(
     [`${prefix}ProviderObservedContentHash`]:
       outcome?.observedContentHash,
     [`${prefix}ProviderCompletionSignal`]: outcome?.completionSignal,
+    [`${prefix}ProviderNativeFinishReason`]: outcome?.nativeFinishReason,
+    [`${prefix}ProviderTokenUsage`]: outcome?.tokenUsage,
   };
 }
 
