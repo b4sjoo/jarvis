@@ -210,6 +210,7 @@ import {
   filterTaskRelationAffinityOutcomeAtCutoff,
   formatFirstBatchRelationReleaseForTrace,
   formatOrderedTaskRelationResolutionForTrace,
+  formatTaskRelationSplitObservationForTrace,
   projectOrderedTaskRelationAdjudication,
   projectTaskRelationOperationCurrentIdentity,
   revalidateTaskRelationAffinityOutcome,
@@ -19935,6 +19936,13 @@ export function useMeetingAssistant() {
         debugModeRef.current ||
         Boolean(sessionRecordingManagerRef.current?.getState().active);
       if (!evaluationActive && !runtimeReleaseRequested) return;
+      // Keep delayed observations with the recorder that owned their input.
+      const splitRecordingManager =
+        sessionRecordingManagerRef.current?.getState().active
+          ? sessionRecordingManagerRef.current
+          : undefined;
+      const splitRecordingSessionId =
+        splitRecordingManager?.getState().sessionId;
       const startedAt = Date.now();
       const contextState = contextManagerRef.current.getState();
       const splitRuntimeEpoch = runtimeEpochRef.current;
@@ -20053,13 +20061,17 @@ export function useMeetingAssistant() {
           promptText,
           baseMetadata
         );
-        sessionRecordingManagerRef.current?.recordModelInput({
-          traceId,
-          taskId,
-          label: `${affinityRequest.affinityKind} affinity model input`,
-          value: promptText,
-          metadata: baseMetadata,
-        });
+        if (
+          splitRecordingManager?.getState().sessionId === splitRecordingSessionId
+        ) {
+          splitRecordingManager?.recordModelInput({
+            traceId,
+            taskId,
+            label: `${affinityRequest.affinityKind} affinity model input`,
+            value: promptText,
+            metadata: baseMetadata,
+          });
+        }
         return new Promise<TaskRelationSplitAffinityResult>((resolve) => {
           let stepId: string | undefined;
           runtime.schedule({
@@ -20149,6 +20161,7 @@ export function useMeetingAssistant() {
                   result?.providerOutcome,
                   prefix
                 ),
+                ...formatTaskRelationSplitObservationForTrace(result, prefix),
                 [`${prefix}Disposition`]: adjudication
                   ? "shadow-observed"
                   : unavailableReason,
@@ -20168,7 +20181,12 @@ export function useMeetingAssistant() {
                   .getTraces()
                   .find((candidate) => candidate.id === traceId)?.metadata ??
                 metadata;
-              sessionRecordingManagerRef.current?.recordTaskRelationAdjudicationDecision(
+              const recordingManager =
+                splitRecordingManager?.getState().sessionId ===
+                splitRecordingSessionId
+                  ? splitRecordingManager
+                  : undefined;
+              recordingManager?.recordTaskRelationAdjudicationDecision(
                 {
                   traceId,
                   taskId,
@@ -20176,7 +20194,7 @@ export function useMeetingAssistant() {
                 }
               );
               if (result?.rawOutput) {
-                sessionRecordingManagerRef.current?.recordModelOutput({
+                recordingManager?.recordModelOutput({
                   traceId,
                   taskId,
                   label: `${affinityRequest.affinityKind} affinity raw output`,
@@ -20368,13 +20386,17 @@ export function useMeetingAssistant() {
           promptText,
           baseMetadata
         );
-        sessionRecordingManagerRef.current?.recordModelInput({
-          traceId,
-          taskId,
-          label: "task relation split canonical model input",
-          value: promptText,
-          metadata: baseMetadata,
-        });
+        if (
+          splitRecordingManager?.getState().sessionId === splitRecordingSessionId
+        ) {
+          splitRecordingManager?.recordModelInput({
+            traceId,
+            taskId,
+            label: "task relation split canonical model input",
+            value: promptText,
+            metadata: baseMetadata,
+          });
+        }
         let stepId: string | undefined;
         taskRelationCanonicalShadowRuntimeRef.current!.schedule({
           job: {
@@ -20483,6 +20505,10 @@ export function useMeetingAssistant() {
                 result?.providerOutcome,
                 "taskRelationSplitCanonical"
               ),
+              ...formatTaskRelationSplitObservationForTrace(
+                result,
+                "taskRelationSplitCanonical"
+              ),
               taskRelationSplitCanonicalDisposition: adjudication
                 ? "shadow-observed"
                 : !authorization.authorized
@@ -20520,16 +20546,28 @@ export function useMeetingAssistant() {
                 .getTraces()
                 .find((candidate) => candidate.id === traceId)?.metadata ??
               metadata;
-            sessionRecordingManagerRef.current?.recordTaskRelationAdjudicationDecision(
+            const recordingManager =
+              splitRecordingManager?.getState().sessionId ===
+              splitRecordingSessionId
+                ? splitRecordingManager
+                : undefined;
+            recordingManager?.recordTaskRelationAdjudicationDecision(
               {
                 traceId,
                 taskId,
                 metadata: recordedMetadata,
               }
             );
-            refreshRecordedCompletedTrace(traceId);
+            if (
+              !sessionRecordingManagerRef.current?.getState().active ||
+              (sessionRecordingManagerRef.current === splitRecordingManager &&
+                splitRecordingManager?.getState().sessionId ===
+                  splitRecordingSessionId)
+            ) {
+              refreshRecordedCompletedTrace(traceId);
+            }
             if (result?.rawOutput) {
-              sessionRecordingManagerRef.current?.recordModelOutput({
+              recordingManager?.recordModelOutput({
                 traceId,
                 taskId,
                 label: "task relation split canonical raw output",

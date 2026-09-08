@@ -907,6 +907,31 @@ export type TaskRelationCanonicalShadowParseResult =
       evidenceSpansValid: false;
     };
 
+export function formatTaskRelationSplitObservationForTrace(
+  result: {
+    parsed:
+      | TaskRelationAffinityParseResult
+      | TaskRelationCanonicalShadowParseResult;
+    parseDisposition: string;
+    firstTokenAt?: number;
+    completedAt: number;
+  } | undefined,
+  prefix: string
+): Record<string, unknown> {
+  // Parser evidence is independent of whether the lease can consume it.
+  const candidate = result?.parsed.ok ? result.parsed.value : undefined;
+  return {
+    [`${prefix}ParseDisposition`]: result?.parseDisposition,
+    [`${prefix}ParseValid`]: result?.parsed.ok,
+    [`${prefix}ParsedDecision`]:
+      candidate && "decision" in candidate ? candidate.decision : undefined,
+    [`${prefix}ParsedRelation`]:
+      candidate && "relation" in candidate ? candidate.relation : undefined,
+    [`${prefix}FirstTokenAt`]: result?.firstTokenAt,
+    [`${prefix}CompletedAt`]: result?.completedAt,
+  };
+}
+
 export interface TaskRelationSplitLease {
   operationId: string;
   operationKind:
