@@ -45,6 +45,7 @@ export async function requestQuestionTypeAdjudication(input: {
   executionIdentity?: AIResponseExecutionIdentityInput;
   onFirstToken?: (at: number) => void;
   timeoutMs?: number;
+  maxOutputTokens?: number;
   readRetryDeadlineAt?: () => number | undefined;
   isExecutionCurrent?: () => boolean;
 }): Promise<QuestionTypeAdjudicationRequestResult> {
@@ -59,7 +60,7 @@ export async function requestQuestionTypeAdjudication(input: {
     applyResponseSettings: false,
     requestOptions: {
       timeoutMs: input.timeoutMs ?? OPERATION.timeoutMs,
-      maxOutputTokens: OPERATION.maxOutputTokens,
+      maxOutputTokens: input.maxOutputTokens ?? OPERATION.maxOutputTokens,
       isExecutionCurrent: input.isExecutionCurrent,
       ...(retryEnabled ? {
         retryPolicy: { maxAttempts: 2, retryableFailureClasses: ["transport", "provider-http"] } satisfies AIResponseRetryPolicy,

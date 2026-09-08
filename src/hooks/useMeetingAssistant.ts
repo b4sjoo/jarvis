@@ -19253,10 +19253,16 @@ export function useMeetingAssistant() {
         contextState.sessionId
       );
       const scheduledTaskId = contextState.activeMeetingTask?.id;
+      const operationMetadata = formatRuntimeInferenceOperationForTrace(
+        "question-type-adjudication"
+      );
+      const maxOutputTokens = sourceKind === "voice" && !forceRuntimeExecution
+        ? 1024
+        : undefined;
       const baseMetadata: Record<string, unknown> = {
-        ...formatRuntimeInferenceOperationForTrace(
-          "question-type-adjudication"
-        ),
+        ...operationMetadata,
+        runtimeInferenceMaxOutputTokens:
+          maxOutputTokens ?? operationMetadata.runtimeInferenceMaxOutputTokens,
         ...formatQuestionTypeAdjudicationForTrace({
           mode,
           eligibility,
@@ -19548,6 +19554,7 @@ export function useMeetingAssistant() {
             selectedProvider: modelRoute.selectedProvider,
             signal,
             timeoutMs: providerTimeoutMs,
+            maxOutputTokens,
             readRetryDeadlineAt: retryEnabled ? () => retryDeadlineAt : undefined,
             isExecutionCurrent: retryEnabled ? () => authorizeTypeOperation().authorized : undefined,
             executionIdentity: {

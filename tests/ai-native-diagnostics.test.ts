@@ -9,7 +9,7 @@ import * as common from "../src/lib/functions/common.function.js";
 import { decodeServerSentEventStream } from "../src/lib/functions/server-sent-event-stream.js";
 import { consumeRuntimeInferenceResponse, formatRuntimeInferenceProviderOutcomeForTrace } from "../src/lib/meeting/runtime-inference-response.js";
 import * as typeLogic from "../src/lib/meeting/question-type-adjudication.js";
-import { getRuntimeInferenceOperationDefinition } from "../src/lib/meeting/runtime-inference.js";
+import { getRuntimeInferenceOperationDefinition, formatRuntimeInferenceOperationForTrace } from "../src/lib/meeting/runtime-inference.js";
 import { SessionRecordingManager, type SessionRecordingInvoke } from "../src/lib/meeting/session-recording.js";
 import type { MeetingAssistantSettings } from "../src/lib/meeting/types.js";
 
@@ -45,7 +45,8 @@ function sse(frames: unknown[], stop = "[DONE]") {
   return new Response(frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join("") + `data: ${stop}\n\n`);
 }
 
-function harness(responses: (() => Response)[], streaming = true, responseContentPath = "choices[0].delta.content", signal?: AbortSignal) {
+function harness(responses: (() => Response)[], streaming = true, responseContentPath = "choices[0].delta.content", signal?: AbortSignal,
+  origin?: { sourceKind: "voice" | "screen" | "mixed"; correctionOwned: boolean }) {
   const calls: any[] = [];
   const transport = loadModule("src/lib/functions/ai-response.function.ts", {
     "./common.function": common,
@@ -67,15 +68,88 @@ function harness(responses: (() => Response)[], streaming = true, responseConten
     "./runtime-inference.js": { getRuntimeInferenceOperationDefinition },
     "./runtime-inference-response.js": { consumeRuntimeInferenceResponse },
   });
-  return { calls, run: () => typeRequest.requestQuestionTypeAdjudication({
+  const params = {
     request,
     provider: { id: "fixture", streaming, responseContentPath,
-      curl: `curl https://provider.invalid/chat -H 'Content-Type: application/json' -d '{"model":"fixture","messages":[{"role":"user","content":"{{TEXT}}"}]}'` },
+      curl: `curl https://provider.invalid/chat -H 'Content-Type: application/json' -d '{"model":"fixture","max_tokens":512,"messages":[{"role":"user","content":"{{TEXT}}"}]}'` },
     selectedProvider: { provider: "fixture", variables: {} },
     signal: signal ?? new AbortController().signal, timeoutMs: 4000,
     readRetryDeadlineAt: () => Date.now() + 4000,
-  }) };
+  };
+  if (!origin) return { calls, traceBudget: undefined, run: () => typeRequest.requestQuestionTypeAdjudication(params) };
+  const scheduled = loadSchedulerBudgetExecution(origin, typeRequest.requestQuestionTypeAdjudication, params);
+  return { calls, ...scheduled };
 }
+
+function loadSchedulerBudgetExecution(origin: { sourceKind: string; correctionOwned: boolean }, requestFn: any, params: any) {
+  const file = ts.createSourceFile("hook.ts", readFileSync("src/hooks/useMeetingAssistant.ts", "utf8"), ts.ScriptTarget.Latest, true);
+  let schedule: ts.ArrowFunction | undefined;
+  const findSchedule = (node: ts.Node) => {
+    if (ts.isVariableDeclaration(node) && node.name.getText(file) === "scheduleQuestionTypeAdjudication" &&
+      node.initializer && ts.isCallExpression(node.initializer)) schedule = node.initializer.arguments[0] as ts.ArrowFunction;
+    ts.forEachChild(node, findSchedule);
+  };
+  findSchedule(file);
+  assert.ok(schedule && ts.isBlock(schedule.body));
+  const declarations = schedule.body.statements.flatMap(s => ts.isVariableStatement(s) ? [...s.declarationList.declarations] : []);
+  const initializer = (name: string) => {
+    const declaration = declarations.find(d => d.name.getText(file) === name);
+    assert.ok(declaration?.initializer, `missing production ${name}`);
+    return declaration.initializer;
+  };
+  const env: Record<string, any> = { sourceKind: origin.sourceKind, forceRuntimeExecution: origin.correctionOwned,
+    formatRuntimeInferenceOperationForTrace };
+  const evaluate = (node: ts.Node) => vm.runInNewContext(ts.transpileModule(`(${node.getText(file)})`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
+  }).outputText, env);
+  env.operationMetadata = evaluate(initializer("operationMetadata"));
+  env.maxOutputTokens = evaluate(initializer("maxOutputTokens"));
+  const base = initializer("baseMetadata");
+  assert.ok(ts.isObjectLiteralExpression(base));
+  const property = base.properties.find(p => ts.isPropertyAssignment(p) && p.name.getText(file) === "runtimeInferenceMaxOutputTokens");
+  assert.ok(property && ts.isPropertyAssignment(property));
+  const traceBudget = evaluate(property.initializer);
+  let execute: ts.ArrowFunction | undefined;
+  const findExecute = (node: ts.Node) => {
+    if (ts.isPropertyAssignment(node) && node.name.getText(file) === "execute" && ts.isArrowFunction(node.initializer)) execute = node.initializer;
+    ts.forEachChild(node, findExecute);
+  };
+  findExecute(schedule.body);
+  assert.ok(execute);
+  Object.assign(env, { cachedCandidate: undefined, modelRoute: params, providerTimeoutMs: 4000,
+    retryEnabled: origin.sourceKind === "voice" && !origin.correctionOwned,
+    retryDeadlineAt: Date.now() + 4000, authorizeTypeOperation: () => ({ authorized: true }),
+    requestQuestionTypeAdjudication: requestFn, readSelectedProviderModelId: () => "fixture",
+    traceId: "trace", traceStoreRef: { current: { updateMetadata() {} } } });
+  const run = evaluate(execute);
+  return { traceBudget, run: () => run({ request, operationId: "type-budget", sessionId: "session",
+    lease: { operationId: "type-budget", runtimeEpoch: 1 } }, params.signal) };
+}
+
+test("TB1 ordinary Voice scheduler passes 1024 through adapter, retry and actual body with matching trace", async () => {
+  const run = harness([
+    () => sse([{ choices: [{ delta: { content: '{"v":1' }, finish_reason: "length" }] }]),
+    () => sse([{ choices: [{ delta: { content: valid }, finish_reason: "stop" }] }]),
+  ], true, "choices[0].delta.content", undefined, { sourceKind: "voice", correctionOwned: false });
+  const result = await run.run();
+  assert.equal(result.parsed.ok, true);
+  assert.equal(run.traceBudget, 1024);
+  assert.deepEqual(run.calls.map(c => c.max_tokens), [1024, 1024]);
+  assert.equal(result.providerAttempts.length, 2);
+});
+
+test("TB2 Screen, mixed, correction-owned and default adapter budgets stay 512", async () => {
+  const origins = [undefined, { sourceKind: "voice" as const, correctionOwned: true },
+    { sourceKind: "screen" as const, correctionOwned: false }, { sourceKind: "screen" as const, correctionOwned: true },
+    { sourceKind: "mixed" as const, correctionOwned: false }];
+  for (const origin of origins) {
+    const run = harness([() => sse([{ choices: [{ delta: { content: valid } }] }])], true, "choices[0].delta.content", undefined, origin);
+    await run.run();
+    assert.deepEqual(run.calls.map(c => c.max_tokens), [512]);
+    if (origin) assert.equal(run.traceBudget, 512);
+  }
+  assert.equal(getRuntimeInferenceOperationDefinition("question-type-adjudication").maxOutputTokens, 512);
+});
 
 test("native finish reason and usage survive actual transport, Type parser and trace projection", async () => {
   const run = harness([() => sse([
