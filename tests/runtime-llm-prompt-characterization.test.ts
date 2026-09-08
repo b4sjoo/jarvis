@@ -33,9 +33,7 @@ import {
   type TaskRelationAdjudicationRequest,
 } from "../src/lib/meeting/task-relation-adjudication.js";
 import {
-  buildTaxonomyAdjudicationPrompts,
   type TaxonomyAdjudicationProjection,
-  type TaxonomyAdjudicationRequest,
 } from "../src/lib/meeting/taxonomy-adjudication.js";
 import {
   buildWhiteboardSyntaxRepairPrompts,
@@ -60,23 +58,6 @@ function parseUserMessage(value: string) {
 }
 
 test("keeps envelope fields out of every runtime LLM prompt", () => {
-  const taxonomy: TaxonomyAdjudicationRequest = {
-    schemaVersion: 2,
-    promptVersion: "taxonomy-adjudication-v3-compact",
-    logicalQuestionUnitId: "question-current",
-    logicalQuestionUnitRevision: 2,
-    question: questionProjection,
-    sourceLanguage: "en",
-    sttUncertaintyMarkers: ["provider-confidence-unavailable"],
-    activeParent: {
-      idHash: "parent-hash",
-      revision: 4,
-      questionType: "project-deep-dive",
-      topic: "Oasis reliability",
-      playbookPhase: "project_narrative",
-    },
-    taskSwitchEvidence: [],
-  };
   const questionType: QuestionTypeAdjudicationRequest = {
     schemaVersion: 1,
     promptVersion: "question-type-adjudication-v1",
@@ -239,7 +220,6 @@ test("keeps envelope fields out of every runtime LLM prompt", () => {
   };
 
   const prompts = {
-    taxonomy: buildTaxonomyAdjudicationPrompts(taxonomy),
     questionType: buildQuestionTypeAdjudicationPrompts(questionType),
     responseOpportunity: buildResponseOpportunityPrompts(responseOpportunity),
     meetingMetadata: buildMeetingMetadataInferencePrompts(metadata),

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import test from "node:test";
 
 const source = readFileSync(
@@ -22,6 +22,15 @@ test("does not schedule the legacy Combined Intent observer", () => {
   assert.match(block, /scheduleTaskRelationAdjudication\(\{/);
   assert.match(block, /legacyCombinedIntentSchedulingRetired: true/);
   assert.doesNotMatch(block, /scheduleTaxonomyAdjudicationShadow\(\{/);
+  assert.doesNotMatch(source, /scheduleTaxonomyAdjudicationShadow|taxonomyAdjudicationRuntimeRef|taxonomyAdjudicationCircuitBreakerRef/);
+  for (const suffix of ["runtime", "request", "response", "health", "comparison"]) {
+    assert.equal(existsSync(`src/lib/meeting/taxonomy-adjudication-${suffix}.ts`), false);
+  }
+  const shared = readFileSync("src/lib/meeting/taxonomy-adjudication.ts", "utf8");
+  assert.match(shared, /function projectLogicalQuestionForAdjudication/);
+  assert.match(shared, /function authorizeTaxonomyAdjudicationLease/);
+  assert.doesNotMatch(shared, /function (?:buildTaxonomyAdjudicationPrompts|parseTaxonomyAdjudicationOutput|decideTaxonomyAdjudicationBudget)/);
+  assert.equal(existsSync("src/lib/meeting/taxonomy-adjudication-reflection.ts"), true);
 });
 
 test("keeps the ordered split chain without scheduling Direct Relation", () => {

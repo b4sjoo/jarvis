@@ -286,11 +286,13 @@
         "npm test",
         "npm run build"
       ],
-      "deletionGate": "Canonical ingress never invokes the Combined Intent scheduler; historical output remains observation-only.",
-      "rollbackBoundary": "Live scheduling retirement is separate from physical request, parser, and decoder deletion.",
+      "deletionGate": "Combined scheduler and its exclusive runtime, request, prompt and model parser are physically absent; shared Type/Split source and lease contracts and historical recording readers remain.",
+      "rollbackBoundary": "Physical Combined retirement can be reverted independently of current Type/Split and offline reader changes.",
       "status": "deleted",
       "forbiddenPatterns": [
-        "scheduleTaxonomyAdjudicationShadow({"
+        "scheduleTaxonomyAdjudicationShadow",
+        "taxonomyAdjudicationRuntimeRef",
+        "taxonomyAdjudicationCircuitBreakerRef"
       ]
     },
     {
