@@ -1,0 +1,10 @@
+[
+  {"id":"opening-1","category":"opening-design","text":"Design a retrieval-augmented generation service for internal documents.","expected":"ai-ml-system-design"},
+  {"id":"opening-2","category":"opening-design","text":"Design a URL shortening service with global availability.","expected":"general-system-design"},
+  {"id":"concept-1","category":"concept-followup","text":"What is HNSW, and how would it help retrieval in this service?","currentBranchType":"ai-ml-system-design","expected":"field-knowledge"},
+  {"id":"concept-2","category":"concept-followup","text":"What is consistent hashing, and why is it useful for distributed caches?","currentBranchType":"general-system-design","expected":"field-knowledge"},
+  {"id":"coding-1","category":"coding","text":"Implement an LRU cache with O(1) get and put operations in Python.","expected":"coding"},
+  {"id":"coding-2","category":"coding","text":"Write a function that merges overlapping intervals and explain its time complexity.","expected":"coding"},
+  {"id":"context-1","category":"contextual-followup","text":"How would you scale that to ten times the traffic?","currentBranchType":"ai-ml-system-design","expected":"ai-ml-system-design"},
+  {"id":"context-2","category":"contextual-followup","text":"And how would you handle failures in that design?","currentBranchType":"general-system-design","expected":"general-system-design"}
+]
