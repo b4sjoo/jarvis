@@ -101,7 +101,8 @@ export function consumeRevisionStableTopologyBinding<
     settlement.sessionId !== logicalQuestionUnit.sessionId ||
     settlement.runtimeEpoch !== logicalQuestionUnit.runtimeEpoch ||
     settlement.logicalQuestionUnitId !== logicalQuestionUnit.id ||
-    settlement.revision !== logicalQuestionUnit.revision
+    settlement.revision !== logicalQuestionUnit.revision ||
+    binding.boundRevision > logicalQuestionUnit.revision
   ) {
     return {
       settlement,
@@ -220,6 +221,14 @@ export function resolveRevisionStableTopologyBinding(input: {
 }): RevisionStableTopologyBinding | undefined {
   const { logicalQuestionUnit, activeMeetingTask } = input;
   const parent = activeMeetingTask?.parent;
+  if (
+    input.records.some((record) =>
+      record.sessionId === logicalQuestionUnit.sessionId &&
+      record.runtimeEpoch === logicalQuestionUnit.runtimeEpoch &&
+      record.logicalQuestionUnitId === logicalQuestionUnit.id &&
+      record.logicalQuestionRevision > logicalQuestionUnit.revision
+    )
+  ) return undefined;
   const latestBoundRecord = input.records
     .filter(
       (record) =>

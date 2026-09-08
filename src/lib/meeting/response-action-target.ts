@@ -1,5 +1,9 @@
 import type { LogicalQuestionUnit } from "./logical-question-unit.js";
-import type { EffectiveQuestionSourceRecord } from "./effective-question-source-ledger.js";
+import {
+  selectLatestEffectiveQuestionSourceRecords,
+  type EffectiveQuestionSourceRecord,
+} from "./effective-question-source-ledger.js";
+import type { MeetingPhaseOwner } from "./meeting-task-runtime-transition.js";
 import type { StableAnswerRevision } from "./stable-answer.js";
 import type { MeetingContextState } from "./types.js";
 import {
@@ -35,6 +39,61 @@ export interface VisibleAnswerResponseActionTargetDecision {
   settlementId?: string;
   settlementSnapshot?: CurrentQuestionSettlementDecision;
   mismatchFacets: string[];
+}
+
+export function resolveResponseActionLogicalQuestionUnit(input: {
+  currentLogicalQuestionUnit: LogicalQuestionUnit | undefined;
+  effectiveQuestionSources: EffectiveQuestionSourceRecord[];
+  meetingContext: MeetingContextState;
+  runtimeEpoch: number;
+  preferScreen: boolean;
+  phaseOwner?: MeetingPhaseOwner;
+}): LogicalQuestionUnit | undefined {
+  const current = input.currentLogicalQuestionUnit;
+  const currentIsValid =
+    current?.sessionId === input.meetingContext.sessionId &&
+    current.runtimeEpoch === input.runtimeEpoch;
+  // Correction retains its current-question target; phase actions select the branch.
+  if (!input.phaseOwner && currentIsValid) return current;
+  if (!input.phaseOwner && !input.preferScreen) return undefined;
+  const task = input.meetingContext.activeMeetingTask;
+  if (!task) return undefined;
+  const owner = input.phaseOwner ?? (
+    task.child
+      ? { kind: "child", id: task.child.id }
+      : { kind: "parent", id: task.parent.id }
+  );
+  if (
+    (owner.kind === "parent" && task.child) ||
+    owner.id !== (owner.kind === "child" ? task.child?.id : task.parent.id)
+  ) {
+    return undefined;
+  }
+  const record = selectLatestEffectiveQuestionSourceRecords(
+    input.effectiveQuestionSources
+  )
+    .filter((candidate) =>
+      candidate.sessionId === input.meetingContext.sessionId &&
+      candidate.runtimeEpoch === input.runtimeEpoch &&
+      candidate.owner.parentId === task.parent.id &&
+      (owner.kind === "child"
+        ? candidate.owner.kind === "active-child" &&
+          candidate.owner.childId === owner.id
+        : candidate.owner.kind === "parent-mainline"))
+    // Regenerating an older visible answer updates settlement time, not source order.
+    .sort((a, b) => b.updatedAt - a.updatedAt || b.settledAt - a.settledAt)
+    .at(0);
+  if (!record || !hasCompleteEffectiveSourceRecord(record)) return undefined;
+  if (
+    currentIsValid && current.id === record.logicalQuestionUnitId &&
+    current.revision > record.logicalQuestionRevision
+  ) return undefined;
+  const unit = reconstructEffectiveSourceQuestion(record, input.meetingContext);
+  return createProvisionalCurrentQuestion({
+    logicalQuestionUnit: unit,
+    sourceKind: record.sourceKind,
+    sourceObservationIds: record.sourceObservationIds,
+  }).sourceHash === record.sourceHash ? unit : undefined;
 }
 
 export function resolveVisibleAnswerResponseActionTarget(input: {
@@ -81,11 +140,13 @@ export function resolveVisibleAnswerResponseActionTarget(input: {
     );
   }
   const activeParentId = input.meetingContext.activeMeetingTask?.parent.id;
-  if (stable.taskId && activeParentId && stable.taskId !== activeParentId) {
+  if (stable.taskId && stable.taskId !== activeParentId) {
     return reject("visible-answer-parent-changed", "parent");
   }
 
-  const sourceRecords = input.effectiveQuestionSources ?? [];
+  const sourceRecords = selectLatestEffectiveQuestionSourceRecords(
+    input.effectiveQuestionSources ?? []
+  );
   const matchingSourceRecords = sourceRecords.filter(
     (record) =>
       record.sessionId === input.meetingContext.sessionId &&
@@ -101,8 +162,48 @@ export function resolveVisibleAnswerResponseActionTarget(input: {
     current?.sessionId === input.meetingContext.sessionId &&
     current.runtimeEpoch === input.runtimeEpoch &&
     current.id === stable.logicalQuestionUnitId &&
+    current.revision > stable.logicalQuestionRevision
+  ) {
+    return reject(
+      "visible-answer-effective-source-mismatch",
+      "superseded-revision"
+    );
+  }
+  if (input.effectiveQuestionSources) {
+    if (!sourceRecord) {
+      return matchingSourceRecords.length
+        ? reject("visible-answer-effective-source-mismatch", "effective-source-hash")
+        : reject("visible-answer-effective-source-missing", "effective-source");
+    }
+    if (!hasCompleteEffectiveSourceRecord(sourceRecord)) {
+      return reject(
+        "visible-answer-effective-source-incomplete",
+        "effective-source-payload"
+      );
+    }
+    if (
+      sourceRecord.owner.parentId !== activeParentId ||
+      (sourceRecord.owner.kind === "active-child" &&
+        sourceRecord.owner.childId !== input.meetingContext.activeMeetingTask?.child?.id)
+    ) {
+      return reject("visible-answer-parent-changed", "source-owner");
+    }
+  }
+  if (
+    current?.sessionId === input.meetingContext.sessionId &&
+    current.runtimeEpoch === input.runtimeEpoch &&
+    current.id === stable.logicalQuestionUnitId &&
     current.revision === stable.logicalQuestionRevision
   ) {
+    if (
+      sourceRecord && createProvisionalCurrentQuestion({
+        logicalQuestionUnit: current,
+        sourceKind: sourceRecord.sourceKind ?? "voice",
+        sourceObservationIds: sourceRecord.sourceObservationIds,
+      }).sourceHash !== sourceRecord.sourceHash
+    ) {
+      return reject("visible-answer-effective-source-mismatch", "current-source-hash");
+    }
     return accepted(
       stable,
       current,
@@ -298,6 +399,7 @@ function hasCompleteEffectiveSourceRecord(
 
 interface CompleteEffectiveQuestionSourceRecord
   extends EffectiveQuestionSourceRecord {
+  sourceKind: CurrentQuestionSettlementDecision["sourceKind"];
   currentTurnId: string;
   contextSourceTurnIds: string[];
   recentLogicalQuestionSourceTurnIds: string[];

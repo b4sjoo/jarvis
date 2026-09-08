@@ -106,6 +106,7 @@ import {
 } from "@/lib/meeting/coding-solution-manifest";
 import {
   formatVisibleAnswerResponseActionTargetForTrace,
+  resolveResponseActionLogicalQuestionUnit,
   resolveVisibleAnswerResponseActionTarget,
 } from "@/lib/meeting/response-action-target";
 import {
@@ -2187,57 +2188,6 @@ function isMeetingPrivacyMode(
     value === "memory-only" ||
     value === "text-and-screen-to-cloud"
   );
-}
-
-function resolveResponseActionLogicalQuestionUnit(input: {
-  currentLogicalQuestionUnit: LogicalQuestionUnit | undefined;
-  meetingContext: MeetingContextState;
-  runtimeEpoch: number;
-  preferScreen: boolean;
-}): LogicalQuestionUnit | undefined {
-  const current = input.currentLogicalQuestionUnit;
-  const currentIsValid =
-    current?.sessionId === input.meetingContext.sessionId &&
-    current.runtimeEpoch === input.runtimeEpoch;
-  if (!input.preferScreen && currentIsValid) return current;
-
-  const task = input.meetingContext.activeMeetingTask;
-  const screenTask = input.meetingContext.taskRuntime.screenAttachment;
-  const screenQuestion =
-    task?.screen?.question?.trim() ??
-    screenTask?.question?.trim();
-  if (task?.screen && screenQuestion) {
-    const screenTaskId =
-      task.screen.activeScreenTaskId ??
-      screenTask?.id ??
-      task.id;
-    const updatedAt =
-      screenTask?.updatedAt ?? task.parent.updatedAt;
-    return {
-      id: `screen-scope-${screenTaskId}`,
-      revision: Math.max(1, task.parent.revisions ?? 1),
-      sessionId: input.meetingContext.sessionId,
-      runtimeEpoch: input.runtimeEpoch,
-      currentTurnId: `screen:${screenTaskId}`,
-      sourceTurnIds: [],
-      sources: [
-        {
-          turnId: `screen:${screenTaskId}`,
-          text: screenQuestion,
-          startedAt: updatedAt,
-          endedAt: updatedAt,
-        },
-      ],
-      normalizedText: screenQuestion,
-      startedAt: updatedAt,
-      updatedAt,
-      compositionReasons: ["visible-screen-question"],
-      boundaryReason: "visible-screen-question",
-      truncated: false,
-    };
-  }
-
-  return currentIsValid ? current : undefined;
 }
 
 function evaluateRuntimeAnswerSufficiencyShadow(input: {
@@ -10528,14 +10478,26 @@ export function useMeetingAssistant() {
       return;
     }
     const settlementOverride = options.currentQuestionSettlementOverride;
+    const responseActionSourceRecord =
+      advisorJob.source === "response-action" &&
+      advisorJob.logicalQuestionUnit
+      ? effectiveQuestionSourceLedgerRef.current.findLogicalQuestion({
+          sessionId: advisorJob.logicalQuestionUnit.sessionId,
+          runtimeEpoch: advisorJob.logicalQuestionUnit.runtimeEpoch,
+          logicalQuestionUnitId: advisorJob.logicalQuestionUnit.id,
+          logicalQuestionRevision: advisorJob.logicalQuestionUnit.revision,
+        })
+      : undefined;
     const settlementIdentitySource = resolveSettlementOwnedQuestionSource({
       settlement: settlementOverride,
-      fallbackSourceKind: promptContext.activeMeetingTask?.screen
-        ? "mixed"
-        : "voice",
-      fallbackSourceObservationIds: promptContext.activeMeetingTask?.screen
-        ? [promptContext.activeMeetingTask.screen.observationId]
-        : [],
+      fallbackSourceKind:
+        responseActionSourceRecord?.sourceKind ??
+        (promptContext.activeMeetingTask?.screen ? "mixed" : "voice"),
+      fallbackSourceObservationIds:
+        responseActionSourceRecord?.sourceObservationIds ??
+        (promptContext.activeMeetingTask?.screen
+          ? [promptContext.activeMeetingTask.screen.observationId]
+          : []),
     });
     const settlementIdentityQuestion = advisorJob.logicalQuestionUnit
       ? createProvisionalCurrentQuestion({
@@ -11866,6 +11828,7 @@ export function useMeetingAssistant() {
       advisorTaskSignals.openingRoute?.commitParent !== false;
     const currentQuestionSourceKind =
       currentQuestionSettlement?.sourceKind ??
+      responseActionSourceRecord?.sourceKind ??
       (advisorJob.source === "live-turn"
         ? promptContext.activeMeetingTask?.screen
           ? "mixed"
@@ -11873,6 +11836,7 @@ export function useMeetingAssistant() {
         : "screen");
     const currentQuestionSourceObservationIds =
       currentQuestionSettlement?.sourceObservationIds ??
+      responseActionSourceRecord?.sourceObservationIds ??
       (promptContext.activeMeetingTask?.screen
         ? [promptContext.activeMeetingTask.screen.observationId]
         : []);
@@ -13447,9 +13411,7 @@ export function useMeetingAssistant() {
       settledExecutionPlan?.taskRelation === "new-parent" &&
         settledExecutionPlan.taskMutationPolicy.kind ===
           "update-parent-context" &&
-        settledExecutionPlan.taskSnapshot?.parent
-          .sourceQuestionUnitId ===
-          settledExecutionPlan.logicalQuestionUnitId
+        settledExecutionPlan.contextReadScope === "active-parent-read"
     );
     const advisorContinuityRelation =
       revisionStableParentContinuation
@@ -28312,6 +28274,9 @@ export function useMeetingAssistant() {
             source: "screen",
             sourceObservationIds: [observation.id],
             existingTask: screenTransitionParentBefore,
+            logicalQuestionUnitId: screenRelationLogicalQuestionUnit?.id,
+            logicalQuestionRevision:
+              screenRelationLogicalQuestionUnit?.revision,
             preserveChildId:
               effectiveScreenSettlementView.effectiveSettlement
                 ?.effectiveChildId,
@@ -33997,15 +33962,6 @@ export function useMeetingAssistant() {
           }));
           return;
         }
-        responseActionLogicalQuestionUnit =
-          resolveResponseActionLogicalQuestionUnit({
-            currentLogicalQuestionUnit: logicalQuestionUnitRef.current,
-            meetingContext,
-            runtimeEpoch: runtimeEpochRef.current,
-            preferScreen: Boolean(
-              meetingContext.taskRuntime.screenAttachment
-            ),
-          });
         const phaseResolution = resolveEffectiveBranchPhase(
           existingInterviewTask
         );
@@ -34030,6 +33986,34 @@ export function useMeetingAssistant() {
           return;
         }
         const phaseOwner = phaseResolution.view;
+        responseActionLogicalQuestionUnit =
+          resolveResponseActionLogicalQuestionUnit({
+            currentLogicalQuestionUnit: logicalQuestionUnitRef.current,
+            effectiveQuestionSources:
+              effectiveQuestionSourceLedgerRef.current.list(),
+            meetingContext,
+            runtimeEpoch: runtimeEpochRef.current,
+            preferScreen: Boolean(
+              meetingContext.taskRuntime.screenAttachment
+            ),
+            phaseOwner: {
+              kind: phaseOwner.ownerKind,
+              id: phaseOwner.ownerId,
+            },
+          });
+        if (!responseActionLogicalQuestionUnit) {
+          recordResponseAction({
+            stage: "terminal",
+            taskId: existingInterviewTask.id,
+            terminalDisposition: "stale",
+            reason: "active-phase-effective-source-unavailable",
+          });
+          setState((previous) => ({
+            ...previous,
+            error: "The current phase source changed. Wait for the latest answer and try again.",
+          }));
+          return;
+        }
         const phaseOwnerIdentity = {
           kind: phaseOwner.ownerKind,
           id: phaseOwner.ownerId,
@@ -34708,6 +34692,8 @@ export function useMeetingAssistant() {
       const targetLogicalQuestionUnit =
         resolveResponseActionLogicalQuestionUnit({
           currentLogicalQuestionUnit,
+          effectiveQuestionSources:
+            effectiveQuestionSourceLedgerRef.current.list(),
           meetingContext: contextState,
           runtimeEpoch: runtimeEpochRef.current,
           preferScreen,

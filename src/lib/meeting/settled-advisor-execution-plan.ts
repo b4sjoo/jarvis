@@ -263,16 +263,9 @@ export function buildEffectiveAdvisorSettlementView(input: {
     : input.fallback.relation;
   const activeTask = input.activeMeetingTask;
   const activeParent = activeTask?.parent;
-  const revisionStableParentOrigin = Boolean(
-    settlement &&
-      settlement.relation === "new-parent" &&
-      !settlement.parentMutationAuthorized &&
-      settlement.responseAuthorized &&
-      settlement.action === "answer" &&
-      activeParent?.sourceQuestionUnitId ===
-        settlement.logicalQuestionUnitId &&
-      (activeParent.sourceQuestionRevision === undefined ||
-        settlement.revision >= activeParent.sourceQuestionRevision)
+  const revisionStableParentOrigin = isRevisionStableParentOrigin(
+    settlement,
+    activeTask
   );
   const preserveCurrentBranch =
     input.preserveCurrentBranchOnAbstention !== false;
@@ -608,6 +601,29 @@ function isEffectiveCurrentQuestionSettlement(
   );
 }
 
+function isRevisionStableParentOrigin(
+  settlement: CurrentQuestionSettlementDecision | undefined,
+  task: ActiveMeetingTask | undefined
+) {
+  if (
+    !settlement || !task || settlement.relation !== "new-parent" ||
+    settlement.parentMutationAuthorized || !settlement.responseAuthorized ||
+    settlement.action !== "answer"
+  ) return false;
+  // Effective ownership was validated when the stable binding was consumed.
+  // Raw proposals still need canonical origin identity, never just the relation label.
+  if (
+    isEffectiveCurrentQuestionSettlement(settlement) &&
+    settlement.effectiveParentId
+  ) {
+    return settlement.effectiveParentId === task.parent.id &&
+      !settlement.effectiveChildId;
+  }
+  return task.parent.sourceQuestionUnitId === settlement.logicalQuestionUnitId &&
+    (task.parent.sourceQuestionRevision === undefined ||
+      settlement.revision >= task.parent.sourceQuestionRevision);
+}
+
 export function buildSettledAdvisorExecutionPlan(input: {
   settlement: CurrentQuestionSettlementDecision;
   activeMeetingTask?: ActiveMeetingTask;
@@ -655,13 +671,8 @@ export function buildSettledAdvisorExecutionPlan(input: {
     ? cloneActiveMeetingTask(input.activeMeetingTask)
     : undefined;
   const revisionStableParentOrigin = Boolean(
-    relation === "new-parent" &&
-      !input.taskBoundaryCommitted &&
-      !input.settlement.parentMutationAuthorized &&
-      input.settlement.responseAuthorized &&
-      input.settlement.action === "answer" &&
-      taskSnapshot?.parent.sourceQuestionUnitId ===
-        input.settlement.logicalQuestionUnitId
+    !input.taskBoundaryCommitted &&
+      isRevisionStableParentOrigin(input.settlement, taskSnapshot)
   );
   const transientPersonalStatusDecision =
     input.transientPersonalStatusDecision

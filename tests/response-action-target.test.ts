@@ -494,6 +494,13 @@ test("reads a Screen visible-answer target from its exact effective source recor
 });
 
 test("projects the exact active-child owner from the effective source record", () => {
+  const meetingContext = context();
+  meetingContext.activeMeetingTask!.child = {
+    id: "child-code", questionType: "coding", relation: "child-probe",
+    question: "Implement the window.", intent: "implementation-probe",
+    basedOnTurnIds: ["turn-voice"], basedOnObservationIds: [],
+    createdAt: 1, updatedAt: 2,
+  };
   const decision = resolveVisibleAnswerResponseActionTarget({
     stableAnswer: stable,
     currentLogicalQuestionUnit: undefined,
@@ -507,7 +514,7 @@ test("projects the exact active-child owner from the effective source record", (
         },
       },
     ],
-    meetingContext: context(),
+    meetingContext,
     runtimeEpoch: 3,
   });
 

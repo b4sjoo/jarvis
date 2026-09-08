@@ -502,6 +502,8 @@ function applyTransition(
         }),
         promptTranscriptStartTurnId: candidate.sourceTurnIds[0],
         canonicalQuestionSourceTurnIds: [...candidate.sourceTurnIds],
+        sourceQuestionUnitId: candidate.logicalQuestionUnitId,
+        sourceQuestionRevision: candidate.logicalQuestionRevision,
         admission: createParentAdmissionRecord({
           action: "create-parent",
           authoritySource: candidate.authoritySource,
