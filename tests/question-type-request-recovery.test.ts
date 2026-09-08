@@ -10,6 +10,10 @@ import { getRuntimeInferenceOperationDefinition } from "../src/lib/meeting/runti
 import { createProvisionalCurrentQuestion, settleCurrentQuestion } from "../src/lib/meeting/current-question-settlement.js";
 import { decideFirstBatchRelationRelease } from "../src/lib/meeting/task-relation-split-shadow.js";
 import type { LogicalQuestionUnit } from "../src/lib/meeting/logical-question-unit.js";
+import { RuntimeInferenceOperationRuntime } from "../src/lib/meeting/runtime-inference-runtime.js";
+import { MeetingAIResponseOutcomeError } from "../src/lib/meeting/meeting-ai-response.js";
+import { createTaxonomyAdjudicationLease, authorizeTaxonomyAdjudicationLease, hashTaxonomyTaskBoundary } from "../src/lib/meeting/taxonomy-adjudication.js";
+import { normalizeCanonicalQuestionType } from "../src/lib/meeting/task-taxonomy.js";
 
 function productionFunction(file: string, name: string, env: Record<string, unknown>): any {
   const source = ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true);
@@ -184,4 +188,57 @@ test("production transport gives retry remaining time instead of another full ti
   assert.equal(result.rawOutput, "ok");
   assert.equal(result.providerOutcome.attemptNumber, 2);
   assert.equal(result.providerOutcome.requestId, identity.requestId);
+});
+
+test("superseded Type runtime keeps both actual attempts without returning a result", async () => {
+  let h: ReturnType<typeof typeHarness>;
+  const runtime = new RuntimeInferenceOperationRuntime("question-type-adjudication");
+  try {
+    const settlement: any = await new Promise(resolve => runtime.schedule({
+      job: { operationId: "type-op", operationKind: "question-type-adjudication", sessionId: "meeting", budgetKey: "lqu:1", budgetSlot: "type", budgetReason: "test" },
+      execute: (_job, signal) => {
+        h = typeHarness([503, valid], {
+          signal,
+          current: () => { if (h.calls.length === 2) runtime.cancelAll("superseded"); return true; },
+        });
+        return h.run();
+      }, onSettled: resolve,
+    }, 0));
+    assert.equal(h!.calls.length, 2);
+    assert.equal(settlement.result, undefined);
+    assert.equal(settlement.disposition, "superseded");
+    assert.ok(settlement.error instanceof MeetingAIResponseOutcomeError);
+    assert.equal(settlement.error.name, "AbortError");
+    assert.equal(settlement.error.attempts.length, 2);
+    assert.equal(settlement.error.attempts[0].statusCode, 503);
+  } finally {
+    runtime.cancelAll("disposed");
+  }
+});
+
+test("production Type lease accepts its provisional source and rejects newer manual or operation authority", () => {
+  const file = ts.createSourceFile("hook.ts", readFileSync("src/hooks/useMeetingAssistant.ts", "utf8"), ts.ScriptTarget.Latest, true);
+  let declaration: ts.VariableDeclaration | undefined;
+  const visit = (node: ts.Node) => {
+    if (ts.isVariableDeclaration(node) && node.name.getText(file) === "authorizeTypeOperation") declaration = node;
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  assert.ok(declaration?.initializer);
+  const operationRef = { current: { getCurrentOperationId: () => "type-op" } };
+  const correctionRef = { current: 0 };
+  const lease = createTaxonomyAdjudicationLease({ operationId: "type-op", sessionId: "meeting", runtimeEpoch: 1, logicalQuestionUnit: unit, taskBoundaryEpoch: hashTaxonomyTaskBoundary({ relation: "unknown" }), manualCorrectionRevision: 0 });
+  const authorize = vm.runInNewContext(ts.transpileModule(`(${declaration.initializer.getText(file)})`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, {
+    contextManagerRef: { current: { getState: () => ({ sessionId: "meeting" }) } },
+    lease, authorizeTaxonomyAdjudicationLease, hashTaxonomyTaskBoundary, normalizeCanonicalQuestionType,
+    questionTypeAdjudicationRuntimeRef: operationRef, runtimeEpochRef: { current: 1 },
+    authorizationLogicalQuestionUnit: unit, logicalQuestionUnitRef: { current: { ...unit, id: "older-global-unit" } },
+    manualCorrectionRevisionRef: correctionRef,
+  });
+  assert.equal(authorize().authorized, true);
+  correctionRef.current = 1;
+  assert.equal(authorize().authorized, false);
+  correctionRef.current = 0;
+  operationRef.current.getCurrentOperationId = () => "new-type-op";
+  assert.equal(authorize().authorized, false);
 });
