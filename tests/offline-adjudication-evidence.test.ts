@@ -175,3 +175,116 @@ test("D4 Split IDs survive repeated trace snapshots; Ordered effect remains sepa
   assert.equal(canonical.firstBatchReleasedRelation, undefined);
   assert.equal(report.rows.find(row => row.operationId === "P1")!.parseValid, undefined);
 });
+
+test("current UI confirmed truth without evaluationTarget uses the exact terminal raw trace", () => {
+  const event = createHumanGroundTruthEventV2({
+    eventId: "ui-truth", sessionId: "runtime-a", subject,
+    fact: { kind: "expected-task-settlement", expectedQuestionType: "coding",
+      expectedRelation: "followup-parent", expectedParentAction: "preserve" },
+    source: "explicit-ui", sourceTraceId: "origin", now: 30,
+  });
+  const uiProjection = deriveHumanEvaluationProjectionV2({ sessionId: "runtime-a", subject, events: [event], now: 40 });
+  const operation = { ...settlement, metadata: { ...settlement.metadata,
+    taskRelationSplitCanonicalOperationId: "C1", taskRelationSplitCanonicalParseValid: true,
+    taskRelationSplitCanonicalParsedRelation: "new-parent",
+  } };
+  const terminal = { ...operation, status: "success", exportedAt: 40, metadata: {
+    ...operation.metadata, currentQuestionSettlementRevision: 2,
+    effectiveCurrentQuestionSettlementUnitRevision: 2,
+    effectiveCurrentQuestionSettlementRevision: 77,
+  } };
+  const type = (traces: typeof terminal[], projections = [uiProjection]) =>
+    buildQuestionTypeAdjudicationOutcomeReport({ decisions: [decision], settlements: traces, outcomes: [], projections });
+  const relation = (traces: typeof terminal[]) => buildTaskRelationAdjudicationReflectionReport({
+    decisions: [operation], settlements: traces, projections: [uiProjection], evaluations: [],
+  });
+  assert.equal(event.provenance.evaluationTarget, undefined);
+  const before = JSON.stringify({ event, terminal });
+  for (const status of ["success", "error", "cancelled"]) {
+    assert.equal(type([{ ...terminal, status }]).rows[0].typeCorrect, true);
+  }
+  assert.equal(type([terminal, terminal]).metrics.labeledProposals, 1);
+  assert.equal(relation([terminal]).rows[0].candidateCorrect, false);
+  assert.equal(relation([terminal]).rows[0].expectedRelation, "followup-parent");
+  assert.equal(JSON.stringify({ event, terminal }), before);
+
+  assert.equal(type([]).rows[0].typeCorrect, undefined);
+  assert.equal(type([{ ...terminal, status: "running" }]).rows[0].typeCorrect, undefined);
+  assert.equal(type([{ ...terminal, exportedAt: NaN }]).rows[0].typeCorrect, undefined);
+  assert.equal(type([terminal], [projection()]).rows[0].typeCorrect, undefined);
+  for (const changed of [
+    { ...event, confirmation: "suggested" as const },
+    { ...event, provenance: { ...event.provenance, sourceTraceId: "another-attempt" } },
+    { ...event, provenance: { ...event.provenance, evaluationTarget: {
+      attemptId: "origin", logicalQuestionUnitId: "Q1", logicalQuestionUnitRevision: 3,
+      sourceTurnIds: ["turn-a"], frozenAt: 30,
+    } } },
+  ]) {
+    const p = deriveHumanEvaluationProjectionV2({ sessionId: "runtime-a", subject, events: [changed], now: 40 });
+    assert.equal(type([terminal], [p]).rows[0].typeCorrect, undefined);
+  }
+
+  // The competing revision is excluded from the operation's exact links. It
+  // must still veto the missing-target path using the unfiltered attempt input.
+  for (const metadata of [
+    { ...terminal.metadata, questionTypeAdjudicationUnitRevision: 3, currentQuestionRevision: 3,
+      currentQuestionSettlementRevision: 3, effectiveCurrentQuestionSettlementUnitRevision: 3 },
+    { ...terminal.metadata, currentQuestionSettlementRevision: 3 },
+    { ...terminal.metadata, currentQuestionSourceHash: "other-source" },
+    { ...terminal.metadata, currentQuestionSettlementSourceTurnIds: ["other-turn"] },
+    { ...terminal.metadata, questionTypeAdjudicationRuntimeEpoch: 4, currentQuestionRuntimeEpoch: 4 },
+    { ...terminal.metadata, currentQuestionSettlementSessionId: "other-runtime" },
+  ]) {
+    const competitor = { ...terminal, metadata, exportedAt: 5000 };
+    assert.equal(type([terminal, competitor]).rows[0].typeCorrect, undefined);
+    assert.equal(relation([terminal, competitor]).rows[0].candidateCorrect, undefined);
+  }
+  assert.equal(type([terminal, { ...terminal, traceId: "unrelated", metadata: {
+    ...terminal.metadata, currentQuestionRevision: 3,
+  } }]).rows[0].typeCorrect, true);
+});
+
+test("D4 cumulative source and Type-origin enrichment preserves one operation per stage and Type ID", () => {
+  const early = { ...settlement, metadata: { ...settlement.metadata,
+    currentQuestionSourceHash: undefined, currentQuestionSourceTurnIds: undefined,
+    taskRelationChildAffinityOperationId: "CH1", taskRelationChildAffinityParsedDecision: "related",
+    taskRelationParentAffinityOperationId: "P1", taskRelationParentAffinityParsedDecision: "related",
+    taskRelationSplitCanonicalOperationId: "C1", taskRelationSplitCanonicalParseValid: true,
+    taskRelationSplitCanonicalParsedRelation: "new-parent",
+  } };
+  const enriched = { ...early, recordedAt: 30, metadata: { ...early.metadata,
+    currentQuestionSourceHash: "source-a", currentQuestionSourceTurnIds: ["turn-a"],
+    questionTypeAdjudicationOriginTraceId: "type-envelope-origin",
+  } };
+  const final = { ...enriched, recordedAt: 40, metadata: { ...enriched.metadata,
+    questionTypeAdjudicationOriginTraceId: "enriched-type-envelope-origin",
+  } };
+  const input = { decisions: [final, early, enriched, enriched], evaluations: [] };
+  const before = JSON.stringify(input);
+  const split = buildTaskRelationAdjudicationReflectionReport(input);
+  assert.equal(split.metrics.currentOperations, 3);
+  assert.deepEqual(split.metrics.operationFamilies, { child: 1, parent: 1, canonical: 1 });
+  assert.ok(split.rows.every(row => row.identityConflicts.length === 0));
+  assert.equal(split.rows.find(row => row.operationId === "C1")!.candidateRelation, "new-parent");
+  assert.equal(JSON.stringify(input), before);
+
+  const type = buildQuestionTypeAdjudicationOutcomeReport({ decisions: [early, enriched, enriched], outcomes: [] });
+  assert.equal(type.metrics.proposalOperations, 1);
+  assert.deepEqual(type.rows[0].identityConflicts, []);
+
+  for (const metadata of [
+    { ...enriched.metadata, currentQuestionSourceHash: "conflicting-source" },
+    { ...enriched.metadata, questionTypeAdjudicationUnitRevision: 3, currentQuestionRevision: 3 },
+  ]) {
+    const conflicting = { ...enriched, recordedAt: 50, metadata };
+    const badSplit = buildTaskRelationAdjudicationReflectionReport({ decisions: [early, enriched, conflicting], evaluations: [], projections: [projection("coding")] });
+    assert.equal(badSplit.metrics.currentOperations, 3);
+    assert.ok(badSplit.rows.every(row => row.identityConflicts.length > 0 && row.expectedQuestionType === undefined && row.mutationApplied === undefined));
+    assert.ok(badSplit.diagnostics.some(row => row.reason.startsWith("conflicting-operation-identity:")));
+    const badType = buildQuestionTypeAdjudicationOutcomeReport({ decisions: [early, enriched, conflicting], settlements: [settlement], outcomes: [release], projections: [projection("coding")] });
+    assert.equal(badType.metrics.proposalOperations, 1);
+    assert.equal(badType.rows[0].typeCorrect, undefined);
+    assert.equal(badType.rows[0].outcomeCount, 0);
+    assert.ok(badType.rows[0].identityConflicts.length > 0);
+  }
+});

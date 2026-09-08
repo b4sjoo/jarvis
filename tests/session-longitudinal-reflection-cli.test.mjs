@@ -60,7 +60,7 @@ test("Task152 single and longitudinal CLIs share exact operation/truth rows with
     "taxonomy/question-type-adjudication-outcomes.jsonl": JSON.stringify({ schemaVersion: 2, outcomeId: "outcome", operationId: "R9", recordingSessionId: "session_recording_a", runtimeSessionId: "runtime-a", sessionId: "runtime-a", runtimeEpoch: 3, logicalQuestionUnitId: "Q1", logicalQuestionUnitRevision: 2, traceId: "consumer", originTraceId: "origin", settlementOperationId: "R9", settlementId: "S12", stage: "release", disposition: "settlement-applied", settlementApplied: true, recordedAt: 25 }) + "\n",
     "human-evaluation/projections-v2.json": JSON.stringify({ projections: [{ sessionId: "runtime-a", subject, computedAt: 40, observed: { traceId: "origin", traceHash: "hash", questionType: "coding" } }] }),
     "human-evaluation/ground-truth-v2.jsonl": "",
-    "traces/origin.json": JSON.stringify({ exportedAt: 50, trace: { id: "origin", metadata: { ...relation.metadata, sourceTransitionDurableMutationApplied: true, sourceTransitionDurableAuthorized: true, sourceTransitionParentAfterId: "parent-final", currentQuestionSettlementRelation: "followup-parent" } } }),
+    "traces/origin.json": JSON.stringify({ exportedAt: 50, trace: { id: "origin", status: "success", metadata: { ...relation.metadata, sourceTransitionDurableMutationApplied: true, sourceTransitionDurableAuthorized: true, sourceTransitionParentAfterId: "parent-final", currentQuestionSettlementRelation: "followup-parent" } } }),
   };
   for (const [filename, contents] of Object.entries(files)) {
     await mkdir(path.dirname(path.join(session, filename)), { recursive: true });
@@ -93,6 +93,23 @@ test("Task152 single and longitudinal CLIs share exact operation/truth rows with
   assert.equal(runSingle().status, 0);
   assert.deepEqual((await read(singleOutput, "question-type-outcomes.json")).rows, type.rows);
   for (const [filename, contents] of Object.entries(files)) assert.equal(await readFile(path.join(session, filename), "utf8"), contents, filename);
+
+  const uiTruth = JSON.stringify({ schemaVersion: 2, eventId: "current-ui-truth", sessionId: "runtime-a", subject,
+    fact: { kind: "expected-task-settlement", expectedQuestionType: "behavioral", expectedRelation: "followup-parent", expectedParentAction: "preserve" },
+    provenance: { source: "explicit-ui", actor: "human", collection: "organic", sourceTraceId: "origin", recordedAt: 60 },
+    confirmation: "confirmed" }) + "\n";
+  await writeFile(path.join(session, "human-evaluation/ground-truth-v2.jsonl"), uiTruth);
+  assert.equal(runSingle().status, 0);
+  assert.equal(runCli(["--session", session, "--output", longitudinalOutput, "--allow-incomplete"]).status, 0);
+  const labeledType = await read(singleOutput, "question-type-outcomes.json");
+  const labeledSplit = await read(singleOutput, "relation-reflection.json");
+  const labeledLong = await read(longitudinalOutput, "report.json");
+  assert.equal(labeledType.metrics.labeledProposals, 1);
+  assert.equal(labeledType.rows[0].typeCorrect, false);
+  assert.equal(labeledSplit.rows.find(row => row.operationId === "C1").candidateCorrect, false);
+  assert.deepEqual(labeledType.rows, labeledLong.adjudicationEvidence[0].questionType.rows);
+  assert.deepEqual(labeledSplit.rows, labeledLong.adjudicationEvidence[0].relation.rows);
+  assert.equal(await readFile(path.join(session, "human-evaluation/ground-truth-v2.jsonl"), "utf8"), uiTruth);
 });
 
 test("enforces release evidence at the longitudinal reflection CLI boundary", async (t) => {

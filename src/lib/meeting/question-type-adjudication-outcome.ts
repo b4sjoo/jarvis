@@ -15,6 +15,10 @@ export interface QuestionTypeAdjudicationRecordedDecision {
   runtimeEpoch?: number;
   traceId: string;
   taskId?: string;
+  // Present only on raw trace exports passed as offline settlement evidence.
+  status?: string;
+  exportedAt?: number;
+  identityConflicts?: string[];
   metadata: Record<string, unknown>;
 }
 
@@ -93,11 +97,12 @@ export interface QuestionTypeAdjudicationOutcomeRow {
   truthSubjectId?: string;
   truthEventIds: string[];
   truthDiagnostic: string;
+  identityConflicts: string[];
 }
 
 export interface QuestionTypeAdjudicationOutcomeReport {
   version: 2;
-  derivationVersion: "task152-offline-v3";
+  derivationVersion: "task152-offline-v4";
   metricContract: { candidateUnit: string; productUnit: string; exclusions: string[] };
   generatedAt: number;
   rows: QuestionTypeAdjudicationOutcomeRow[];
@@ -168,12 +173,9 @@ export function buildQuestionTypeAdjudicationOutcomeReport(input: {
       decision.metadata.questionTypeAdjudicationOperationId
     );
     if (!operationId) continue;
-    const id = readOfflineDecisionIdentity(decision);
-    const key = JSON.stringify([operationId, id.recordingSessionId, id.sessionId, id.epoch, id.unitId, id.revision, id.sourceTurnIdsHash ?? id.sourceHash ?? id.sourceTurnIds, id.originTraceId]);
+    const key = JSON.stringify([decision.recordingSessionId ?? decision.sessionId ?? decision.runtimeSessionId, operationId]);
     const current = decisionsByOperation.get(key);
-    if (!current || current.recordedAt <= decision.recordedAt) {
-      decisionsByOperation.set(key, decision);
-    }
+    decisionsByOperation.set(key, mergeOfflineDecisionSnapshots(current ?? decision, decision));
   }
 
   const uniqueOutcomes = deduplicateOutcomes(input.outcomes);
@@ -191,7 +193,8 @@ export function buildQuestionTypeAdjudicationOutcomeReport(input: {
     .map(([, decision]) => {
       const operationId = readString(decision.metadata.questionTypeAdjudicationOperationId)!;
       const expectedIdentity = readDecisionIdentity(decision);
-      const links = (input.settlements ?? []).filter(link =>
+      const identityConflicts = decision.identityConflicts ?? [];
+      const links = (input.settlements ?? []).filter(link => !identityConflicts.length &&
         link.metadata.runtimeSettlementTypeOperationId === operationId &&
         offlineIdentityMatches(decision, link)
       );
@@ -203,6 +206,7 @@ export function buildQuestionTypeAdjudicationOutcomeReport(input: {
       const matchingOutcomes: QuestionTypeAdjudicationOutcomeEvent[] = [];
       for (const outcome of allOutcomes) {
         referencedOutcomes.add(outcome);
+        if (identityConflicts.length) continue;
         if (outcomeIdentities.get(outcomeKey(outcome))! > 1) {
           diagnostics.push({ input: outcome.outcomeId, reason: "conflicting-outcome-id" });
           continue;
@@ -250,7 +254,10 @@ export function buildQuestionTypeAdjudicationOutcomeReport(input: {
         "visible-committed", "suppressed", "stale-dropped", "cancelled-by-new-job",
         "cancelled-by-runtime-boundary", "error", "enforcement-denied",
       ].includes(outcome.disposition));
-      const truth = resolveOfflineHumanTruth(decision, input.projections ?? [], links);
+      const truth = resolveOfflineHumanTruth(
+        decision, identityConflicts.length ? [] : input.projections ?? [], links,
+        [...input.decisions, ...input.settlements ?? []]
+      );
       const proposedQuestionType = normalizeQuestionType(decision.metadata.questionTypeAdjudicationCandidateType);
       const finalMetadata = [...links].sort((a, b) => b.recordedAt - a.recordedAt)[0]?.metadata ?? {};
 
@@ -314,7 +321,8 @@ export function buildQuestionTypeAdjudicationOutcomeReport(input: {
           ? truth.expectedQuestionType === normalizeQuestionType(finalMetadata.effectiveCurrentQuestionSettlementQuestionType ?? finalMetadata.currentQuestionSettlementType) : undefined,
         truthSubjectId: truth.subjectId,
         truthEventIds: truth.eventIds,
-        truthDiagnostic: truth.diagnostic,
+        truthDiagnostic: identityConflicts.length ? "conflicting-operation-identity" : truth.diagnostic,
+        identityConflicts,
       } satisfies QuestionTypeAdjudicationOutcomeRow;
     })
     .sort((left, right) => left.operationId.localeCompare(right.operationId));
@@ -334,7 +342,7 @@ export function buildQuestionTypeAdjudicationOutcomeReport(input: {
 
   return {
     version: 2,
-    derivationVersion: "task152-offline-v3",
+    derivationVersion: "task152-offline-v4",
     metricContract: { candidateUnit: "Type operation with exact recorded identity", productUnit: "confirmed human attempt/source subject", exclusions: ["Missing or conflicting identity/truth is unscored", "Release-only is joined but not terminal-complete", "Unknown application is not false"] },
     generatedAt: input.now ?? Date.now(),
     rows,
@@ -389,7 +397,7 @@ export function buildQuestionTypeAdjudicationOutcomeReport(input: {
       ),
       firstIdentityMismatch: mismatches[0],
       duplicateOutcomes: input.outcomes.length - uniqueOutcomes.length,
-      diagnostics: [...diagnostics, ...unmatchedOutcomeEvents.map(outcome => ({ input: outcome.outcomeId, reason: "unresolved-outcome-identity-or-link" })), ...rows.filter(row => row.rawProposedQuestionType !== undefined && !row.proposedQuestionType).map(row => ({ input: row.operationId, reason: `unsupported-question-type:${String(row.rawProposedQuestionType)}` }))],
+      diagnostics: [...diagnostics, ...rows.flatMap(row => row.identityConflicts.map(field => ({ input: row.operationId, reason: `conflicting-operation-identity:${field}` }))), ...unmatchedOutcomeEvents.map(outcome => ({ input: outcome.outcomeId, reason: "unresolved-outcome-identity-or-link" })), ...rows.filter(row => row.rawProposedQuestionType !== undefined && !row.proposedQuestionType).map(row => ({ input: row.operationId, reason: `unsupported-question-type:${String(row.rawProposedQuestionType)}` }))],
     },
   };
 }
@@ -648,6 +656,37 @@ function observedBoolean(outcomes: QuestionTypeAdjudicationOutcomeEvent[], key: 
   return values.length ? values.some(value => value === true) : undefined;
 }
 
+// Operation cardinality is determined by recorded operation ID, not by how much
+// of its source identity a cumulative snapshot has acquired so far.
+export function mergeOfflineDecisionSnapshots<T extends QuestionTypeAdjudicationRecordedDecision>(left: T, right: T): T {
+  const a = readOfflineDecisionIdentity(left);
+  const b = readOfflineDecisionIdentity(right);
+  const conflicts = new Set([...(left.identityConflicts ?? []), ...(right.identityConflicts ?? [])]);
+  for (const key of ["recordingSessionId", "sessionId", "epoch", "unitId", "revision", "sourceHash", "sourceTurnIdsHash"] as const) {
+    if (a[key] !== undefined && b[key] !== undefined && a[key] !== b[key]) conflicts.add(key);
+  }
+  if (a.sourceTurnIds !== undefined && b.sourceTurnIds !== undefined && !sameSources(a.sourceTurnIds, b.sourceTurnIds)) conflicts.add("sourceTurnIds");
+  const [earlier, later] = left.recordedAt <= right.recordedAt ? [left, right] : [right, left];
+  const merged = {
+    ...earlier, ...later,
+    metadata: { ...earlier.metadata, ...Object.fromEntries(Object.entries(later.metadata).filter(([, value]) => value !== undefined)) },
+  };
+  const identity = readOfflineDecisionIdentity(merged);
+  for (const prefix of ["currentQuestion", "currentQuestionSettlement", "effectiveCurrentQuestionSettlement"]) {
+    const aliases: Record<string, unknown> = {
+      [`${prefix}SessionId`]: identity.sessionId,
+      [`${prefix}RuntimeEpoch`]: identity.epoch,
+      [`${prefix}UnitId`]: identity.unitId,
+      [`${prefix}${prefix === "effectiveCurrentQuestionSettlement" ? "UnitRevision" : "Revision"}`]: identity.revision,
+      [`${prefix}SourceHash`]: identity.sourceHash,
+    };
+    for (const [key, expected] of Object.entries(aliases)) {
+      if (merged.metadata[key] !== undefined && expected !== undefined && merged.metadata[key] !== expected) conflicts.add(key);
+    }
+  }
+  return { ...merged, identityConflicts: [...conflicts].sort() };
+}
+
 // These are recorded identity aliases, not an inference or nearest-trace join.
 export function readOfflineDecisionIdentity(decision: QuestionTypeAdjudicationRecordedDecision) {
   const m = decision.metadata;
@@ -696,7 +735,8 @@ export function offlineIdentityMatches(left: QuestionTypeAdjudicationRecordedDec
 export function resolveOfflineHumanTruth(
   decision: QuestionTypeAdjudicationRecordedDecision,
   projections: HumanEvaluationProjectionV2[],
-  linkedDecisions: QuestionTypeAdjudicationRecordedDecision[] = []
+  linkedDecisions: QuestionTypeAdjudicationRecordedDecision[] = [],
+  attemptEvidence: QuestionTypeAdjudicationRecordedDecision[] = linkedDecisions
 ) {
   const evidence = [decision, ...linkedDecisions.filter(link => offlineIdentityMatches(decision, link))]
     .filter(record => offlineIdentityMatches(record, record));
@@ -724,11 +764,12 @@ export function resolveOfflineHumanTruth(
         return event.sessionId === id.sessionId && event.subject.attemptId === record.traceId &&
           event.subject.traceIds.includes(record.traceId) && sameSources(event.subject.sourceTurnIds, id.sourceTurnIds) &&
           (event.provenance.sourceTraceId === undefined || event.provenance.sourceTraceId === record.traceId) &&
-          (target && ((target.attemptId === undefined || target.attemptId === record.traceId) &&
+          (target ? ((target.attemptId === undefined || target.attemptId === record.traceId) &&
             (target.sourceTraceId === undefined || target.sourceTraceId === record.traceId) &&
             target.logicalQuestionUnitId !== undefined && target.logicalQuestionUnitId === id.unitId &&
             target.logicalQuestionUnitRevision !== undefined && target.logicalQuestionUnitRevision === id.revision &&
-            sameSources(target.sourceTurnIds, id.sourceTurnIds)));
+            sameSources(target.sourceTurnIds, id.sourceTurnIds)) :
+            linkedDecisions.includes(record) && terminalTraceProvesHumanSubject(event, record, attemptEvidence));
       });
       if (valid) {
         const existing = facts.get(event.eventId);
@@ -752,6 +793,59 @@ export function resolveOfflineHumanTruth(
     eventIds: values.map(event => event.eventId),
     diagnostic: values.length ? "confirmed-human-truth" : empty.diagnostic,
   };
+}
+
+function terminalTraceProvesHumanSubject(
+  event: HumanGroundTruthEventV2,
+  trace: QuestionTypeAdjudicationRecordedDecision,
+  attemptEvidence: QuestionTypeAdjudicationRecordedDecision[]
+) {
+  if (
+    !["success", "error", "cancelled"].includes(trace.status ?? "") ||
+    !Number.isFinite(trace.exportedAt) ||
+    event.provenance.sourceTraceId !== trace.traceId
+  ) return false;
+
+  const identity = readOfflineDecisionIdentity(trace);
+  if (!offlineIdentityMatches(trace, trace) || !readString(identity.sourceHash)) return false;
+
+  // The current/settled/effective fields describe the same source, not three
+  // alternative revisions. In particular, effective *UnitRevision* is the LQU
+  // revision; effective *Revision* is a different ledger revision.
+  const aliases: Record<string, unknown> = {
+    questionTypeAdjudicationRuntimeSessionId: identity.sessionId,
+    questionTypeAdjudicationRuntimeEpoch: identity.epoch,
+    questionTypeAdjudicationUnitId: identity.unitId,
+    questionTypeAdjudicationUnitRevision: identity.revision,
+    taskRelationAdjudicationUnitId: identity.unitId,
+    taskRelationAdjudicationUnitRevision: identity.revision,
+    taskRelationAdjudicationSourceHash: identity.sourceHash,
+  };
+  for (const prefix of ["currentQuestion", "currentQuestionSettlement", "effectiveCurrentQuestionSettlement"]) {
+    aliases[`${prefix}SessionId`] = identity.sessionId;
+    aliases[`${prefix}RuntimeEpoch`] = identity.epoch;
+    aliases[`${prefix}UnitId`] = identity.unitId;
+    aliases[`${prefix}${prefix === "effectiveCurrentQuestionSettlement" ? "UnitRevision" : "Revision"}`] = identity.revision;
+    aliases[`${prefix}SourceHash`] = identity.sourceHash;
+  }
+
+  return [trace, ...attemptEvidence].every(record => {
+    if (record.traceId !== trace.traceId) return true;
+    const other = readOfflineDecisionIdentity(record);
+    if (other.recordingSessionId !== undefined && identity.recordingSessionId !== undefined &&
+      other.recordingSessionId !== identity.recordingSessionId) return true;
+    for (const key of ["sessionId", "epoch", "unitId", "revision", "sourceHash", "sourceTurnIdsHash"] as const) {
+      if (other[key] !== undefined && identity[key] !== undefined && other[key] !== identity[key]) return false;
+    }
+    for (const [key, expected] of Object.entries(aliases)) {
+      if (record.metadata[key] !== undefined && record.metadata[key] !== expected) return false;
+    }
+    for (const prefix of ["currentQuestion", "currentQuestionSettlement", "effectiveCurrentQuestionSettlement"]) {
+      const sources = record.metadata[`${prefix}SourceTurnIds`];
+      if (sources !== undefined && !sameSources(sources, event.subject.sourceTurnIds)) return false;
+    }
+    return true;
+  });
 }
 
 function sameSources(left: unknown, right: unknown) {

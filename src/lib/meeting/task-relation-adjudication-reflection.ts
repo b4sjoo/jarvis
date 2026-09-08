@@ -8,13 +8,14 @@ import type {
   TaskRelationSemanticValidity,
 } from "./task-relation-counterfactual-branch.js";
 import type { HumanEvaluationProjectionV2 } from "./human-ground-truth-v2.js";
-import { offlineIdentityMatches, readOfflineDecisionIdentity, resolveOfflineHumanTruth } from "./question-type-adjudication-outcome.js";
+import { mergeOfflineDecisionSnapshots, offlineIdentityMatches, resolveOfflineHumanTruth } from "./question-type-adjudication-outcome.js";
 
 export interface TaskRelationAdjudicationRecordedDecision {
   recordedAt: number;
   sessionId?: string;
   traceId: string;
   taskId?: string;
+  identityConflicts?: string[];
   metadata: Record<string, unknown>;
 }
 
@@ -26,6 +27,7 @@ export interface TaskRelationAdjudicationReflectionRow {
   taskId?: string;
   operationId?: string;
   operationFamily: "child" | "parent" | "canonical" | "legacy";
+  identityConflicts: string[];
   rawCandidateRelation?: unknown;
   truthSubjectId?: string;
   truthEventIds: string[];
@@ -106,7 +108,7 @@ export interface TaskRelationLatencyMetric {
 
 export interface TaskRelationAdjudicationReflectionReport {
   version: 1;
-  derivationVersion: "task152-offline-v3";
+  derivationVersion: "task152-offline-v4";
   diagnostics: Array<{ traceId: string; reason: string }>;
   inputRecords: number;
   duplicateRecords: number;
@@ -177,9 +179,13 @@ export function buildTaskRelationAdjudicationReflectionReport(input: {
     const metadata = decision.metadata ?? {};
     const prefix = decision.reflectionPrefix;
     const current = prefix !== undefined;
-    const linked = [...input.decisions, ...input.settlements ?? []].filter(link => current && offlineIdentityMatches(decision, link) &&
+    const identityConflicts = decision.identityConflicts ?? [];
+    const linked = [...input.decisions, ...input.settlements ?? []].filter(link => current && !identityConflicts.length && offlineIdentityMatches(decision, link) &&
       link.metadata[`${prefix}OperationId`] === metadata[`${prefix}OperationId`]);
-    const truth = resolveOfflineHumanTruth(decision, input.projections ?? [], linked);
+    const truth = resolveOfflineHumanTruth(
+      decision, identityConflicts.length ? [] : input.projections ?? [], linked,
+      [...input.decisions, ...input.settlements ?? []]
+    );
     const legacyEvaluation = evaluationByTrace.get(`${decision.sessionId ?? ""}:${decision.traceId}`) ?? evaluationByTrace.get(`:${decision.traceId}`);
     const evaluation = input.projections?.some(projection => projection.subject.traceIds.includes(decision.traceId)) || current ? undefined : legacyEvaluation;
     if (evaluation) matchedEvaluationIds.add(evaluation.id);
@@ -296,9 +302,10 @@ export function buildTaskRelationAdjudicationReflectionReport(input: {
         current ? metadata[`${prefix}OperationId`] : metadata.taskRelationAdjudicationOperationId
       ),
       operationFamily: prefix === "taskRelationChildAffinity" ? "child" : prefix === "taskRelationParentAffinity" ? "parent" : prefix === "taskRelationSplitCanonical" ? "canonical" : "legacy",
+      identityConflicts,
       truthSubjectId: truth.subjectId,
       truthEventIds: truth.eventIds,
-      truthDiagnostic: truth.diagnostic,
+      truthDiagnostic: identityConflicts.length ? "conflicting-operation-identity" : truth.diagnostic,
       rawCandidate,
       rawCandidateRelation: current ? (prefix === "taskRelationSplitCanonical" ? rawCandidate ?? metadata.taskRelationSplitCanonicalRelation : undefined) : metadata.taskRelationAdjudicationCandidateRelation,
       parseDisposition,
@@ -458,7 +465,7 @@ export function buildTaskRelationAdjudicationReflectionReport(input: {
 
   return {
     version: 1,
-    derivationVersion: "task152-offline-v3",
+    derivationVersion: "task152-offline-v4",
     metricContract: { candidateUnit: "Child/Parent/Canonical operation identity; legacy Direct separate", productUnit: "confirmed human attempt/source subject", exclusions: ["Unknown parse is not invalid", "Candidate is not Ordered or durable effect", "Missing/conflicting identity or truth is unscored"] },
     inputRecords: input.decisions.length,
     duplicateRecords: input.decisions.length - new Set(input.decisions.map(decision => JSON.stringify(decision))).size,
@@ -467,6 +474,7 @@ export function buildTaskRelationAdjudicationReflectionReport(input: {
       ...input.decisions.filter(decision => isCurrentOnlyWithoutOperation(decision)).map(decision => ({ traceId: decision.traceId, reason: "missing-operation-identity" })),
       ...rows.filter(row => row.rawCandidateRelation !== undefined && !normalizeRelation(row.rawCandidateRelation)).map(row => ({ traceId: row.traceId, reason: `unsupported-relation:${String(row.rawCandidateRelation)}` })),
       ...rows.flatMap(row => row.predecessorDiagnostics.map(reason => ({ traceId: row.traceId, reason }))),
+      ...rows.flatMap(row => row.identityConflicts.map(field => ({ traceId: row.traceId, reason: `conflicting-operation-identity:${row.operationId}:${field}` }))),
     ],
     generatedAt: input.now ?? Date.now(),
     metrics: {
@@ -628,9 +636,8 @@ function dedupeLatestDecisions(
     for (const decision of candidates) {
     const key = decisionKey(decision);
     const existing = latest.get(key);
-    if (!existing || decision.recordedAt >= existing.recordedAt) {
-      latest.set(key, decision);
-    }
+    if (decision.reflectionPrefix) latest.set(key, mergeOfflineDecisionSnapshots(existing ?? decision, decision));
+    else if (!existing || decision.recordedAt >= existing.recordedAt) latest.set(key, decision);
     }
   }
   return Array.from(latest.values()).sort(
@@ -651,7 +658,6 @@ function decisionKey(decision: TaskRelationAdjudicationRecordedDecision & { refl
       decision.reflectionPrefix ? decision.metadata[`${decision.reflectionPrefix}OperationId`] : decision.metadata.taskRelationAdjudicationOperationId
     ) ?? `trace:${decision.traceId}`,
     decision.reflectionPrefix,
-    decision.reflectionPrefix ? readOfflineDecisionIdentity(decision) : undefined,
   ]);
 }
 
