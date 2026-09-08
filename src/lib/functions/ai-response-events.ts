@@ -240,6 +240,7 @@ export async function* coordinateAIResponseAttempts(input: {
   signal?: AbortSignal;
   isExecutionCurrent?: (identity: AIResponseAttemptIdentity) => boolean;
   readRetryDeadlineAt?: () => number | undefined;
+  retryCompletedOutput?: (outcome: Readonly<AIResponseTerminalOutcome>) => boolean;
   now?: () => number;
   runAttempt: (
     identity: AIResponseAttemptIdentity
@@ -295,8 +296,8 @@ export async function* coordinateAIResponseAttempts(input: {
           event.outcome,
           attemptIdentity
         );
-        const current =
-          input.isExecutionCurrent?.(attemptIdentity) ?? true;
+        const current = (input.isExecutionCurrent?.(attemptIdentity) ?? true) &&
+          !(attemptNumber > 1 && input.readRetryDeadlineAt && !retryWindowOpen());
         terminalSeen = true;
         if (!current) {
           yield {
@@ -310,7 +311,9 @@ export async function* coordinateAIResponseAttempts(input: {
           return;
         }
         retry = !input.signal?.aborted && retryWindowOpen() &&
-          shouldRetryAIResponseOutcome(outcome, policy);
+          (shouldRetryAIResponseOutcome(outcome, policy) ||
+            (attemptNumber < policy.maxAttempts && outcome.status === "success" &&
+              input.retryCompletedOutput?.(outcome) === true));
         yield {
           type: "terminal",
           outcome: {

@@ -11,6 +11,7 @@ export interface RuntimeInferenceProviderResponse {
   rawOutput: string;
   providerDisposition: MeetingAIResponseProviderDisposition;
   providerOutcome: Readonly<AIResponseTerminalOutcome>;
+  providerAttempts?: readonly Readonly<AIResponseTerminalOutcome>[];
   firstTokenAt?: number;
   completedAt: number;
 }
@@ -41,6 +42,7 @@ export async function consumeRuntimeInferenceResponse(input: {
     rawOutput: result.accepted ? result.candidate.content : "",
     providerDisposition: result.providerDisposition,
     providerOutcome: outcome,
+    providerAttempts: result.accepted ? result.candidate.attempts : result.attempts,
     firstTokenAt,
     completedAt: Date.now(),
   };
@@ -53,6 +55,7 @@ export function formatRuntimeInferenceProviderOutcomeForTrace(
   return {
     [`${prefix}ProviderOutcomeStatus`]: outcome?.status,
     [`${prefix}ProviderFailureClass`]: outcome?.failureClass,
+    [`${prefix}ProviderHttpStatus`]: outcome?.statusCode,
     [`${prefix}ProviderAttemptId`]: outcome?.attemptId,
     [`${prefix}ProviderAttemptNumber`]: outcome?.attemptNumber,
     [`${prefix}ProviderMaxAttempts`]: outcome?.maxAttempts,

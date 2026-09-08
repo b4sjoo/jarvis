@@ -592,6 +592,7 @@ import {
   SCREEN_FIELD_KNOWLEDGE_REVIEW_WAIT_BUDGET_MS,
   resolveVoiceQuestionTypeForegroundBudget,
   buildQuestionTypeAdjudicationPrompts,
+  parseQuestionTypeAdjudicationOutput,
   buildQuestionTypeAdjudicationRequest,
   buildQuestionTypeAdjudicationCacheKey,
   createQuestionTypeAdjudicationOutcomeEvent,
@@ -2511,6 +2512,7 @@ interface QuestionTypeAdjudicationScheduleHandle {
   waitBudgetMs: number;
   operationId?: string;
   outcome: Promise<QuestionTypeAdjudicationRuntimeOutcome>;
+  restrictRetryDeadlineAt?: (deadlineAt: number) => void;
 }
 
 interface TaskRelationAdjudicationScheduleHandle {
@@ -19256,6 +19258,14 @@ export function useMeetingAssistant() {
         sourceKind === "screen"
           ? SCREEN_FIELD_KNOWLEDGE_REVIEW_PROVIDER_TIMEOUT_MS
           : undefined;
+      const retryEnabled = sourceKind !== "screen" &&
+        !forceRuntimeExecution && enforcementWindowRequested;
+      let retryDeadlineAt = Date.now() + Math.max(
+        waitBudgetMs, VOICE_ORDERED_RELATION_FOREGROUND_BUDGET_MS
+      );
+      const restrictRetryDeadlineAt = (deadlineAt: number) => {
+        retryDeadlineAt = Math.min(retryDeadlineAt, deadlineAt);
+      };
       const immediateHandle = (
         disposition: string
       ): QuestionTypeAdjudicationScheduleHandle => ({
@@ -19408,6 +19418,25 @@ export function useMeetingAssistant() {
         expectedParentId: activeParent?.id,
         expectedParentRevision: activeParent?.revisions,
       });
+      const authorizeTypeOperation = (latestContext = contextManagerRef.current.getState()) => {
+        const latestParent = latestContext.activeMeetingTask?.parent;
+        return authorizeTaxonomyAdjudicationLease(lease, {
+          currentOperationId: questionTypeAdjudicationRuntimeRef.current?.getCurrentOperationId(),
+          sessionId: latestContext.sessionId,
+          runtimeEpoch: runtimeEpochRef.current,
+          logicalQuestionUnit: authorizationLogicalQuestionUnit ?? logicalQuestionUnitRef.current,
+          taskBoundaryEpoch: hashTaxonomyTaskBoundary({
+            parentId: latestParent?.id,
+            questionType: normalizeCanonicalQuestionType(latestParent?.questionType),
+            relation: latestContext.activeMeetingTask?.child ? "child-probe" : latestParent ? "followup-parent" : "unknown",
+          }),
+          manualCorrectionRevision: manualCorrectionRevisionRef.current,
+          activeParentId: latestParent?.id,
+          activeParentRevision: latestParent?.revisions,
+          logicalUnitClosed: false,
+          selfHealingBudgetConsumed: false,
+        });
+      };
       const prompts = buildQuestionTypeAdjudicationPrompts(request);
       const promptText = [
         prompts.systemPrompt,
@@ -19555,6 +19584,8 @@ export function useMeetingAssistant() {
             selectedProvider: modelRoute.selectedProvider,
             signal,
             timeoutMs: providerTimeoutMs,
+            readRetryDeadlineAt: retryEnabled ? () => retryDeadlineAt : undefined,
+            isExecutionCurrent: retryEnabled ? () => authorizeTypeOperation().authorized : undefined,
             executionIdentity: {
               requestId: job.operationId,
               executionPlanId: job.lease.operationId,
@@ -19598,38 +19629,7 @@ export function useMeetingAssistant() {
         onSettled: (settlement) => {
           const latestContext = contextManagerRef.current.getState();
           const latestParent = latestContext.activeMeetingTask?.parent;
-          const latestParentQuestionType =
-            normalizeCanonicalQuestionType(
-              latestParent?.questionType
-            );
-          const latestRelation = latestContext.activeMeetingTask?.child
-            ? "child-probe"
-            : latestParent
-              ? "followup-parent"
-              : "unknown";
-          const authorization = authorizeTaxonomyAdjudicationLease(
-            settlement.job.lease,
-            {
-              currentOperationId:
-                questionTypeAdjudicationRuntimeRef.current?.getCurrentOperationId(),
-              sessionId: latestContext.sessionId,
-              runtimeEpoch: runtimeEpochRef.current,
-              logicalQuestionUnit:
-                authorizationLogicalQuestionUnit ??
-                logicalQuestionUnitRef.current,
-              taskBoundaryEpoch: hashTaxonomyTaskBoundary({
-                parentId: latestParent?.id,
-                questionType: latestParentQuestionType,
-                relation: latestRelation,
-              }),
-              manualCorrectionRevision:
-                manualCorrectionRevisionRef.current,
-              activeParentId: latestParent?.id,
-              activeParentRevision: latestParent?.revisions,
-              logicalUnitClosed: false,
-              selfHealingBudgetConsumed: false,
-            }
-          );
+          const authorization = authorizeTypeOperation(latestContext);
           const result = settlement.result;
           const parsed = result?.parsed;
           const parsedValue = parsed?.ok
@@ -19824,6 +19824,20 @@ export function useMeetingAssistant() {
             questionTypeAdjudicationRawOutputTruncated:
               rawOutput.length > boundedRawOutput.length,
             questionTypeAdjudicationCacheHit: result?.cacheHit ?? false,
+            questionTypeAdjudicationRetryDeadlineAt: retryEnabled ? retryDeadlineAt : undefined,
+            questionTypeAdjudicationAttempts: result?.providerAttempts?.map((attempt) => {
+              const parsedAttempt = attempt.status === "success"
+                ? parseQuestionTypeAdjudicationOutput(attempt.text ?? "", request)
+                : undefined;
+              return {
+                ...formatRuntimeInferenceProviderOutcomeForTrace(attempt, "questionTypeAdjudication"),
+                startedAt: attempt.startedAt,
+                completedAt: attempt.finishedAt,
+                parseDisposition: parsedAttempt
+                  ? parsedAttempt.ok ? "valid-json" : parsedAttempt.reason
+                  : "not-run-provider-error-content",
+              };
+            }),
             questionTypeAdjudicationError:
               settlement.error instanceof Error
                 ? settlement.error.message
@@ -19863,6 +19877,16 @@ export function useMeetingAssistant() {
                 },
               });
             }
+          }
+          for (const attempt of result?.providerAttempts ?? []) {
+            if (attempt.final || !attempt.text) continue;
+            const value = attempt.text.slice(0, QUESTION_TYPE_ADJUDICATION_MAX_OUTPUT_CHARS);
+            const label = `question type adjudication attempt ${attempt.attemptNumber} raw output`;
+            const attemptMetadata = formatRuntimeInferenceProviderOutcomeForTrace(attempt, "questionTypeAdjudication");
+            if (debugModeRef.current) traceStoreRef.current.recordOutput(traceId, label, value, attemptMetadata);
+            if (recordingActive) sessionRecordingManagerRef.current?.recordModelOutput({
+              traceId, taskId: scheduledTaskId, label, value, metadata: attemptMetadata,
+            });
           }
           traceStoreRef.current.updateMetadata(traceId, metadata);
           resolveOutcome?.({
@@ -19913,6 +19937,7 @@ export function useMeetingAssistant() {
         waitBudgetMs,
         operationId: lease.operationId,
         outcome,
+        restrictRetryDeadlineAt: retryEnabled ? restrictRetryDeadlineAt : undefined,
       };
     },
     []
@@ -21465,6 +21490,7 @@ export function useMeetingAssistant() {
       const foregroundReleaseGate = createOrderedSettlementReleaseGate(
         foregroundDeadline
       );
+      questionTypeHandle?.restrictRetryDeadlineAt?.(foregroundDeadline.deadlineAt);
       const logicalQuestionLease = createLogicalQuestionUnitLease(
         input.logicalQuestionUnit
       );
@@ -21545,6 +21571,7 @@ export function useMeetingAssistant() {
         waitDisposition: string,
         releaseSource: OrderedSettlementReleaseSource
       ) => {
+        questionTypeHandle?.restrictRetryDeadlineAt?.(Date.now());
         const operationAuthorization =
           taskRelationHandle?.authorizeOperation?.() ?? {
             authorized: false,

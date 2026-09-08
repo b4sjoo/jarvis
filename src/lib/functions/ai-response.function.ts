@@ -23,6 +23,7 @@ import {
   type AIResponseExecutionIdentity,
   type AIResponseExecutionIdentityInput,
   type AIResponseRetryPolicy,
+  type AIResponseTerminalOutcome,
 } from "./ai-response-events.js";
 import { decodeServerSentEventStream } from "./server-sent-event-stream.js";
 
@@ -43,6 +44,7 @@ export interface AIResponseRequestOptions {
   retryPolicy?: AIResponseRetryPolicy;
   isExecutionCurrent?: (identity: AIResponseAttemptIdentity) => boolean;
   readRetryDeadlineAt?: () => number | undefined;
+  retryCompletedOutput?: (outcome: Readonly<AIResponseTerminalOutcome>) => boolean;
 }
 
 export type AIResponseParams = {
@@ -112,6 +114,7 @@ export async function* fetchAIResponseEvents(
     signal: params.signal,
     isExecutionCurrent: params.requestOptions?.isExecutionCurrent,
     readRetryDeadlineAt,
+    retryCompletedOutput: params.requestOptions?.retryCompletedOutput,
     runAttempt: (attemptIdentity) =>
       fetchAIResponseAttemptEvents(
         attemptIdentity.attemptNumber > 1 && readRetryDeadlineAt

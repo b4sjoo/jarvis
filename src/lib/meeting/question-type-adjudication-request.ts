@@ -4,6 +4,7 @@ import {
 import type {
   AIResponseExecutionIdentityInput,
   AIResponseTerminalOutcome,
+  AIResponseRetryPolicy,
 } from "../functions/ai-response-events.js";
 import type { TYPE_PROVIDER } from "@/types";
 import type { SelectedProviderState } from "./types.js";
@@ -30,6 +31,7 @@ export interface QuestionTypeAdjudicationRequestResult {
     | "provider-auth-error";
   parseDisposition: string;
   providerOutcome?: Readonly<AIResponseTerminalOutcome>;
+  providerAttempts?: readonly Readonly<AIResponseTerminalOutcome>[];
   firstTokenAt?: number;
   completedAt: number;
   cacheHit?: boolean;
@@ -43,8 +45,11 @@ export async function requestQuestionTypeAdjudication(input: {
   executionIdentity?: AIResponseExecutionIdentityInput;
   onFirstToken?: (at: number) => void;
   timeoutMs?: number;
+  readRetryDeadlineAt?: () => number | undefined;
+  isExecutionCurrent?: () => boolean;
 }): Promise<QuestionTypeAdjudicationRequestResult> {
   const prompts = buildQuestionTypeAdjudicationPrompts(input.request);
+  const retryEnabled = Boolean(input.readRetryDeadlineAt && input.request.reviewScope !== "field-vs-coding");
   const responseEvents = fetchAIResponseEvents({
     provider: input.provider,
     selectedProvider: input.selectedProvider,
@@ -55,6 +60,15 @@ export async function requestQuestionTypeAdjudication(input: {
     requestOptions: {
       timeoutMs: input.timeoutMs ?? OPERATION.timeoutMs,
       maxOutputTokens: OPERATION.maxOutputTokens,
+      isExecutionCurrent: input.isExecutionCurrent,
+      ...(retryEnabled ? {
+        retryPolicy: { maxAttempts: 2, retryableFailureClasses: ["transport", "provider-http"] } satisfies AIResponseRetryPolicy,
+        readRetryDeadlineAt: input.readRetryDeadlineAt,
+        retryCompletedOutput: (outcome: Readonly<AIResponseTerminalOutcome>) => {
+          const parsedAttempt = parseQuestionTypeAdjudicationOutput(outcome.text ?? "", input.request);
+          return !parsedAttempt.ok && (parsedAttempt.errorKind === "parse" || parsedAttempt.errorKind === "schema");
+        },
+      } : {}),
     },
     executionIdentity: {
       ...input.executionIdentity,

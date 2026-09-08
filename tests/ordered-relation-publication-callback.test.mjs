@@ -638,7 +638,7 @@ function resolveRelationProvider(execution, rawOutput) {
   });
 }
 
-function startVoiceResolution(harness, handle) {
+function startVoiceResolution(harness, handle, typeHandleFields = {}) {
   const typeOutcome = deferred();
   harness.clock.setTimeout(
     () => typeOutcome.resolve({ enforcement: { authorized: false } }),
@@ -650,6 +650,7 @@ function startVoiceResolution(harness, handle) {
         enforcementWindowRequested: true,
         waitBudgetMs: 2_000,
         outcome: typeOutcome.promise,
+        ...typeHandleFields,
       },
       taskRelation: handle,
     },
@@ -1443,6 +1444,25 @@ test("keeps the existing null-hypothesis fallback for a valid Relation operation
       harness.metadata.taskRelationOrderedResolutionOperationAuthorized,
       true
     );
+  } finally {
+    harness.restore();
+  }
+});
+
+test("production Voice publication closes Type retry permission at the same foreground handoff", { concurrency: false }, async () => {
+  const harness = createHarness();
+  try {
+    const restrictions = [];
+    const handle = relationHandle(harness, { authorized: true, reason: "identity-current" });
+    startVoiceResolution(harness, handle, {
+      restrictRetryDeadlineAt: at => restrictions.push(at),
+    });
+    assert.deepEqual(restrictions, [14_000]);
+    await harness.clock.advanceTo(400);
+    assert.equal(harness.advisorCalls.length, 1);
+    assert.equal(restrictions.length, 2);
+    assert.ok(restrictions[1] < 14_000);
+    assert.ok(restrictions[1] <= harness.clock.now);
   } finally {
     harness.restore();
   }
