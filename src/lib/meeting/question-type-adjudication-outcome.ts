@@ -72,6 +72,9 @@ export interface QuestionTypeAdjudicationOutcomeRow {
   parentQuestionType?: CanonicalQuestionType;
   consumerQuestionType?: CanonicalQuestionType;
   proposalValid?: boolean;
+  recordedAttempts?: unknown;
+  parseDisposition?: string;
+  providerOutcomeStatus?: string;
   enforcementAuthorized?: boolean;
   settlementApplied?: boolean;
   appliedToResponse?: boolean;
@@ -89,6 +92,13 @@ export interface QuestionTypeAdjudicationOutcomeRow {
   outcomeCount: number;
   identityMismatchCount: number;
   terminalComplete: boolean;
+  productTerminalState: QuestionTypeAdjudicationTerminalState;
+  productTerminalComplete: boolean;
+  productAdvisorJobId?: string;
+  productPlanId?: string;
+  productConsumerTraceId?: string;
+  productVisibleAnswerRevision?: number;
+  productOutcomeDiagnostics: string[];
   consumerTraceIds: string[];
   outcomeOriginTraceIds: string[];
   expectedQuestionType?: CanonicalQuestionType;
@@ -102,8 +112,8 @@ export interface QuestionTypeAdjudicationOutcomeRow {
 
 export interface QuestionTypeAdjudicationOutcomeReport {
   version: 2;
-  derivationVersion: "task152-offline-v4";
-  metricContract: { candidateUnit: string; productUnit: string; exclusions: string[] };
+  derivationVersion: "task152-offline-v5";
+  metricContract: { candidateUnit: string; productUnit: string; terminalCoverage: string; productTerminalCoverage: string; exclusions: string[] };
   generatedAt: number;
   rows: QuestionTypeAdjudicationOutcomeRow[];
   metrics: {
@@ -127,6 +137,9 @@ export interface QuestionTypeAdjudicationOutcomeReport {
     joinCoverage: number | null;
     terminalCoverage: number | null;
     terminalComplete: number;
+    productTerminalComplete: number;
+    productVisibleCommitted: number;
+    productTerminalCoverage: number | null;
     labeledProposals: number;
     typePrecision: number | null;
     evaluatedSubjects: number;
@@ -260,6 +273,7 @@ export function buildQuestionTypeAdjudicationOutcomeReport(input: {
       );
       const proposedQuestionType = normalizeQuestionType(decision.metadata.questionTypeAdjudicationCandidateType);
       const finalMetadata = [...links].sort((a, b) => b.recordedAt - a.recordedAt)[0]?.metadata ?? {};
+      const product = resolveOfflineTypeProductOutcome(decision, input.settlements ?? []);
 
       return {
         operationId,
@@ -292,6 +306,9 @@ export function buildQuestionTypeAdjudicationOutcomeReport(input: {
         parentQuestionType: normalizeQuestionType(finalMetadata.currentQuestionSettlementParentAfterType),
         consumerQuestionType: normalizeQuestionType(finalMetadata.settledExecutionPlanQuestionType),
         proposalValid: readBoolean(decision.metadata.questionTypeAdjudicationParseValid),
+        recordedAttempts: decision.metadata.questionTypeAdjudicationAttempts,
+        parseDisposition: readString(decision.metadata.questionTypeAdjudicationParseDisposition),
+        providerOutcomeStatus: readString(decision.metadata.questionTypeAdjudicationProviderOutcomeStatus),
         enforcementAuthorized,
         settlementApplied: observedBoolean(matchingOutcomes, "settlementApplied"),
         appliedToResponse: observedBoolean(matchingOutcomes, "appliedToResponse") ??
@@ -312,6 +329,7 @@ export function buildQuestionTypeAdjudicationOutcomeReport(input: {
         identityMismatchCount:
           allOutcomes.length - matchingOutcomes.length,
         terminalComplete,
+        ...product,
         consumerTraceIds: [...new Set(matchingOutcomes.map(outcome => outcome.traceId))],
         outcomeOriginTraceIds: [...new Set(matchingOutcomes.map(outcome => outcome.originTraceId ?? outcome.traceId))],
         expectedQuestionType: truth.expectedQuestionType,
@@ -342,8 +360,8 @@ export function buildQuestionTypeAdjudicationOutcomeReport(input: {
 
   return {
     version: 2,
-    derivationVersion: "task152-offline-v4",
-    metricContract: { candidateUnit: "Type operation with exact recorded identity", productUnit: "confirmed human attempt/source subject", exclusions: ["Missing or conflicting identity/truth is unscored", "Release-only is joined but not terminal-complete", "Unknown application is not false"] },
+    derivationVersion: "task152-offline-v5",
+    metricContract: { candidateUnit: "Type operation with exact recorded identity", productUnit: "confirmed human attempt/source subject", terminalCoverage: "Dedicated Type outcome-event terminal operations / Type operations", productTerminalCoverage: "Explicit operation-settlement-Plan-job terminal chains / Type operations; not Type recovery or semantic accuracy", exclusions: ["Missing or conflicting identity/truth is unscored", "Release-only is joined but not terminal-complete", "Unknown application is not false"] },
     generatedAt: input.now ?? Date.now(),
     rows,
     metrics: {
@@ -376,6 +394,9 @@ export function buildQuestionTypeAdjudicationOutcomeReport(input: {
         rows.length === 0 ? null : count(rows, row => row.outcomeCount > 0) / rows.length,
       terminalCoverage: rows.length ? count(rows, row => row.terminalComplete) / rows.length : null,
       terminalComplete: count(rows, row => row.terminalComplete),
+      productTerminalComplete: count(rows, row => row.productTerminalComplete),
+      productVisibleCommitted: count(rows, row => row.productTerminalState === "visible-committed"),
+      productTerminalCoverage: rows.length ? count(rows, row => row.productTerminalComplete) / rows.length : null,
       labeledProposals: count(rows, row => row.typeCorrect !== undefined),
       typePrecision: rows.some(row => row.typeCorrect !== undefined)
         ? count(rows, row => row.typeCorrect === true) / count(rows, row => row.typeCorrect !== undefined) : null,
@@ -428,7 +449,9 @@ export function renderQuestionTypeAdjudicationOutcomeMarkdown(
     "",
     `- Joined or explicit terminal: ${metrics.joinedOrExplicitTerminal}`,
     `- Join coverage: ${metrics.joinCoverage === null ? "N/A" : `${(metrics.joinCoverage * 100).toFixed(1)}%`}`,
-    `- Terminal coverage: ${metrics.terminalCoverage === null ? "N/A" : `${(metrics.terminalCoverage * 100).toFixed(1)}%`}`,
+    `- Dedicated Type outcome-event terminal coverage: ${metrics.terminalCoverage === null ? "N/A" : `${(metrics.terminalCoverage * 100).toFixed(1)}%`}`,
+    `- Explicit product terminal coverage (not Type recovery): ${metrics.productTerminalCoverage === null ? "N/A" : `${(metrics.productTerminalCoverage * 100).toFixed(1)}%`}`,
+    `- Explicit product visible commits: ${metrics.productVisibleCommitted}`,
     `- Explicit not applied: ${metrics.explicitNotApplied}`,
     `- Denied or dropped: ${metrics.deniedOrDropped}`,
     `- Stale dropped: ${metrics.staleDropped}`,
@@ -452,7 +475,121 @@ export function renderQuestionTypeAdjudicationOutcomeMarkdown(
     );
   }
   lines.push("");
+  lines.push("## Product Evidence", "", "| Operation | Product terminal | Plan | Job | Consumer trace | Diagnostics |", "| --- | --- | --- | --- | --- | --- |");
+  for (const row of report.rows) lines.push(`| ${row.operationId} | ${row.productTerminalState} | ${row.productPlanId ?? "-"} | ${row.productAdvisorJobId ?? "-"} | ${row.productConsumerTraceId ?? "-"} | ${row.productOutcomeDiagnostics.join(", ") || "-"} |`);
   return `${lines.join("\n")}\n`;
+}
+
+// Product evidence is a read-only projection of a recorded consumer chain.
+// It never fills dedicated Type events or changes proposal validity.
+function resolveOfflineTypeProductOutcome(
+  decision: QuestionTypeAdjudicationRecordedDecision,
+  records: QuestionTypeAdjudicationRecordedDecision[]
+): Pick<QuestionTypeAdjudicationOutcomeRow, "productTerminalState" | "productTerminalComplete" |
+  "productAdvisorJobId" | "productPlanId" | "productConsumerTraceId" |
+  "productVisibleAnswerRevision" | "productOutcomeDiagnostics"> {
+  const diagnostics = new Set<string>();
+  const missing = () => ({ productTerminalState: "outcome-missing" as const,
+    productTerminalComplete: false, productOutcomeDiagnostics: [...diagnostics].sort() });
+  const operationId = decision.metadata.questionTypeAdjudicationOperationId;
+  const recordingSessionId = readOfflineDecisionIdentity(decision).recordingSessionId;
+  const referenced = records.filter(record => record.metadata.runtimeSettlementTypeOperationId === operationId &&
+    readOfflineDecisionIdentity(record).recordingSessionId === recordingSessionId);
+  const isTerminal = (record: QuestionTypeAdjudicationRecordedDecision) => [
+    "committed", "suppressed", "replaced-before-execution", "cancelled-by-new-job",
+    "cancelled-by-runtime-boundary", "stale-commit-rejected", "error",
+  ].includes(String(record.metadata.advisorJobOutcome));
+  const terminals = referenced.filter(isTerminal);
+  if (!terminals.length) diagnostics.add("missing-explicit-product-terminal-chain");
+  const products = new Map<string, {
+    productTerminalState: QuestionTypeAdjudicationTerminalState;
+    productTerminalComplete: boolean;
+    productOutcomeDiagnostics: string[];
+    productAdvisorJobId: string; productPlanId: string; productConsumerTraceId: string;
+    productVisibleAnswerRevision?: number;
+  }>();
+  for (const terminal of terminals) {
+    const m = terminal.metadata;
+    const id = readOfflineDecisionIdentity(terminal);
+    const jobId = readString(m.advisorJobId);
+    const planId = readString(m.settledExecutionPlanId);
+    const settlementId = readString(m.currentQuestionSettlementId);
+    const settlementOperationId = readString(m.runtimeSettlementOperationId);
+    const planIdentity: QuestionTypeAdjudicationRecordedDecision = {
+      recordedAt: terminal.recordedAt, recordingSessionId: id.recordingSessionId,
+      traceId: terminal.traceId, metadata: {
+        currentQuestionSessionId: m.settledExecutionPlanSessionId,
+        currentQuestionRuntimeEpoch: m.settledExecutionPlanRuntimeEpoch,
+        currentQuestionUnitId: m.settledExecutionPlanLogicalQuestionUnitId,
+        currentQuestionRevision: m.settledExecutionPlanLogicalQuestionRevision,
+        currentQuestionSourceHash: m.settledExecutionPlanSourceHash,
+        currentQuestionSourceTurnIds: m.settledExecutionPlanSourceTurnIds,
+        currentQuestionSourceObservationIds: m.settledExecutionPlanSourceObservationIds,
+        questionTypeAdjudicationSourceTurnIdsHash: m.questionTypeAdjudicationSourceTurnIdsHash,
+      },
+    };
+    if (!offlineIdentityMatches(decision, terminal) || !offlineIdentityMatches(terminal, planIdentity) ||
+      m.advisorJobExpectedSessionId !== id.sessionId || m.advisorJobExpectedRuntimeEpoch !== id.epoch) {
+      diagnostics.add("conflicting-or-missing-product-identity");
+      continue;
+    }
+    if (!jobId || !planId || !settlementId || !settlementOperationId || m.settledExecutionPlanSettlementId !== settlementId) {
+      diagnostics.add("missing-or-conflicting-product-reference");
+      continue;
+    }
+    // Source identity remains immutable across snapshots. Settlement content
+    // can evolve before generation, so only terminal claims veto the final ID.
+    // Inspect siblings before source filtering to retain conflicting identities.
+    const siblings = records.filter(record => {
+      const other = readOfflineDecisionIdentity(record);
+      return other.recordingSessionId === id.recordingSessionId &&
+        (record.metadata.advisorJobId === jobId || record.metadata.settledExecutionPlanId === planId ||
+          record.metadata.runtimeSettlementOperationId === settlementOperationId);
+    });
+    if (siblings.some(record =>
+      (mergeOfflineDecisionSnapshots(terminal, record).identityConflicts?.length ?? 0) > 0 ||
+      record.metadata.runtimeSettlementTypeOperationId !== undefined && record.metadata.runtimeSettlementTypeOperationId !== operationId ||
+      isTerminal(record) && (!offlineIdentityMatches(terminal, record) ||
+        ["currentQuestionSettlementId", "settledExecutionPlanSettlementId", "settledExecutionPlanSessionId", "settledExecutionPlanRuntimeEpoch",
+          "settledExecutionPlanLogicalQuestionUnitId", "settledExecutionPlanLogicalQuestionRevision", "settledExecutionPlanSourceHash",
+          "settledExecutionPlanSourceTurnIds", "settledExecutionPlanSourceObservationIds", "settledExecutionPlanAuthorized",
+          "settledExecutionPlanResponseAuthorized", "advisorJobCommitAuthorized", "generationResultCommitDisposition",
+          "leaseAuthorizedAtCommit", "latestUsefulAnswerVisibleCommitAuthorized", "advisorOutputCommittedToUi",
+          "advisorJobExpectedSessionId", "advisorJobExpectedRuntimeEpoch", "advisorJobOutcome", "visibleAnswerRevisionAfter",
+          "latestUsefulAnswerVisibleCommitRevision"].some(key => record.metadata[key] !== undefined && JSON.stringify(record.metadata[key]) !== JSON.stringify(m[key])))
+    )) {
+      diagnostics.add("ambiguous-or-conflicting-product-chain");
+      continue;
+    }
+    let state: QuestionTypeAdjudicationTerminalState = "outcome-missing";
+    if (m.advisorJobOutcome === "committed") {
+      if (m.settledExecutionPlanAuthorized === true && m.settledExecutionPlanResponseAuthorized === true &&
+        m.advisorJobCommitAuthorized === true && m.generationResultCommitDisposition === "committed" &&
+        m.leaseAuthorizedAtCommit === true && m.latestUsefulAnswerVisibleCommitAuthorized === true &&
+        m.advisorOutputCommittedToUi === true && readNumber(m.visibleAnswerRevisionAfter) !== undefined &&
+        m.visibleAnswerRevisionAfter === m.latestUsefulAnswerVisibleCommitRevision) state = "visible-committed";
+    } else if (m.advisorJobOutcome === "suppressed") state = "suppressed";
+    else if (["cancelled-by-new-job", "cancelled-by-runtime-boundary", "replaced-before-execution"].includes(String(m.advisorJobOutcome))) state = "cancelled";
+    else if (m.advisorJobOutcome === "stale-commit-rejected") state = "stale-dropped";
+    else if (m.advisorJobOutcome === "error") state = "error";
+    if (state !== "visible-committed" && (m.advisorOutputCommittedToUi === true || m.latestUsefulAnswerVisibleCommitAuthorized === true)) {
+      diagnostics.add("conflicting-product-terminal-and-visible-commit");
+      continue;
+    }
+    if (state === "outcome-missing") {
+      diagnostics.add("missing-authorized-visible-commit-or-terminal");
+      continue;
+    }
+    products.set(JSON.stringify([settlementOperationId, settlementId, planId, jobId, terminal.traceId, state, m.visibleAnswerRevisionAfter]), {
+      productTerminalState: state, productTerminalComplete: true,
+      productAdvisorJobId: jobId, productPlanId: planId, productConsumerTraceId: terminal.traceId,
+      productVisibleAnswerRevision: state === "visible-committed" ? readNumber(m.visibleAnswerRevisionAfter) : undefined,
+      productOutcomeDiagnostics: [],
+    });
+  }
+  if (products.size > 1) diagnostics.add("ambiguous-product-terminal-chain");
+  if (diagnostics.size || products.size !== 1) return missing();
+  return [...products.values()][0];
 }
 
 function readDecisionIdentity(
