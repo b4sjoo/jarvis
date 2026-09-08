@@ -51,4 +51,16 @@ test("keeps the ordered split chain without scheduling Direct Relation", () => {
     /taskRelationAdjudicationRuntimeRef\.current!\.schedule/
   );
   assert.doesNotMatch(block, /requestTaskRelationAdjudication\(\{/);
+  assert.doesNotMatch(source, /taskRelationHandle\.outcome|initialNarrowScreenRelease|narrowScreenReleaseInput/);
+  const handle = source.slice(
+    source.indexOf("interface TaskRelationAdjudicationScheduleHandle"),
+    source.indexOf("interface TaskRelationOperationAuthorization")
+  );
+  assert.doesNotMatch(handle, /^ {2}(?:admission|outcome):/m);
+  assert.match(handle, /affinityOutcome/);
+  assert.equal(existsSync("src/lib/meeting/task-relation-adjudication-request.ts"), false);
+  const shared = readFileSync("src/lib/meeting/task-relation-adjudication.ts", "utf8");
+  assert.match(shared, /function buildTaskRelationAdjudicationRequest/);
+  assert.match(shared, /function createTaskRelationSettlementProposal/);
+  assert.doesNotMatch(shared, /function (?:buildTaskRelationAdjudicationPrompts|parseTaskRelationAdjudicationOutput|decideNarrowScreenRelationRelease)/);
 });

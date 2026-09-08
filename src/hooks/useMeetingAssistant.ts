@@ -603,11 +603,8 @@ import {
   formatQuestionTypeEnforcementForTrace,
   formatOrderedQuestionTypeResolutionForTrace,
   requestQuestionTypeAdjudication,
-  TaskRelationAdjudicationRuntimeOutcome,
-  NarrowScreenRelationReleaseInput,
   buildTaskRelationAdjudicationRequest,
   createTaskRelationSettlementProposal,
-  decideNarrowScreenRelationRelease,
   isRuntimeTaskRelation,
   isWhiteboardRevisionAuthorized,
   updateWhiteboardArtifactFromAnswer,
@@ -2518,12 +2515,6 @@ interface QuestionTypeAdjudicationScheduleHandle {
 interface TaskRelationAdjudicationScheduleHandle {
   releaseWindowRequested: boolean;
   operationId?: string;
-  admission: Promise<{
-    scheduledAt: number;
-    startedAt: number;
-    queueWaitMs: number;
-  } | undefined>;
-  outcome: Promise<TaskRelationAdjudicationRuntimeOutcome>;
   affinityOutcome?: Promise<TaskRelationSplitAffinityOutcome>;
   readAffinityOutcome?: () => TaskRelationSplitAffinityOutcome;
   freezeAffinityOutcome?: (
@@ -20642,7 +20633,6 @@ export function useMeetingAssistant() {
       sourceKind = "voice",
       currentQuestion: suppliedCurrentQuestion,
       deterministicProposal,
-      narrowScreenRelease,
       manualCorrectionOwned = false,
       currentQuestionEvidenceTexts,
       authorizeSourceOperation,
@@ -20656,7 +20646,6 @@ export function useMeetingAssistant() {
       sourceKind?: "voice" | "screen" | "mixed";
       currentQuestion?: ProvisionalCurrentQuestion;
       deterministicProposal?: CurrentQuestionSettlementProposal;
-      narrowScreenRelease?: NarrowScreenRelationReleaseInput;
       manualCorrectionOwned?: boolean;
       currentQuestionEvidenceTexts?: string[];
       authorizeSourceOperation: ReadTaskRelationSourceOperationAuthorization;
@@ -20675,22 +20664,6 @@ export function useMeetingAssistant() {
       const manualCorrectionActive = Boolean(
         manualCorrectionOperationCoordinatorRef.current.getActiveOperationId()
       ) && !manualCorrectionOwned;
-      const releaseInput =
-        narrowScreenRelease ??
-        ({
-          sourceKind,
-          screenBoundaryPrior: false,
-          currentQuestionType: lexical.type,
-          activeParentQuestionType:
-            activeMeetingTask?.parent.questionType,
-          typeEvidenceAuthorized: false,
-          typeConfidence: 0,
-          questionComplete: false,
-          manualCorrectionActive,
-          hasActiveChild: Boolean(activeMeetingTask?.child),
-        } satisfies NarrowScreenRelationReleaseInput);
-      const initialNarrowScreenRelease =
-        decideNarrowScreenRelationRelease(releaseInput);
       const releaseWindowRequested = Boolean(
         activeMeetingTask &&
           configuredMode !== "off" &&
@@ -20751,12 +20724,6 @@ export function useMeetingAssistant() {
         return {
           releaseWindowRequested: false,
           operationId,
-          admission: Promise.resolve(undefined),
-          outcome: Promise.resolve({
-            disposition: "active-parent-missing",
-            operationLeaseAuthorized: false,
-            narrowScreenRelease: initialNarrowScreenRelease,
-          }),
           authorizeOperation: authorizeCurrentTaskRelationOperation,
           currentQuestion,
           deterministicProposal,
@@ -20813,17 +20780,9 @@ export function useMeetingAssistant() {
         runtimeReleaseRequested: releaseWindowRequested,
         authorizeSourceOperation,
       });
-      const immediateHandle = (
-        disposition: string
-      ): TaskRelationAdjudicationScheduleHandle => ({
+      const handle: TaskRelationAdjudicationScheduleHandle = {
         releaseWindowRequested,
         operationId: splitHandle?.operationId,
-        admission: Promise.resolve(undefined),
-        outcome: Promise.resolve({
-          disposition,
-          operationLeaseAuthorized: false,
-          narrowScreenRelease: initialNarrowScreenRelease,
-        }),
         affinityOutcome: splitHandle?.affinityOutcome,
         readAffinityOutcome: splitHandle?.readAffinityOutcome,
         freezeAffinityOutcome: splitHandle?.freezeAffinityOutcome,
@@ -20839,7 +20798,7 @@ export function useMeetingAssistant() {
         localQuestionType:
           normalizeCanonicalQuestionType(lexical.type) ?? "unknown",
         sourceKind,
-      });
+      };
       const retiredMetadata = {
         ...formatRuntimeInferenceOperationForTrace(
           "task-relation-adjudication"
@@ -20856,7 +20815,7 @@ export function useMeetingAssistant() {
       sessionRecordingManagerRef.current?.recordTaskRelationAdjudicationDecision(
         { traceId, taskId: activeMeetingTask.id, metadata: retiredMetadata }
       );
-      return immediateHandle("legacy-direct-relation-retired");
+      return handle;
     },
     [scheduleTaskRelationSplitRuntime]
   );
@@ -22165,37 +22124,6 @@ export function useMeetingAssistant() {
           typeSettled = true;
           releaseWhenSettled();
           }
-        );
-      }
-      if (relationWindowRequested && taskRelationHandle) {
-        void taskRelationHandle.outcome.then(
-          (outcome) => {
-            if (!foregroundReleaseGate.isReleased()) return;
-
-            const metadata = {
-              taskRelationAdjudicationAppliedToRuntime: false,
-              taskRelationAdjudicationLateAfterAdvisorRelease: true,
-              taskRelationAdjudicationReleaseDisposition:
-                "settled-after-deadline-shadow-only",
-              taskRelationAdjudicationWaitMs: Math.max(
-                0,
-                Date.now() - waitStartedAt
-              ),
-              taskRelationAdjudicationOperationId:
-                outcome.operationId ?? taskRelationHandle.operationId,
-              taskRelationAdjudicationCandidate:
-                outcome.candidate?.relation,
-            };
-            traceStoreRef.current.updateMetadata(input.traceId, metadata);
-            sessionRecordingManagerRef.current?.recordCaptureLifecycle({
-              stage: "task-relation-adjudication-late-result",
-              traceId: input.traceId,
-              taskId:
-                contextManagerRef.current.getState().activeMeetingTask?.id,
-              ...metadata,
-            });
-          },
-          () => undefined
         );
       }
       if (
@@ -27783,23 +27711,6 @@ export function useMeetingAssistant() {
         let screenCoordinatorDecision:
           | ReturnType<typeof coordinateOrderedSettlement>
           | undefined;
-        const narrowScreenReleaseInput = {
-          sourceKind: "screen" as const,
-          screenBoundaryPrior: true,
-          currentQuestionType: screenMemoryQuestionType,
-          activeParentQuestionType:
-            preflightContextState.activeMeetingTask?.parent.questionType,
-          typeAuthoritySource: screenTypeAuthoritySource,
-          typeEvidenceAuthorized: screenTypeEvidenceAuthorized,
-          typeConfidence: screenTypeConfidence,
-          questionComplete: screenQuestionComplete,
-          manualCorrectionActive: Boolean(
-            manualCorrectionOperationCoordinatorRef.current.getActiveOperationId()
-          ),
-          hasActiveChild: Boolean(
-            preflightContextState.activeMeetingTask?.child
-          ),
-        } satisfies NarrowScreenRelationReleaseInput;
         if (
           screenRelationQuestion.trim() &&
           screenRelationLogicalQuestionUnit &&
@@ -27892,7 +27803,6 @@ export function useMeetingAssistant() {
                 currentQuestion: screenCurrentQuestion,
                 deterministicProposal:
                   screenDeterministicSettlementProposal,
-                narrowScreenRelease: narrowScreenReleaseInput,
                 currentQuestionEvidenceTexts: screenSourcePacket.visualEvidence
                   .focusedEvidenceSummary
                   ? [

@@ -4,7 +4,6 @@ import path from "node:path";
 import test from "node:test";
 import type { ActiveMeetingTask } from "../src/lib/meeting/active-meeting-task.js";
 import {
-  buildTaskRelationAdjudicationPrompts,
   buildTaskRelationAdjudicationRequest,
 } from "../src/lib/meeting/task-relation-adjudication.js";
 import {
@@ -256,7 +255,6 @@ test("shares bounded screen focus evidence across relation prompts without chang
     manualCorrectionRevision: 2,
   });
   const parentPrompt = buildTaskRelationAffinityPrompts(split.parent);
-  const directPrompt = buildTaskRelationAdjudicationPrompts(base);
   const canonical = buildTaskRelationCanonicalShadowRequest({
     request: base,
     sessionId: "session-a",
@@ -266,7 +264,6 @@ test("shares bounded screen focus evidence across relation prompts without chang
   const canonicalPrompt = buildTaskRelationCanonicalShadowPrompts(canonical);
 
   assert.match(parentPrompt.userMessage, /LRUCache\.put method lines 40-45/);
-  assert.match(directPrompt.userMessage, /LRUCache\.put method lines 40-45/);
   assert.match(canonicalPrompt.userMessage, /LRUCache\.put method lines 40-45/);
   assert.equal(base.currentQuestion.text.includes("LRUCache.put"), false);
   assert.equal(base.sourceHash, baseline.sourceHash);
@@ -831,7 +828,7 @@ test("wires provider faults to finalization while stale source ownership fails c
     "const resolveOrderedTaskRelationWithinWindow"
   );
   const resolverEnd = meetingHookSource.indexOf(
-    "const scheduleTaxonomyAdjudicationShadow",
+    "const scheduleSemanticTaxonomyShadow",
     resolverStart
   );
   assert.ok(resolverStart >= 0);

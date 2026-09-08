@@ -309,12 +309,14 @@
         "npm test",
         "npm run build"
       ],
-      "deletionGate": "The ordered Relation handle exposes only tri-split operations and never allocates or calls a monolithic Direct Relation provider runtime.",
-      "rollbackBoundary": "Hook scheduler deletion is separate from shared Relation contract and historical decoder cleanup.",
+      "deletionGate": "Direct provider request, prompt/parser and exclusive release wrappers are physically absent; the live Relation scheduler retains tri-split and local operation authorization without fake Direct admission/outcome promises.",
+      "rollbackBoundary": "Direct-exclusive retirement is independent of the retained tri-split request/evidence/settlement contract and historical recording readers.",
       "status": "deleted",
       "forbiddenPatterns": [
         "taskRelationAdjudicationRuntimeRef",
-        "requestTaskRelationAdjudication({"
+        "requestTaskRelationAdjudication({",
+        "initialNarrowScreenRelease",
+        "taskRelationHandle.outcome"
       ]
     }
   ]

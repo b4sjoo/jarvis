@@ -85,7 +85,6 @@ export * from "./question-type-adjudication";
 export * from "./question-type-adjudication-outcome";
 export * from "./question-type-adjudication-request";
 export * from "./task-relation-adjudication";
-export * from "./task-relation-adjudication-request";
 export * from "./task-relation-adjudication-reflection";
 export * from "./task-relation-authority-convergence";
 export * from "./task-relation-counterfactual-branch";

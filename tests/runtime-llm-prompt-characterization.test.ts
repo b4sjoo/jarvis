@@ -28,10 +28,11 @@ import {
   buildSourceLinkageAdjudicationPrompts,
   type SourceLinkageAdjudicationRequest,
 } from "../src/lib/meeting/source-linkage-adjudication.js";
+import type { TaskRelationAdjudicationRequest } from "../src/lib/meeting/task-relation-adjudication.js";
 import {
-  buildTaskRelationAdjudicationPrompts,
-  type TaskRelationAdjudicationRequest,
-} from "../src/lib/meeting/task-relation-adjudication.js";
+  buildTaskRelationAffinityPrompts,
+  buildTaskRelationAffinityRequests,
+} from "../src/lib/meeting/task-relation-split-shadow.js";
 import {
   type TaxonomyAdjudicationProjection,
 } from "../src/lib/meeting/taxonomy-adjudication.js";
@@ -224,7 +225,14 @@ test("keeps envelope fields out of every runtime LLM prompt", () => {
     responseOpportunity: buildResponseOpportunityPrompts(responseOpportunity),
     meetingMetadata: buildMeetingMetadataInferencePrompts(metadata),
     whiteboard: buildWhiteboardSyntaxRepairPrompts(whiteboard),
-    taskRelation: buildTaskRelationAdjudicationPrompts(relation),
+    taskRelation: buildTaskRelationAffinityPrompts(
+      buildTaskRelationAffinityRequests({
+        request: relation,
+        sessionId: "session-a",
+        runtimeEpoch: 1,
+        manualCorrectionRevision: 0,
+      }).parent
+    ),
     answerResolution: buildAnswerRecoveryAdjudicationPrompts(answerRecovery),
     evidenceRequirement: buildAnswerRecoveryAdjudicationPrompts(
       buildVisualEvidenceCheckRequest({
