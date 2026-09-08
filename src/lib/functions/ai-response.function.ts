@@ -42,6 +42,7 @@ export interface AIResponseRequestOptions {
   maxOutputTokens?: number;
   retryPolicy?: AIResponseRetryPolicy;
   isExecutionCurrent?: (identity: AIResponseAttemptIdentity) => boolean;
+  readRetryDeadlineAt?: () => number | undefined;
 }
 
 export type AIResponseParams = {
@@ -100,14 +101,27 @@ export async function* fetchAIResponseEvents(
   const identity = resolveAIResponseExecutionIdentity(params);
   const providerId =
     params.provider?.id ?? params.selectedProvider?.provider ?? "unknown";
+  const requestDeadlineAt = Date.now() + (params.requestOptions?.timeoutMs ?? Infinity);
+  const readRetryDeadlineAt = params.requestOptions?.readRetryDeadlineAt
+    ? () => Math.min(params.requestOptions!.readRetryDeadlineAt!() ?? -Infinity, requestDeadlineAt)
+    : undefined;
   yield* coordinateAIResponseAttempts({
     identity,
     providerId,
     retryPolicy: params.requestOptions?.retryPolicy,
     signal: params.signal,
     isExecutionCurrent: params.requestOptions?.isExecutionCurrent,
+    readRetryDeadlineAt,
     runAttempt: (attemptIdentity) =>
-      fetchAIResponseAttemptEvents(params, attemptIdentity),
+      fetchAIResponseAttemptEvents(
+        attemptIdentity.attemptNumber > 1 && readRetryDeadlineAt
+          ? { ...params, requestOptions: {
+              ...params.requestOptions,
+              timeoutMs: Math.max(1, readRetryDeadlineAt() - Date.now()),
+            } }
+          : params,
+        attemptIdentity
+      ),
   });
 }
 

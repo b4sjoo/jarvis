@@ -22,6 +22,47 @@ const executionIdentity: AIResponseExecutionIdentity = {
   logicalQuestionRevision: 7,
 };
 
+test("bounded retry uses the original deadline and never starts after it", async () => {
+  let now = 100;
+  const calls: number[] = [];
+  const events = await collectEvents(coordinateAIResponseAttempts({
+    identity: executionIdentity,
+    retryPolicy: { maxAttempts: 2, retryableFailureClasses: ["provider-http"] },
+    readRetryDeadlineAt: () => 150,
+    now: () => now,
+    runAttempt: async function* (id) {
+      calls.push(id.attemptNumber);
+      now = 151;
+      yield new AIResponseEventBuilder("provider-a", id).terminal({
+        status: "failed", failureClass: "provider-http", retryable: true, statusCode: 503,
+      });
+    },
+  }));
+  assert.deepEqual(calls, [1]);
+  const end = events.at(-1);
+  assert.equal(end?.type === "terminal" && end.outcome.final, true);
+});
+
+test("bounded retry checks source liveness before a retry request", async () => {
+  let current = true;
+  const calls: number[] = [];
+  const events = await collectEvents(coordinateAIResponseAttempts({
+    identity: executionIdentity,
+    retryPolicy: { maxAttempts: 2 },
+    isExecutionCurrent: () => current,
+    readRetryDeadlineAt: () => Date.now() + 1000,
+    runAttempt: async function* (id) {
+      calls.push(id.attemptNumber);
+      current = false;
+      yield new AIResponseEventBuilder("provider-a", id).terminal({
+        status: "failed", failureClass: "transport", retryable: true,
+      });
+    },
+  }));
+  assert.deepEqual(calls, [1]);
+  assert.equal(events.at(-1)?.type === "terminal" && (events.at(-1) as any).outcome.disposition, "stale");
+});
+
 function attemptIdentity(attemptNumber = 1, maxAttempts = 1) {
   return {
     ...executionIdentity,

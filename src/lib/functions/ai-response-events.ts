@@ -239,11 +239,19 @@ export async function* coordinateAIResponseAttempts(input: {
   retryPolicy?: AIResponseRetryPolicy;
   signal?: AbortSignal;
   isExecutionCurrent?: (identity: AIResponseAttemptIdentity) => boolean;
+  readRetryDeadlineAt?: () => number | undefined;
+  now?: () => number;
   runAttempt: (
     identity: AIResponseAttemptIdentity
   ) => AsyncIterable<AIResponseEvent>;
 }): AsyncIterable<AIResponseEvent> {
   const policy = normalizeAIResponseRetryPolicy(input.retryPolicy);
+  const now = input.now ?? Date.now;
+  const retryWindowOpen = () => {
+    if (!input.readRetryDeadlineAt) return true;
+    const deadlineAt = input.readRetryDeadlineAt();
+    return deadlineAt !== undefined && Number.isFinite(deadlineAt) && now() < deadlineAt;
+  };
   for (
     let attemptNumber = 1;
     attemptNumber <= policy.maxAttempts;
@@ -254,6 +262,17 @@ export async function* coordinateAIResponseAttempts(input: {
       attemptNumber,
       policy.maxAttempts
     );
+    if (attemptNumber > 1 && input.readRetryDeadlineAt &&
+        (!retryWindowOpen() || input.signal?.aborted ||
+          input.isExecutionCurrent?.(attemptIdentity) === false)) {
+      const builder = new AIResponseEventBuilder(input.providerId ?? "unknown", attemptIdentity);
+      yield builder.terminal({
+        status: "aborted",
+        retryable: false,
+        completionSignal: "request-abort",
+      });
+      return;
+    }
     let terminalSeen = false;
     let retry = false;
     try {
@@ -290,7 +309,8 @@ export async function* coordinateAIResponseAttempts(input: {
           };
           return;
         }
-        retry = shouldRetryAIResponseOutcome(outcome, policy);
+        retry = !input.signal?.aborted && retryWindowOpen() &&
+          shouldRetryAIResponseOutcome(outcome, policy);
         yield {
           type: "terminal",
           outcome: {
