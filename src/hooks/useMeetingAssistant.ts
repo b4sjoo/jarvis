@@ -19535,6 +19535,8 @@ export function useMeetingAssistant() {
       let resolveOutcome:
         | ((outcome: QuestionTypeAdjudicationRuntimeOutcome) => void)
         | undefined;
+      const typeRecordingManager = sessionRecordingManagerRef.current;
+      const typeRecordingSessionId = typeRecordingManager?.getState().sessionId;
       const outcome = new Promise<QuestionTypeAdjudicationRuntimeOutcome>(
         (resolve) => {
           resolveOutcome = resolve;
@@ -19631,6 +19633,9 @@ export function useMeetingAssistant() {
           const latestParent = latestContext.activeMeetingTask?.parent;
           const authorization = authorizeTypeOperation(latestContext);
           const result = settlement.result;
+          const providerError = settlement.error instanceof MeetingAIResponseOutcomeError
+            ? settlement.error : undefined;
+          const providerAttempts = result?.providerAttempts ?? providerError?.attempts;
           const parsed = result?.parsed;
           const parsedValue = parsed?.ok
             ? parsed.value
@@ -19733,8 +19738,8 @@ export function useMeetingAssistant() {
               : finalDisposition;
           const rawOutput = result?.rawOutput ?? "";
           const recordingActive =
-            sessionRecordingManagerRef.current?.getState().active ??
-            false;
+            typeRecordingManager?.getState().active === true &&
+            typeRecordingManager.getState().sessionId === typeRecordingSessionId;
           const rawOutputStored = Boolean(
             rawOutput &&
               (debugModeRef.current || recordingActive)
@@ -19749,7 +19754,7 @@ export function useMeetingAssistant() {
               settlement.sharedAdmission
             ),
             ...formatRuntimeInferenceProviderOutcomeForTrace(
-              result?.providerOutcome,
+              result?.providerOutcome ?? providerError?.outcome,
               "questionTypeAdjudication"
             ),
             ...formatQuestionTypeAdjudicationForTrace({
@@ -19825,7 +19830,7 @@ export function useMeetingAssistant() {
               rawOutput.length > boundedRawOutput.length,
             questionTypeAdjudicationCacheHit: result?.cacheHit ?? false,
             questionTypeAdjudicationRetryDeadlineAt: retryEnabled ? retryDeadlineAt : undefined,
-            questionTypeAdjudicationAttempts: result?.providerAttempts?.map((attempt) => {
+            questionTypeAdjudicationAttempts: providerAttempts?.map((attempt) => {
               const parsedAttempt = attempt.status === "success"
                 ? parseQuestionTypeAdjudicationOutput(attempt.text ?? "", request)
                 : undefined;
@@ -19861,7 +19866,7 @@ export function useMeetingAssistant() {
               );
             }
             if (recordingActive) {
-              sessionRecordingManagerRef.current?.recordModelOutput({
+              typeRecordingManager?.recordModelOutput({
                 traceId,
                 taskId: scheduledTaskId,
                 label:
@@ -19878,13 +19883,13 @@ export function useMeetingAssistant() {
               });
             }
           }
-          for (const attempt of result?.providerAttempts ?? []) {
+          for (const attempt of providerAttempts ?? []) {
             if (attempt.final || !attempt.text) continue;
             const value = attempt.text.slice(0, QUESTION_TYPE_ADJUDICATION_MAX_OUTPUT_CHARS);
             const label = `question type adjudication attempt ${attempt.attemptNumber} raw output`;
             const attemptMetadata = formatRuntimeInferenceProviderOutcomeForTrace(attempt, "questionTypeAdjudication");
             if (debugModeRef.current) traceStoreRef.current.recordOutput(traceId, label, value, attemptMetadata);
-            if (recordingActive) sessionRecordingManagerRef.current?.recordModelOutput({
+            if (recordingActive) typeRecordingManager?.recordModelOutput({
               traceId, taskId: scheduledTaskId, label, value, metadata: attemptMetadata,
             });
           }
@@ -19923,7 +19928,7 @@ export function useMeetingAssistant() {
                   : undefined)
             );
           }
-          sessionRecordingManagerRef.current?.recordQuestionTypeAdjudicationDecision(
+          if (recordingActive) typeRecordingManager?.recordQuestionTypeAdjudicationDecision(
             {
               traceId,
               taskId: scheduledTaskId,

@@ -4,6 +4,7 @@ import type {
 } from "../functions/ai-response-events.js";
 import {
   collectMeetingAIResponseCandidate,
+  MeetingAIResponseOutcomeError,
   type MeetingAIResponseProviderDisposition,
 } from "./meeting-ai-response.js";
 
@@ -36,7 +37,12 @@ export async function consumeRuntimeInferenceResponse(input: {
     ? result.candidate.outcome
     : result.outcome;
   if (input.signal.aborted || outcome.status === "aborted") {
-    throw new DOMException(`${input.operationLabel} aborted`, "AbortError");
+    const error = new MeetingAIResponseOutcomeError(
+      outcome, result.accepted ? result.candidate.attempts : result.attempts
+    );
+    error.name = "AbortError";
+    error.message = `${input.operationLabel} aborted`;
+    throw error;
   }
   return {
     rawOutput: result.accepted ? result.candidate.content : "",
