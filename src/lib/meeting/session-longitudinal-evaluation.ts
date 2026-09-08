@@ -250,6 +250,7 @@ export interface LongitudinalQuestionEvaluation {
 }
 
 export interface LongitudinalSessionInput {
+  questionTypeAdjudicationReport?: import("./question-type-adjudication-outcome.js").QuestionTypeAdjudicationOutcomeReport;
   directory: string;
   manifest: LongitudinalSessionManifest;
   transcriptTurns: LongitudinalTranscriptTurn[];
@@ -304,6 +305,7 @@ type TypeStage =
   | "runtime";
 
 export interface SessionLongitudinalEvaluationReport {
+  adjudicationEvidence: Array<{ directory: string; questionType?: import("./question-type-adjudication-outcome.js").QuestionTypeAdjudicationOutcomeReport; relation?: TaskRelationAdjudicationReflectionReport }>;
   version: 2;
   generatedAt: number;
   sessions: Array<{
@@ -913,6 +915,7 @@ export function buildSessionLongitudinalEvaluationReport(
   return {
     version: 2,
     generatedAt: Date.now(),
+    adjudicationEvidence: inputs.map(input => ({ directory: input.directory, questionType: input.questionTypeAdjudicationReport, relation: input.taskRelationAdjudicationReport })),
     sessions: sessionRows,
     excludedSessions: excludedScriptedInputs.map((session) => ({
       sessionId:

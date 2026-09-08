@@ -7,6 +7,8 @@ import type {
   TaskRelationProductionApplicability,
   TaskRelationSemanticValidity,
 } from "./task-relation-counterfactual-branch.js";
+import type { HumanEvaluationProjectionV2 } from "./human-ground-truth-v2.js";
+import { offlineIdentityMatches, readOfflineDecisionIdentity, resolveOfflineHumanTruth } from "./question-type-adjudication-outcome.js";
 
 export interface TaskRelationAdjudicationRecordedDecision {
   recordedAt: number;
@@ -23,6 +25,24 @@ export interface TaskRelationAdjudicationReflectionRow {
   traceId: string;
   taskId?: string;
   operationId?: string;
+  operationFamily: "child" | "parent" | "canonical" | "legacy";
+  rawCandidateRelation?: unknown;
+  truthSubjectId?: string;
+  truthEventIds: string[];
+  truthDiagnostic?: string;
+  orderedRelation?: InterviewTaskRelation;
+  orderedStatus?: string;
+  settledRelation?: InterviewTaskRelation;
+  settlementId?: string;
+  settlementOperationId?: string;
+  predecessorOperationIds: string[];
+  predecessorDiagnostics: string[];
+  rawCandidate?: unknown;
+  firstTokenAt?: number;
+  completedAt?: number;
+  parseDisposition?: string;
+  leaseAuthorized?: boolean;
+  predecessorsAuthorized?: boolean;
   logicalQuestionUnitId?: string;
   logicalQuestionUnitRevision?: number;
   parentId?: string;
@@ -67,7 +87,7 @@ export interface TaskRelationAdjudicationReflectionRow {
   contextOwnerCorrect?: boolean;
   contextOutcome?: "correct" | "contaminated" | "missing";
   stale: boolean;
-  mutationApplied: boolean;
+  mutationApplied?: boolean;
   durationMs?: number;
 }
 
@@ -86,9 +106,21 @@ export interface TaskRelationLatencyMetric {
 
 export interface TaskRelationAdjudicationReflectionReport {
   version: 1;
+  derivationVersion: "task152-offline-v3";
+  diagnostics: Array<{ traceId: string; reason: string }>;
+  inputRecords: number;
+  duplicateRecords: number;
+  missingInputs?: string[];
+  metricContract: { candidateUnit: string; productUnit: string; exclusions: string[] };
   generatedAt: number;
   metrics: {
     operations: number;
+    currentOperations: number;
+    legacyOperations: number;
+    operationFamilies: Record<string, number>;
+    evaluatedSubjects: number;
+    orderedAccuracy: TaskRelationRateMetric;
+    currentCandidateAccuracy: TaskRelationRateMetric;
     eligible: number;
     candidateAvailable: number;
     deterministicComparisonEligible: number;
@@ -133,6 +165,9 @@ export interface TaskRelationAdjudicationReflectionReport {
 export function buildTaskRelationAdjudicationReflectionReport(input: {
   decisions: TaskRelationAdjudicationRecordedDecision[];
   evaluations: QuestionHumanEvaluation[];
+  projections?: HumanEvaluationProjectionV2[];
+  settlements?: TaskRelationAdjudicationRecordedDecision[];
+  missingInputs?: string[];
   now?: number;
 }): TaskRelationAdjudicationReflectionReport {
   const decisions = dedupeLatestDecisions(input.decisions);
@@ -140,39 +175,46 @@ export function buildTaskRelationAdjudicationReflectionReport(input: {
   const matchedEvaluationIds = new Set<string>();
   const rows = decisions.map((decision) => {
     const metadata = decision.metadata ?? {};
-    const evaluation = evaluationByTrace.get(decision.traceId);
+    const prefix = decision.reflectionPrefix;
+    const current = prefix !== undefined;
+    const linked = [...input.decisions, ...input.settlements ?? []].filter(link => current && offlineIdentityMatches(decision, link) &&
+      link.metadata[`${prefix}OperationId`] === metadata[`${prefix}OperationId`]);
+    const truth = resolveOfflineHumanTruth(decision, input.projections ?? [], linked);
+    const legacyEvaluation = evaluationByTrace.get(`${decision.sessionId ?? ""}:${decision.traceId}`) ?? evaluationByTrace.get(`:${decision.traceId}`);
+    const evaluation = input.projections?.some(projection => projection.subject.traceIds.includes(decision.traceId)) || current ? undefined : legacyEvaluation;
     if (evaluation) matchedEvaluationIds.add(evaluation.id);
-    const deterministicRelation = normalizeRelation(
+    const deterministicRelation = current ? undefined : normalizeRelation(
       metadata.taskRelationAdjudicationDeterministicRelation
     );
-    const candidateRelation = normalizeRelation(
-      metadata.taskRelationAdjudicationCandidateRelation
-    );
+    const rawCandidate = current ? metadata[`${prefix}${prefix === "taskRelationSplitCanonical" ? "ParsedRelation" : "ParsedDecision"}`] : undefined;
+    const candidateRelation = normalizeRelation(current
+      ? prefix === "taskRelationSplitCanonical" ? rawCandidate ?? metadata.taskRelationSplitCanonicalRelation : undefined
+      : metadata.taskRelationAdjudicationCandidateRelation);
     const expectedRelation =
-      evaluation?.expectedRelation === "none"
+      (truth.expectedRelation ?? evaluation?.expectedRelation) === "none"
         ? undefined
-        : evaluation?.expectedRelation;
-    const expectedParentAction = evaluation?.expectedParentAction;
-    const expectedParentId = evaluation?.expectedParentId;
-    const expectedBranchId = evaluation?.expectedBranchId;
-    const expectedContextOwnerId = evaluation?.expectedContextOwnerId;
+        : normalizeRelation(truth.expectedRelation ?? evaluation?.expectedRelation);
+    const expectedParentAction = truth.expectedParentAction ?? evaluation?.expectedParentAction;
+    const expectedParentId = truth.expectedParentId ?? evaluation?.expectedParentId;
+    const expectedBranchId = truth.expectedBranchId ?? evaluation?.expectedBranchId;
+    const expectedContextOwnerId = truth.expectedContextOwnerId ?? evaluation?.expectedContextOwnerId;
     const candidateConfidence = readNumber(
-      metadata.taskRelationAdjudicationConfidence
+      current ? metadata[`${prefix}Confidence`] : metadata.taskRelationAdjudicationConfidence
     );
     const childAffinityDecision = normalizeChildAffinity(
-      metadata.taskRelationChildAffinityDecision
+      current && prefix !== "taskRelationChildAffinity" ? undefined : rawCandidate ?? metadata.taskRelationChildAffinityDecision
     );
     const parentAffinityDecision = normalizeParentAffinity(
-      metadata.taskRelationParentAffinityDecision
+      current && prefix !== "taskRelationParentAffinity" ? undefined : rawCandidate ?? metadata.taskRelationParentAffinityDecision
     );
     const splitCanonicalRelation = normalizeRelation(
-      metadata.taskRelationSplitCanonicalRelation
+      current ? candidateRelation : metadata.taskRelationSplitCanonicalRelation
     );
-    const firstBatchReleasedRelation = normalizeRelation(
+    const firstBatchReleasedRelation = current ? undefined : normalizeRelation(
       metadata.taskRelationFirstBatchReleasedRelation
     );
     const parseDisposition = readString(
-      metadata.taskRelationAdjudicationParseDisposition
+      current ? metadata[`${prefix}ParseDisposition`] : metadata.taskRelationAdjudicationParseDisposition
     );
     const parseAttempted =
       Boolean(candidateRelation) ||
@@ -181,51 +223,50 @@ export function buildTaskRelationAdjudicationReflectionReport(input: {
           !parseDisposition.startsWith("not-run")
       );
     const parseValid = readBoolean(
-      metadata.taskRelationAdjudicationParseValid
+      current ? metadata[`${prefix}ParseValid`] : metadata.taskRelationAdjudicationParseValid
     );
     const evidenceSpansValid = readBoolean(
-      metadata.taskRelationAdjudicationEvidenceSpansValid
+      current ? metadata[`${prefix}EvidenceSpansValid`] : metadata.taskRelationAdjudicationEvidenceSpansValid
     );
-    const semanticValidity = deriveSemanticValidity({
+    const semanticValidity = current ? (parseValid === undefined ? "unavailable" : parseValid ? "valid" : "invalid") : deriveSemanticValidity({
       candidateRelation,
       parseAttempted,
       parseValid,
       evidenceSpansValid,
     });
     const stale =
-      readString(metadata.taskRelationAdjudicationDisposition) === "stale" ||
-      Boolean(readString(metadata.taskRelationAdjudicationStaleReason));
+      current ? metadata[`${prefix}LeaseAuthorized`] === false || metadata[`${prefix}Disposition`] === "stale" :
+        readString(metadata.taskRelationAdjudicationDisposition) === "stale" || Boolean(readString(metadata.taskRelationAdjudicationStaleReason));
+    const effects = current ? [...linked].sort((a, b) => b.recordedAt - a.recordedAt)[0]?.metadata ?? {} : metadata;
     const activeChildId = readString(
       metadata.taskRelationAdjudicationActiveChildId
     );
     const observedParentId = readString(
-      metadata.effectiveCurrentQuestionSettlementParentId ??
-        metadata.settledExecutionPlanPostMutationParentId ??
-        metadata.sourceTransitionParentAfterId ??
-        metadata.currentQuestionSettlementParentAfterId ??
-        metadata.activeMeetingParentId ??
-        metadata.taskRelationAdjudicationParentId
+      effects.effectiveCurrentQuestionSettlementParentId ??
+        effects.settledExecutionPlanPostMutationParentId ??
+        effects.sourceTransitionParentAfterId ??
+        effects.currentQuestionSettlementParentAfterId ??
+        (current ? undefined : metadata.activeMeetingParentId ?? metadata.taskRelationAdjudicationParentId)
     );
     const observedChildId = readString(
-      metadata.effectiveCurrentQuestionSettlementChildId ??
-        metadata.activeMeetingChildId ??
-        metadata.taskRelationAdjudicationActiveChildId
+      effects.effectiveCurrentQuestionSettlementChildId ??
+        (current ? undefined : metadata.activeMeetingChildId ?? metadata.taskRelationAdjudicationActiveChildId)
     );
     const effectiveRelation =
       readBoolean(metadata.effectiveAdvisorCurrentOnly) === true
         ? undefined
         : normalizeRelation(
-            metadata.effectiveCurrentQuestionSettlementRelation ??
-              metadata.settledExecutionPlanTaskRelation ??
-              metadata.currentQuestionSettlementRelation
+            effects.effectiveCurrentQuestionSettlementRelation ??
+              effects.settledExecutionPlanTaskRelation ??
+              effects.currentQuestionSettlementRelation
           );
     const observedBranchId =
       effectiveRelation === "child-probe" && observedChildId
         ? observedChildId
         : observedParentId;
     const contextReadScope = readString(
-      metadata.effectiveCurrentQuestionContextReadScope ??
-        metadata.responseOnlyContextReadScope
+      effects.effectiveCurrentQuestionContextReadScope ??
+        effects.responseOnlyContextReadScope
     );
     const observedContextOwnerId =
       contextReadScope === "active-child-read"
@@ -233,11 +274,11 @@ export function buildTaskRelationAdjudicationReflectionReport(input: {
         : contextReadScope === "active-parent-read"
           ? observedParentId
           : readString(
-              metadata.effectiveCurrentQuestionSettlementUnitId ??
-                metadata.currentQuestionSettlementUnitId ??
-                metadata.logicalQuestionUnitId
+              effects.effectiveCurrentQuestionSettlementUnitId ??
+                effects.currentQuestionSettlementUnitId ??
+                (current ? undefined : metadata.logicalQuestionUnitId)
             );
-    const productionApplicability = deriveProductionApplicability({
+    const productionApplicability = current ? { applicability: "not-evaluated" as const, reason: "current-operation-uses-recorded-ordered-effects" } : deriveProductionApplicability({
       candidateRelation,
       semanticValidity,
       stale,
@@ -252,8 +293,28 @@ export function buildTaskRelationAdjudicationReflectionReport(input: {
       traceId: decision.traceId,
       taskId: decision.taskId,
       operationId: readString(
-        metadata.taskRelationAdjudicationOperationId
+        current ? metadata[`${prefix}OperationId`] : metadata.taskRelationAdjudicationOperationId
       ),
+      operationFamily: prefix === "taskRelationChildAffinity" ? "child" : prefix === "taskRelationParentAffinity" ? "parent" : prefix === "taskRelationSplitCanonical" ? "canonical" : "legacy",
+      truthSubjectId: truth.subjectId,
+      truthEventIds: truth.eventIds,
+      truthDiagnostic: truth.diagnostic,
+      rawCandidate,
+      rawCandidateRelation: current ? (prefix === "taskRelationSplitCanonical" ? rawCandidate ?? metadata.taskRelationSplitCanonicalRelation : undefined) : metadata.taskRelationAdjudicationCandidateRelation,
+      parseDisposition,
+      firstTokenAt: current ? readNumber(metadata[`${prefix}FirstTokenAt`]) : undefined,
+      completedAt: current ? readNumber(metadata[`${prefix}CompletedAt`]) : undefined,
+      leaseAuthorized: current ? readBoolean(metadata[`${prefix}LeaseAuthorized`]) : undefined,
+      predecessorsAuthorized: current ? readBoolean(metadata[`${prefix}PredecessorsAuthorized`]) : undefined,
+      orderedRelation: current ? normalizeRelation(effects.taskRelationOrderedResolutionRelation) : undefined,
+      orderedStatus: current ? readString(effects.taskRelationOrderedResolutionStatus) : undefined,
+      settledRelation: current ? effectiveRelation : undefined,
+      settlementId: readString(effects.currentQuestionSettlementId),
+      settlementOperationId: readString(effects.runtimeSettlementOperationId),
+      predecessorOperationIds: prefix === "taskRelationSplitCanonical" ? [metadata.taskRelationSplitChildPredecessorOperationId, metadata.taskRelationSplitParentPredecessorOperationId].filter((id): id is string => typeof id === "string") : [],
+      predecessorDiagnostics: prefix === "taskRelationSplitCanonical" ? [metadata.taskRelationSplitChildPredecessorOperationId, metadata.taskRelationSplitParentPredecessorOperationId].filter((id): id is string => typeof id === "string").filter(id => !decisions.some(other =>
+        other.reflectionPrefix && other.metadata[`${other.reflectionPrefix}OperationId`] === id && offlineIdentityMatches(decision, other)
+      )).map(id => `unresolved-predecessor:${id}`) : [],
       logicalQuestionUnitId: readString(
         metadata.taskRelationAdjudicationUnitId
       ),
@@ -275,22 +336,22 @@ export function buildTaskRelationAdjudicationReflectionReport(input: {
         metadata.taskRelationAdjudicationRecentSourceEvidenceTurnIds
       ),
       disposition: readString(
-        metadata.taskRelationAdjudicationDisposition
+        current ? metadata[`${prefix}Disposition`] : metadata.taskRelationAdjudicationDisposition
       ),
       deterministicRelation,
       candidateRelation,
       candidateConfidence,
       childAffinityDecision,
       childAffinityConfidence: readNumber(
-        metadata.taskRelationChildAffinityConfidence
+        current && prefix !== "taskRelationChildAffinity" ? undefined : metadata.taskRelationChildAffinityConfidence
       ),
       parentAffinityDecision,
       parentAffinityConfidence: readNumber(
-        metadata.taskRelationParentAffinityConfidence
+        current && prefix !== "taskRelationParentAffinity" ? undefined : metadata.taskRelationParentAffinityConfidence
       ),
       splitCanonicalRelation,
       splitCanonicalConfidence: readNumber(
-        metadata.taskRelationSplitCanonicalConfidence
+        current && prefix !== "taskRelationSplitCanonical" ? undefined : metadata.taskRelationSplitCanonicalConfidence
       ),
       firstBatchReleasedRelation,
       parseAttempted,
@@ -304,10 +365,9 @@ export function buildTaskRelationAdjudicationReflectionReport(input: {
         metadata.taskRelationAdjudicationComparisonOutcome
       ),
       comparisonEligible:
-        metadata.taskRelationAdjudicationComparisonEligible === true,
+        !current && metadata.taskRelationAdjudicationComparisonEligible === true,
       expectedQuestionType:
-        evaluation?.correctedQuestionType ??
-        evaluation?.questionType,
+        truth.expectedQuestionType ?? evaluation?.correctedQuestionType,
       expectedRelation,
       expectedParentAction,
       expectedParentId,
@@ -318,43 +378,42 @@ export function buildTaskRelationAdjudicationReflectionReport(input: {
           ? deterministicRelation === expectedRelation
           : undefined,
       candidateCorrect:
-        candidateRelation && expectedRelation
+        candidateRelation && candidateRelation !== "unknown" && expectedRelation && (!current || parseValid !== false)
           ? candidateRelation === expectedRelation
           : undefined,
       splitCanonicalCorrect:
-        splitCanonicalRelation && expectedRelation
+        splitCanonicalRelation && splitCanonicalRelation !== "unknown" && expectedRelation && (!current || parseValid !== false)
           ? splitCanonicalRelation === expectedRelation
           : undefined,
       firstBatchReleaseCorrect:
         firstBatchReleasedRelation && expectedRelation
           ? firstBatchReleasedRelation === expectedRelation
           : undefined,
-      parentIdentityCorrect: expectedParentId
+      parentIdentityCorrect: expectedParentId && observedParentId
         ? observedParentId === expectedParentId
         : undefined,
-      branchIdentityCorrect: expectedBranchId
+      branchIdentityCorrect: expectedBranchId && observedBranchId
         ? observedBranchId === expectedBranchId
         : undefined,
-      contextOwnerCorrect: expectedContextOwnerId
+      contextOwnerCorrect: expectedContextOwnerId && observedContextOwnerId
         ? observedContextOwnerId === expectedContextOwnerId
         : undefined,
       contextOutcome,
       stale,
-      mutationApplied:
-        metadata.taskRelationAdjudicationAppliedToRuntime === true ||
-        metadata.taskRelationAdjudicationBehaviorMutationBlocked === false,
+      mutationApplied: current ? (effects.sourceTransitionDurableAuthorized === true ? readBoolean(effects.sourceTransitionDurableMutationApplied) : undefined) :
+        metadata.taskRelationAdjudicationAppliedToRuntime === true || metadata.taskRelationAdjudicationBehaviorMutationBlocked === false,
       durationMs: readNumber(
-        metadata.taskRelationAdjudicationDurationMs
+        current ? metadata[`${prefix}DurationMs`] : metadata.taskRelationAdjudicationDurationMs
       ),
     } satisfies TaskRelationAdjudicationReflectionRow;
   });
   const labeledRows = rows.filter((row) => row.expectedRelation);
-  const llmLabeledRows = labeledRows.filter((row) => row.candidateRelation);
+  const llmLabeledRows = labeledRows.filter((row) => row.operationFamily === "legacy" && row.candidateRelation);
   const deterministicLabeledRows = labeledRows.filter(
     (row) => row.deterministicRelation
   );
   const splitCanonicalLabeledRows = labeledRows.filter(
-    (row) => row.splitCanonicalRelation
+    (row) => row.operationFamily === "legacy" && row.splitCanonicalCorrect !== undefined
   );
   const firstBatchReleaseLabeledRows = labeledRows.filter(
     (row) => row.firstBatchReleasedRelation
@@ -372,13 +431,15 @@ export function buildTaskRelationAdjudicationReflectionReport(input: {
     (row) => row.splitCanonicalRelation === "new-parent"
   );
   const activeChildRows = rows.filter((row) => row.activeChildId);
-  const parentIdentityRows = rows.filter(
+  const subjects = new Map(rows.filter(row => row.truthSubjectId).map(row => [row.truthSubjectId!, row]));
+  const productRows = [...rows.filter(row => row.operationFamily === "legacy"), ...subjects.values()];
+  const parentIdentityRows = productRows.filter(
     (row) => row.parentIdentityCorrect !== undefined
   );
-  const branchIdentityRows = rows.filter(
+  const branchIdentityRows = productRows.filter(
     (row) => row.branchIdentityCorrect !== undefined
   );
-  const contextOwnerRows = rows.filter(
+  const contextOwnerRows = productRows.filter(
     (row) => row.contextOwnerCorrect !== undefined
   );
   const unmatchedEvaluations = input.evaluations
@@ -392,12 +453,30 @@ export function buildTaskRelationAdjudicationReflectionReport(input: {
       questionId: evaluation.questionId,
       traceIds: [...evaluation.traceIds],
     }));
+  const currentCandidates = rows.filter(row => row.operationFamily !== "legacy" && row.candidateCorrect !== undefined);
+  const orderedSubjects = [...subjects.values()].filter(row => row.orderedRelation && row.expectedRelation);
 
   return {
     version: 1,
+    derivationVersion: "task152-offline-v3",
+    metricContract: { candidateUnit: "Child/Parent/Canonical operation identity; legacy Direct separate", productUnit: "confirmed human attempt/source subject", exclusions: ["Unknown parse is not invalid", "Candidate is not Ordered or durable effect", "Missing/conflicting identity or truth is unscored"] },
+    inputRecords: input.decisions.length,
+    duplicateRecords: input.decisions.length - new Set(input.decisions.map(decision => JSON.stringify(decision))).size,
+    missingInputs: input.missingInputs,
+    diagnostics: [
+      ...input.decisions.filter(decision => isCurrentOnlyWithoutOperation(decision)).map(decision => ({ traceId: decision.traceId, reason: "missing-operation-identity" })),
+      ...rows.filter(row => row.rawCandidateRelation !== undefined && !normalizeRelation(row.rawCandidateRelation)).map(row => ({ traceId: row.traceId, reason: `unsupported-relation:${String(row.rawCandidateRelation)}` })),
+      ...rows.flatMap(row => row.predecessorDiagnostics.map(reason => ({ traceId: row.traceId, reason }))),
+    ],
     generatedAt: input.now ?? Date.now(),
     metrics: {
       operations: rows.length,
+      currentOperations: rows.filter(row => row.operationFamily !== "legacy").length,
+      legacyOperations: rows.filter(row => row.operationFamily === "legacy").length,
+      operationFamilies: countValues(rows.map(row => row.operationFamily)),
+      evaluatedSubjects: subjects.size,
+      orderedAccuracy: rate(orderedSubjects.filter(row => row.orderedRelation === row.expectedRelation).length, orderedSubjects.length),
+      currentCandidateAccuracy: rate(currentCandidates.filter(row => row.candidateCorrect).length, currentCandidates.length),
       eligible: rows.filter(
         (row) =>
           row.disposition !== "not-eligible" &&
@@ -477,7 +556,7 @@ export function buildTaskRelationAdjudicationReflectionReport(input: {
         (row) => row.contextOutcome === "contaminated"
       ).length,
       stale: rows.filter((row) => row.stale).length,
-      mutationApplied: rows.filter((row) => row.mutationApplied).length,
+      mutationApplied: [...new Map(rows.filter(row => row.mutationApplied).map(row => [row.settlementId ?? row.key, row])).values()].length,
       disposition: countValues(rows.map((row) => row.disposition)),
       expectedRelation: countValues(
         rows.map((row) => row.expectedRelation)
@@ -503,6 +582,9 @@ export function renderTaskRelationAdjudicationReflectionMarkdown(
     "# Task Relation Adjudication Reflection",
     "",
     `- Operations: ${metrics.operations}`,
+    `- Current / legacy operations: ${metrics.currentOperations} / ${metrics.legacyOperations}`,
+    `- Current candidate accuracy: ${formatRate(metrics.currentCandidateAccuracy)}`,
+    `- Ordered accuracy (unique human subjects): ${formatRate(metrics.orderedAccuracy)}`,
     `- Candidate available: ${metrics.candidateAvailable}`,
     `- Human-labeled: ${metrics.labeled}`,
     `- Deterministic/LLM agreement: ${formatRate(metrics.deterministicAgreement)}`,
@@ -538,12 +620,17 @@ export function renderTaskRelationAdjudicationReflectionMarkdown(
 function dedupeLatestDecisions(
   decisions: TaskRelationAdjudicationRecordedDecision[]
 ) {
-  const latest = new Map<string, TaskRelationAdjudicationRecordedDecision>();
-  for (const decision of decisions) {
+  const latest = new Map<string, TaskRelationAdjudicationRecordedDecision & { reflectionPrefix?: string }>();
+  for (const record of decisions) {
+    const prefixes = ["taskRelationChildAffinity", "taskRelationParentAffinity", "taskRelationSplitCanonical"].filter(prefix => readString(record.metadata[`${prefix}OperationId`]));
+    const candidates: Array<TaskRelationAdjudicationRecordedDecision & { reflectionPrefix?: string }> = prefixes.map(reflectionPrefix => ({ ...record, reflectionPrefix }));
+    if (readString(record.metadata.taskRelationAdjudicationOperationId) || (!prefixes.length && !isCurrentOnlyWithoutOperation(record))) candidates.push(record);
+    for (const decision of candidates) {
     const key = decisionKey(decision);
     const existing = latest.get(key);
     if (!existing || decision.recordedAt >= existing.recordedAt) {
       latest.set(key, decision);
+    }
     }
   }
   return Array.from(latest.values()).sort(
@@ -551,12 +638,20 @@ function dedupeLatestDecisions(
   );
 }
 
-function decisionKey(decision: TaskRelationAdjudicationRecordedDecision) {
+function isCurrentOnlyWithoutOperation(record: TaskRelationAdjudicationRecordedDecision) {
+  return !readString(record.metadata.taskRelationAdjudicationOperationId) &&
+    !["taskRelationChildAffinity", "taskRelationParentAffinity", "taskRelationSplitCanonical"].some(prefix => readString(record.metadata[`${prefix}OperationId`])) &&
+    Object.keys(record.metadata).some(key => key.startsWith("taskRelationOrderedResolution") || key.startsWith("taskRelationChildAffinity") || key.startsWith("taskRelationParentAffinity") || key.startsWith("taskRelationSplitCanonical") || key === "runtimeSettlementOperationId");
+}
+
+function decisionKey(decision: TaskRelationAdjudicationRecordedDecision & { reflectionPrefix?: string }) {
   return JSON.stringify([
     decision.sessionId ?? "session",
     readString(
-      decision.metadata.taskRelationAdjudicationOperationId
+      decision.reflectionPrefix ? decision.metadata[`${decision.reflectionPrefix}OperationId`] : decision.metadata.taskRelationAdjudicationOperationId
     ) ?? `trace:${decision.traceId}`,
+    decision.reflectionPrefix,
+    decision.reflectionPrefix ? readOfflineDecisionIdentity(decision) : undefined,
   ]);
 }
 
@@ -566,7 +661,7 @@ function indexLatestEvaluations(evaluations: QuestionHumanEvaluation[]) {
     (left, right) => left.updatedAt - right.updatedAt
   )) {
     for (const traceId of evaluation.traceIds) {
-      byTrace.set(traceId, evaluation);
+      byTrace.set(`${evaluation.sessionId ?? ""}:${traceId}`, evaluation);
     }
   }
   return byTrace;

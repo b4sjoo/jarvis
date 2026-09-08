@@ -275,12 +275,14 @@ test("keeps branch results isolated when sessions reuse an operation id", () => 
     evaluations: [
       evaluation({
         id: "evaluation-child",
+        sessionId: "session-child",
         traceId: "trace-child",
         expectedRelation: "child-probe",
         expectedParentAction: "attach-child",
       }),
       evaluation({
         id: "evaluation-resume",
+        sessionId: "session-resume",
         traceId: "trace-resume",
         expectedRelation: "resume-parent",
         expectedParentAction: "resume",
@@ -474,6 +476,7 @@ function decision(input: {
 }
 
 function evaluation(input: {
+  sessionId?: string;
   id: string;
   traceId: string;
   expectedRelation: InterviewTaskRelation;
@@ -482,7 +485,7 @@ function evaluation(input: {
   const empty = { verdict: "not_applicable" as const, reasons: [] };
   return {
     id: input.id,
-    sessionId: "session-convergence",
+    sessionId: input.sessionId ?? "session-convergence",
     questionId: `question-${input.id}`,
     traceIds: [input.traceId],
     expectedRelation: input.expectedRelation,

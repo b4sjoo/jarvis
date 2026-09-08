@@ -2,6 +2,9 @@ import {
   normalizeCanonicalQuestionType,
   type CanonicalQuestionType,
 } from "./task-taxonomy.js";
+import type { HumanEvaluationProjectionV2 } from "./human-ground-truth-v2.js";
+import { buildQuestionTypeAdjudicationOutcomeReport, resolveOfflineHumanTruth, type QuestionTypeAdjudicationOutcomeReport, type QuestionTypeAdjudicationRecordedDecision } from "./question-type-adjudication-outcome.js";
+import type { QuestionTypeAdjudicationOutcomeEvent } from "./question-type-adjudication.js";
 
 export interface TaxonomyAdjudicationRecordedDecision {
   recordedAt: number;
@@ -12,6 +15,7 @@ export interface TaxonomyAdjudicationRecordedDecision {
 }
 
 export interface TaxonomyAdjudicationEvaluationLabel {
+  sessionId?: string;
   id: string;
   questionId: string;
   traceIds: string[];
@@ -196,6 +200,9 @@ export interface TaxonomyAdjudicationReflectionRow {
 }
 
 export interface TaxonomyAdjudicationReflectionReport {
+  derivationVersion: "task152-offline-v3";
+  legacyDenominator: "Combined/Direct historical operations only";
+  currentType: QuestionTypeAdjudicationOutcomeReport;
   version: 5;
   generatedAt: number;
   sessions: string[];
@@ -304,6 +311,11 @@ export function buildTaxonomyAdjudicationReflectionReport(input: {
   decisions: TaxonomyAdjudicationRecordedDecision[];
   traces: TaxonomyAdjudicationCompactTrace[];
   evaluations: TaxonomyAdjudicationEvaluationLabel[];
+  projections?: HumanEvaluationProjectionV2[];
+  questionTypeDecisions?: QuestionTypeAdjudicationRecordedDecision[];
+  questionTypeOutcomes?: QuestionTypeAdjudicationOutcomeEvent[];
+  settlements?: QuestionTypeAdjudicationRecordedDecision[];
+  missingInputs?: string[];
 }): TaxonomyAdjudicationReflectionReport {
   const traceById = new Map(input.traces.map((trace) => [trace.traceId, trace]));
   const evaluationByTraceId = new Map<string, TaxonomyAdjudicationEvaluationLabel>();
@@ -311,7 +323,7 @@ export function buildTaxonomyAdjudicationReflectionReport(input: {
     (left, right) => left.updatedAt - right.updatedAt
   )) {
     for (const traceId of evaluation.traceIds) {
-      evaluationByTraceId.set(traceId, evaluation);
+      evaluationByTraceId.set(`${evaluation.sessionId ?? ""}:${traceId}`, evaluation);
     }
   }
 
@@ -321,7 +333,9 @@ export function buildTaxonomyAdjudicationReflectionReport(input: {
     const summary = trace?.taxonomyAdjudication;
     const intentSummary = trace?.interviewerIntentLlm;
     const terminalSummary = trace?.currentQuestionTerminalNoAnswer;
-    const evaluation = evaluationByTraceId.get(decision.traceId);
+    const evaluation = input.projections?.some(p => p.subject.traceIds.includes(decision.traceId))
+      ? undefined : evaluationByTraceId.get(`${decision.sessionId ?? ""}:${decision.traceId}`) ?? evaluationByTraceId.get(`:${decision.traceId}`);
+    const truth = resolveOfflineHumanTruth(decision, input.projections ?? []);
     const human = evaluation?.taxonomyAdjudication;
     const llmCandidateType = normalizeType(
       readString(metadata, "interviewerIntentLlmQuestionType") ??
@@ -330,7 +344,7 @@ export function buildTaxonomyAdjudicationReflectionReport(input: {
         summary?.candidateType
     );
     const expectedType = normalizeType(
-      evaluation?.correctedQuestionType ?? evaluation?.questionType
+      truth.expectedQuestionType ?? evaluation?.correctedQuestionType
     );
     const llmRelation =
       readString(metadata, "interviewerIntentLlmRelation") ??
@@ -346,10 +360,9 @@ export function buildTaxonomyAdjudicationReflectionReport(input: {
         ? normalizeExpectedAction(expectedAction) === llmAction
         : undefined;
     const expectedRelation =
-      evaluation?.expectedRelation ??
+      truth.expectedRelation ?? evaluation?.expectedRelation ??
       evaluation?.taxonomyAdjudication?.expectedRelation ??
-      normalizeRelation(evaluation?.correctedRelation) ??
-      normalizeRelation(evaluation?.relation);
+      normalizeRelation(evaluation?.correctedRelation);
     const disposition =
       readString(metadata, "taxonomyAdjudicationDisposition") ??
       summary?.disposition;
@@ -593,7 +606,7 @@ export function buildTaxonomyAdjudicationReflectionReport(input: {
   );
   const providerValidRows = triggeredRows.filter(isProviderValidRow);
   const joinedHumanRows = providerValidRows.filter((row) =>
-    hasTaxonomyEvaluation(evaluationByTraceId.get(row.traceId))
+    hasTaxonomyEvaluation(evaluationByTraceId.get(`${row.sessionId ?? ""}:${row.traceId}`) ?? evaluationByTraceId.get(`:${row.traceId}`))
   );
   const typeLabeled = joinedHumanRows.filter(
     (row) => row.typeCorrect !== undefined
@@ -615,7 +628,7 @@ export function buildTaxonomyAdjudicationReflectionReport(input: {
   ) as string[];
   const matchedEvaluationIds = new Set(
     rows
-      .map((row) => evaluationByTraceId.get(row.traceId)?.id)
+      .map((row) => (evaluationByTraceId.get(`${row.sessionId ?? ""}:${row.traceId}`) ?? evaluationByTraceId.get(`:${row.traceId}`))?.id)
       .filter(Boolean)
   );
   const inputChars = sum(rows.map((row) => row.inputChars));
@@ -644,6 +657,9 @@ export function buildTaxonomyAdjudicationReflectionReport(input: {
 
   return {
     version: 5,
+    derivationVersion: "task152-offline-v3",
+    legacyDenominator: "Combined/Direct historical operations only",
+    currentType: buildQuestionTypeAdjudicationOutcomeReport({ decisions: input.questionTypeDecisions ?? [], outcomes: input.questionTypeOutcomes ?? [], settlements: input.settlements, projections: input.projections, missingInputs: input.missingInputs }),
     generatedAt: Date.now(),
     sessions,
     funnel: {
@@ -850,7 +866,7 @@ export function buildTaxonomyAdjudicationReflectionReport(input: {
         questionId: evaluation.questionId,
         traceIds: evaluation.traceIds,
         expectedType: normalizeType(
-          evaluation.correctedQuestionType ?? evaluation.questionType
+          evaluation.correctedQuestionType
         ),
         expectedRelation:
           evaluation.expectedRelation ??
@@ -883,6 +899,8 @@ export function renderTaxonomyAdjudicationReflectionMarkdown(
     "",
     "## Summary",
     "",
+    `- Current Type operations: ${report.currentType.metrics.proposalOperations}; confirmed labels: ${report.currentType.metrics.labeledProposals}`,
+    "- The following legacy metrics cover Combined/Direct historical operations only, independently from current Type/Split.",
     `- Observed operations / unique units: ${report.metrics.observedOperations} / ${report.metrics.observedUnits}`,
     `- Operation IDs / legacy fallbacks: ${report.metrics.operationsWithId} / ${report.metrics.legacyFallbackOperations}`,
     `- Retried units / retry operations / max operations per unit: ${report.metrics.retriedUnits} / ${report.metrics.retryOperations} / ${report.metrics.maxOperationsPerUnit}`,
@@ -1214,7 +1232,7 @@ function hasTaxonomyEvaluation(
     evaluation &&
       (evaluation.taxonomyAdjudication ||
         normalizeType(
-          evaluation.correctedQuestionType ?? evaluation.questionType
+          evaluation.correctedQuestionType
         ) ||
         evaluation.expectedRelation ||
         normalizeRelation(evaluation.correctedRelation) ||

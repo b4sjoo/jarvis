@@ -27,6 +27,74 @@ const cliPath = path.join(
 );
 let cliCompiled = false;
 
+test("Task152 single and longitudinal CLIs share exact operation/truth rows without changing raw evidence", async (t) => {
+  ensureCliCompiled();
+  const compile = spawnSync(tscPath, ["-p", "tsconfig.taxonomy-adjudication-reflection.json"], { cwd: repoRoot, encoding: "utf8" });
+  assert.equal(compile.status, 0, compile.stdout + compile.stderr);
+  const root = await mkdtemp(path.join(tmpdir(), "jarvis-task152-cli-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const session = path.join(root, "recording");
+  const metadata = {
+    currentQuestionSessionId: "runtime-a", currentQuestionRuntimeEpoch: 3,
+    currentQuestionUnitId: "Q1", currentQuestionRevision: 2,
+    currentQuestionSourceHash: "source-a", currentQuestionSourceTurnIds: ["turn-a"],
+    questionTypeAdjudicationOperationId: "T7", questionTypeAdjudicationRuntimeSessionId: "runtime-a",
+    questionTypeAdjudicationRuntimeEpoch: 3, questionTypeAdjudicationUnitId: "Q1", questionTypeAdjudicationUnitRevision: 2,
+    questionTypeAdjudicationCandidateType: "coding", questionTypeAdjudicationParseValid: true,
+  };
+  const proposal = { recordedAt: 10, traceId: "origin", sessionId: "session_recording_a", metadata };
+  const relation = { ...proposal, recordedAt: 20, metadata: { ...metadata,
+    taskRelationParentAffinityOperationId: "P1", taskRelationParentAffinityParsedDecision: "related",
+    taskRelationParentAffinityParseValid: true, taskRelationSplitCanonicalOperationId: "C1",
+    taskRelationSplitCanonicalParsedRelation: "new-parent", taskRelationSplitCanonicalParseValid: true,
+    taskRelationSplitCanonicalLeaseAuthorized: false, taskRelationSplitCanonicalDisposition: "stale",
+    taskRelationSplitParentPredecessorOperationId: "P1",
+    runtimeSettlementTypeOperationId: "T7", runtimeSettlementOperationId: "R9", currentQuestionSettlementId: "S12",
+    taskRelationOrderedResolutionStatus: "resolved", taskRelationOrderedResolutionRelation: "followup-parent",
+  } };
+  const subject = { attemptId: "origin", questionId: "Q1", traceIds: ["origin"], sourceTurnIds: ["turn-a"] };
+  const files = {
+    "manifest.json": JSON.stringify({ sessionId: "session_recording_a" }),
+    "taxonomy/question-type-adjudications.jsonl": JSON.stringify(proposal) + "\n",
+    "runtime-inference/task-relation-decisions.jsonl": [relation, relation].map(JSON.stringify).join("\n") + "\n",
+    "taxonomy/question-type-adjudication-outcomes.jsonl": JSON.stringify({ schemaVersion: 2, outcomeId: "outcome", operationId: "R9", recordingSessionId: "session_recording_a", runtimeSessionId: "runtime-a", sessionId: "runtime-a", runtimeEpoch: 3, logicalQuestionUnitId: "Q1", logicalQuestionUnitRevision: 2, traceId: "consumer", originTraceId: "origin", settlementOperationId: "R9", settlementId: "S12", stage: "release", disposition: "settlement-applied", settlementApplied: true, recordedAt: 25 }) + "\n",
+    "human-evaluation/projections-v2.json": JSON.stringify({ projections: [{ sessionId: "runtime-a", subject, computedAt: 40, observed: { traceId: "origin", traceHash: "hash", questionType: "coding" } }] }),
+    "human-evaluation/ground-truth-v2.jsonl": "",
+    "traces/origin.json": JSON.stringify({ exportedAt: 50, trace: { id: "origin", metadata: { ...relation.metadata, sourceTransitionDurableMutationApplied: true, sourceTransitionDurableAuthorized: true, sourceTransitionParentAfterId: "parent-final", currentQuestionSettlementRelation: "followup-parent" } } }),
+  };
+  for (const [filename, contents] of Object.entries(files)) {
+    await mkdir(path.dirname(path.join(session, filename)), { recursive: true });
+    await writeFile(path.join(session, filename), contents);
+  }
+  const taxonomyCli = path.join(repoRoot, ".tmp-taxonomy-adjudication-reflection/scripts/reflect-taxonomy-adjudication-session.js");
+  const singleOutput = path.join(root, "single");
+  const longitudinalOutput = path.join(root, "longitudinal");
+  const runSingle = () => spawnSync(process.execPath, [taxonomyCli, "--session", session, "--output", singleOutput], { cwd: repoRoot, encoding: "utf8" });
+  const single = runSingle();
+  assert.equal(single.status, 0, single.stderr);
+  const longitudinal = runCli(["--session", session, "--output", longitudinalOutput, "--allow-incomplete"]);
+  assert.equal(longitudinal.status, 0, longitudinal.stderr);
+  const read = async (dir, file) => JSON.parse(await readFile(path.join(dir, file), "utf8"));
+  const type = await read(singleOutput, "question-type-outcomes.json");
+  const split = await read(singleOutput, "relation-reflection.json");
+  const long = await read(longitudinalOutput, "report.json");
+  assert.deepEqual(type.rows, long.adjudicationEvidence[0].questionType.rows);
+  assert.deepEqual(split.rows, long.adjudicationEvidence[0].relation.rows);
+  assert.equal(type.metrics.labeledProposals, 0);
+  assert.equal(type.metrics.proposalOperations, 1);
+  assert.equal(type.metrics.joinCoverage, 1);
+  assert.equal(type.metrics.terminalCoverage, 0);
+  assert.equal(split.metrics.currentOperations, 2);
+  assert.equal(split.metrics.legacyOperations, 0);
+  assert.equal(split.rows.find(row => row.operationId === "C1").candidateRelation, "new-parent");
+  assert.equal(split.rows.find(row => row.operationId === "C1").orderedRelation, "followup-parent");
+  assert.equal(split.rows.find(row => row.operationId === "C1").observedParentId, "parent-final");
+  assert.equal(split.metrics.mutationApplied, 1);
+  assert.equal(runSingle().status, 0);
+  assert.deepEqual((await read(singleOutput, "question-type-outcomes.json")).rows, type.rows);
+  for (const [filename, contents] of Object.entries(files)) assert.equal(await readFile(path.join(session, filename), "utf8"), contents, filename);
+});
+
 test("enforces release evidence at the longitudinal reflection CLI boundary", async (t) => {
   const fixtureRoot = await mkdtemp(
     path.join(tmpdir(), "jarvis-longitudinal-cli-")

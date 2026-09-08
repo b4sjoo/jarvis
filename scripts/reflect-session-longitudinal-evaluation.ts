@@ -14,11 +14,14 @@ import {
   type LongitudinalTranscriptTurn,
 } from "../src/lib/meeting/session-longitudinal-evaluation.js";
 import { writeDerivedEvaluationProvenance } from "./lib/derived-evaluation-provenance.js";
+import { readRuntimeTraceEvidence, missingAdjudicationEvidenceFiles, type RuntimeTraceEvidence } from "./lib/recorded-trace-evidence.js";
 import {
   buildTaskRelationAdjudicationReflectionReport,
   type TaskRelationAdjudicationRecordedDecision,
 } from "../src/lib/meeting/task-relation-adjudication-reflection.js";
 import { buildTaskRelationAuthorityConvergenceReportV1 } from "../src/lib/meeting/task-relation-authority-convergence.js";
+import { buildQuestionTypeAdjudicationOutcomeReport, type QuestionTypeAdjudicationRecordedDecision } from "../src/lib/meeting/question-type-adjudication-outcome.js";
+import type { QuestionTypeAdjudicationOutcomeEvent } from "../src/lib/meeting/question-type-adjudication.js";
 import { projectMeetingMetadataEvaluationObservation } from "../src/lib/meeting/meeting-metadata-evaluation.js";
 import { resolveCommittedSourceTransitionLifecycleEvidence } from "../src/lib/meeting/task-settlement-tuple.js";
 import {
@@ -154,6 +157,7 @@ async function readSession(
     ]);
   const evaluationView =
     await loadSessionHumanEvaluationConsumerView(directory);
+  const missingInputs = await missingAdjudicationEvidenceFiles(directory);
   const relationDecisions =
     await readJsonLines<TaskRelationAdjudicationRecordedDecision>(
       path.join(
@@ -165,8 +169,18 @@ async function readSession(
   const taskRelationAdjudicationReport =
     buildTaskRelationAdjudicationReflectionReport({
       decisions: relationDecisions,
-      evaluations: evaluationView.evaluations,
+      evaluations: evaluationView.legacyEvaluations,
+      projections: evaluationView.projections,
+      missingInputs,
+      settlements: runtimeTraces.map(trace => ({ ...trace, recordedAt: trace.exportedAt ?? 0, sessionId: manifest.sessionId })),
     });
+  const questionTypeAdjudicationReport = buildQuestionTypeAdjudicationOutcomeReport({
+    missingInputs,
+    decisions: await readJsonLines<QuestionTypeAdjudicationRecordedDecision>(path.join(directory, "taxonomy", "question-type-adjudications.jsonl")),
+    outcomes: await readJsonLines<QuestionTypeAdjudicationOutcomeEvent>(path.join(directory, "taxonomy", "question-type-adjudication-outcomes.jsonl")),
+    settlements: [...relationDecisions, ...runtimeTraces.map(trace => ({ ...trace, recordedAt: trace.exportedAt ?? 0, sessionId: manifest.sessionId }))],
+    projections: evaluationView.projections,
+  });
   const taskRelationConvergenceReport =
     buildTaskRelationAuthorityConvergenceReportV1({
       relationReport: taskRelationAdjudicationReport,
@@ -201,65 +215,10 @@ async function readSession(
       criticalMomentEvaluationsPayload.evaluations ?? [],
     humanEvaluationProjectionsV2: evaluationView.projections,
     taskRelationAdjudicationReport,
+    questionTypeAdjudicationReport,
     taskRelationConvergenceReport,
     evidenceScope,
   };
-}
-
-interface RuntimeTraceEvidence {
-  traceId: string;
-  traceKind: string | undefined;
-  status: string | undefined;
-  startedAt: number | undefined;
-  durationMs: number | undefined;
-  metadata: Record<string, unknown>;
-}
-
-async function readRuntimeTraceEvidence(directory: string) {
-  let filenames: string[];
-  try {
-    filenames = await readdir(directory);
-  } catch (error) {
-    if (isMissingFile(error)) return [];
-    throw error;
-  }
-  const traces = await Promise.all(
-    filenames
-      .filter((filename) => filename.endsWith(".json"))
-      .map(async (filename) => {
-        const payload = JSON.parse(
-          await readFile(path.join(directory, filename), "utf8")
-        ) as {
-          trace?: {
-            id?: string;
-            kind?: string;
-            status?: string;
-            startedAt?: number;
-            durationMs?: number;
-            metadata?: Record<string, unknown>;
-          };
-          id?: string;
-          kind?: string;
-          status?: string;
-          startedAt?: number;
-          durationMs?: number;
-          metadata?: Record<string, unknown>;
-        };
-        const trace = payload.trace ?? payload;
-        if (!trace.id) return undefined;
-        return {
-          traceId: trace.id,
-          traceKind: trace.kind,
-          status: trace.status,
-          startedAt: trace.startedAt,
-          durationMs: trace.durationMs,
-          metadata: trace.metadata ?? {},
-        } satisfies RuntimeTraceEvidence;
-      })
-  );
-  return traces.filter(
-    (trace): trace is RuntimeTraceEvidence => Boolean(trace)
-  );
 }
 
 function mergeRuntimeTraceEvidence(

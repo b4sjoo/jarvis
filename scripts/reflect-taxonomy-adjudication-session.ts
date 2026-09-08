@@ -17,7 +17,6 @@ import {
   renderTaskRelationAuthorityConvergenceMarkdown,
 } from "../src/lib/meeting/task-relation-authority-convergence.js";
 import {
-  buildQuestionTypeAdjudicationOutcomeReport,
   renderQuestionTypeAdjudicationOutcomeMarkdown,
   type QuestionTypeAdjudicationRecordedDecision,
 } from "../src/lib/meeting/question-type-adjudication-outcome.js";
@@ -27,6 +26,7 @@ import {
   writeHumanEvaluationCompatibilityReport,
 } from "./session-human-evaluation-v2.js";
 import { writeDerivedEvaluationProvenance } from "./lib/derived-evaluation-provenance.js";
+import { readRuntimeTraceEvidence, missingAdjudicationEvidenceFiles } from "./lib/recorded-trace-evidence.js";
 
 interface CliOptions {
   sessionDirectories: string[];
@@ -37,6 +37,9 @@ async function main() {
   const options = parseOptions(process.argv.slice(2));
   const summaries = [];
   for (const sessionDirectory of options.sessionDirectories) {
+    const missingInputs = await missingAdjudicationEvidenceFiles(sessionDirectory);
+    const manifest = await readOptionalJson<{ sessionId?: string }>(path.join(sessionDirectory, "manifest.json"), {});
+    const traceDecisions = (await readRuntimeTraceEvidence(path.join(sessionDirectory, "traces"))).map(trace => ({ ...trace, recordedAt: trace.exportedAt ?? 0, sessionId: manifest.sessionId }));
     const intentDecisions =
       await readOptionalJsonLines<TaxonomyAdjudicationRecordedDecision>(
         path.join(sessionDirectory, "intent", "llm-adjudications.jsonl")
@@ -80,22 +83,26 @@ async function main() {
     const report = buildTaxonomyAdjudicationReflectionReport({
       decisions,
       traces: tracePayload.traces ?? [],
-      evaluations: evaluationView.evaluations,
+      evaluations: evaluationView.legacyEvaluations,
+      projections: evaluationView.projections,
+      questionTypeDecisions,
+      questionTypeOutcomes,
+      settlements: [...relationDecisions, ...traceDecisions],
+      missingInputs,
     });
     const relationReport =
       buildTaskRelationAdjudicationReflectionReport({
         decisions: relationDecisions,
-        evaluations: evaluationView.evaluations,
+        evaluations: evaluationView.legacyEvaluations,
+        projections: evaluationView.projections,
+        settlements: traceDecisions,
+        missingInputs,
       });
     const relationConvergence =
       buildTaskRelationAuthorityConvergenceReportV1({
         relationReport,
       });
-    const questionTypeOutcomeReport =
-      buildQuestionTypeAdjudicationOutcomeReport({
-        decisions: questionTypeDecisions,
-        outcomes: questionTypeOutcomes,
-      });
+    const questionTypeOutcomeReport = report.currentType;
     const outputDirectory = options.outputDirectory
       ? options.sessionDirectories.length === 1
         ? options.outputDirectory

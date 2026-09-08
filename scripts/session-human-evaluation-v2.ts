@@ -110,6 +110,7 @@ export async function loadSessionHumanEvaluationConsumerView(
   }
   return {
     ...consumerView,
+    legacyEvaluations: v1Payload.evaluations ?? [],
     projections: precisionPartition.eligible,
     materialization,
     evaluationProvenance,

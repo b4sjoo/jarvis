@@ -229,7 +229,7 @@ test("does not confuse the recording envelope with the runtime session", () => {
   assert.equal(report.rows[0]?.runtimeSessionId, "meeting-a");
 });
 
-test("reports a shadow proposal as explicitly not applied", () => {
+test("keeps a shadow proposal without an outcome unconfirmed", () => {
   const report = buildQuestionTypeAdjudicationOutcomeReport({
     decisions: [
       {
@@ -244,10 +244,10 @@ test("reports a shadow proposal as explicitly not applied", () => {
     outcomes: [],
   });
 
-  assert.equal(report.rows[0]?.terminalState, "not-applied-shadow");
-  assert.equal(report.metrics.explicitNotApplied, 1);
-  assert.equal(report.metrics.unmatchedProposals, 0);
-  assert.equal(report.metrics.joinCoverage, 1);
+  assert.equal(report.rows[0]?.terminalState, "outcome-missing");
+  assert.equal(report.metrics.explicitNotApplied, 0);
+  assert.equal(report.metrics.unmatchedProposals, 1);
+  assert.equal(report.metrics.joinCoverage, 0);
 });
 
 test("derives response application from the legacy advisor-start event", () => {

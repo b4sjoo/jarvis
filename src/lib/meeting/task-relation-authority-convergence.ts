@@ -60,7 +60,7 @@ export interface TaskRelationConvergenceRow {
   relationContextLossRisk: boolean;
   relationContaminationRisk: boolean;
   stale: boolean;
-  mutationApplied: boolean;
+  mutationApplied?: boolean;
   contextOutcome?: "correct" | "contaminated" | "missing";
   counterfactualReason?: string;
   humanPathReason?: string;
@@ -138,7 +138,7 @@ export function buildTaskRelationAuthorityConvergenceReportV1(input: {
     ...input.thresholds,
   };
   const branches = buildRelationEvaluationBranches(
-    input.relationReport
+    { ...input.relationReport, rows: input.relationReport.rows.filter(row => row.operationFamily === "legacy") }
   );
   const candidateResults = indexBranchResults(
     branches.candidateBranches
@@ -146,7 +146,7 @@ export function buildTaskRelationAuthorityConvergenceReportV1(input: {
   const humanResults = indexBranchResults(
     branches.humanExpectedBranches
   );
-  const rows = input.relationReport.rows.map((row) => {
+  const rows = input.relationReport.rows.filter(row => row.operationFamily === "legacy").map((row) => {
     const resultKey = relationResultKey(row);
     return buildConvergenceRow({
       row,
@@ -162,7 +162,7 @@ export function buildTaskRelationAuthorityConvergenceReportV1(input: {
     (row) => row.expectedTupleCompatible === true
   );
   const parseRows = input.relationReport.rows.filter(
-    (row) => row.parseAttempted
+    (row) => row.operationFamily === "legacy" && row.parseAttempted
   );
   const structuredOutputValidity = rate(
     parseRows.filter((row) => row.semanticValidity === "valid").length,

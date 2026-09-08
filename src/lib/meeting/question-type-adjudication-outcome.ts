@@ -4,6 +4,8 @@ import type {
   QuestionTypeAdjudicationOutcomeStage,
 } from "./question-type-adjudication.js";
 import type { CanonicalQuestionType } from "./task-taxonomy.js";
+import { normalizeCanonicalQuestionType } from "./task-taxonomy.js";
+import type { HumanEvaluationProjectionV2, HumanGroundTruthEventV2 } from "./human-ground-truth-v2.js";
 
 export interface QuestionTypeAdjudicationRecordedDecision {
   recordedAt: number;
@@ -61,16 +63,20 @@ export interface QuestionTypeAdjudicationOutcomeRow {
   advisorJobId?: string;
   visibleAnswerRevision?: number;
   proposedQuestionType?: CanonicalQuestionType;
-  proposalValid: boolean;
-  enforcementAuthorized: boolean;
-  settlementApplied: boolean;
-  appliedToResponse: boolean;
-  appliedToSettlement: boolean;
-  appliedToParent: boolean;
-  advisorStarted: boolean;
-  modelCompleted: boolean;
-  deliveryPending: boolean;
-  visibleCommitted: boolean;
+  rawProposedQuestionType?: unknown;
+  settledCurrentQuestionType?: CanonicalQuestionType;
+  parentQuestionType?: CanonicalQuestionType;
+  consumerQuestionType?: CanonicalQuestionType;
+  proposalValid?: boolean;
+  enforcementAuthorized?: boolean;
+  settlementApplied?: boolean;
+  appliedToResponse?: boolean;
+  appliedToSettlement?: boolean;
+  appliedToParent?: boolean;
+  advisorStarted?: boolean;
+  modelCompleted?: boolean;
+  deliveryPending?: boolean;
+  visibleCommitted?: boolean;
   finalStage?: QuestionTypeAdjudicationOutcomeStage;
   finalDisposition?: QuestionTypeAdjudicationOutcomeDisposition;
   finalReason?: string;
@@ -78,10 +84,21 @@ export interface QuestionTypeAdjudicationOutcomeRow {
   joinedOrExplicitTerminal: boolean;
   outcomeCount: number;
   identityMismatchCount: number;
+  terminalComplete: boolean;
+  consumerTraceIds: string[];
+  outcomeOriginTraceIds: string[];
+  expectedQuestionType?: CanonicalQuestionType;
+  typeCorrect?: boolean;
+  settledTypeCorrect?: boolean;
+  truthSubjectId?: string;
+  truthEventIds: string[];
+  truthDiagnostic: string;
 }
 
 export interface QuestionTypeAdjudicationOutcomeReport {
   version: 2;
+  derivationVersion: "task152-offline-v3";
+  metricContract: { candidateUnit: string; productUnit: string; exclusions: string[] };
   generatedAt: number;
   rows: QuestionTypeAdjudicationOutcomeRow[];
   metrics: {
@@ -102,16 +119,26 @@ export interface QuestionTypeAdjudicationOutcomeReport {
     errors: number;
     explicitNotApplied: number;
     joinedOrExplicitTerminal: number;
-    joinCoverage: number;
+    joinCoverage: number | null;
+    terminalCoverage: number | null;
+    terminalComplete: number;
+    labeledProposals: number;
+    typePrecision: number | null;
+    evaluatedSubjects: number;
+    settledLabeledSubjects: number;
+    settledTypePrecision: number | null;
     unmatchedProposals: number;
     unmatchedOutcomes: number;
     orphanOutcomes: number;
     identityMismatches: number;
   };
   integrity: {
+    missingInputs?: string[];
     unmatchedProposalOperationIds: string[];
     unmatchedOutcomeIds: string[];
     firstIdentityMismatch?: QuestionTypeAdjudicationIdentityMismatch;
+    diagnostics: Array<{ input: string; reason: string }>;
+    duplicateOutcomes: number;
   };
 }
 
@@ -127,6 +154,9 @@ interface DecisionIdentity {
 export function buildQuestionTypeAdjudicationOutcomeReport(input: {
   decisions: QuestionTypeAdjudicationRecordedDecision[];
   outcomes: QuestionTypeAdjudicationOutcomeEvent[];
+  settlements?: QuestionTypeAdjudicationRecordedDecision[];
+  projections?: HumanEvaluationProjectionV2[];
+  missingInputs?: string[];
   now?: number;
 }): QuestionTypeAdjudicationOutcomeReport {
   const decisionsByOperation = new Map<
@@ -138,55 +168,91 @@ export function buildQuestionTypeAdjudicationOutcomeReport(input: {
       decision.metadata.questionTypeAdjudicationOperationId
     );
     if (!operationId) continue;
-    const current = decisionsByOperation.get(operationId);
+    const id = readOfflineDecisionIdentity(decision);
+    const key = JSON.stringify([operationId, id.recordingSessionId, id.sessionId, id.epoch, id.unitId, id.revision, id.sourceTurnIdsHash ?? id.sourceHash ?? id.sourceTurnIds, id.originTraceId]);
+    const current = decisionsByOperation.get(key);
     if (!current || current.recordedAt <= decision.recordedAt) {
-      decisionsByOperation.set(operationId, decision);
+      decisionsByOperation.set(key, decision);
     }
   }
 
-  const outcomesByOperation = new Map<
-    string,
-    QuestionTypeAdjudicationOutcomeEvent[]
-  >();
-  for (const outcome of deduplicateOutcomes(input.outcomes)) {
-    const existing = outcomesByOperation.get(outcome.operationId) ?? [];
-    existing.push(outcome);
-    outcomesByOperation.set(outcome.operationId, existing);
-  }
+  const uniqueOutcomes = deduplicateOutcomes(input.outcomes);
+  const outcomeIdentities = new Map<string, number>();
+  const outcomeKey = (outcome: QuestionTypeAdjudicationOutcomeEvent) => JSON.stringify([outcome.recordingSessionId, outcome.runtimeSessionId ?? outcome.sessionId, outcome.outcomeId]);
+  for (const outcome of uniqueOutcomes) outcomeIdentities.set(outcomeKey(outcome), (outcomeIdentities.get(outcomeKey(outcome)) ?? 0) + 1);
+  const joinedOutcomes = new Set<QuestionTypeAdjudicationOutcomeEvent>();
+  const referencedOutcomes = new Set<QuestionTypeAdjudicationOutcomeEvent>();
+  const diagnostics: Array<{ input: string; reason: string }> = input.decisions
+    .filter(decision => !readString(decision.metadata.questionTypeAdjudicationOperationId))
+    .map(decision => ({ input: decision.traceId, reason: "missing-operation-id" }));
 
   const mismatches: QuestionTypeAdjudicationIdentityMismatch[] = [];
   const rows = Array.from(decisionsByOperation.entries())
-    .map(([operationId, decision]) => {
+    .map(([, decision]) => {
+      const operationId = readString(decision.metadata.questionTypeAdjudicationOperationId)!;
       const expectedIdentity = readDecisionIdentity(decision);
-      const allOutcomes = outcomesByOperation.get(operationId) ?? [];
+      const links = (input.settlements ?? []).filter(link =>
+        link.metadata.runtimeSettlementTypeOperationId === operationId &&
+        offlineIdentityMatches(decision, link)
+      );
+      const allOutcomes = uniqueOutcomes.filter(outcome => outcome.operationId === operationId || links.some(link =>
+        link.metadata.runtimeSettlementOperationId === outcome.operationId &&
+        readString(link.metadata.currentQuestionSettlementId) !== undefined &&
+        link.metadata.currentQuestionSettlementId === outcome.settlementId
+      ));
       const matchingOutcomes: QuestionTypeAdjudicationOutcomeEvent[] = [];
       for (const outcome of allOutcomes) {
+        referencedOutcomes.add(outcome);
+        if (outcomeIdentities.get(outcomeKey(outcome))! > 1) {
+          diagnostics.push({ input: outcome.outcomeId, reason: "conflicting-outcome-id" });
+          continue;
+        }
+        const owners = Array.from(decisionsByOperation.values()).filter(other => {
+          const otherId = other.metadata.questionTypeAdjudicationOperationId;
+          const otherLinks = (input.settlements ?? []).filter(link =>
+            link.metadata.runtimeSettlementTypeOperationId === otherId &&
+            link.metadata.runtimeSettlementOperationId === outcome.operationId &&
+            link.metadata.currentQuestionSettlementId === outcome.settlementId &&
+            offlineIdentityMatches(other, link));
+          const references = otherId === outcome.operationId || otherLinks.length > 0;
+          return references && !findIdentityMismatch(String(otherId), outcome, identityForLinkedOutcome(other, outcome, otherLinks));
+        });
+        if (owners.length > 1) {
+          diagnostics.push({ input: outcome.outcomeId, reason: "ambiguous-proposal-identity" });
+          continue;
+        }
         const mismatch = findIdentityMismatch(
           operationId,
           outcome,
-          expectedIdentity
+          identityForLinkedOutcome(decision, outcome, links)
         );
         if (mismatch) {
           mismatches.push(mismatch);
         } else {
           matchingOutcomes.push(outcome);
+          joinedOutcomes.add(outcome);
         }
       }
       matchingOutcomes.sort((left, right) => left.recordedAt - right.recordedAt);
       const latest = matchingOutcomes.at(-1);
-      const enforcementAuthorized =
-        decision.metadata.questionTypeAdjudicationEnforcementAuthorized ===
-          true ||
-        matchingOutcomes.some((outcome) => outcome.enforcementAuthorized);
+      const enforcementAuthorized = observedBoolean(matchingOutcomes, "enforcementAuthorized") ??
+        readBoolean(decision.metadata.questionTypeAdjudicationEnforcementAuthorized);
       const terminalState = resolveTerminalState({
         decision,
         latest,
-        enforcementAuthorized,
+        enforcementAuthorized: enforcementAuthorized === true,
       });
       const joinedOrExplicitTerminal =
         matchingOutcomes.length > 0 ||
         terminalState === "not-applied-shadow" ||
         terminalState === "not-applied-enforcement-denied";
+      const terminalComplete = matchingOutcomes.some(outcome => [
+        "visible-committed", "suppressed", "stale-dropped", "cancelled-by-new-job",
+        "cancelled-by-runtime-boundary", "error", "enforcement-denied",
+      ].includes(outcome.disposition));
+      const truth = resolveOfflineHumanTruth(decision, input.projections ?? [], links);
+      const proposedQuestionType = normalizeQuestionType(decision.metadata.questionTypeAdjudicationCandidateType);
+      const finalMetadata = [...links].sort((a, b) => b.recordedAt - a.recordedAt)[0]?.metadata ?? {};
 
       return {
         operationId,
@@ -194,9 +260,7 @@ export function buildQuestionTypeAdjudicationOutcomeReport(input: {
         runtimeSessionId: expectedIdentity.runtimeSessionId,
         runtimeEpoch: expectedIdentity.runtimeEpoch,
         traceId: decision.traceId,
-        originTraceId:
-          readLatestString(matchingOutcomes, "originTraceId") ??
-          expectedIdentity.originTraceId,
+        originTraceId: expectedIdentity.originTraceId,
         taskId: decision.taskId,
         logicalQuestionUnitId: expectedIdentity.logicalQuestionUnitId,
         logicalQuestionUnitRevision:
@@ -215,40 +279,23 @@ export function buildQuestionTypeAdjudicationOutcomeReport(input: {
           matchingOutcomes,
           "visibleAnswerRevision"
         ),
-        proposedQuestionType: normalizeQuestionType(
-          decision.metadata.questionTypeAdjudicationCandidateType
-        ),
-        proposalValid:
-          decision.metadata.questionTypeAdjudicationParseValid === true,
+        proposedQuestionType,
+        rawProposedQuestionType: decision.metadata.questionTypeAdjudicationCandidateType,
+        settledCurrentQuestionType: normalizeQuestionType(finalMetadata.effectiveCurrentQuestionSettlementQuestionType ?? finalMetadata.currentQuestionSettlementType),
+        parentQuestionType: normalizeQuestionType(finalMetadata.currentQuestionSettlementParentAfterType),
+        consumerQuestionType: normalizeQuestionType(finalMetadata.settledExecutionPlanQuestionType),
+        proposalValid: readBoolean(decision.metadata.questionTypeAdjudicationParseValid),
         enforcementAuthorized,
-        settlementApplied: matchingOutcomes.some(
-          (outcome) => outcome.settlementApplied
-        ),
-        appliedToResponse: matchingOutcomes.some(
-          (outcome) =>
-            outcome.appliedToResponse === true ||
-            (outcome.schemaVersion === 1 && outcome.advisorStarted === true)
-        ),
-        appliedToSettlement: matchingOutcomes.some(
-          (outcome) =>
-            outcome.appliedToSettlement === true ||
-            outcome.settlementApplied === true
-        ),
-        appliedToParent: matchingOutcomes.some(
-          (outcome) => outcome.appliedToParent === true
-        ),
-        advisorStarted: matchingOutcomes.some(
-          (outcome) => outcome.advisorStarted
-        ),
-        modelCompleted: matchingOutcomes.some(
-          (outcome) => outcome.modelCompleted
-        ),
-        deliveryPending: matchingOutcomes.some(
-          (outcome) => outcome.deliveryPending
-        ),
-        visibleCommitted: matchingOutcomes.some(
-          (outcome) => outcome.visibleCommitted
-        ),
+        settlementApplied: observedBoolean(matchingOutcomes, "settlementApplied"),
+        appliedToResponse: observedBoolean(matchingOutcomes, "appliedToResponse") ??
+          (matchingOutcomes.some(outcome => outcome.schemaVersion === 1 && outcome.advisorStarted) ? true : undefined),
+        appliedToSettlement: observedBoolean(matchingOutcomes, "appliedToSettlement") ??
+          (matchingOutcomes.some(outcome => outcome.schemaVersion === 1 && outcome.settlementApplied) ? true : undefined),
+        appliedToParent: observedBoolean(matchingOutcomes, "appliedToParent"),
+        advisorStarted: observedBoolean(matchingOutcomes, "advisorStarted"),
+        modelCompleted: observedBoolean(matchingOutcomes, "modelCompleted"),
+        deliveryPending: observedBoolean(matchingOutcomes, "deliveryPending"),
+        visibleCommitted: observedBoolean(matchingOutcomes, "visibleCommitted"),
         finalStage: latest?.stage,
         finalDisposition: latest?.disposition,
         finalReason: latest?.reason,
@@ -257,14 +304,22 @@ export function buildQuestionTypeAdjudicationOutcomeReport(input: {
         outcomeCount: matchingOutcomes.length,
         identityMismatchCount:
           allOutcomes.length - matchingOutcomes.length,
+        terminalComplete,
+        consumerTraceIds: [...new Set(matchingOutcomes.map(outcome => outcome.traceId))],
+        outcomeOriginTraceIds: [...new Set(matchingOutcomes.map(outcome => outcome.originTraceId ?? outcome.traceId))],
+        expectedQuestionType: truth.expectedQuestionType,
+        typeCorrect: truth.expectedQuestionType && truth.expectedQuestionType !== "unknown" && proposedQuestionType && proposedQuestionType !== "unknown" && decision.metadata.questionTypeAdjudicationParseValid !== false
+          ? truth.expectedQuestionType === proposedQuestionType : undefined,
+        settledTypeCorrect: truth.expectedQuestionType && normalizeQuestionType(finalMetadata.effectiveCurrentQuestionSettlementQuestionType ?? finalMetadata.currentQuestionSettlementType)
+          ? truth.expectedQuestionType === normalizeQuestionType(finalMetadata.effectiveCurrentQuestionSettlementQuestionType ?? finalMetadata.currentQuestionSettlementType) : undefined,
+        truthSubjectId: truth.subjectId,
+        truthEventIds: truth.eventIds,
+        truthDiagnostic: truth.diagnostic,
       } satisfies QuestionTypeAdjudicationOutcomeRow;
     })
     .sort((left, right) => left.operationId.localeCompare(right.operationId));
 
-  const joinedOperationIds = new Set(decisionsByOperation.keys());
-  const unmatchedOutcomeEvents = input.outcomes.filter(
-    (outcome) => !joinedOperationIds.has(outcome.operationId)
-  );
+  const unmatchedOutcomeEvents = uniqueOutcomes.filter(outcome => !joinedOutcomes.has(outcome));
   const unmatchedProposalRows = rows.filter(
     (row) => !row.joinedOrExplicitTerminal
   );
@@ -275,23 +330,26 @@ export function buildQuestionTypeAdjudicationOutcomeReport(input: {
     rows,
     (row) => row.joinedOrExplicitTerminal
   );
+  const settledSubjects = [...new Map(rows.filter(row => row.truthSubjectId && row.settledTypeCorrect !== undefined).map(row => [row.truthSubjectId, row])).values()];
 
   return {
     version: 2,
+    derivationVersion: "task152-offline-v3",
+    metricContract: { candidateUnit: "Type operation with exact recorded identity", productUnit: "confirmed human attempt/source subject", exclusions: ["Missing or conflicting identity/truth is unscored", "Release-only is joined but not terminal-complete", "Unknown application is not false"] },
     generatedAt: input.now ?? Date.now(),
     rows,
     metrics: {
       proposalOperations: rows.length,
-      validProposalOperations: count(rows, (row) => row.proposalValid),
-      enforcementAuthorized: count(rows, (row) => row.enforcementAuthorized),
-      settlementApplied: count(rows, (row) => row.settlementApplied),
-      appliedToResponse: count(rows, (row) => row.appliedToResponse),
-      appliedToSettlement: count(rows, (row) => row.appliedToSettlement),
-      appliedToParent: count(rows, (row) => row.appliedToParent),
-      advisorStarted: count(rows, (row) => row.advisorStarted),
-      modelCompleted: count(rows, (row) => row.modelCompleted),
-      deliveryPending: count(rows, (row) => row.deliveryPending),
-      visibleCommitted: count(rows, (row) => row.visibleCommitted),
+      validProposalOperations: count(rows, (row) => row.proposalValid === true),
+      enforcementAuthorized: count(rows, (row) => row.enforcementAuthorized === true),
+      settlementApplied: count(rows, (row) => row.settlementApplied === true),
+      appliedToResponse: count(rows, (row) => row.appliedToResponse === true),
+      appliedToSettlement: count(rows, (row) => row.appliedToSettlement === true),
+      appliedToParent: count(rows, (row) => row.appliedToParent === true),
+      advisorStarted: count(rows, (row) => row.advisorStarted === true),
+      modelCompleted: count(rows, (row) => row.modelCompleted === true),
+      deliveryPending: count(rows, (row) => row.deliveryPending === true),
+      visibleCommitted: count(rows, (row) => row.visibleCommitted === true),
       deniedOrDropped,
       staleDropped: count(
         rows,
@@ -307,13 +365,22 @@ export function buildQuestionTypeAdjudicationOutcomeReport(input: {
       ),
       joinedOrExplicitTerminal,
       joinCoverage:
-        rows.length === 0 ? 1 : joinedOrExplicitTerminal / rows.length,
+        rows.length === 0 ? null : count(rows, row => row.outcomeCount > 0) / rows.length,
+      terminalCoverage: rows.length ? count(rows, row => row.terminalComplete) / rows.length : null,
+      terminalComplete: count(rows, row => row.terminalComplete),
+      labeledProposals: count(rows, row => row.typeCorrect !== undefined),
+      typePrecision: rows.some(row => row.typeCorrect !== undefined)
+        ? count(rows, row => row.typeCorrect === true) / count(rows, row => row.typeCorrect !== undefined) : null,
+      evaluatedSubjects: new Set(rows.map(row => row.truthSubjectId).filter(Boolean)).size,
+      settledLabeledSubjects: settledSubjects.length,
+      settledTypePrecision: settledSubjects.length ? count(settledSubjects, row => row.settledTypeCorrect === true) / settledSubjects.length : null,
       unmatchedProposals: unmatchedProposalRows.length,
       unmatchedOutcomes: unmatchedOutcomeEvents.length,
-      orphanOutcomes: unmatchedOutcomeEvents.length,
+      orphanOutcomes: uniqueOutcomes.filter(outcome => !referencedOutcomes.has(outcome)).length,
       identityMismatches: mismatches.length,
     },
     integrity: {
+      missingInputs: input.missingInputs,
       unmatchedProposalOperationIds: unmatchedProposalRows.map(
         (row) => row.operationId
       ),
@@ -321,6 +388,8 @@ export function buildQuestionTypeAdjudicationOutcomeReport(input: {
         (outcome) => outcome.outcomeId
       ),
       firstIdentityMismatch: mismatches[0],
+      duplicateOutcomes: input.outcomes.length - uniqueOutcomes.length,
+      diagnostics: [...diagnostics, ...unmatchedOutcomeEvents.map(outcome => ({ input: outcome.outcomeId, reason: "unresolved-outcome-identity-or-link" })), ...rows.filter(row => row.rawProposedQuestionType !== undefined && !row.proposedQuestionType).map(row => ({ input: row.operationId, reason: `unsupported-question-type:${String(row.rawProposedQuestionType)}` }))],
     },
   };
 }
@@ -350,7 +419,8 @@ export function renderQuestionTypeAdjudicationOutcomeMarkdown(
     "## Integrity",
     "",
     `- Joined or explicit terminal: ${metrics.joinedOrExplicitTerminal}`,
-    `- Join coverage: ${(metrics.joinCoverage * 100).toFixed(1)}%`,
+    `- Join coverage: ${metrics.joinCoverage === null ? "N/A" : `${(metrics.joinCoverage * 100).toFixed(1)}%`}`,
+    `- Terminal coverage: ${metrics.terminalCoverage === null ? "N/A" : `${(metrics.terminalCoverage * 100).toFixed(1)}%`}`,
     `- Explicit not applied: ${metrics.explicitNotApplied}`,
     `- Denied or dropped: ${metrics.deniedOrDropped}`,
     `- Stale dropped: ${metrics.staleDropped}`,
@@ -388,6 +458,7 @@ function readDecisionIdentity(
   const runtimeSessionId =
     decision.runtimeSessionId ??
     readString(decision.metadata.questionTypeAdjudicationRuntimeSessionId) ??
+    readString(decision.metadata.currentQuestionSessionId) ??
     readString(decision.metadata.currentQuestionSettlementSessionId) ??
     readString(decision.metadata.runtimeInferenceCircuitSessionId) ??
     (!recordingSessionId ? decision.sessionId : undefined);
@@ -452,13 +523,10 @@ function findIdentityMismatch(
       actual: outcome.originTraceId ?? outcome.traceId,
     },
   ];
-  const mismatch = checks.find(
-    (check) =>
-      check.expected !== undefined &&
-      check.actual !== undefined &&
-      check.expected !== check.actual
-  );
-  if (!mismatch || mismatch.expected === undefined || mismatch.actual === undefined) {
+  const mismatch = checks.find(check =>
+    check.field === "recordingSessionId" && (check.expected === undefined || (outcome.schemaVersion === 1 && check.actual === undefined))
+      ? false : check.expected === undefined || check.actual === undefined || check.expected !== check.actual);
+  if (!mismatch) {
     return undefined;
   }
   return {
@@ -466,9 +534,24 @@ function findIdentityMismatch(
     outcomeId: outcome.outcomeId,
     stage: outcome.stage,
     field: mismatch.field,
-    expected: mismatch.expected,
-    actual: mismatch.actual,
+    expected: mismatch.expected ?? "missing",
+    actual: mismatch.actual ?? "missing",
   };
+}
+
+function identityForLinkedOutcome(
+  decision: QuestionTypeAdjudicationRecordedDecision,
+  outcome: QuestionTypeAdjudicationOutcomeEvent,
+  verifiedLinks: QuestionTypeAdjudicationRecordedDecision[]
+) {
+  const identity = readDecisionIdentity(decision);
+  const origin = outcome.originTraceId ?? outcome.traceId;
+  if (verifiedLinks.some(link => link.traceId === origin &&
+    link.metadata.currentQuestionSettlementId === outcome.settlementId &&
+    link.metadata.runtimeSettlementOperationId === outcome.operationId)) {
+    return { ...identity, originTraceId: origin };
+  }
+  return identity;
 }
 
 function resolveTerminalState(input: {
@@ -477,11 +560,7 @@ function resolveTerminalState(input: {
   enforcementAuthorized: boolean;
 }): QuestionTypeAdjudicationTerminalState {
   if (!input.latest) {
-    if (input.enforcementAuthorized) return "outcome-missing";
-    return readString(input.decision.metadata.questionTypeAdjudicationMode) ===
-      "shadow"
-      ? "not-applied-shadow"
-      : "not-applied-enforcement-denied";
+    return "outcome-missing";
   }
   switch (input.latest.disposition) {
     case "visible-committed":
@@ -525,7 +604,7 @@ function isDeniedOrDropped(
 function deduplicateOutcomes(outcomes: QuestionTypeAdjudicationOutcomeEvent[]) {
   const byId = new Map<string, QuestionTypeAdjudicationOutcomeEvent>();
   for (const outcome of outcomes) {
-    byId.set(outcome.outcomeId, outcome);
+    byId.set(JSON.stringify(outcome), outcome);
   }
   return Array.from(byId.values());
 }
@@ -557,18 +636,127 @@ function isRecordingSessionId(value: string | undefined) {
 function normalizeQuestionType(
   value: unknown
 ): CanonicalQuestionType | undefined {
-  return typeof value === "string" &&
-    [
-      "behavioral",
-      "coding",
-      "general-system-design",
-      "ai-ml-system-design",
-      "project-deep-dive",
-      "field-knowledge",
-      "unknown",
-    ].includes(value)
-    ? (value as CanonicalQuestionType)
-    : undefined;
+  return normalizeCanonicalQuestionType(value);
+}
+
+function readBoolean(value: unknown) {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function observedBoolean(outcomes: QuestionTypeAdjudicationOutcomeEvent[], key: keyof QuestionTypeAdjudicationOutcomeEvent) {
+  const values = outcomes.map(outcome => outcome[key]).filter(value => typeof value === "boolean");
+  return values.length ? values.some(value => value === true) : undefined;
+}
+
+// These are recorded identity aliases, not an inference or nearest-trace join.
+export function readOfflineDecisionIdentity(decision: QuestionTypeAdjudicationRecordedDecision) {
+  const m = decision.metadata;
+  const read = (...keys: string[]) => keys.map(key => m[key]).find(value => value !== undefined);
+  return {
+    recordingSessionId: decision.recordingSessionId ?? (isRecordingSessionId(decision.sessionId) ? decision.sessionId : undefined),
+    sessionId: decision.runtimeSessionId ?? read("questionTypeAdjudicationRuntimeSessionId", "currentQuestionSessionId", "currentQuestionSettlementSessionId", "effectiveCurrentQuestionSettlementSessionId") ?? (!isRecordingSessionId(decision.sessionId) ? decision.sessionId : undefined),
+    epoch: decision.runtimeEpoch ?? read("questionTypeAdjudicationRuntimeEpoch", "currentQuestionRuntimeEpoch", "currentQuestionSettlementRuntimeEpoch"),
+    unitId: read("questionTypeAdjudicationUnitId", "taskRelationAdjudicationUnitId", "currentQuestionUnitId", "currentQuestionSettlementUnitId", "logicalQuestionUnitId"),
+    revision: read("questionTypeAdjudicationUnitRevision", "taskRelationAdjudicationUnitRevision", "currentQuestionRevision", "currentQuestionSettlementRevision", "logicalQuestionUnitRevision"),
+    sourceHash: read("currentQuestionSourceHash", "taskRelationAdjudicationSourceHash", "currentQuestionSettlementSourceHash", "effectiveCurrentQuestionSettlementSourceHash"),
+    sourceTurnIds: read("currentQuestionSourceTurnIds", "currentQuestionSettlementSourceTurnIds", "effectiveCurrentQuestionSettlementSourceTurnIds"),
+    sourceTurnIdsHash: m.questionTypeAdjudicationSourceTurnIdsHash,
+    originTraceId: read("questionTypeAdjudicationOriginTraceId") ?? decision.traceId,
+  };
+}
+
+export function offlineIdentityMatches(left: QuestionTypeAdjudicationRecordedDecision, right: QuestionTypeAdjudicationRecordedDecision) {
+  const a = readOfflineDecisionIdentity(left);
+  const b = readOfflineDecisionIdentity(right);
+  for (const key of ["sessionId", "epoch", "unitId", "revision"] as const) {
+    if (a[key] === undefined || b[key] === undefined || a[key] !== b[key]) return false;
+  }
+  if (a.sourceHash !== undefined || b.sourceHash !== undefined) {
+    // Type-only records may carry only their source-turn hash; the link must preserve it.
+    if (a.sourceHash !== b.sourceHash && !(a.sourceHash === undefined && a.sourceTurnIdsHash !== undefined && a.sourceTurnIdsHash === b.sourceTurnIdsHash)) return false;
+  } else if (!(a.sourceTurnIdsHash !== undefined && a.sourceTurnIdsHash === b.sourceTurnIdsHash) && !sameSources(a.sourceTurnIds, b.sourceTurnIds)) return false;
+  for (const key of ["recordingSessionId", "sourceTurnIdsHash"] as const) {
+    if ((a[key] !== undefined || b[key] !== undefined) && a[key] !== b[key]) return false;
+  }
+  if (a.sourceTurnIds !== undefined && b.sourceTurnIds !== undefined && !sameSources(a.sourceTurnIds, b.sourceTurnIds)) return false;
+  // A copied Type identity cannot hide a contradictory current-source identity.
+  for (const record of [left, right]) {
+    const m = record.metadata;
+    const id = readOfflineDecisionIdentity(record);
+    const aliases = { currentQuestionSessionId: id.sessionId, currentQuestionRuntimeEpoch: id.epoch,
+      currentQuestionUnitId: id.unitId, currentQuestionRevision: id.revision,
+      taskRelationAdjudicationUnitId: id.unitId, taskRelationAdjudicationUnitRevision: id.revision };
+    for (const [key, expected] of Object.entries(aliases)) {
+      if (m[key] !== undefined && m[key] !== expected) return false;
+    }
+  }
+  return true;
+}
+
+export function resolveOfflineHumanTruth(
+  decision: QuestionTypeAdjudicationRecordedDecision,
+  projections: HumanEvaluationProjectionV2[],
+  linkedDecisions: QuestionTypeAdjudicationRecordedDecision[] = []
+) {
+  const evidence = [decision, ...linkedDecisions.filter(link => offlineIdentityMatches(decision, link))]
+    .filter(record => offlineIdentityMatches(record, record));
+  const matches = projections.filter(projection => evidence.some(record => {
+    const id = readOfflineDecisionIdentity(record);
+    return projection.sessionId === id.sessionId &&
+      projection.subject.attemptId === record.traceId &&
+      projection.subject.traceIds.includes(record.traceId) &&
+      sameSources(projection.subject.sourceTurnIds, id.sourceTurnIds);
+  }));
+  const subjects = new Set(matches.map(p => `${p.sessionId}:${p.subject.attemptId}:${JSON.stringify([...new Set(p.subject.sourceTurnIds)].sort())}`));
+  const empty = { eventIds: [] as string[], diagnostic: "missing-confirmed-human-truth" };
+  if (subjects.size > 1) return { ...empty, diagnostic: "ambiguous-human-subject" };
+  const facts = new Map<string, HumanGroundTruthEventV2>();
+  for (const projection of matches) {
+    if (projection.conflicts.some(conflict => ["expected-question-type", "expected-task-settlement"].includes(conflict.factKind))) {
+      return { ...empty, diagnostic: "conflicting-human-truth" };
+    }
+    for (const kind of ["expected-question-type", "expected-task-settlement"] as const) {
+      const event = projection.activeFacts[kind];
+      if (!event || event.confirmation !== "confirmed") continue;
+      const target = event.provenance.evaluationTarget;
+      const valid = evidence.some(record => {
+        const id = readOfflineDecisionIdentity(record);
+        return event.sessionId === id.sessionId && event.subject.attemptId === record.traceId &&
+          event.subject.traceIds.includes(record.traceId) && sameSources(event.subject.sourceTurnIds, id.sourceTurnIds) &&
+          (event.provenance.sourceTraceId === undefined || event.provenance.sourceTraceId === record.traceId) &&
+          (target && ((target.attemptId === undefined || target.attemptId === record.traceId) &&
+            (target.sourceTraceId === undefined || target.sourceTraceId === record.traceId) &&
+            target.logicalQuestionUnitId !== undefined && target.logicalQuestionUnitId === id.unitId &&
+            target.logicalQuestionUnitRevision !== undefined && target.logicalQuestionUnitRevision === id.revision &&
+            sameSources(target.sourceTurnIds, id.sourceTurnIds)));
+      });
+      if (valid) {
+        const existing = facts.get(event.eventId);
+        if (existing && JSON.stringify(existing.fact) !== JSON.stringify(event.fact)) return { ...empty, diagnostic: "conflicting-human-event-id" };
+        facts.set(event.eventId, event);
+      }
+    }
+  }
+  const values = [...facts.values()];
+  const types = new Set(values.map(event => "expectedQuestionType" in event.fact ? event.fact.expectedQuestionType : undefined));
+  if (types.size > 1) return { ...empty, diagnostic: "conflicting-human-truth" };
+  const settlement = values.find(event => event.fact.kind === "expected-task-settlement")?.fact;
+  return {
+    expectedQuestionType: normalizeQuestionType([...types][0]),
+    expectedRelation: settlement?.kind === "expected-task-settlement" ? settlement.expectedRelation : undefined,
+    expectedParentAction: settlement?.kind === "expected-task-settlement" ? settlement.expectedParentAction : undefined,
+    expectedParentId: settlement?.kind === "expected-task-settlement" ? settlement.expectedParentId : undefined,
+    expectedBranchId: settlement?.kind === "expected-task-settlement" ? settlement.expectedBranchId : undefined,
+    expectedContextOwnerId: settlement?.kind === "expected-task-settlement" ? settlement.expectedContextOwnerId : undefined,
+    subjectId: values.length ? [...subjects][0] : undefined,
+    eventIds: values.map(event => event.eventId),
+    diagnostic: values.length ? "confirmed-human-truth" : empty.diagnostic,
+  };
+}
+
+function sameSources(left: unknown, right: unknown) {
+  return Array.isArray(left) && left.length > 0 && Array.isArray(right) &&
+    JSON.stringify([...new Set(left)].sort()) === JSON.stringify([...new Set(right)].sort());
 }
 
 function readString(value: unknown) {
