@@ -27,6 +27,84 @@ const cliPath = path.join(
 );
 let cliCompiled = false;
 
+test("O1/O2 native Screen confirmed truth survives both CLIs without sealing or multiplying operations", async (t) => {
+  ensureCliCompiled();
+  const compile = spawnSync(tscPath, ["-p", "tsconfig.taxonomy-adjudication-reflection.json"], { cwd: repoRoot, encoding: "utf8" });
+  assert.equal(compile.status, 0, compile.stdout + compile.stderr);
+  const root = await mkdtemp(path.join(tmpdir(), "jarvis-native-screen-cli-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const session = path.join(root, "recording");
+  const metadata = {
+    manualScreenQuestionPacketCommitted: true, manualScreenQuestionPacketSessionId: "runtime-screen",
+    manualScreenQuestionPacketRuntimeEpoch: 3, manualScreenQuestionPacketLogicalQuestionUnitId: "screen-answer-sufficiency:O1",
+    manualScreenQuestionPacketLogicalQuestionRevision: 1, manualScreenQuestionPacketSourceHash: "screen-hash",
+    manualScreenPrimaryAskSourceTurnIds: [], manualScreenVisualEvidenceObservationId: "O1",
+    taskRelationParentAffinityOperationId: "P-screen", taskRelationParentAffinityParsedDecision: "independent",
+    taskRelationParentAffinityParseValid: true, taskRelationOrderedResolutionStatus: "resolved",
+    taskRelationOrderedResolutionRelation: "new-parent",
+  };
+  const operation = { recordedAt: 10, sessionId: "session_recording_screen", traceId: "screen-attempt", metadata };
+  const terminal = { exportedAt: 30, trace: { id: "screen-attempt", status: "success", metadata: {
+    ...metadata, currentQuestionSourceTurnIds: [], currentQuestionScreenObservationId: "O1",
+    currentQuestionSettlementSessionId: "runtime-screen", currentQuestionSettlementRuntimeEpoch: 3,
+    currentQuestionSettlementUnitId: "screen-answer-sufficiency:O1", currentQuestionSettlementRevision: 1,
+    currentQuestionSettlementSourceHash: "screen-hash", currentQuestionSettlementSourceTurnIds: [],
+    currentQuestionSettlementSourceObservationIds: ["O1"], effectiveCurrentQuestionSettlementUnitRevision: 1,
+    effectiveCurrentQuestionSettlementRevision: 4,
+  } } };
+  const subject = { attemptId: "screen-attempt", questionId: "lqu:screen-answer-sufficiency:O1", traceIds: ["screen-attempt"], sourceTurnIds: [] };
+  const files = {
+    "manifest.json": JSON.stringify({ sessionId: "session_recording_screen", status: "running" }),
+    "runtime-inference/task-relation-decisions.jsonl": [operation, operation].map(JSON.stringify).join("\n") + "\n",
+    "taxonomy/question-type-adjudications.jsonl": "",
+    "taxonomy/question-type-adjudication-outcomes.jsonl": "",
+    "human-evaluation/projections-v2.json": JSON.stringify({ projections: [{ sessionId: "runtime-screen", subject, computedAt: 40,
+      observed: { traceId: "screen-attempt", traceHash: "hash", questionType: "coding" } }] }),
+    "human-evaluation/ground-truth-v2.jsonl": JSON.stringify({ schemaVersion: 2, eventId: "screen-truth", sessionId: "runtime-screen", subject,
+      fact: { kind: "expected-task-settlement", expectedQuestionType: "behavioral", expectedRelation: "new-parent", expectedParentAction: "create" },
+      provenance: { source: "explicit-ui", actor: "human", collection: "scripted-validation", sourceTraceId: "screen-attempt", recordedAt: 50 },
+      confirmation: "confirmed" }) + "\n",
+    "traces/screen-attempt.json": JSON.stringify(terminal),
+    // Output-only Regenerate starts no Type or Split operation.
+    "traces/regenerate.json": JSON.stringify({ exportedAt: 60, trace: { id: "regenerate", status: "success", metadata: {
+      manualScreenQuestionPacketSessionId: "runtime-screen", currentQuestionSourceTurnIds: [],
+    } } }),
+  };
+  for (const [filename, contents] of Object.entries(files)) {
+    await mkdir(path.dirname(path.join(session, filename)), { recursive: true });
+    await writeFile(path.join(session, filename), contents);
+  }
+  const singleOutput = path.join(root, "single");
+  const longitudinalOutput = path.join(root, "longitudinal");
+  const taxonomyCli = path.join(repoRoot, ".tmp-taxonomy-adjudication-reflection/scripts/reflect-taxonomy-adjudication-session.js");
+  const read = async (dir, file) => JSON.parse(await readFile(path.join(dir, file), "utf8"));
+  const normalize = value => JSON.parse(JSON.stringify(value, (key, entry) => key === "generatedAt" ? undefined : entry));
+  let previous;
+  for (let run = 0; run < 2; run++) {
+    const single = spawnSync(process.execPath, [taxonomyCli, "--session", session, "--output", singleOutput], { cwd: repoRoot, encoding: "utf8" });
+    assert.equal(single.status, 0, single.stderr);
+    const longitudinal = runCli(["--session", session, "--output", longitudinalOutput, "--allow-incomplete"]);
+    assert.equal(longitudinal.status, 0, longitudinal.stderr);
+    const type = await read(singleOutput, "question-type-outcomes.json");
+    const split = await read(singleOutput, "relation-reflection.json");
+    const long = await read(longitudinalOutput, "report.json");
+    assert.equal(type.metrics.proposalOperations, 0);
+    assert.equal(split.metrics.currentOperations, 1);
+    assert.equal(split.rows[0].expectedQuestionType, "behavioral");
+    assert.equal(split.rows[0].expectedRelation, "new-parent");
+    assert.equal(split.rows[0].expectedParentAction, "create");
+    assert.equal(split.rows[0].truthDiagnostic, "confirmed-human-truth");
+    assert.deepEqual(type.rows, long.adjudicationEvidence[0].questionType.rows);
+    assert.deepEqual(split.rows, long.adjudicationEvidence[0].relation.rows);
+    assert.equal(long.evidenceScope.releaseEligible, false);
+    const current = normalize({ type, split, long });
+    if (previous) assert.deepEqual(current, previous);
+    previous = current;
+  }
+  assert.notEqual(runCli(["--session", session, "--output", path.join(root, "sealed-only")]).status, 0);
+  for (const [filename, contents] of Object.entries(files)) assert.equal(await readFile(path.join(session, filename), "utf8"), contents, filename);
+});
+
 test("Task152 single and longitudinal CLIs share exact operation/truth rows without changing raw evidence", async (t) => {
   ensureCliCompiled();
   const compile = spawnSync(tscPath, ["-p", "tsconfig.taxonomy-adjudication-reflection.json"], { cwd: repoRoot, encoding: "utf8" });

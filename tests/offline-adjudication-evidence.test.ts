@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildQuestionTypeAdjudicationOutcomeReport } from "../src/lib/meeting/question-type-adjudication-outcome.js";
+import { buildQuestionTypeAdjudicationOutcomeReport, offlineIdentityMatches, type QuestionTypeAdjudicationRecordedDecision } from "../src/lib/meeting/question-type-adjudication-outcome.js";
 import { buildTaskRelationAdjudicationReflectionReport } from "../src/lib/meeting/task-relation-adjudication-reflection.js";
 import { createQuestionTypeAdjudicationOutcomeEvent } from "../src/lib/meeting/question-type-adjudication.js";
 import { createHumanGroundTruthEventV2, deriveHumanEvaluationProjectionV2 } from "../src/lib/meeting/human-ground-truth-v2.js";
@@ -10,6 +10,142 @@ const identity = {
   currentQuestionUnitId: "Q1", currentQuestionRevision: 2,
   currentQuestionSourceHash: "source-a", currentQuestionSourceTurnIds: ["turn-a"],
 };
+
+// Native qf3b6f shape: no Voice/current-question identity and no UI evaluationTarget.
+function nativeScreenFixture() {
+  const packet = {
+    manualScreenQuestionPacketCommitted: true,
+    manualScreenQuestionPacketSessionId: "runtime-screen",
+    manualScreenQuestionPacketRuntimeEpoch: 3,
+    manualScreenQuestionPacketLogicalQuestionUnitId: "screen-answer-sufficiency:observation-a",
+    manualScreenQuestionPacketLogicalQuestionRevision: 1,
+    manualScreenQuestionPacketSourceHash: "screen-source-a",
+    manualScreenPrimaryAskSourceTurnIds: [],
+    manualScreenVisualEvidenceObservationId: "observation-a",
+  };
+  const operation: QuestionTypeAdjudicationRecordedDecision = {
+    recordedAt: 10, sessionId: "session_recording_screen", traceId: "screen-attempt",
+    metadata: { ...packet, taskRelationParentAffinityOperationId: "screen-parent",
+      taskRelationParentAffinityParseValid: true, taskRelationParentAffinityParsedDecision: "independent",
+      taskRelationOrderedResolutionStatus: "resolved", taskRelationOrderedResolutionRelation: "new-parent" },
+  };
+  const terminal = { ...operation, exportedAt: 40, status: "success", metadata: {
+    ...operation.metadata,
+    currentQuestionSourceTurnIds: [], currentQuestionScreenObservationId: "observation-a",
+    currentQuestionSettlementSessionId: "runtime-screen", currentQuestionSettlementRuntimeEpoch: 3,
+    currentQuestionSettlementUnitId: packet.manualScreenQuestionPacketLogicalQuestionUnitId,
+    currentQuestionSettlementRevision: 1, currentQuestionSettlementSourceHash: "screen-source-a",
+    currentQuestionSettlementSourceTurnIds: [], currentQuestionSettlementSourceObservationIds: ["observation-a"],
+    effectiveCurrentQuestionSettlementUnitId: packet.manualScreenQuestionPacketLogicalQuestionUnitId,
+    effectiveCurrentQuestionSettlementUnitRevision: 1, effectiveCurrentQuestionSettlementRevision: 4,
+    effectiveCurrentQuestionSettlementSourceHash: "screen-source-a",
+  } };
+  const subject = { attemptId: "screen-attempt", questionId: `lqu:${packet.manualScreenQuestionPacketLogicalQuestionUnitId}`,
+    traceIds: ["screen-attempt"], sourceTurnIds: [] };
+  const event = createHumanGroundTruthEventV2({ eventId: "screen-truth", sessionId: "runtime-screen", subject,
+    fact: { kind: "expected-task-settlement", expectedQuestionType: "behavioral", expectedRelation: "new-parent", expectedParentAction: "create" },
+    source: "explicit-ui", sourceTraceId: "screen-attempt", now: 50 });
+  const projection = deriveHumanEvaluationProjectionV2({ sessionId: "runtime-screen", subject, events: [event], now: 60 });
+  return { operation, terminal, event, projection };
+}
+
+test("O1 native Screen packet and terminal attempt retain confirmed truth in the actual Split report", () => {
+  const { operation, terminal, projection } = nativeScreenFixture();
+  const input = { decisions: [operation, terminal, terminal], settlements: [terminal], evaluations: [], projections: [projection] };
+  const before = JSON.stringify(input);
+  const report = buildTaskRelationAdjudicationReflectionReport(input);
+  assert.equal(report.metrics.currentOperations, 1);
+  assert.deepEqual(report.rows[0].identityConflicts, []);
+  assert.equal(report.rows[0].expectedQuestionType, "behavioral");
+  assert.equal(report.rows[0].expectedRelation, "new-parent");
+  assert.equal(report.rows[0].expectedParentAction, "create");
+  assert.equal(report.rows[0].orderedRelation, "new-parent");
+  assert.equal(report.rows[0].truthDiagnostic, "confirmed-human-truth");
+  assert.equal(JSON.stringify(input), before);
+  assert.equal(offlineIdentityMatches(operation, terminal), true);
+  assert.equal(offlineIdentityMatches(terminal, terminal), true);
+});
+
+test("O1 shared Type builder uses Screen proof only for a recorded Type operation", () => {
+  const { operation, terminal, projection } = nativeScreenFixture();
+  const proposal = { ...operation, metadata: { ...operation.metadata,
+    questionTypeAdjudicationOperationId: "screen-type", questionTypeAdjudicationCandidateType: "behavioral",
+    questionTypeAdjudicationParseValid: true,
+  } };
+  const linked = { ...terminal, metadata: { ...terminal.metadata, runtimeSettlementTypeOperationId: "screen-type" } };
+  const run = (settlements = [linked], projections = [projection]) =>
+    buildQuestionTypeAdjudicationOutcomeReport({ decisions: [proposal, proposal], settlements, projections, outcomes: [] });
+  assert.equal(run().metrics.proposalOperations, 1);
+  assert.equal(run().metrics.labeledProposals, 1);
+  assert.equal(run().rows[0].typeCorrect, true);
+  assert.equal(run().metrics.terminalCoverage, 0);
+  assert.equal(run([]).rows[0].typeCorrect, undefined);
+  assert.equal(run([linked], []).rows[0].typeCorrect, undefined);
+  const competing = { ...linked, metadata: { ...linked.metadata, manualScreenVisualEvidenceObservationId: "other-observation" } };
+  assert.equal(run([linked, competing]).rows[0].typeCorrect, undefined);
+});
+
+test("O1 native Screen requires exact source and unique terminal attempt, never empty turns alone", () => {
+  const { operation, terminal, projection, event } = nativeScreenFixture();
+  const run = (settlements: QuestionTypeAdjudicationRecordedDecision[], projections = [projection], decisions = [operation]) =>
+    buildTaskRelationAdjudicationReflectionReport({ decisions, settlements, projections, evaluations: [] });
+  for (const settlements of [[], [{ ...terminal, status: "running" }], [{ ...terminal, exportedAt: NaN }]]) {
+    assert.equal(run(settlements).rows[0].expectedRelation, undefined);
+  }
+  for (const [key, value] of [
+    ["manualScreenQuestionPacketSessionId", "other-session"], ["manualScreenQuestionPacketRuntimeEpoch", 4],
+    ["manualScreenQuestionPacketLogicalQuestionUnitId", "other-unit"], ["manualScreenQuestionPacketLogicalQuestionRevision", 2],
+    ["manualScreenQuestionPacketSourceHash", "other-hash"], ["manualScreenVisualEvidenceObservationId", "other-observation"],
+    ["currentQuestionScreenObservationId", "other-observation"], ["currentQuestionSettlementSourceObservationIds", ["other-observation"]],
+    ["effectiveCurrentQuestionSettlementUnitRevision", 2], ["currentQuestionSettlementSessionId", "other-session"],
+    ["currentQuestionSettlementSourceTurnIds", ["other-turn"]],
+  ] as const) {
+    const competitor = { ...terminal, metadata: { ...terminal.metadata, [key]: value } };
+    assert.equal(run([competitor]).rows[0].expectedRelation, undefined, key);
+    assert.equal(run([terminal, competitor]).rows[0].expectedRelation, undefined, key);
+    assert.equal(offlineIdentityMatches(terminal, competitor), false, key);
+  }
+  for (const key of ["manualScreenQuestionPacketSourceHash", "manualScreenVisualEvidenceObservationId",
+    "manualScreenQuestionPacketLogicalQuestionUnitId", "manualScreenQuestionPacketLogicalQuestionRevision",
+    "manualScreenQuestionPacketSessionId", "manualScreenQuestionPacketRuntimeEpoch"]) {
+    const incomplete = { ...operation, metadata: { ...operation.metadata, [key]: undefined } };
+    assert.equal(run([terminal], [projection], [incomplete]).rows[0].expectedRelation, undefined, key);
+  }
+  for (const changed of [{ ...event, confirmation: "suggested" as const },
+    { ...event, provenance: { ...event.provenance, sourceTraceId: "another-attempt" } }]) {
+    const p = deriveHumanEvaluationProjectionV2({ sessionId: event.sessionId, subject: event.subject, events: [changed], now: 60 });
+    assert.equal(run([terminal], [p]).rows[0].expectedRelation, undefined);
+  }
+  assert.equal(run([terminal], []).rows[0].expectedRelation, undefined);
+  const targeted = { ...event, provenance: { ...event.provenance, evaluationTarget: {
+    attemptId: terminal.traceId, logicalQuestionUnitId: "screen-answer-sufficiency:observation-a",
+    logicalQuestionUnitRevision: 1, sourceTurnIds: [], sourceTraceId: terminal.traceId, frozenAt: 50,
+  } } };
+  const targetedProjection = deriveHumanEvaluationProjectionV2({ sessionId: event.sessionId, subject: event.subject, events: [targeted], now: 60 });
+  assert.equal(run([], [targetedProjection]).rows[0].expectedRelation, undefined);
+  assert.equal(run([terminal], [targetedProjection]).rows[0].expectedRelation, "new-parent");
+  assert.equal(run([{ ...terminal, sessionId: "session_recording_other" }]).rows[0].expectedRelation, undefined);
+  const differentAttempt = { ...terminal, traceId: "other-attempt" };
+  assert.equal(run([differentAttempt]).rows[0].expectedRelation, undefined);
+  const otherObservation = { ...operation, metadata: { ...operation.metadata, manualScreenVisualEvidenceObservationId: "other-observation" } };
+  assert.equal(offlineIdentityMatches(operation, otherObservation), false);
+  assert.equal(run([terminal], [projection], [operation, otherObservation]).metrics.currentOperations, 1);
+  assert.ok(run([terminal], [projection], [operation, otherObservation]).rows[0].identityConflicts.length > 0);
+  // Two internally consistent revisions on one trace still cannot select a UI target.
+  const nextRevision = { ...terminal, metadata: { ...terminal.metadata,
+    manualScreenQuestionPacketLogicalQuestionRevision: 2, currentQuestionSettlementRevision: 2,
+    effectiveCurrentQuestionSettlementUnitRevision: 2,
+  } };
+  assert.equal(run([terminal, nextRevision]).rows[0].expectedRelation, undefined);
+  const voice = { ...decision, metadata: { ...decision.metadata, currentQuestionSourceObservationIds: [] } };
+  assert.equal(offlineIdentityMatches(voice, voice), true);
+  const noSource = { ...operation, metadata: { manualScreenPrimaryAskSourceTurnIds: [] } };
+  assert.equal(offlineIdentityMatches(noSource, noSource), false);
+  const missingObservationAndTurns = { ...operation, metadata: { ...operation.metadata,
+    manualScreenVisualEvidenceObservationId: undefined, manualScreenPrimaryAskSourceTurnIds: undefined,
+  } };
+  assert.equal(run([terminal], [projection], [missingObservationAndTurns]).rows[0].expectedRelation, undefined);
+});
 const decision = { recordedAt: 10, sessionId: "session_recording_a", traceId: "origin", metadata: {
   ...identity, questionTypeAdjudicationOperationId: "T7",
   questionTypeAdjudicationUnitId: "Q1", questionTypeAdjudicationUnitRevision: 2,

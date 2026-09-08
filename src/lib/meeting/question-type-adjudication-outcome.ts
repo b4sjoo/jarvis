@@ -661,50 +661,85 @@ function observedBoolean(outcomes: QuestionTypeAdjudicationOutcomeEvent[], key: 
 export function mergeOfflineDecisionSnapshots<T extends QuestionTypeAdjudicationRecordedDecision>(left: T, right: T): T {
   const a = readOfflineDecisionIdentity(left);
   const b = readOfflineDecisionIdentity(right);
-  const conflicts = new Set([...(left.identityConflicts ?? []), ...(right.identityConflicts ?? [])]);
+  const conflicts = new Set([...offlineIdentityAliasConflicts(left), ...offlineIdentityAliasConflicts(right)]);
   for (const key of ["recordingSessionId", "sessionId", "epoch", "unitId", "revision", "sourceHash", "sourceTurnIdsHash"] as const) {
     if (a[key] !== undefined && b[key] !== undefined && a[key] !== b[key]) conflicts.add(key);
   }
-  if (a.sourceTurnIds !== undefined && b.sourceTurnIds !== undefined && !sameSources(a.sourceTurnIds, b.sourceTurnIds)) conflicts.add("sourceTurnIds");
+  for (const key of ["sourceTurnIds", "sourceObservationIds"] as const) {
+    // Snapshot equality is not source proof: two empty lists are not a conflict.
+    if (a[key] !== undefined && b[key] !== undefined && !sameSources(a[key], b[key], true)) conflicts.add(key);
+  }
   const [earlier, later] = left.recordedAt <= right.recordedAt ? [left, right] : [right, left];
   const merged = {
     ...earlier, ...later,
     metadata: { ...earlier.metadata, ...Object.fromEntries(Object.entries(later.metadata).filter(([, value]) => value !== undefined)) },
   };
-  const identity = readOfflineDecisionIdentity(merged);
-  for (const prefix of ["currentQuestion", "currentQuestionSettlement", "effectiveCurrentQuestionSettlement"]) {
-    const aliases: Record<string, unknown> = {
-      [`${prefix}SessionId`]: identity.sessionId,
-      [`${prefix}RuntimeEpoch`]: identity.epoch,
-      [`${prefix}UnitId`]: identity.unitId,
-      [`${prefix}${prefix === "effectiveCurrentQuestionSettlement" ? "UnitRevision" : "Revision"}`]: identity.revision,
-      [`${prefix}SourceHash`]: identity.sourceHash,
-    };
-    for (const [key, expected] of Object.entries(aliases)) {
-      if (merged.metadata[key] !== undefined && expected !== undefined && merged.metadata[key] !== expected) conflicts.add(key);
-    }
-  }
+  for (const key of offlineIdentityAliasConflicts(merged)) conflicts.add(key);
   return { ...merged, identityConflicts: [...conflicts].sort() };
 }
 
 // These are recorded identity aliases, not an inference or nearest-trace join.
+const offlineIdentityAliases = {
+  sessionId: ["questionTypeAdjudicationRuntimeSessionId", "currentQuestionSessionId", "currentQuestionSettlementSessionId", "effectiveCurrentQuestionSettlementSessionId", "manualScreenQuestionPacketSessionId"],
+  epoch: ["questionTypeAdjudicationRuntimeEpoch", "currentQuestionRuntimeEpoch", "currentQuestionSettlementRuntimeEpoch", "effectiveCurrentQuestionSettlementRuntimeEpoch", "manualScreenQuestionPacketRuntimeEpoch"],
+  unitId: ["questionTypeAdjudicationUnitId", "taskRelationAdjudicationUnitId", "currentQuestionUnitId", "currentQuestionSettlementUnitId", "logicalQuestionUnitId", "effectiveCurrentQuestionSettlementUnitId", "manualScreenQuestionPacketLogicalQuestionUnitId"],
+  // Effective *Revision* is the ledger revision, not the LQU revision.
+  revision: ["questionTypeAdjudicationUnitRevision", "taskRelationAdjudicationUnitRevision", "currentQuestionRevision", "currentQuestionSettlementRevision", "logicalQuestionUnitRevision", "effectiveCurrentQuestionSettlementUnitRevision", "manualScreenQuestionPacketLogicalQuestionRevision"],
+  sourceHash: ["currentQuestionSourceHash", "taskRelationAdjudicationSourceHash", "currentQuestionSettlementSourceHash", "effectiveCurrentQuestionSettlementSourceHash", "manualScreenQuestionPacketSourceHash"],
+  sourceTurnIds: ["currentQuestionSourceTurnIds", "currentQuestionSettlementSourceTurnIds", "effectiveCurrentQuestionSettlementSourceTurnIds", "manualScreenPrimaryAskSourceTurnIds"],
+  sourceObservationIds: ["currentQuestionSourceObservationIds", "currentQuestionSettlementSourceObservationIds", "effectiveCurrentQuestionSettlementSourceObservationIds", "currentQuestionScreenObservationId", "manualScreenVisualEvidenceObservationId"],
+} as const;
+
+function readOfflineAlias(metadata: Record<string, unknown>, key: string) {
+  const value = metadata[key];
+  return value !== undefined && ["currentQuestionScreenObservationId", "manualScreenVisualEvidenceObservationId"].includes(key)
+    ? [value] : value;
+}
+
 export function readOfflineDecisionIdentity(decision: QuestionTypeAdjudicationRecordedDecision) {
   const m = decision.metadata;
-  const read = (...keys: string[]) => keys.map(key => m[key]).find(value => value !== undefined);
+  const read = (...keys: string[]) => keys.map(key => readOfflineAlias(m, key)).find(value => value !== undefined);
   return {
     recordingSessionId: decision.recordingSessionId ?? (isRecordingSessionId(decision.sessionId) ? decision.sessionId : undefined),
-    sessionId: decision.runtimeSessionId ?? read("questionTypeAdjudicationRuntimeSessionId", "currentQuestionSessionId", "currentQuestionSettlementSessionId", "effectiveCurrentQuestionSettlementSessionId") ?? (!isRecordingSessionId(decision.sessionId) ? decision.sessionId : undefined),
-    epoch: decision.runtimeEpoch ?? read("questionTypeAdjudicationRuntimeEpoch", "currentQuestionRuntimeEpoch", "currentQuestionSettlementRuntimeEpoch"),
-    unitId: read("questionTypeAdjudicationUnitId", "taskRelationAdjudicationUnitId", "currentQuestionUnitId", "currentQuestionSettlementUnitId", "logicalQuestionUnitId"),
-    revision: read("questionTypeAdjudicationUnitRevision", "taskRelationAdjudicationUnitRevision", "currentQuestionRevision", "currentQuestionSettlementRevision", "logicalQuestionUnitRevision"),
-    sourceHash: read("currentQuestionSourceHash", "taskRelationAdjudicationSourceHash", "currentQuestionSettlementSourceHash", "effectiveCurrentQuestionSettlementSourceHash"),
-    sourceTurnIds: read("currentQuestionSourceTurnIds", "currentQuestionSettlementSourceTurnIds", "effectiveCurrentQuestionSettlementSourceTurnIds"),
+    sessionId: decision.runtimeSessionId ?? read(...offlineIdentityAliases.sessionId) ?? (!isRecordingSessionId(decision.sessionId) ? decision.sessionId : undefined),
+    epoch: decision.runtimeEpoch ?? read(...offlineIdentityAliases.epoch),
+    unitId: read(...offlineIdentityAliases.unitId),
+    revision: read(...offlineIdentityAliases.revision),
+    sourceHash: read(...offlineIdentityAliases.sourceHash),
+    sourceTurnIds: read(...offlineIdentityAliases.sourceTurnIds),
+    sourceObservationIds: read(...offlineIdentityAliases.sourceObservationIds),
     sourceTurnIdsHash: m.questionTypeAdjudicationSourceTurnIdsHash,
     originTraceId: read("questionTypeAdjudicationOriginTraceId") ?? decision.traceId,
   };
 }
 
+function offlineIdentityAliasConflicts(record: QuestionTypeAdjudicationRecordedDecision) {
+  const identity = readOfflineDecisionIdentity(record);
+  const conflicts = new Set(record.identityConflicts ?? []);
+  for (const field of Object.keys(offlineIdentityAliases) as (keyof typeof offlineIdentityAliases)[]) {
+    for (const key of offlineIdentityAliases[field]) {
+      const value = readOfflineAlias(record.metadata, key);
+      if (value === undefined) continue;
+      const equal = field === "sourceTurnIds" || field === "sourceObservationIds"
+        ? sameSources(value, identity[field], true) : value === identity[field];
+      if (!equal) conflicts.add(key);
+    }
+  }
+  if (record.sessionId !== undefined) {
+    const expected = isRecordingSessionId(record.sessionId) ? identity.recordingSessionId : identity.sessionId;
+    if (record.sessionId !== expected) conflicts.add("sessionId");
+  }
+  return [...conflicts];
+}
+
+function hasOfflineScreenSource(identity: ReturnType<typeof readOfflineDecisionIdentity>) {
+  return !!readString(identity.sessionId) && readNumber(identity.epoch) !== undefined &&
+    !!readString(identity.unitId) && readNumber(identity.revision) !== undefined &&
+    !!readString(identity.sourceHash) && sameSources(identity.sourceObservationIds, identity.sourceObservationIds);
+}
+
 export function offlineIdentityMatches(left: QuestionTypeAdjudicationRecordedDecision, right: QuestionTypeAdjudicationRecordedDecision) {
+  if (offlineIdentityAliasConflicts(left).length || offlineIdentityAliasConflicts(right).length) return false;
   const a = readOfflineDecisionIdentity(left);
   const b = readOfflineDecisionIdentity(right);
   for (const key of ["sessionId", "epoch", "unitId", "revision"] as const) {
@@ -717,18 +752,14 @@ export function offlineIdentityMatches(left: QuestionTypeAdjudicationRecordedDec
   for (const key of ["recordingSessionId", "sourceTurnIdsHash"] as const) {
     if ((a[key] !== undefined || b[key] !== undefined) && a[key] !== b[key]) return false;
   }
-  if (a.sourceTurnIds !== undefined && b.sourceTurnIds !== undefined && !sameSources(a.sourceTurnIds, b.sourceTurnIds)) return false;
-  // A copied Type identity cannot hide a contradictory current-source identity.
-  for (const record of [left, right]) {
-    const m = record.metadata;
-    const id = readOfflineDecisionIdentity(record);
-    const aliases = { currentQuestionSessionId: id.sessionId, currentQuestionRuntimeEpoch: id.epoch,
-      currentQuestionUnitId: id.unitId, currentQuestionRevision: id.revision,
-      taskRelationAdjudicationUnitId: id.unitId, taskRelationAdjudicationUnitRevision: id.revision };
-    for (const [key, expected] of Object.entries(aliases)) {
-      if (m[key] !== undefined && m[key] !== expected) return false;
-    }
+  if (a.sourceObservationIds !== undefined && b.sourceObservationIds !== undefined) {
+    if (!sameSources(a.sourceObservationIds, b.sourceObservationIds, true)) return false;
   }
+  const screenSourceMatches = hasOfflineScreenSource(a) && hasOfflineScreenSource(b) &&
+    a.sourceHash === b.sourceHash && sameSources(a.sourceObservationIds, b.sourceObservationIds);
+  if ([a, b].some(id => Array.isArray(id.sourceTurnIds) && id.sourceTurnIds.length === 0) && !screenSourceMatches) return false;
+  if (a.sourceTurnIds !== undefined && b.sourceTurnIds !== undefined &&
+    !sameSources(a.sourceTurnIds, b.sourceTurnIds, screenSourceMatches)) return false;
   return true;
 }
 
@@ -745,7 +776,7 @@ export function resolveOfflineHumanTruth(
     return projection.sessionId === id.sessionId &&
       projection.subject.attemptId === record.traceId &&
       projection.subject.traceIds.includes(record.traceId) &&
-      sameSources(projection.subject.sourceTurnIds, id.sourceTurnIds);
+      sameSources(projection.subject.sourceTurnIds, id.sourceTurnIds, hasOfflineScreenSource(id));
   }));
   const subjects = new Set(matches.map(p => `${p.sessionId}:${p.subject.attemptId}:${JSON.stringify([...new Set(p.subject.sourceTurnIds)].sort())}`));
   const empty = { eventIds: [] as string[], diagnostic: "missing-confirmed-human-truth" };
@@ -762,13 +793,17 @@ export function resolveOfflineHumanTruth(
       const valid = evidence.some(record => {
         const id = readOfflineDecisionIdentity(record);
         return event.sessionId === id.sessionId && event.subject.attemptId === record.traceId &&
-          event.subject.traceIds.includes(record.traceId) && sameSources(event.subject.sourceTurnIds, id.sourceTurnIds) &&
+          event.subject.traceIds.includes(record.traceId) && sameSources(event.subject.sourceTurnIds, id.sourceTurnIds, hasOfflineScreenSource(id)) &&
           (event.provenance.sourceTraceId === undefined || event.provenance.sourceTraceId === record.traceId) &&
+          // Empty UI turns carry no Observation identity. Even an explicit target
+          // needs the unique terminal attempt to prove its native Screen source.
+          (event.subject.sourceTurnIds.length > 0 ||
+            linkedDecisions.includes(record) && terminalTraceProvesHumanSubject(event, record, attemptEvidence)) &&
           (target ? ((target.attemptId === undefined || target.attemptId === record.traceId) &&
             (target.sourceTraceId === undefined || target.sourceTraceId === record.traceId) &&
             target.logicalQuestionUnitId !== undefined && target.logicalQuestionUnitId === id.unitId &&
             target.logicalQuestionUnitRevision !== undefined && target.logicalQuestionUnitRevision === id.revision &&
-            sameSources(target.sourceTurnIds, id.sourceTurnIds)) :
+            sameSources(target.sourceTurnIds, id.sourceTurnIds, hasOfflineScreenSource(id))) :
             linkedDecisions.includes(record) && terminalTraceProvesHumanSubject(event, record, attemptEvidence));
       });
       if (valid) {
@@ -809,47 +844,26 @@ function terminalTraceProvesHumanSubject(
   const identity = readOfflineDecisionIdentity(trace);
   if (!offlineIdentityMatches(trace, trace) || !readString(identity.sourceHash)) return false;
 
-  // The current/settled/effective fields describe the same source, not three
-  // alternative revisions. In particular, effective *UnitRevision* is the LQU
-  // revision; effective *Revision* is a different ledger revision.
-  const aliases: Record<string, unknown> = {
-    questionTypeAdjudicationRuntimeSessionId: identity.sessionId,
-    questionTypeAdjudicationRuntimeEpoch: identity.epoch,
-    questionTypeAdjudicationUnitId: identity.unitId,
-    questionTypeAdjudicationUnitRevision: identity.revision,
-    taskRelationAdjudicationUnitId: identity.unitId,
-    taskRelationAdjudicationUnitRevision: identity.revision,
-    taskRelationAdjudicationSourceHash: identity.sourceHash,
-  };
-  for (const prefix of ["currentQuestion", "currentQuestionSettlement", "effectiveCurrentQuestionSettlement"]) {
-    aliases[`${prefix}SessionId`] = identity.sessionId;
-    aliases[`${prefix}RuntimeEpoch`] = identity.epoch;
-    aliases[`${prefix}UnitId`] = identity.unitId;
-    aliases[`${prefix}${prefix === "effectiveCurrentQuestionSettlement" ? "UnitRevision" : "Revision"}`] = identity.revision;
-    aliases[`${prefix}SourceHash`] = identity.sourceHash;
-  }
-
   return [trace, ...attemptEvidence].every(record => {
     if (record.traceId !== trace.traceId) return true;
     const other = readOfflineDecisionIdentity(record);
     if (other.recordingSessionId !== undefined && identity.recordingSessionId !== undefined &&
       other.recordingSessionId !== identity.recordingSessionId) return true;
+    if (offlineIdentityAliasConflicts(record).length) return false;
     for (const key of ["sessionId", "epoch", "unitId", "revision", "sourceHash", "sourceTurnIdsHash"] as const) {
       if (other[key] !== undefined && identity[key] !== undefined && other[key] !== identity[key]) return false;
     }
-    for (const [key, expected] of Object.entries(aliases)) {
-      if (record.metadata[key] !== undefined && record.metadata[key] !== expected) return false;
-    }
-    for (const prefix of ["currentQuestion", "currentQuestionSettlement", "effectiveCurrentQuestionSettlement"]) {
-      const sources = record.metadata[`${prefix}SourceTurnIds`];
-      if (sources !== undefined && !sameSources(sources, event.subject.sourceTurnIds)) return false;
-    }
+    if (other.sourceObservationIds !== undefined &&
+      !sameSources(other.sourceObservationIds, identity.sourceObservationIds, true)) return false;
+    if (other.sourceTurnIds !== undefined &&
+      !sameSources(other.sourceTurnIds, event.subject.sourceTurnIds, hasOfflineScreenSource(identity))) return false;
     return true;
   });
 }
 
-function sameSources(left: unknown, right: unknown) {
-  return Array.isArray(left) && left.length > 0 && Array.isArray(right) &&
+function sameSources(left: unknown, right: unknown, allowEmpty = false) {
+  return Array.isArray(left) && (allowEmpty || left.length > 0) && Array.isArray(right) &&
+    left.every(value => !!readString(value)) && right.every(value => !!readString(value)) &&
     JSON.stringify([...new Set(left)].sort()) === JSON.stringify([...new Set(right)].sort());
 }
 
