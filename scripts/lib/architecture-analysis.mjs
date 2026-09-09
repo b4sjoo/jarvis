@@ -99,7 +99,8 @@ export function discoverArchitecture(repositoryRoot = process.cwd()) {
 
       if (
         ts.isPropertyAccessExpression(node.expression) &&
-        node.expression.name.text === "invokeCommand"
+        (node.expression.name.text === "invokeCommand" ||
+          node.expression.name.text === "invoke")
       ) {
         collectLiteralOrDynamic(
           firstArgument,
@@ -108,6 +109,15 @@ export function discoverArchitecture(repositoryRoot = process.cwd()) {
           callsite,
           staticStrings
         );
+        return;
+      }
+
+      if (
+        ts.isPropertyAccessExpression(node.expression) &&
+        node.expression.name.text === "listen"
+      ) {
+        collectLiteralOrDynamic(firstArgument, frontendListens,
+          dynamicFrontendListens, callsite, staticStrings);
         return;
       }
 
@@ -461,9 +471,23 @@ function analyzeRust(repositoryRoot, rustFiles) {
       )
     : [];
 
-  const emittedEvents = extractRustStringCalls(source, /\.emit(?:_to)?\s*\(\s*"([^"]+)"/g);
+  const emittedEvents = uniqueSorted(rustFiles.flatMap((file) =>
+    collectRustEmittedEvents(fs.readFileSync(file, "utf8"))));
   const listenedEvents = extractRustStringCalls(source, /\.listen(?:_global)?\s*\(\s*"([^"]+)"/g);
   return { registeredCommands, emittedEvents, listenedEvents };
+}
+
+export function collectRustEmittedEvents(source) {
+  const constants = new Map([...source.matchAll(
+    /\bconst\s+(\w+)\s*:\s*&(?:'static\s+)?str\s*=\s*"([^"]+)"/g
+  )].map((match) => [match[1], match[2]]));
+  const patterns = [
+    /\.emit\s*\(\s*(?:"([^"]+)"|([A-Za-z_]\w*))/g,
+    /\.emit_to\s*\(\s*(?:"[^"]*"|[A-Za-z_][\w:]*)\s*,\s*(?:"([^"]+)"|([A-Za-z_]\w*))/g,
+  ];
+  return uniqueSorted(patterns.flatMap((pattern) => [...source.matchAll(pattern)]
+    .map((match) => match[1] ?? constants.get(match[2]))
+    .filter((value) => value !== undefined)));
 }
 
 function extractRustStringCalls(source, pattern) {

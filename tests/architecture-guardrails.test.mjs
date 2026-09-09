@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  collectRustEmittedEvents,
   discoverArchitecture,
   evaluateArchitectureAnalysis,
   loadArchitectureContract,
@@ -11,6 +12,19 @@ const repositoryRoot = process.cwd();
 const baselineAnalysis = discoverArchitecture(repositoryRoot);
 const baselineContract = loadArchitectureContract(repositoryRoot);
 const baselineLedger = loadDeletionLedger(repositoryRoot);
+
+test("Rust targeted emission records the event, not the recipient window", () => {
+  assert.deepEqual(collectRustEmittedEvents(`
+    const REQUEST_EVENT: &str = "shutdown-request";
+    const STATUS_EVENT: &'static str = "shutdown-status";
+    app.emit_to("main", REQUEST_EVENT, payload);
+    app.emit_to(target, "literal-request", payload);
+    app.emit(STATUS_EVENT, payload);
+    app.emit("literal-status", payload);
+  `), ["literal-request", "literal-status", "shutdown-request", "shutdown-status"]);
+  assert.deepEqual(collectRustEmittedEvents('app.emit_to("main", unresolved, value);'), []);
+  assert.deepEqual(collectRustEmittedEvents('app.emit(REQUEST_EVENT, value);'), []);
+});
 
 function evaluate({ analysis = baselineAnalysis, contract = baselineContract, ledger = baselineLedger } = {}) {
   return evaluateArchitectureAnalysis({ analysis, contract, ledger });
