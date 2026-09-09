@@ -1,3 +1,5 @@
+import { buildMeetingAnswerSummary } from "./meeting-answer.js";
+import type { ActiveMeetingTask } from "./active-meeting-task.js";
 import type { StableAnswerRevision } from "./stable-answer.js";
 import type {
   AdvisorGeneratedContinuityCapsule,
@@ -11,6 +13,184 @@ const MAX_CAPSULE_CHARS = 520;
 const MAX_HISTORY_CAPSULES = 4;
 const MAX_SELECTED_CAPSULES = 2;
 const MAX_SELECTED_CHARS = 900;
+
+export interface BoundedGeneratedContinuityOwner {
+  sessionId?: StableAnswerRevision["sessionId"];
+  runtimeEpoch?: StableAnswerRevision["runtimeEpoch"];
+  parentTaskId: string;
+  childTaskId?: string;
+}
+
+export interface BoundedGeneratedContinuityState {
+  owner?: Omit<BoundedGeneratedContinuityOwner, "childTaskId">;
+  latestUsefulAnswer?: string;
+  previousUsefulAnswer?: string;
+  child?: { childTaskId: string; compactSummary: string };
+  recentCapsules: AdvisorGeneratedContinuityCapsule[];
+}
+
+/** OUTPUT continuity only; callers retain all prompt-read authorization. */
+export interface BoundedGeneratedContinuityRead {
+  source: "generated-continuity";
+  latestUsefulAnswer?: string;
+  previousUsefulAnswer?: string;
+  childCompactSummary?: string;
+  recentCapsules: AdvisorGeneratedContinuityCapsule[];
+}
+
+/** Prepares an after-state; only the existing publication owner installs it. */
+export function prepareBoundedGeneratedContinuity(input: {
+  state: BoundedGeneratedContinuityState;
+  stable: StableAnswerRevision;
+  currentOwner?: BoundedGeneratedContinuityOwner;
+  parentRevision: number;
+  parentSummaryAllowed: boolean;
+  parentSummary?: string;
+  childSummary?: string;
+  artifactOnly?: boolean;
+}): BoundedGeneratedContinuityState {
+  const { stable, currentOwner } = input;
+  if (input.artifactOnly || !currentOwner) return input.state;
+  const answerOwner = stable.sections.answer.owner;
+  if (
+    stable.sessionId !== currentOwner.sessionId ||
+    stable.runtimeEpoch !== currentOwner.runtimeEpoch ||
+    stable.taskId !== currentOwner.parentTaskId ||
+    !answerOwner ||
+    answerOwner.parentId !== currentOwner.parentTaskId ||
+    (answerOwner.kind === "active-child"
+      ? answerOwner.childId !== currentOwner.childTaskId
+      : currentOwner.childTaskId !== undefined)
+  ) {
+    return input.state;
+  }
+
+  const state = input.state.owner && !sameContinuityParent(input.state.owner, currentOwner)
+    ? { recentCapsules: [] } as BoundedGeneratedContinuityState
+    : input.state;
+
+  const summary = input.parentSummaryAllowed && !currentOwner.childTaskId
+    ? (input.parentSummary ?? (stable.suggestion.meetingAnswer
+        ? buildMeetingAnswerSummary(stable.suggestion.meetingAnswer).text
+        : "")).trim().slice(0, 1000)
+    : "";
+  const childSummary = input.childSummary?.trim().slice(0, 800);
+  const capsule = createAdvisorGeneratedContinuityCapsule({
+    stable,
+    parentRevision: input.parentRevision,
+    childTaskId: currentOwner.childTaskId,
+  });
+  return {
+    owner: {
+      sessionId: currentOwner.sessionId,
+      runtimeEpoch: currentOwner.runtimeEpoch,
+      parentTaskId: currentOwner.parentTaskId,
+    },
+    latestUsefulAnswer: summary || state.latestUsefulAnswer,
+    previousUsefulAnswer:
+      summary && state.latestUsefulAnswer && summary !== state.latestUsefulAnswer
+        ? state.latestUsefulAnswer
+        : state.previousUsefulAnswer,
+    child: currentOwner.childTaskId
+      ? childSummary
+        ? { childTaskId: currentOwner.childTaskId, compactSummary: childSummary }
+        : state.child?.childTaskId === currentOwner.childTaskId
+          ? { ...state.child }
+          : undefined
+      : undefined,
+    recentCapsules: appendAdvisorGeneratedContinuityCapsule({
+      history: state.recentCapsules,
+      capsule,
+    }).map(cloneCapsule),
+  };
+}
+
+export function readBoundedGeneratedContinuity(input: {
+  state: BoundedGeneratedContinuityState;
+  currentOwner?: BoundedGeneratedContinuityOwner;
+}): BoundedGeneratedContinuityRead {
+  const { state, currentOwner } = input;
+  if (!state.owner || !currentOwner || !sameContinuityParent(state.owner, currentOwner)) {
+    return { source: "generated-continuity", recentCapsules: [] };
+  }
+  return {
+    source: "generated-continuity",
+    latestUsefulAnswer: state.latestUsefulAnswer,
+    previousUsefulAnswer: state.previousUsefulAnswer,
+    childCompactSummary: currentOwner.childTaskId &&
+      state.child?.childTaskId === currentOwner.childTaskId
+        ? state.child.compactSummary
+        : undefined,
+    // The existing recent-history gate intentionally spans children of this parent.
+    recentCapsules: state.recentCapsules
+      .filter((capsule) => capsule.parentTaskId === currentOwner.parentTaskId)
+      .map(cloneCapsule),
+  };
+}
+
+/** The caller chooses the lane using existing lifecycle authority. */
+export function clearBoundedGeneratedContinuity(input: {
+  state: BoundedGeneratedContinuityState;
+  scope: "recent" | "child" | "branch";
+}): BoundedGeneratedContinuityState {
+  if (input.scope === "branch") return { recentCapsules: [] };
+  return {
+    ...input.state,
+    owner: input.state.owner ? { ...input.state.owner } : undefined,
+    child: input.scope === "child" || !input.state.child
+      ? undefined
+      : { ...input.state.child },
+    recentCapsules: input.scope === "recent"
+      ? []
+      : input.state.recentCapsules.map(cloneCapsule),
+  };
+}
+
+function sameContinuityParent(
+  left: Omit<BoundedGeneratedContinuityOwner, "childTaskId">,
+  right: BoundedGeneratedContinuityOwner
+) {
+  return left.sessionId === right.sessionId &&
+    left.runtimeEpoch === right.runtimeEpoch &&
+    left.parentTaskId === right.parentTaskId;
+}
+
+export function clearBoundedGeneratedSummaries(
+  state: BoundedGeneratedContinuityState
+): BoundedGeneratedContinuityState {
+  return {
+    owner: state.owner ? { ...state.owner } : undefined,
+    recentCapsules: state.recentCapsules.map(cloneCapsule),
+  };
+}
+
+export function projectBoundedGeneratedContinuityForTask(input: {
+  state: BoundedGeneratedContinuityState;
+  task?: ActiveMeetingTask;
+  sessionId: string;
+  runtimeEpoch: number;
+}): ActiveMeetingTask | undefined {
+  const task = input.task;
+  if (!task) return undefined;
+  const generated = readBoundedGeneratedContinuity({
+    state: input.state,
+    currentOwner: {
+      sessionId: input.sessionId,
+      runtimeEpoch: input.runtimeEpoch,
+      parentTaskId: task.parent.id,
+      childTaskId: task.child?.id,
+    },
+  });
+  return {
+    ...task,
+    parent: {
+      ...task.parent,
+      latestUsefulAnswer: generated.latestUsefulAnswer,
+      previousUsefulAnswer: generated.previousUsefulAnswer,
+    },
+    child: task.child ? { ...task.child, compactSummary: generated.childCompactSummary } : undefined,
+  };
+}
 
 const DECISION_MARKERS = [
   /\btrade[- ]?offs?\b/i,
