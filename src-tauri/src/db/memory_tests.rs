@@ -126,8 +126,10 @@ async fn snapshot(
     let version: i64 = sqlx::query_scalar("SELECT COUNT(*)+1 FROM interview_preparation_snapshots")
         .fetch_one(pool)
         .await?;
-    sqlx::query("INSERT INTO interview_preparation_snapshots (id,process_id,round_id,version,profile_revision_id,profile_revision,compiler_version,playbook_registry_version,runtime_capability_version,source_fingerprint,content_hash,runtime_char_count,snapshot_json,source_manifest_json,warnings_json,status,build_status,created_at,schema_version) VALUES (?,'p','round',?,'profile',1,'compiler','playbook','capability',?,?,0,'{\"schemaVersion\":2,\"frozen\":\"A\"}',?,'[]','ready','staging',1,2)")
-        .bind(id).bind(version).bind(id).bind(id).bind(manifest.to_string()).execute(pool).await?;
+    let payload = json!({"schemaVersion":2,"runtimeBrief":{"role":"A"},
+        "artifactManifest":{"version":"preparation-artifact-manifest-v1","artifacts":[]}});
+    sqlx::query("INSERT INTO interview_preparation_snapshots (id,process_id,round_id,version,profile_revision_id,profile_revision,compiler_version,playbook_registry_version,runtime_capability_version,source_fingerprint,content_hash,runtime_char_count,snapshot_json,source_manifest_json,warnings_json,status,build_status,created_at,schema_version) VALUES (?,'p','round',?,'profile',1,'compiler','playbook','capability',?,?,0,?,?,'[]','ready','staging',1,2)")
+        .bind(id).bind(version).bind(id).bind(id).bind(payload.to_string()).bind(manifest.to_string()).execute(pool).await?;
     sqlx::query("INSERT INTO preparation_snapshot_kmb_entry_links (snapshot_id,entry_id,entry_revision,content_hash,ordinal) VALUES (?,'entry',?,?,0)").bind(id).bind(revision).bind(hash).execute(pool).await?;
     Ok(())
 }
@@ -317,6 +319,16 @@ async fn task165_k5_migration_retains_raw_content_policy_and_unknown_history() {
         .content
         .insert("interview_families".into(), Some("not-json".into()));
     insert_legacy(&pool, Kind::Entry, legacy).await;
+    seed_legacy_snapshot(&pool).await;
+    pool.execute(include_str!(
+        "migrations/memory-content-revisions-and-snapshot-pins.sql"
+    ))
+    .await
+    .unwrap();
+    assert_legacy_migration(&pool).await;
+}
+
+async fn seed_legacy_snapshot(pool: &SqlitePool) {
     pool.execute("INSERT INTO preparation_workspaces VALUES ('w','interview','Test','active',1,1,NULL);
       INSERT INTO interview_processes (id,workspace_id,created_at,updated_at) VALUES ('p','w',1,1);
       INSERT INTO interview_rounds (id,process_id,title,stage,expected_interview_types,expected_type_policy,created_at,updated_at) VALUES ('round','p','Round','coding','[]','advisory',1,1);
@@ -324,24 +336,52 @@ async fn task165_k5_migration_retains_raw_content_policy_and_unknown_history() {
       INSERT INTO interview_preparation_snapshots (id,process_id,round_id,version,profile_revision_id,profile_revision,compiler_version,playbook_registry_version,runtime_capability_version,source_fingerprint,content_hash,runtime_char_count,snapshot_json,source_manifest_json,warnings_json,status,build_status,created_at)
       VALUES ('legacy','p','round',1,'profile',1,'compiler','playbook','capability','fp','legacy-hash',0,'{\"frozen\":\"Original\"}','{\"kmbEntries\":[{\"entryId\":\"entry\",\"contentHash\":\"legacy-body-hash\"}]}','[]','ready','committed',1);
       INSERT INTO preparation_snapshot_kmb_entry_links (snapshot_id,entry_id,content_hash,ordinal) VALUES ('legacy','entry','legacy-body-hash',0);").await.unwrap();
-    pool.execute(include_str!(
-        "migrations/memory-content-revisions-and-snapshot-pins.sql"
-    ))
-    .await
-    .unwrap();
+}
+
+async fn assert_legacy_migration(pool: &SqlitePool) {
     assert_eq!(
-        current(&pool).await[0],
+        current(pool).await[0],
         ("entry".into(), 1, "Original".into(), 0, Some(77))
     );
-    initialize(&pool).await.unwrap();
-    initialize(&pool).await.unwrap();
+    initialize(pool).await.unwrap();
+    initialize(pool).await.unwrap();
+    let source_row = sqlx::query(
+        "SELECT * FROM memory_source_revisions WHERE source_id='source' AND revision=1",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(row_content(&source_row, SOURCE_FIELDS), source().content);
+    let entry_row =
+        sqlx::query("SELECT * FROM memory_entry_revisions WHERE entry_id='entry' AND revision=1")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    let mut original = entry("Original");
+    original
+        .content
+        .insert("interview_families".into(), Some("not-json".into()));
+    assert_eq!(row_content(&entry_row, ENTRY_FIELDS), original.content);
     assert_eq!(
-        current(&pool).await[0],
+        entry_row.get::<String, _>("source_revisions_json"),
+        "{\"source\":1}"
+    );
+    for table in ["memory_source_revisions", "memory_entry_revisions"] {
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(&format!("SELECT COUNT(*) FROM {table}"))
+                .fetch_one(pool)
+                .await
+                .unwrap(),
+            1
+        );
+    }
+    assert_eq!(
+        current(pool).await[0],
         ("entry".into(), 1, "Original".into(), 0, Some(77))
     );
     assert_eq!(
         sqlx::query_scalar::<_, String>("SELECT interview_families FROM memory_entry_revisions")
-            .fetch_one(&pool)
+            .fetch_one(pool)
             .await
             .unwrap(),
         "not-json"
@@ -350,7 +390,7 @@ async fn task165_k5_migration_retains_raw_content_policy_and_unknown_history() {
         sqlx::query_as::<_, (Option<i64>, String)>(
             "SELECT entry_revision,content_hash FROM preparation_snapshot_kmb_entry_links"
         )
-        .fetch_one(&pool)
+        .fetch_one(pool)
         .await
         .unwrap(),
         (None, "legacy-body-hash".into())
@@ -359,12 +399,12 @@ async fn task165_k5_migration_retains_raw_content_policy_and_unknown_history() {
         sqlx::query_scalar::<_, String>(
             "SELECT snapshot_json FROM interview_preparation_snapshots"
         )
-        .fetch_one(&pool)
+        .fetch_one(pool)
         .await
         .unwrap(),
         "{\"frozen\":\"Original\"}"
     );
-    assert!(activate(&pool, "legacy").await.is_err());
+    assert!(activate(pool, "legacy").await.is_err());
     assert!(pool
         .fetch_all("PRAGMA foreign_key_check")
         .await
@@ -374,6 +414,126 @@ async fn task165_k5_migration_retains_raw_content_policy_and_unknown_history() {
         .execute("UPDATE memory_entries SET content='old writer'")
         .await
         .is_err());
+}
+
+#[tokio::test]
+async fn task165_k5_file_copy_migration_failure_restore_and_reopen() {
+    let root = std::env::temp_dir().join(format!(
+        "jarvis-k5-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir(&root).unwrap();
+    let original = root.join("legacy.db");
+    let backup = root.join("backup.db");
+    let candidate = root.join("candidate.db");
+    let options = |path: &std::path::Path| {
+        sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(path)
+            .create_if_missing(true)
+    };
+    let pool = SqlitePool::connect_with(options(&original)).await.unwrap();
+    migrate(&pool, 19).await;
+    insert_legacy(&pool, Kind::Source, source()).await;
+    let mut legacy = entry("Original");
+    legacy
+        .content
+        .insert("interview_families".into(), Some("not-json".into()));
+    insert_legacy(&pool, Kind::Entry, legacy).await;
+    seed_legacy_snapshot(&pool).await;
+    pool.close().await;
+    std::fs::copy(&original, &backup).unwrap();
+    let backup_bytes = std::fs::read(&backup).unwrap();
+    std::fs::copy(&backup, &candidate).unwrap();
+    let migration = crate::db::migrations()
+        .into_iter()
+        .find(|m| m.version == 20)
+        .unwrap();
+    let failed = SqlitePool::connect_with(options(&candidate)).await.unwrap();
+    failed.execute(migration.sql).await.unwrap();
+    // Fail after source hashes have been prepared, proving initialization is atomic.
+    failed.execute("CREATE TRIGGER injected_copy_failure BEFORE UPDATE OF content_hash ON memory_entry_revisions BEGIN SELECT RAISE(ABORT,'injected copy bootstrap failure'); END").await.unwrap();
+    assert!(initialize(&failed)
+        .await
+        .unwrap_err()
+        .contains("injected copy bootstrap failure"));
+    for table in ["memory_source_revisions", "memory_entry_revisions"] {
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(&format!(
+                "SELECT COUNT(*) FROM {table} WHERE content_hash IS NOT NULL"
+            ))
+            .fetch_one(&failed)
+            .await
+            .unwrap(),
+            0
+        );
+    }
+    failed.close().await;
+
+    std::fs::copy(&backup, &candidate).unwrap();
+    let restored = SqlitePool::connect_with(options(&candidate)).await.unwrap();
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name='memory_entry_revisions'"
+        )
+        .fetch_one(&restored)
+        .await
+        .unwrap(),
+        0
+    );
+    assert_eq!(
+        sqlx::query_as::<_, (String, i64, Option<i64>)>(
+            "SELECT content,enabled,last_used_at FROM memory_entries"
+        )
+        .fetch_one(&restored)
+        .await
+        .unwrap(),
+        ("Original".into(), 0, Some(77))
+    );
+    restored.execute(migration.sql).await.unwrap();
+    assert_legacy_migration(&restored).await;
+    let hashes: Vec<(String, String)> = sqlx::query_as(
+        "SELECT entry_id,content_hash FROM memory_entry_revisions ORDER BY entry_id,revision",
+    )
+    .fetch_all(&restored)
+    .await
+    .unwrap();
+    let source_hashes: Vec<(String, String)> = sqlx::query_as(
+        "SELECT source_id,content_hash FROM memory_source_revisions ORDER BY source_id,revision",
+    )
+    .fetch_all(&restored)
+    .await
+    .unwrap();
+    restored.close().await;
+
+    let reopened = SqlitePool::connect_with(options(&candidate)).await.unwrap();
+    assert_legacy_migration(&reopened).await;
+    assert_eq!(
+        sqlx::query_as::<_, (String, String)>(
+            "SELECT entry_id,content_hash FROM memory_entry_revisions ORDER BY entry_id,revision"
+        )
+        .fetch_all(&reopened)
+        .await
+        .unwrap(),
+        hashes
+    );
+    assert_eq!(sqlx::query_as::<_, (String, String)>(
+        "SELECT source_id,content_hash FROM memory_source_revisions ORDER BY source_id,revision")
+        .fetch_all(&reopened).await.unwrap(), source_hashes);
+    assert_eq!(
+        sqlx::query_scalar::<_, String>("PRAGMA integrity_check")
+            .fetch_one(&reopened)
+            .await
+            .unwrap(),
+        "ok"
+    );
+    reopened.close().await;
+    assert_eq!(std::fs::read(&backup).unwrap(), backup_bytes);
+    assert_eq!(std::fs::read(&original).unwrap(), backup_bytes);
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[tokio::test]
@@ -507,6 +667,107 @@ async fn task165_file_database_publish_select_deactivate_rollback_and_restart() 
         .is_empty());
     reopened.close().await;
     std::fs::remove_file(path).unwrap();
+}
+
+#[tokio::test]
+async fn task165_native_repository_readers_follow_committed_versions_and_policy() {
+    let root = std::env::temp_dir().join(format!(
+        "jarvis-k1-readers-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir(&root).unwrap();
+    let path = root.join("fixture.db");
+    let options = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(&path)
+        .create_if_missing(true);
+    let mut pool = SqlitePool::connect_with(options.clone()).await.unwrap();
+    migrate(&pool, 20).await;
+    publish(&pool, input("A")).await.unwrap();
+    let old_hash = hash_for(&pool, 1).await;
+    snapshot(&pool, "s1", 1, &old_hash).await.unwrap();
+    commit_snapshot(&pool, "s1").await.unwrap();
+    activate(&pool, "s1").await.unwrap();
+    pool.execute("UPDATE memory_entries SET last_used_at=77")
+        .await
+        .unwrap();
+    pool.execute("INSERT INTO preparation_statement_proposal_operations
+        (id,process_id,scope_kind,scope_key,conversation_id,expected_conversation_revision,source_manifest_json,source_manifest_hash,status,created_at)
+        VALUES ('operation','p','process','process','fixture-conversation',0,'[]','manifest','committed',1);
+      INSERT INTO preparation_statements
+        (id,process_id,domain,content,normalized_content,status,authority,ownership,proposal_operation_id,last_review_action,last_review_actor,created_at,updated_at)
+        VALUES ('statement','p','candidate-fact','A','a','confirmed','curated-kmb','candidate-owned','operation','confirmed','user',1,1);
+      INSERT INTO preparation_statement_sources (id,statement_id,source_type,source_id,title,kmb_entry_revision,created_at)
+        VALUES ('source','statement','curated-kmb','entry','Original entry',1,1);").await.unwrap();
+    for stage in [
+        "same-content",
+        "changed-content",
+        "revoked",
+        "restored-content",
+    ] {
+        match stage {
+            "same-content" => {
+                assert_eq!(
+                    publish(&pool, input("A")).await.unwrap().revisions_reused,
+                    2
+                );
+            }
+            "changed-content" => {
+                let mut changed = input("B");
+                changed.sources[0]
+                    .content
+                    .insert("title".into(), Some("Source B".into()));
+                publish(&pool, changed).await.unwrap();
+            }
+            "revoked" => {
+                pool.execute("UPDATE memory_entries SET enabled=0")
+                    .await
+                    .unwrap();
+                let mut changed = input("B");
+                changed.sources[0]
+                    .content
+                    .insert("title".into(), Some("Source B".into()));
+                publish(&pool, changed).await.unwrap();
+            }
+            "restored-content" => {
+                pool.execute("UPDATE memory_entries SET enabled=1")
+                    .await
+                    .unwrap();
+                publish(&pool, input("A")).await.unwrap();
+                activate(&pool, "s1").await.unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let active = stage == "same-content" || stage == "restored-content";
+        let revision = if active { 1 } else { 2 };
+        let expected = json!({"kind":"memory","stage":stage,"revision":revision,
+            "text":if active {"A"} else {"B"},"sourceTitle":if active {"Source A"} else {"Source B"},
+            "enabled":stage!="revoked","active":active,"hash":hash_for(&pool,revision).await,"oldHash":old_hash});
+        pool.close().await;
+        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap();
+        let result = std::process::Command::new("node")
+            .args(["--test", "tests/helpers/native-repository-readers.mjs"])
+            .current_dir(repo)
+            .env("JARVIS_NATIVE_REPOSITORY_DB", &path)
+            .env("JARVIS_NATIVE_REPOSITORY_EXPECTED", expected.to_string())
+            .output()
+            .expect("Node must be available for native-to-repository acceptance");
+        assert!(
+            result.status.success(),
+            "stage={stage}\n{}\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+        pool = SqlitePool::connect_with(options.clone()).await.unwrap();
+        initialize(&pool).await.unwrap();
+    }
+    pool.close().await;
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[tokio::test]

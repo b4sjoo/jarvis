@@ -213,6 +213,337 @@ async fn task164_simultaneous_webview_bootstraps_use_the_same_sqlite_transaction
     std::fs::remove_file(path).unwrap();
 }
 
+#[tokio::test]
+async fn task164_e5_file_copy_migration_failure_restore_and_reopen() {
+    let root = std::env::temp_dir().join(format!(
+        "jarvis-e5-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir(&root).unwrap();
+    let original = root.join("legacy.db");
+    let backup = root.join("backup.db");
+    let candidate = root.join("candidate.db");
+    let options = |path: &std::path::Path| {
+        sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(path)
+            .create_if_missing(true)
+    };
+    let pool = SqlitePool::connect_with(options(&original)).await.unwrap();
+    seed_legacy(&pool).await;
+    let content_before: (String, String, String, String) = sqlx::query_as(
+        "SELECT r.review_status,r.extraction_metadata,c.content,c.extraction_request_id
+         FROM preparation_material_revisions r JOIN preparation_material_chunks c ON c.material_revision_id=r.id")
+        .fetch_one(&pool).await.unwrap();
+    let snapshot_before: (String, String) = sqlx::query_as(
+        "SELECT snapshot_json,source_manifest_json FROM interview_preparation_snapshots",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    // Copy only a closed database; no live WAL or user database is involved.
+    pool.close().await;
+    std::fs::copy(&original, &backup).unwrap();
+    let backup_bytes = std::fs::read(&backup).unwrap();
+    std::fs::copy(&backup, &candidate).unwrap();
+    let migration = crate::db::migrations()
+        .into_iter()
+        .find(|m| m.version == 19)
+        .unwrap();
+    let failed = SqlitePool::connect_with(options(&candidate)).await.unwrap();
+    failed.execute(migration.sql).await.unwrap();
+    failed.execute("CREATE TRIGGER injected_copy_failure BEFORE UPDATE OF output_hash ON preparation_material_revisions BEGIN SELECT RAISE(ABORT,'injected copy bootstrap failure'); END").await.unwrap();
+    assert!(bootstrap(&failed)
+        .await
+        .unwrap_err()
+        .contains("injected copy bootstrap failure"));
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM preparation_material_revisions WHERE output_hash IS NOT NULL"
+        )
+        .fetch_one(&failed)
+        .await
+        .unwrap(),
+        0
+    );
+    failed.close().await;
+
+    std::fs::copy(&backup, &candidate).unwrap();
+    let restored = SqlitePool::connect_with(options(&candidate)).await.unwrap();
+    assert_eq!(sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM pragma_table_info('preparation_material_revisions') WHERE name='output_hash'")
+        .fetch_one(&restored).await.unwrap(), 0);
+    assert_eq!(sqlx::query_as::<_, (String, String, String, String)>(
+        "SELECT r.review_status,r.extraction_metadata,c.content,c.extraction_request_id FROM preparation_material_revisions r JOIN preparation_material_chunks c ON c.material_revision_id=r.id")
+        .fetch_one(&restored).await.unwrap(), content_before);
+    restored.execute(migration.sql).await.unwrap();
+    bootstrap(&restored).await.unwrap();
+    let hashes: Vec<(String, String)> = sqlx::query_as(
+        "SELECT id,output_hash FROM preparation_material_revisions WHERE output_hash IS NOT NULL ORDER BY id")
+        .fetch_all(&restored).await.unwrap();
+    assert_eq!(hashes.len(), 1);
+    assert_eq!(
+        sqlx::query_as::<_, (String, String)>(
+            "SELECT selected_revision_id,candidate_revision_id FROM preparation_materials"
+        )
+        .fetch_one(&restored)
+        .await
+        .unwrap(),
+        ("a".into(), "a".into())
+    );
+    assert_eq!(
+        sqlx::query_as::<_, (String, String)>(
+            "SELECT snapshot_json,source_manifest_json FROM interview_preparation_snapshots"
+        )
+        .fetch_one(&restored)
+        .await
+        .unwrap(),
+        snapshot_before
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, Option<String>>(
+            "SELECT output_hash FROM preparation_snapshot_material_revision_links"
+        )
+        .fetch_one(&restored)
+        .await
+        .unwrap(),
+        None
+    );
+    assert!(restored
+        .execute("UPDATE interview_preparation_current_context SET selected_snapshot_id='snapshot'")
+        .await
+        .is_err());
+    restored.close().await;
+
+    let reopened = SqlitePool::connect_with(options(&candidate)).await.unwrap();
+    bootstrap(&reopened).await.unwrap();
+    assert_eq!(sqlx::query_as::<_, (String, String)>(
+        "SELECT id,output_hash FROM preparation_material_revisions WHERE output_hash IS NOT NULL ORDER BY id")
+        .fetch_all(&reopened).await.unwrap(), hashes);
+    assert_eq!(sqlx::query_as::<_, (String, String, String, String)>(
+        "SELECT r.review_status,r.extraction_metadata,c.content,c.extraction_request_id FROM preparation_material_revisions r JOIN preparation_material_chunks c ON c.material_revision_id=r.id")
+        .fetch_one(&reopened).await.unwrap(), content_before);
+    assert!(reopened
+        .fetch_all("PRAGMA foreign_key_check")
+        .await
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        sqlx::query_scalar::<_, String>("PRAGMA integrity_check")
+            .fetch_one(&reopened)
+            .await
+            .unwrap(),
+        "ok"
+    );
+    reopened.close().await;
+    assert_eq!(std::fs::read(&backup).unwrap(), backup_bytes);
+    assert_eq!(std::fs::read(&original).unwrap(), backup_bytes);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+#[ignore = "Two-operation test transport; invoked explicitly by the E1 fixture parent"]
+async fn task164_two_operation_driver() {
+    let path = std::path::PathBuf::from(std::env::var("JARVIS_NATIVE_REPOSITORY_DB").unwrap());
+    let result_path =
+        std::path::PathBuf::from(std::env::var("JARVIS_NATIVE_OPERATION_RESULT").unwrap());
+    assert_eq!(result_path.parent(), path.parent());
+    let input = std::env::var("JARVIS_NATIVE_OPERATION_INPUT").unwrap();
+    let pool = SqlitePool::connect_with(sqlx::sqlite::SqliteConnectOptions::new().filename(&path))
+        .await
+        .unwrap();
+    let result = match std::env::var("JARVIS_NATIVE_OPERATION").unwrap().as_str() {
+        "preparation_extraction_claim" => {
+            claim(&pool, serde_json::from_str::<ClaimInput>(&input).unwrap())
+                .await
+                .map(|id| json!(id))
+        }
+        "preparation_extraction_fail" => {
+            fail(&pool, serde_json::from_str::<FailInput>(&input).unwrap())
+                .await
+                .map(|changed| json!(changed))
+        }
+        other => panic!("Unsupported test operation: {other}"),
+    };
+    pool.close().await;
+    std::fs::write(result_path, serde_json::to_vec(&result).unwrap()).unwrap();
+}
+
+#[tokio::test]
+async fn task164_native_repository_readers_follow_failure_and_publication() {
+    let root = std::env::temp_dir().join(format!(
+        "jarvis-e1-readers-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir(&root).unwrap();
+    let original = root.join("materials/m/original.pdf");
+    std::fs::create_dir_all(original.parent().unwrap()).unwrap();
+    std::fs::write(&original, b"unchanged original fixture bytes").unwrap();
+    let path = root.join("fixture.db");
+    let options = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(&path)
+        .create_if_missing(true);
+    let mut pool = SqlitePool::connect_with(options.clone()).await.unwrap();
+    for migration in crate::db::migrations()
+        .into_iter()
+        .filter(|m| m.version < 19)
+    {
+        pool.execute(migration.sql).await.unwrap();
+    }
+    // The production process creator uses workspace.id as process.id.
+    pool.execute("INSERT INTO preparation_workspaces VALUES ('w','interview','Test','active',1,1,NULL);
+      INSERT INTO preparation_materials (id,workspace_id,scope_kind,display_name,original_file_name,mime_type,extension,size_bytes,checksum_sha256,storage_relative_path,status,created_at,updated_at)
+      VALUES ('m','w','workspace','Test','test.pdf','application/pdf','pdf',1,'checksum','materials/m/original.pdf','ready',1,1);
+      INSERT INTO preparation_material_revisions (id,material_id,revision,source_checksum_sha256,extraction_status,extraction_request_id,review_status,extraction_metadata,created_at)
+      VALUES ('a','m',1,'checksum','ready','old','approved','{\"method\":\"pdf-text\",\"chunkCount\":1}',1);
+      INSERT INTO preparation_material_chunks (id,workspace_id,material_id,material_revision_id,extraction_request_id,ordinal,content,search_text,source_method,created_at)
+      VALUES ('old-c','w','m','a','old',0,'old text','old text','pdf-text',1);
+      INSERT INTO interview_processes (id,workspace_id,created_at,updated_at) VALUES ('w','w',1,1);
+      INSERT INTO interview_rounds (id,process_id,title,stage,expected_interview_types,expected_type_policy,created_at,updated_at) VALUES ('round','w','Round','coding','[]','advisory',1,1);
+      INSERT INTO interview_preparation_profile_revisions (id,process_id,scope_key,round_id,revision,source_fingerprint,content_hash,content_json,confirmed_statement_ids_json,unresolved_statement_ids_json,build_status,created_at)
+      VALUES ('profile','w','round','round',1,'fp','ph','{}','[]','[]','committed',1);").await.unwrap();
+    for migration in crate::db::migrations()
+        .into_iter()
+        .filter(|m| m.version >= 19)
+    {
+        pool.execute(migration.sql).await.unwrap();
+    }
+    bootstrap(&pool).await.unwrap();
+    let old_hash: String =
+        sqlx::query_scalar("SELECT output_hash FROM preparation_material_revisions WHERE id='a'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let manifest = json!({"materials":[{"materialId":"m","materialRevisionId":"a","sourceChecksumSha256":"checksum","outputHash":old_hash}],"kmbEntries":[]});
+    let payload = json!({"schemaVersion":2,"runtimeBrief":{"role":"old text"},
+        "artifactManifest":{"version":"preparation-artifact-manifest-v1","artifacts":[]}});
+    sqlx::query("INSERT INTO interview_preparation_snapshots (id,process_id,round_id,version,profile_revision_id,profile_revision,compiler_version,playbook_registry_version,runtime_capability_version,source_fingerprint,content_hash,runtime_char_count,snapshot_json,source_manifest_json,warnings_json,status,build_status,created_at,schema_version)
+      VALUES ('snapshot','w','round',1,'profile',1,'compiler','playbook','capability','fp','snapshot-hash',0,?,?,'[]','ready','staging',1,2)")
+        .bind(payload.to_string()).bind(manifest.to_string()).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO preparation_snapshot_material_revision_links (snapshot_id,material_id,material_revision_id,source_checksum_sha256,output_hash,ordinal) VALUES ('snapshot','m','a','checksum',?,0)")
+        .bind(&old_hash).execute(&pool).await.unwrap();
+    pool.execute(
+        "UPDATE interview_preparation_snapshots SET build_status='committed' WHERE id='snapshot'",
+    )
+    .await
+    .unwrap();
+    pool.execute("INSERT INTO preparation_statement_proposal_operations
+        (id,process_id,scope_kind,scope_key,conversation_id,expected_conversation_revision,source_manifest_json,source_manifest_hash,status,created_at)
+        VALUES ('operation','w','process','process','fixture-conversation',0,'[]','manifest','committed',1);
+      INSERT INTO preparation_statements
+        (id,process_id,domain,content,normalized_content,status,authority,ownership,proposal_operation_id,last_review_action,last_review_actor,created_at,updated_at)
+        VALUES ('statement','w','candidate-fact','old text','old text','confirmed','material-grounded','candidate-owned','operation','confirmed','user',1,1);
+      INSERT INTO preparation_statement_sources (id,statement_id,source_type,source_id,title,material_id,material_revision_id,created_at)
+        VALUES ('source','statement','material-chunk','old-c','Original material','m','a',1);").await.unwrap();
+    let request = |base: &str, next: &str| {
+        serde_json::from_value::<ClaimInput>(json!({
+        "workspaceId":"w","materialId":"m","revisionId":base,"newRevisionId":next,
+        "sourceChecksumSha256":"checksum","requestId":format!("request-{next}"),
+        "startedAt":10,"staleBefore":0,"force":true}))
+        .unwrap()
+    };
+    let completion = |id: &str| {
+        serde_json::from_value::<CompleteInput>(json!({
+        "workspaceId":"w","materialId":"m","revisionId":id,"requestId":format!("request-{id}"),
+        "status":"ready","metadata":{"method":"pdf-text","chunkCount":1},
+        "reviewStatus":"unreviewed","reviewActor":"runtime","completedAt":20,
+        "chunks":[{"id":format!("chunk-{id}"),"workspaceId":"w","materialId":"m","materialRevisionId":id,
+          "extractionRequestId":format!("request-{id}"),"ordinal":0,"content":"new text","searchText":"new text",
+          "sourceMethod":"pdf-text","createdAt":20}]})).unwrap()
+    };
+    for stage in [
+        "claim-failure",
+        "file-failure",
+        "claimed",
+        "completion-failure",
+        "failed",
+        "published",
+    ] {
+        match stage {
+            "claim-failure" => {
+                pool.execute("CREATE TRIGGER injected_claim BEFORE UPDATE OF candidate_revision_id ON preparation_materials BEGIN SELECT RAISE(ABORT,'injected claim'); END").await.unwrap();
+                assert!(claim(&pool, request("a", "b")).await.is_err());
+                pool.execute("DROP TRIGGER injected_claim").await.unwrap();
+            }
+            "file-failure" => {} // The actual TS service invokes claim and fail in the Node child.
+            "claimed" => {
+                assert_eq!(
+                    claim(&pool, request("file-b", "b")).await.unwrap(),
+                    Some("b".into())
+                );
+            }
+            "completion-failure" => {
+                pool.execute("CREATE TRIGGER injected_complete BEFORE UPDATE OF output_hash ON preparation_material_revisions BEGIN SELECT RAISE(ABORT,'injected complete'); END").await.unwrap();
+                assert!(complete(&pool, completion("b")).await.is_err());
+                pool.execute("DROP TRIGGER injected_complete")
+                    .await
+                    .unwrap();
+            }
+            "failed" => {
+                assert!(fail(&pool, serde_json::from_value(json!({"workspaceId":"w","materialId":"m",
+                    "revisionId":"b","requestId":"request-b","metadata":{"error":"failed candidate"},"completedAt":20})).unwrap()).await.unwrap());
+            }
+            "published" => {
+                assert_eq!(
+                    claim(&pool, request("b", "c")).await.unwrap(),
+                    Some("c".into())
+                );
+                assert!(complete(&pool, completion("c")).await.unwrap());
+            }
+            _ => unreachable!(),
+        }
+        let published = stage == "published";
+        let selected = if published { "c" } else { "a" };
+        let selected_hash: String =
+            sqlx::query_scalar("SELECT output_hash FROM preparation_material_revisions WHERE id=?")
+                .bind(selected)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let expected = json!({"kind":"extraction","stage":stage,"selected":selected,"selectedHash":selected_hash,"oldHash":old_hash,
+            "text":if published {"new text"} else {"old text"},
+            "candidate":if published {"c"} else if stage=="claim-failure" {"a"} else if stage=="file-failure" {"file-b"} else {"b"},
+            "candidateStatus":if published || stage=="claim-failure" {"ready"} else if stage=="failed" || stage=="file-failure" {"failed"} else {"extracting"}});
+        pool.close().await;
+        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap();
+        let result = std::process::Command::new("node")
+            .args(["--test", "tests/helpers/native-repository-readers.mjs"])
+            .current_dir(repo)
+            .env("JARVIS_NATIVE_REPOSITORY_DB", &path)
+            .env("JARVIS_NATIVE_TEST_BINARY", std::env::current_exe().unwrap())
+            .env("JARVIS_NATIVE_REPOSITORY_EXPECTED", expected.to_string())
+            .output()
+            .expect("Node must be available for native-to-repository acceptance");
+        assert!(
+            result.status.success(),
+            "stage={stage}\n{}\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+        pool = SqlitePool::connect_with(options.clone()).await.unwrap();
+        assert_eq!(std::fs::read(&original).unwrap(), b"unchanged original fixture bytes");
+        assert_eq!(
+            sqlx::query_scalar::<_, String>(
+                "SELECT storage_relative_path FROM preparation_materials WHERE id='m'"
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            "materials/m/original.pdf"
+        );
+    }
+    pool.close().await;
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 async fn material_lifecycle(pool: &SqlitePool, status: &str, deleted: Option<i64>) {
     sqlx::query(sql(MATERIAL_REPOSITORY, "async setLifecycle(input)", 0))
         .bind(status)
