@@ -1020,6 +1020,49 @@ test("builds one immutable coding plan for route, prompt, memory, and artifacts"
   assert.equal(Object.isFrozen(plan.taskSnapshot?.parent), true);
 });
 
+for (const sourceKind of ["voice", "screen"] as const) {
+  test(`J3: ${sourceKind} ordinary Plan owns immutable permissions without freezing live inputs`, () => {
+    const task = activeTask();
+    const source = settlement({ sourceKind });
+    const providerSnapshot = structuredClone(providers);
+    const explicitCommand = { kind: "update-parent-context" } as const;
+    const plan = buildSettledAdvisorExecutionPlan({
+      settlement: source,
+      activeMeetingTask: task,
+      taskBoundaryCommitted: false,
+      childOwnsResponse: false,
+      providerSnapshot,
+      playbook: playbook(),
+      explicitTaskMutationCommand: explicitCommand,
+      memoryUseCase: "coding_interview",
+      askFrame: "direct-answer",
+      topicDomain: "backend",
+    });
+    const before = structuredClone(plan);
+    for (const value of [plan, plan.taskMutationPolicy, plan.modelRoute,
+      plan.modelRoute.selectedProvider.variables, plan.memoryPolicy,
+      plan.artifactPolicy, plan.requestedArtifacts, plan.responseOwner]) {
+      assert.equal(Object.isFrozen(value), true);
+    }
+    assert.equal(Reflect.set(plan, "contextReadScope", "active-parent-read"), false);
+    assert.equal(Reflect.set(plan.taskMutationPolicy, "kind", "preserve"), false);
+    assert.equal(Reflect.set(explicitCommand, "kind", "preserve"), true);
+    providerSnapshot.codingProvider.variables.model = "new-model";
+    task.parent.topic = "another topic";
+    source.sourceTurnIds.push("later-turn");
+    assert.deepEqual(plan, before);
+    const after = activeTask("coding", { revisions: 4 });
+    const rebased = rebaseSettledAdvisorExecutionPlanAfterOwnedParentMutation({
+      plan, activeMeetingTask: after,
+    });
+    assert.ok(rebased);
+    assert.notEqual(rebased, plan);
+    assert.equal(Object.isFrozen(rebased), true);
+    assert.equal(rebased.expectedParentRevision, 4);
+    assert.deepEqual(plan, before);
+  });
+}
+
 test("current-only plan routes from the current question without borrowing parent authority", () => {
   const preservedTask = activeTask("ai-ml-system-design");
   const responseOnlySettlement = settlement({

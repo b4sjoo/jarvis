@@ -957,7 +957,7 @@ export function buildSettledAdvisorExecutionPlan(input: {
         input.settlement.sourceHash,
     });
 
-  return {
+  const plan: SettledAdvisorExecutionPlan = {
     id: planId,
     settlementId: input.settlement.settlementId,
     sessionId: input.settlement.sessionId,
@@ -1043,6 +1043,7 @@ export function buildSettledAdvisorExecutionPlan(input: {
     transientPersonalStatusDecision,
     createdAt: input.createdAt ?? Date.now(),
   };
+  return deepFreeze(structuredClone(plan));
 }
 
 export function rebaseSettledAdvisorExecutionPlanAfterOwnedParentMutation(
