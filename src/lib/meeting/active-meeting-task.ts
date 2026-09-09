@@ -22,9 +22,9 @@ import {
   isParentCanonicalQuestionType,
   normalizeCanonicalQuestionType,
 } from "./task-taxonomy.js";
-import type { MeetingTaskRuntimeTransitionKind } from "./meeting-task-runtime-transition.js";
+import type { AnswerArtifactSection, MeetingTaskRuntimeTransitionKind } from "./meeting-task-runtime-transition.js";
 
-export type { MeetingTaskRuntimeTransitionKind } from "./meeting-task-runtime-transition.js";
+export type { AnswerArtifactSection, MeetingTaskRuntimeTransitionKind } from "./meeting-task-runtime-transition.js";
 
 export type ActiveMeetingTaskSource = "screen" | "voice" | "mixed";
 
@@ -146,6 +146,7 @@ export type MeetingTaskRuntimeMutation =
   | (MeetingTaskRuntimeMutationBase & {
       kind: "commit-transition";
       transition: MeetingTaskRuntimeTransitionKind;
+      authorizedArtifacts?: readonly AnswerArtifactSection[];
       parent?: ActiveInterviewParent | null;
       screenAttachment?: ActiveScreenTask | null;
     });
@@ -161,6 +162,148 @@ export interface MeetingTaskRuntimeMutationResult {
     | "invalid-transition"
     | "parent-type-not-allowed"
     | "child-type-not-allowed";
+}
+
+type ParentContextChanges = Pick<ActiveInterviewParent,
+  | "updatedAt" | "expiresAt" | "revisions" | "playbook" | "phaseProgress"
+  | "projectBinding" | "supportedFactAnchors" | "latestUsefulAnswer"
+  | "previousUsefulAnswer" | "whiteboardArtifact" | "latestScreenObservationId"
+>;
+const PARENT_CONTEXT_FIELDS: readonly (keyof ParentContextChanges)[] = [
+  "updatedAt", "expiresAt", "revisions", "playbook", "phaseProgress",
+  "projectBinding", "supportedFactAnchors", "latestUsefulAnswer",
+  "previousUsefulAnswer", "whiteboardArtifact", "latestScreenObservationId",
+];
+const PARENT_PHASE_FIELDS: readonly (keyof ActiveInterviewParent)[] = [
+  "updatedAt", "expiresAt", "revisions", "playbook", "playbookPhase",
+  "phaseProgress", "latestScreenObservationId", "child",
+];
+
+// Shared by the store writer and Plan lifecycle reducer. Caller payloads may
+// contain complete snapshots, but only these command-owned fields can change.
+export function validateTaskTransitionFieldChanges(input: {
+  transition: MeetingTaskRuntimeTransitionKind;
+  beforeParent?: ActiveInterviewParent;
+  afterParent?: ActiveInterviewParent;
+  beforeScreen?: ActiveScreenTask;
+  afterScreen?: ActiveScreenTask;
+  authorizedArtifacts?: readonly AnswerArtifactSection[];
+}): boolean {
+  const { transition, beforeParent: before, afterParent: after } = input;
+  if (transition === "create-parent" || transition === "replace-parent") return true;
+  if (transition === "update-parent-context" || transition === "update-source-attachment") {
+    if (Boolean(before) !== Boolean(after)) return false;
+    if (before && after) {
+      const projectReset = isProjectBindingContextReset(before, after);
+      if (!hasOnlyFieldChanges(before, after, [
+        ...PARENT_CONTEXT_FIELDS, "child", ...(projectReset ? ["playbookPhase" as const] : []),
+      ])) return false;
+      if (after.revisions < before.revisions || after.revisions > before.revisions + 1) return false;
+      if (!sameRuntimeValue(before.playbook, after.playbook) &&
+        !samePhasePlaybook(after.playbook, after.stableKind, after.playbookPhase)) return false;
+      if (!projectReset && !validChildContextChanges(before.child, after.child)) return false;
+      if (!projectReset && !sameRuntimeValue(before.whiteboardArtifact, after.whiteboardArtifact) &&
+        !input.authorizedArtifacts?.includes("whiteboard")) return false;
+    }
+    if (transition === "update-source-attachment") return true;
+    if (Boolean(input.beforeScreen) !== Boolean(input.afterScreen)) return false;
+    return !input.beforeScreen || !input.afterScreen || hasOnlyFieldChanges(
+      input.beforeScreen, input.afterScreen, ["content", "updatedAt", "expiresAt", "basedOnTurnIds"]
+    );
+  }
+  if (!before || !after) return false;
+  if (!sameRuntimeValue(input.beforeScreen, input.afterScreen)) return false;
+  if (transition === "attach-child") {
+    return hasOnlyFieldChanges(before, after, ["child", "updatedAt", "expiresAt", "revisions"]);
+  }
+  if (transition === "resume-parent") {
+    return hasOnlyFieldChanges(before, after, [
+      "child", "updatedAt", "expiresAt", "revisions", "playbook", "playbookPhase",
+      "supportedFactAnchors", "latestScreenObservationId",
+    ]) && samePhasePlaybook(after.playbook, after.stableKind, after.playbookPhase);
+  }
+  if (!hasOnlyFieldChanges(before, after, PARENT_PHASE_FIELDS)) return false;
+  if (before.child || after.child) {
+    if (!before.child || !after.child || !before.child.phaseState || !after.child.phaseState) return false;
+    return sameRuntimeValue(before.playbook, after.playbook) &&
+      before.playbookPhase === after.playbookPhase &&
+      sameRuntimeValue(before.phaseProgress, after.phaseProgress) &&
+      hasOnlyFieldChanges(before.child, after.child, ["updatedAt", "phaseState"]) &&
+      hasOnlyFieldChanges(before.child.phaseState, after.child.phaseState, ["revision", "phase", "playbook", "phaseProgress"]) &&
+      after.child.phaseState.revision === before.child.phaseState.revision + 1 &&
+      samePhasePlaybook(after.child.phaseState.playbook, after.child.questionType, after.child.phaseState.phase);
+  }
+  return samePhasePlaybook(after.playbook, after.stableKind, after.playbookPhase);
+}
+
+function validChildContextChanges(
+  before: RuntimeActiveInterviewChild | undefined,
+  after: RuntimeActiveInterviewChild | undefined
+) {
+  if (!before || !after) return before === after;
+  if (!hasOnlyFieldChanges(before, after, ["updatedAt", "compactSummary", "artifactId", "phaseState"])) return false;
+  const beforePhase = before.phaseState;
+  const afterPhase = after.phaseState;
+  if (!beforePhase || !afterPhase) return beforePhase === afterPhase;
+  return beforePhase.phase === afterPhase.phase &&
+    hasOnlyFieldChanges(beforePhase, afterPhase, ["revision", "playbook", "phaseProgress"]) &&
+    afterPhase.revision >= beforePhase.revision &&
+    afterPhase.revision <= beforePhase.revision + 1 &&
+    samePhasePlaybook(afterPhase.playbook, after.questionType, afterPhase.phase);
+}
+
+function samePhasePlaybook(
+  playbook: SelectedInterviewPlaybook | undefined,
+  questionType: string,
+  phase: InterviewPlaybookPhase
+) {
+  return !playbook || (playbook.phase === phase &&
+    normalizeCanonicalQuestionType(playbook.questionType) === normalizeCanonicalQuestionType(questionType));
+}
+
+function isProjectBindingContextReset(before: ActiveInterviewParent, after: ActiveInterviewParent) {
+  // Existing project rebind/invalidate semantics clear the old project's state.
+  // A binding change does not authorize arbitrary phase or child replacement.
+  return !sameRuntimeValue(before.projectBinding, after.projectBinding) &&
+    after.playbookPhase === "project_narrative" &&
+    Object.keys(after.phaseProgress).length === 0 &&
+    after.supportedFactAnchors.length === 0 && !after.child &&
+    !after.whiteboardArtifact && !after.latestUsefulAnswer && !after.previousUsefulAnswer;
+}
+
+function hasOnlyFieldChanges<T extends object>(before: T, after: T, fields: readonly (keyof T)[]) {
+  const allowed = new Set<keyof T>(fields);
+  const keys = new Set([...Object.keys(before), ...Object.keys(after)] as (keyof T)[]);
+  for (const key of keys) {
+    if (!allowed.has(key) && !sameRuntimeValue(before[key], after[key])) return false;
+  }
+  return true;
+}
+
+function sameRuntimeValue(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  if (!left || !right || typeof left !== "object" || typeof right !== "object") return false;
+  if (Array.isArray(left) !== Array.isArray(right)) return false;
+  if (Array.isArray(left) && Array.isArray(right) && left.length !== right.length) return false;
+  const keys = new Set([...Object.keys(left), ...Object.keys(right)]);
+  return [...keys].every((key) => sameRuntimeValue(
+    (left as Record<string, unknown>)[key], (right as Record<string, unknown>)[key]
+  ));
+}
+
+function constructCommandParent(
+  before: ActiveInterviewParent | undefined,
+  after: ActiveInterviewParent | undefined,
+  transition: MeetingTaskRuntimeTransitionKind
+) {
+  if (!before || !after || (transition !== "update-parent-context" && transition !== "set-phase")) {
+    return cloneRuntimeValue(after);
+  }
+  const fields: readonly (keyof ActiveInterviewParent)[] = transition === "set-phase"
+    ? PARENT_PHASE_FIELDS
+    : [...PARENT_CONTEXT_FIELDS, "child", ...(isProjectBindingContextReset(before, after) ? ["playbookPhase" as const] : [])];
+  const changes = Object.fromEntries(fields.map((field) => [field, after[field]]));
+  return cloneRuntimeValue({ ...before, ...changes });
 }
 
 export function createMeetingTaskRuntimeState(): MeetingTaskRuntimeState {
@@ -898,6 +1041,7 @@ function applyRuntimeMutation(
       afterParent: parent,
       beforeScreen: state.screenAttachment,
       afterScreen: screenAttachment,
+      authorizedArtifacts: mutation.authorizedArtifacts,
     });
     if (rejectionReason) {
       return {
@@ -911,7 +1055,7 @@ function applyRuntimeMutation(
         mutation.parent !== undefined ||
         mutation.screenAttachment !== undefined,
       patch: {
-        parent: cloneRuntimeValue(parent),
+        parent: constructCommandParent(state.parent, parent, mutation.transition),
         screenAttachment: cloneRuntimeValue(screenAttachment),
       },
     };
@@ -976,8 +1120,10 @@ function validateRuntimeTransition(input: {
   afterParent?: ActiveInterviewParent;
   beforeScreen?: ActiveScreenTask;
   afterScreen?: ActiveScreenTask;
+  authorizedArtifacts?: readonly AnswerArtifactSection[];
 }): RuntimeTransitionRejectionReason | undefined {
   const { transition, beforeParent, afterParent } = input;
+  if (!validateTaskTransitionFieldChanges(input)) return "invalid-transition";
   if (transition === "create-parent") {
     if (beforeParent || !afterParent || afterParent.revisions < 1) {
       return "invalid-transition";

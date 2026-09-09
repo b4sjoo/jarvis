@@ -1,5 +1,6 @@
 import {
   buildActiveMeetingTask,
+  validateTaskTransitionFieldChanges,
   type ActiveMeetingTask,
 } from "./active-meeting-task.js";
 import type { SettledAdvisorExecutionPlan } from "./settled-advisor-execution-plan.js";
@@ -192,6 +193,16 @@ export function reduceTaskLifecycleTransaction(input: {
     transaction.proposedActiveScreenTask === undefined
       ? input.currentActiveScreenTask
       : transaction.proposedActiveScreenTask ?? undefined;
+  if (!validateTaskTransitionFieldChanges({
+    transition: command.kind,
+    beforeParent: input.currentActiveInterviewTask,
+    afterParent: proposedParent,
+    beforeScreen: input.currentActiveScreenTask,
+    afterScreen: proposedScreen,
+    authorizedArtifacts: transaction.plan.artifactPolicy.allowWhiteboard ? ["whiteboard"] : [],
+  })) {
+    return reject("command-transition-mismatch");
+  }
   if (
     (command.kind === "create-parent" ||
       command.kind === "replace-parent") &&

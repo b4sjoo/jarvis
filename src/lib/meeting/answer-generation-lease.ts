@@ -9,11 +9,8 @@ import type {
   CurrentQuestionSettlementDecision,
 } from "./current-question-settlement.js";
 
-export type AnswerArtifactSection =
-  | "answer"
-  | "code"
-  | "complexity"
-  | "whiteboard";
+import type { AnswerArtifactSection } from "./meeting-task-runtime-transition.js";
+export type { AnswerArtifactSection } from "./meeting-task-runtime-transition.js";
 
 export type AnswerArtifactFamily = "answer" | "code" | "whiteboard";
 

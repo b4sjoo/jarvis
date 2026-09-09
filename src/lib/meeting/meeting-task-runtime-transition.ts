@@ -3,6 +3,12 @@ export interface MeetingPhaseOwner {
   id: string;
 }
 
+export type AnswerArtifactSection =
+  | "answer"
+  | "code"
+  | "complexity"
+  | "whiteboard";
+
 export type MeetingTaskRuntimeTransitionKind =
   | "create-parent"
   | "replace-parent"

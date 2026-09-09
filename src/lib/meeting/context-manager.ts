@@ -24,6 +24,7 @@ import {
   projectActiveMeetingTask,
   reduceMeetingTaskRuntimeMutation,
   type ActiveMeetingTask,
+  type AnswerArtifactSection,
   type MeetingTaskRuntimeMutation,
   type MeetingTaskRuntimeState,
   type MeetingTaskRuntimeTransitionKind,
@@ -211,6 +212,7 @@ export class MeetingContextManager {
   commitTaskRuntimeTransition(input: {
     id: string;
     transition: MeetingTaskRuntimeTransitionKind;
+    authorizedArtifacts?: readonly AnswerArtifactSection[];
     reason: string;
     expectedRevision?: number;
     parent?: ActiveInterviewParent | null;
@@ -224,6 +226,7 @@ export class MeetingContextManager {
   prepareTaskRuntimeTransition(input: {
     id: string;
     transition: MeetingTaskRuntimeTransitionKind;
+    authorizedArtifacts?: readonly AnswerArtifactSection[];
     reason: string;
     expectedRevision?: number;
     parent?: ActiveInterviewParent | null;

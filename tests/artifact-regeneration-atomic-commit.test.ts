@@ -216,6 +216,7 @@ test("co-commits the canonical Whiteboard and Stable Answer section", () => {
         const prepared = manager.prepareTaskRuntimeTransition({
           id: "artifact-transition",
           transition: "update-parent-context",
+          authorizedArtifacts: leaseSnapshot().authorizedArtifacts,
           reason: "manual-artifact-regeneration-atomic-whiteboard",
           expectedRevision: beforeRuntime.revision,
           parent: fixture.nextParent,
@@ -306,6 +307,7 @@ test("rolls the canonical parent back when visible publication fails", () => {
         const prepared = manager.prepareTaskRuntimeTransition({
           id: "artifact-transition-rollback",
           transition: "update-parent-context",
+          authorizedArtifacts: leaseSnapshot().authorizedArtifacts,
           reason: "manual-artifact-regeneration-atomic-whiteboard",
           expectedRevision: beforeRuntime.revision,
           parent: fixture.nextParent,

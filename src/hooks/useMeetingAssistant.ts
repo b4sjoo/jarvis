@@ -1094,6 +1094,7 @@ function submitTaskRuntimeTransition(
   input: {
     operationId?: string;
     transition: MeetingTaskRuntimeTransitionKind;
+    authorizedArtifacts?: readonly AnswerArtifactSection[];
     reason: string;
     parent?: ActiveInterviewParent | null;
     screenAttachment?: ActiveScreenTask | null;
@@ -1243,6 +1244,7 @@ function commitCorrectionLifecycleWithManager(input: {
         operationId: input.operationId,
         transition: runtimeTransition,
         reason: "correction-lifecycle-command-committed",
+        authorizedArtifacts: input.plan.artifactPolicy.allowWhiteboard ? ["whiteboard"] : [],
         expectedRevision: input.currentContext.taskRuntime.revision,
         screenAttachment: reduction.screenAttachment ?? null,
         parent: reduction.parent ?? null,
@@ -1280,7 +1282,8 @@ function prepareGenerationDerivedTaskRuntimeCommit(
     parent?: ActiveInterviewParent | null;
     screenAttachment?: ActiveScreenTask | null;
     expectedRevision?: number;
-  }
+  },
+  authorizedArtifacts: readonly AnswerArtifactSection[] = []
 ) {
   const { operationId, ...transition } = input;
   const prepared = manager.prepareTaskRuntimeTransition({
@@ -1288,6 +1291,7 @@ function prepareGenerationDerivedTaskRuntimeCommit(
     expectedRevision:
       input.expectedRevision ?? manager.getTaskRuntimeState().revision,
     ...transition,
+    authorizedArtifacts,
   });
   return {
     authorized: prepared.result.authorized,
@@ -5092,7 +5096,8 @@ export function useMeetingAssistant() {
               prepare: () =>
                 prepareGenerationDerivedTaskRuntimeCommit(
                   contextManagerRef.current,
-                  preparedPendingTransition.transition!
+                  preparedPendingTransition.transition!,
+                  pending.authorizedArtifacts
                 ),
               install: (prepared) =>
                 contextManagerRef.current.commitPreparedTaskRuntimeTransition(
@@ -16404,7 +16409,8 @@ export function useMeetingAssistant() {
                   prepare: () =>
                     prepareGenerationDerivedTaskRuntimeCommit(
                       contextManagerRef.current,
-                      preparedAdvisorTransition.transition!
+                      preparedAdvisorTransition.transition!,
+                      generationAuthorizedArtifacts
                     ),
                   install: (prepared) =>
                     contextManagerRef.current.commitPreparedTaskRuntimeTransition(
@@ -23473,7 +23479,9 @@ export function useMeetingAssistant() {
         );
         if (stateUpdatedTask) {
           submitTaskRuntimeTransition(contextManagerRef.current, {
-            transition: "update-parent-context",
+            transition: contextState.taskRuntime.parent?.child && !stateUpdatedTask.child
+              ? "resume-parent"
+              : "update-parent-context",
             reason: "turn-gate-state-update",
             parent: stateUpdatedTask,
           });
@@ -30788,7 +30796,8 @@ export function useMeetingAssistant() {
                     prepare: () =>
                       prepareGenerationDerivedTaskRuntimeCommit(
                         contextManagerRef.current,
-                        preparedScreenTransition.transition!
+                        preparedScreenTransition.transition!,
+                        screenPresentationAuthorizedArtifacts
                       ),
                     install: (prepared) => {
                       const result =
