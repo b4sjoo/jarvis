@@ -126,6 +126,19 @@ export function createPreparationSnapshotService(dependencies: {
       );
     },
 
+    async getCurrentSnapshotForRuntimePin() {
+      const context = await dependencies.snapshots.getCurrentContext();
+      if (!context.processId || !context.roundId || !context.selectedSnapshotId) return undefined;
+      const snapshot = await dependencies.snapshots.get(context.processId, context.selectedSnapshotId);
+      if (!snapshot) throw new Error("The selected Snapshot is unavailable. Deactivate it or compile and activate a new Snapshot.");
+      validateKmbPins(snapshot, await dependencies.getKmbEntries());
+      const current = await dependencies.snapshots.getActive({ processId: context.processId, roundId: context.roundId });
+      if (!current || current.id !== snapshot.id) {
+        throw new Error("The selected Snapshot's KMB sources changed. Deactivate it, or review current KMB statements and compile and activate a new Snapshot.");
+      }
+      return current;
+    },
+
     listCurrentContextEvents() {
       return dependencies.snapshots.listCurrentContextEvents();
     },
@@ -186,6 +199,7 @@ export function createPreparationSnapshotService(dependencies: {
               ),
             });
             const snapshot: InterviewPreparationSnapshot = {
+              schemaVersion: 2,
               id: snapshotId,
               processId: input.processId,
               roundId: input.roundId,
@@ -539,15 +553,26 @@ async function validateSnapshotActivationAuthority(
     }
   }
 
-  const kmbById = new Map(kmbEntries.map((entry) => [entry.id, entry]));
+  validateKmbPins(snapshot, kmbEntries);
+}
+
+function validateKmbPins(snapshot: InterviewPreparationSnapshot, entries: MemoryEntry[]) {
+  if (![1, 2].includes(snapshot.schemaVersion ?? 1)) {
+    throw new Error("This Snapshot schema is unsupported. Compile a new Snapshot before activating it.");
+  }
+  const kmbById = new Map(entries.map((entry) => [entry.id, entry]));
   for (const pin of snapshot.sourceManifest.kmbEntries) {
+    if (snapshot.schemaVersion !== 2 || !pin.entryRevision) {
+      throw new Error("This legacy Snapshot has unverified KMB version references. Its saved content is still available to view. Create and confirm new statements from current KMB sources, then compile and activate a new Snapshot.");
+    }
     const entry = kmbById.get(pin.entryId);
     if (
       !entry ||
       !entry.enabled ||
-      stablePreparationHash(entry.content) !== pin.contentHash
+      entry.contentRevision !== pin.entryRevision || entry.contentHash !== pin.contentHash ||
+      !entry.sourceRevisions || Object.values(entry.sourceRevisions).some((revision) => revision === null)
     ) {
-      throw new Error("A pinned curated memory entry changed or was disabled.");
+      throw new Error("A pinned KMB source changed, was disabled, or has unverified lineage. Restore the intended source, create and confirm current KMB statements, then compile a new Snapshot. Saved Snapshot content is unchanged.");
     }
   }
 }
@@ -826,6 +851,7 @@ async function prepareSnapshotCompilation(
   const sourceFingerprint = stablePreparationHash(stableJson(sourceManifest));
   const contentHash = stablePreparationHash(
     stableJson({
+      schemaVersion: 2,
       artifacts,
       sourceManifest,
       warnings,
@@ -938,17 +964,22 @@ async function compileSourceState(input: {
     input.statements.flatMap((statement) =>
       statement.sources
         .filter((source) => source.sourceType === "curated-kmb")
-        .map((source) => source.sourceId)
+        .map((source) => ({ entryId: source.sourceId, entryRevision: source.kmbEntryRevision }))
     ),
-    (id) => id
-  ).map((entryId) => {
+    (pin) => `${pin.entryId}:${pin.entryRevision ?? "unknown"}`
+  ).map(({ entryId, entryRevision }) => {
+    if (!entryRevision) {
+      throw new Error("A reviewed statement has a legacy KMB reference without a verifiable content revision. Create a new statement from the current KMB source and confirm it before compiling. Re-confirming the unchanged legacy statement cannot restore its source history.");
+    }
     const entry = kmbById.get(entryId);
-    if (!entry || !entry.enabled) {
-      throw new Error("A curated memory source is missing or disabled.");
+    if (!entry || !entry.enabled || !entryRevision || entry.contentRevision !== entryRevision || !entry.contentHash ||
+        !entry.sourceRevisions || Object.values(entry.sourceRevisions).some((revision) => revision === null)) {
+      throw new Error("A statement's KMB source changed, is disabled, or has unverified lineage. Restore or rebuild the intended KMB source, create and confirm a new statement from it, then compile again.");
     }
     return {
       entryId,
-      contentHash: stablePreparationHash(entry.content),
+      entryRevision,
+      contentHash: entry.contentHash,
     };
   });
   const evidenceIndex = dedupeBy(

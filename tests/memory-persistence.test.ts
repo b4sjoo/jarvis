@@ -8,11 +8,10 @@ import {
 } from "../src/lib/memory/interview-family.js";
 import { parseCuratedMemoryDraft } from "../src/lib/memory/parser.js";
 import {
-  buildPersistedMemoryEntryParameters,
+  buildMemoryEntryCandidate,
   decodePersistedMemoryInterviewFamilies,
   encodePersistedMemoryInterviewFamilies,
   hydratePersistedMemoryInterviewFamilies,
-  UPSERT_PERSISTED_MEMORY_ENTRY_SQL,
 } from "../src/lib/memory/persistence.js";
 import type { MemoryEntry } from "../src/lib/memory/types.js";
 
@@ -81,34 +80,14 @@ test("diagnoses malformed persisted families without accepting partial authority
   );
 });
 
-test("round-trips explicit interview families through the real SQLite rebuild contract", () => {
+test("round-trips immutable revision interview families through SQLite", () => {
   const db = new DatabaseSync(":memory:");
   try {
-    db.exec(
-      readFileSync(
-        "src-tauri/src/db/migrations/knowledge-memory-base.sql",
-        "utf8"
-      )
-    );
-    db.exec(
-      readFileSync(
-        "src-tauri/src/db/migrations/memory-entry-interview-families.sql",
-        "utf8"
-      )
-    );
-
-    const columns = db.prepare("PRAGMA table_info(memory_entries)").all();
-    assert.ok(
-      columns.some(
-        (column) =>
-          (column as { name?: string }).name === "interview_families"
-      )
-    );
-
-    const parsed = parseCuratedMemoryDraft(
-      {
-        path: "sqlite-curated.md",
-        content: `\`\`\`yaml
+    const registry = readFileSync("src-tauri/src/db/main.rs", "utf8");
+    for (const match of registry.matchAll(/include_str!\("migrations\/([^"]+)"\)/g)) {
+      db.exec(readFileSync(`src-tauri/src/db/migrations/${match[1]}`, "utf8"));
+    }
+    const parsed = parseCuratedMemoryDraft({ path: "sqlite-curated.md", content: `\`\`\`yaml
 entries:
   - id: mem_sqlite_multi_family
     sourceIds: [source_sqlite]
@@ -116,127 +95,40 @@ entries:
     title: Shared architecture guidance
     content: Use this guidance only for its curated interview families.
     interviewFamilies: [ai-ml-system-design, system-design]
-\`\`\``,
-      },
-      1_700_000_000_000
-    );
-    const parsedEntry = parsed.entries[0];
-    assert.ok(parsedEntry);
-
-    const upsert = db.prepare(UPSERT_PERSISTED_MEMORY_ENTRY_SQL);
-    upsert.run(
-      ...buildPersistedMemoryEntryParameters(
-        parsedEntry,
-        1_700_000_000_000
-      )
-    );
-    const row = db
-      .prepare(
-        "SELECT interview_families FROM memory_entries WHERE id = ?"
-      )
-      .get(parsedEntry.id) as { interview_families: string | null };
-    const hydrated = hydratePersistedMemoryInterviewFamilies(
-      parsedEntry,
-      row.interview_families
-    );
-
-    assert.equal(hydrated.interviewFamiliesStatus, "explicit");
-    assert.deepEqual(hydrated.entry.interviewFamilies, [
-      "ai-ml-system-design",
-      "system-design",
-    ]);
-    assert.equal(
-      resolveMemoryInterviewFamilies(hydrated.entry).source,
-      "explicit"
-    );
-    assert.equal(
-      resolveMemoryInterviewFamilyGateDecision({
-        entry: hydrated.entry,
-        questionType: "general-system-design",
-        memoryPolicy: {
-          id: "general-system-design",
-          allowedFamilies: ["system-design"],
-        },
-      }).rejectReason,
-      undefined
-    );
-    assert.equal(
-      resolveMemoryInterviewFamilyGateDecision({
-        entry: hydrated.entry,
-        questionType: "ai-ml-system-design",
-        memoryPolicy: {
-          id: "ai-ml-system-design",
-          allowedFamilies: ["ai-ml-system-design"],
-        },
-      }).rejectReason,
-      undefined
-    );
-
-    const rebuiltEntry: MemoryEntry = {
-      ...parsedEntry,
-      interviewFamilies: ["behavioral"],
+\`\`\`` }, 100);
+    const entry = parsed.entries[0];
+    assert.ok(entry);
+    const store = (input: MemoryEntry, rawFamilies?: string) => {
+      const candidate = buildMemoryEntryCandidate(input);
+      if (rawFamilies !== undefined) candidate.content.interview_families = rawFamilies;
+      db.prepare("INSERT OR IGNORE INTO memory_entries (id, enabled, created_at, updated_at, current_content_revision) VALUES (?,1,1,1,NULL)").run(input.id);
+      const next = db.prepare("SELECT COALESCE(MAX(revision),0)+1 AS revision FROM memory_entry_revisions WHERE entry_id=?").get(input.id) as {revision:number};
+      const fields = Object.keys(candidate.content);
+      db.prepare(`INSERT INTO memory_entry_revisions (entry_id, revision, content_hash, source_revisions_json, created_at, ${fields.join(",")}) VALUES (?, ?, ?, '{}', 1, ${fields.map(() => "?").join(",")})`).run(input.id, next.revision, `fixture-${next.revision}`, ...Object.values(candidate.content));
+      db.prepare("UPDATE memory_entries SET current_content_revision=? WHERE id=?").run(next.revision, input.id);
+      return next.revision;
     };
-    upsert.run(
-      ...buildPersistedMemoryEntryParameters(
-        rebuiltEntry,
-        1_700_000_001_000
-      )
-    );
-    const rebuiltRow = db
-      .prepare(
-        "SELECT interview_families FROM memory_entries WHERE id = ?"
-      )
-      .get(parsedEntry.id) as { interview_families: string | null };
-    const rebuilt = hydratePersistedMemoryInterviewFamilies(
-      parsedEntry,
-      rebuiltRow.interview_families
-    );
-    assert.deepEqual(rebuilt.entry.interviewFamilies, ["behavioral"]);
-
-    const legacyEntry: MemoryEntry = {
-      ...parsedEntry,
-      id: "mem_sqlite_legacy",
-      title: "Coding algorithm guide",
-      tags: ["coding"],
-      interviewFamilies: undefined,
+    const read = (input: MemoryEntry) => {
+      const row = db.prepare("SELECT r.interview_families FROM memory_entries e JOIN memory_entry_revisions r ON r.entry_id=e.id AND r.revision=e.current_content_revision WHERE e.id=?").get(input.id) as { interview_families: string | null };
+      return hydratePersistedMemoryInterviewFamilies(input, row.interview_families);
     };
-    upsert.run(
-      ...buildPersistedMemoryEntryParameters(
-        legacyEntry,
-        1_700_000_002_000
-      )
-    );
-    const legacyRow = db
-      .prepare(
-        "SELECT interview_families FROM memory_entries WHERE id = ?"
-      )
-      .get(legacyEntry.id) as { interview_families: string | null };
-    const legacy = hydratePersistedMemoryInterviewFamilies(
-      legacyEntry,
-      legacyRow.interview_families
-    );
-    assert.equal(legacy.interviewFamiliesStatus, "missing");
-    assert.deepEqual(resolveMemoryInterviewFamilies(legacy.entry).families, [
-      "coding",
-    ]);
-
-    db.prepare(
-      "UPDATE memory_entries SET interview_families = ? WHERE id = ?"
-    ).run("not-json", legacyEntry.id);
-    const malformedRow = db
-      .prepare(
-        "SELECT interview_families FROM memory_entries WHERE id = ?"
-      )
-      .get(legacyEntry.id) as { interview_families: string | null };
-    const malformed = hydratePersistedMemoryInterviewFamilies(
-      legacyEntry,
-      malformedRow.interview_families
-    );
-    assert.equal(malformed.interviewFamiliesStatus, "malformed");
-    assert.deepEqual(resolveMemoryInterviewFamilies(malformed.entry).families, [
-      "coding",
-    ]);
-  } finally {
-    db.close();
-  }
+    store(entry);
+    const hydrated = read(entry);
+    assert.deepEqual(hydrated.entry.interviewFamilies, ["ai-ml-system-design", "system-design"]);
+    assert.equal(resolveMemoryInterviewFamilies(hydrated.entry).source, "explicit");
+    for (const [questionType, family] of [["general-system-design", "system-design"], ["ai-ml-system-design", "ai-ml-system-design"]] as const) {
+      assert.equal(resolveMemoryInterviewFamilyGateDecision({ entry: hydrated.entry, questionType, memoryPolicy: { id: family, allowedFamilies: [family] } }).rejectReason, undefined);
+    }
+    store({ ...entry, interviewFamilies: ["behavioral"] });
+    assert.deepEqual(read(entry).entry.interviewFamilies, ["behavioral"]);
+    const old = db.prepare("SELECT interview_families FROM memory_entry_revisions WHERE entry_id=? AND revision=1").get(entry.id) as {interview_families:string};
+    assert.deepEqual(JSON.parse(old.interview_families), ["ai-ml-system-design", "system-design"]);
+    const legacy: MemoryEntry = { ...entry, id: "legacy", title: "Coding algorithm guide", tags: ["coding"], interviewFamilies: undefined };
+    store(legacy);
+    assert.equal(read(legacy).interviewFamiliesStatus, "missing");
+    store(legacy, "not-json");
+    assert.equal(read(legacy).interviewFamiliesStatus, "malformed");
+    assert.deepEqual(resolveMemoryInterviewFamilies(read(legacy).entry).families, ["coding"]);
+    assert.throws(() => db.prepare("UPDATE memory_entry_revisions SET interview_families='[]' WHERE entry_id=?").run(entry.id), /immutable/);
+  } finally { db.close(); }
 });

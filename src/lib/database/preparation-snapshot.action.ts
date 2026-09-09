@@ -9,6 +9,7 @@ import { ensurePreparationSnapshotArtifactManifest } from "@/lib/preparation/sna
 import { getDatabase } from "./config";
 
 interface SnapshotRow {
+  schema_version: number;
   id: string;
   process_id: string;
   round_id: string;
@@ -61,7 +62,7 @@ interface CurrentContextEventRow {
 }
 
 const SNAPSHOT_SELECT = `
-  SELECT id, process_id, round_id, version, profile_revision_id,
+  SELECT id, process_id, round_id, version, schema_version, profile_revision_id,
          profile_revision, compiler_version, playbook_registry_version,
          runtime_capability_version, source_fingerprint, content_hash,
          runtime_char_count, snapshot_json, source_manifest_json,
@@ -101,6 +102,7 @@ export const preparationSnapshotRepository: PreparationSnapshotRepository = {
          WHERE singleton_id = 1
            AND process_id = ? AND round_id = ?
        )
+       AND NOT EXISTS (SELECT 1 FROM preparation_snapshot_invalid_kmb_pins WHERE snapshot_id=interview_preparation_snapshots.id)
        LIMIT 1`,
       [input.processId, input.roundId, input.processId, input.roundId]
     );
@@ -187,9 +189,9 @@ export const preparationSnapshotRepository: PreparationSnapshotRepository = {
          profile_revision, compiler_version, playbook_registry_version,
          runtime_capability_version, source_fingerprint, content_hash,
          runtime_char_count, snapshot_json, source_manifest_json,
-         warnings_json, status, build_status, created_at, activated_at)
+         warnings_json, status, build_status, created_at, activated_at, schema_version)
        SELECT ?, ?, round.id, ?, profile.id, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-              'ready', 'staging', ?, NULL
+              'ready', 'staging', ?, NULL, 2
        FROM interview_rounds round
        JOIN interview_processes process ON process.id = round.process_id
        JOIN preparation_workspaces workspace ON workspace.id = process.workspace_id
@@ -331,11 +333,12 @@ export const preparationSnapshotRepository: PreparationSnapshotRepository = {
       for (const link of input.kmbEntries) {
         const linked = await db.execute(
           `INSERT INTO preparation_snapshot_kmb_entry_links
-            (snapshot_id, entry_id, content_hash, ordinal)
-           SELECT ?, entry.id, ?, ?
+            (snapshot_id, entry_id, entry_revision, content_hash, ordinal)
+           SELECT ?, entry.id, content.revision, content.content_hash, ?
            FROM memory_entries entry
-           WHERE entry.id = ? AND entry.enabled = 1`,
-          [snapshot.id, link.contentHash, link.ordinal, link.entryId]
+           JOIN memory_entry_revisions content ON content.entry_id=entry.id AND content.revision=entry.current_content_revision
+           WHERE entry.id = ? AND entry.enabled = 1 AND content.revision = ? AND content.content_hash = ?`,
+          [snapshot.id, link.ordinal, link.entryId, link.entryRevision ?? null, link.contentHash]
         );
         if (linked.rowsAffected === 0) {
           throw new Error("A curated memory entry changed before compilation committed.");
@@ -439,13 +442,7 @@ export const preparationSnapshotRepository: PreparationSnapshotRepository = {
                    OR material.deleted_at IS NOT NULL
                    )
              )
-             AND NOT EXISTS (
-               SELECT 1
-               FROM preparation_snapshot_kmb_entry_links link
-               LEFT JOIN memory_entries entry ON entry.id = link.entry_id
-               WHERE link.snapshot_id = snapshot.id
-                 AND (entry.id IS NULL OR entry.enabled <> 1)
-             )
+             AND NOT EXISTS (SELECT 1 FROM preparation_snapshot_invalid_kmb_pins WHERE snapshot_id=snapshot.id)
          )`,
       [
         input.processId,
@@ -548,6 +545,7 @@ function mapSnapshot(row: SnapshotRow): InterviewPreparationSnapshot {
   const payload = parseSnapshot(row.snapshot_json);
   return ensurePreparationSnapshotArtifactManifest({
     ...payload,
+    schemaVersion: row.schema_version,
     id: row.id,
     processId: row.process_id,
     roundId: row.round_id,

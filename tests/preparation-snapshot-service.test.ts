@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import type { MemoryEntry } from "../src/lib/memory/types.js";
+import { parseCuratedMemoryDraft } from "../src/lib/memory/parser.js";
 import { createPreparationProfileSourceFingerprint } from "../src/lib/preparation/preparation-composition-service.js";
 import {
   createPreparationSnapshotService,
@@ -426,6 +428,37 @@ test("user-approved needs-review material sources can compile", async () => {
   assert.equal(result.snapshot.sourceManifest.materials[0]?.materialRevisionId, "revision-1");
 });
 
+test("legacy KMB statements remain visible but require new reviewed source references before compilation", async () => {
+  const fixture = createFixture();
+  const entry = parseCuratedMemoryDraft({ path: "kmb.md", content: "```yaml\nentries:\n  - id: memory-1\n    sourceIds: [source-1]\n    type: interview_framework\n    title: Memory\n    content: Current evidence\n```" }, 1).entries[0];
+  assert.ok(entry);
+  fixture.kmbEntries.push({ ...entry, contentRevision: 1, contentHash: "full-content-hash", sourceRevisions: { "source-1": 1 } });
+  fixture.statements[0].sources = [{ id: "legacy-source", statementId: fixture.statements[0].id,
+    sourceType: "curated-kmb", sourceId: "memory-1", title: "Memory", contentHash: "snippet-hash", createdAt: 1 }, ...fixture.statements[0].sources];
+  fixture.profile = profile(fixture.statements, 2);
+  await assert.rejects(fixture.service.compile({ processId: PROCESS_ID, roundId: ROUND_ID, profileRevisionId: fixture.profile.id }), /Create a new statement.*confirm/);
+  assert.equal(fixture.statements[0].sources[0].kmbEntryRevision, undefined);
+  assert.equal(fixture.statements[0].content, "Built memory APIs");
+  // The existing proposal/review workflow creates a new, explicitly sourced statement.
+  fixture.statements[0] = { ...fixture.statements[0], id: "reviewed-current-statement", sources: [{
+    ...fixture.statements[0].sources[0], id: "current-source", statementId: "reviewed-current-statement", kmbEntryRevision: 1,
+  }, { ...fixture.statements[0].sources[1], id: "current-confirmation", statementId: "reviewed-current-statement", sourceId: "reviewed-current-statement:1" }] };
+  fixture.profile = profile(fixture.statements, 3);
+  const compiled = (await fixture.service.compile({ processId: PROCESS_ID, roundId: ROUND_ID, profileRevisionId: fixture.profile.id })).snapshot;
+  assert.equal(compiled.schemaVersion, 2);
+  assert.deepEqual(compiled.sourceManifest.kmbEntries, [{ entryId: "memory-1", entryRevision: 1, contentHash: "full-content-hash" }]);
+  await fixture.service.activate({ processId: PROCESS_ID, roundId: ROUND_ID, snapshotId: compiled.id });
+  const legacy = { ...compiled, id: "legacy-snapshot", schemaVersion: 1, sourceManifest: { ...compiled.sourceManifest,
+    kmbEntries: [{ entryId: "memory-1", contentHash: "legacy-body-hash" }] } };
+  fixture.snapshots.push(legacy);
+  assert.ok((await fixture.service.list({ processId: PROCESS_ID, roundId: ROUND_ID })).some((row) => row.id === legacy.id));
+  await assert.rejects(fixture.service.activate({ processId: PROCESS_ID, roundId: ROUND_ID, snapshotId: legacy.id }), /legacy Snapshot.*available to view.*Create and confirm/);
+  assert.equal(fixture.snapshots.find((row) => row.id === legacy.id)?.schemaVersion, 1);
+  fixture.kmbEntries[0] = { ...fixture.kmbEntries[0], enabled: false };
+  await assert.rejects(fixture.service.getCurrentSnapshotForRuntimePin(), /KMB source changed.*disabled/);
+  assert.equal((await fixture.service.getCurrentSnapshot())?.id, compiled.id);
+});
+
 function createFixture() {
   const statements = [
     statement({ id: "fact-1", revision: 1, content: "Built memory APIs" }),
@@ -440,6 +473,7 @@ function createFixture() {
   const events: PreparationSnapshotActivationEvent[] = [];
   const serviceEvents: PreparationSnapshotEvent[] = [];
   const repository = snapshotRepository(snapshots, events);
+  const kmbEntries: MemoryEntry[] = [];
   let id = 0;
   const service = createPreparationSnapshotService({
     statements: statementRepository(statements),
@@ -447,13 +481,14 @@ function createFixture() {
     snapshots: repository,
     interviewProcesses: activeProcessRepository(),
     materialExtraction: extractionRepository(() => currentExtraction),
-    getKmbEntries: async () => [],
+    getKmbEntries: async () => kmbEntries,
     now: () => 100 + id,
     createId: () => String(++id),
     onEvent: (event) => serviceEvents.push(event),
   });
   return {
     statements,
+    kmbEntries,
     snapshots,
     events,
     serviceEvents,

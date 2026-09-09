@@ -14,6 +14,7 @@ function deferred<T>() {
 async function harness() {
   const loaded = deferred<object>();
   const bootstrapped = deferred<void>();
+  const materialInitialized = deferred<void>();
   const calls: string[] = [];
   const row = {
     workspace_id: "w", material_id: "m", extension: "pdf", revision_id: "r", revision: 1,
@@ -30,7 +31,10 @@ async function harness() {
   const globals = globalThis as typeof globalThis & Record<string, unknown>;
   globals[key] = {
     load(name: string) { assert.equal(name, "sqlite:jarvis.db"); calls.push("load"); return loaded.promise; },
-    invoke(name: string) { assert.equal(name, "preparation_extraction_initialize"); calls.push("bootstrap"); return bootstrapped.promise; },
+    invoke(name: string) {
+      if (name === "preparation_extraction_initialize") { calls.push("material-initialize"); return materialInitialized.promise; }
+      assert.equal(name, "memory_content_initialize"); calls.push("bootstrap"); return bootstrapped.promise;
+    },
   };
   const moduleUrl = (source: string) => `data:text/javascript,${encodeURIComponent(source)}`;
   const sqlUrl = moduleUrl(`export default { load: (...args) => globalThis.${key}.load(...args) };`);
@@ -53,7 +57,7 @@ async function harness() {
       getRevision(id: string, revision: string): Promise<{ outputHash?: string }>;
     };
   };
-  return { loaded, bootstrapped, database, calls, config, repository,
+  return { loaded, materialInitialized, bootstrapped, database, calls, config, repository,
     dispose() { hooks.deregister(); delete globals[key]; } };
 }
 
@@ -66,7 +70,10 @@ test("database readiness shares one promise and gates every extraction reader be
     assert.deepEqual(h.calls, ["load"]);
     h.loaded.resolve(h.database);
     await Promise.resolve();
-    assert.deepEqual(h.calls, ["load", "bootstrap"]);
+    assert.deepEqual(h.calls, ["load", "material-initialize"]);
+    h.materialInitialized.resolve();
+    await Promise.resolve();
+    assert.deepEqual(h.calls, ["load", "material-initialize", "bootstrap"]);
     let ready = false;
     void first.then(() => { ready = true; });
     await Promise.resolve();
@@ -92,12 +99,14 @@ test("bootstrap failure rejects all waiting readers without publishing database 
     const outcomes = Promise.allSettled([ready, h.repository.getCurrent("m"), h.repository.getSelected("m")]);
     h.loaded.resolve(h.database);
     await Promise.resolve();
+    h.materialInitialized.resolve();
+    await Promise.resolve();
     h.bootstrapped.reject(new Error("bootstrap transaction rolled back"));
     for (const outcome of await outcomes) {
       assert.equal(outcome.status, "rejected");
       if (outcome.status === "rejected") assert.match(String(outcome.reason), /bootstrap transaction rolled back/);
     }
-    assert.deepEqual(h.calls, ["load", "bootstrap"]);
+    assert.deepEqual(h.calls, ["load", "material-initialize", "bootstrap"]);
   } finally { h.dispose(); }
 });
 

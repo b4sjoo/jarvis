@@ -461,6 +461,8 @@ pub fn run() {
             db::preparation_extraction::preparation_extraction_fail,
             db::preparation_extraction::preparation_extraction_review,
             db::preparation_extraction::preparation_extraction_initialize,
+            db::memory::memory_content_initialize,
+            db::memory::memory_content_publish,
             preparation_material_storage::stage_preparation_material_storage_delete,
             preparation_material_storage::restore_preparation_material_storage_delete,
             preparation_material_storage::commit_preparation_material_storage_delete,

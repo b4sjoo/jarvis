@@ -39,6 +39,7 @@ interface StatementRow {
 }
 
 interface StatementSourceRow {
+  kmb_entry_revision: number | null;
   id: string;
   statement_id: string;
   source_type: PreparationStatementSource["sourceType"];
@@ -772,8 +773,8 @@ async function insertStatementSource(
   await db.execute(
     `INSERT INTO preparation_statement_sources
       (id, statement_id, source_type, source_id, title, material_id,
-       material_revision_id, page, section, content_hash, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       material_revision_id, page, section, content_hash, created_at, kmb_entry_revision)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       source.id,
       source.statementId,
@@ -786,6 +787,7 @@ async function insertStatementSource(
       source.section ?? null,
       source.contentHash ?? null,
       source.createdAt,
+      source.kmbEntryRevision ?? null,
     ]
   );
 }
@@ -800,7 +802,7 @@ async function attachSources(
     `SELECT source.id, source.statement_id, source.source_type,
             source.source_id, source.title, source.material_id,
             source.material_revision_id, source.page, source.section,
-            source.content_hash, source.created_at,
+            source.content_hash, source.created_at, source.kmb_entry_revision,
             CASE source.source_type
               WHEN 'preparation-message' THEN (
                 SELECT substr(message.content, 1, 1200)
@@ -812,7 +814,8 @@ async function attachSources(
               )
               WHEN 'curated-kmb' THEN (
                 SELECT substr(entry.content, 1, 1200)
-                FROM memory_entries entry WHERE entry.id = source.source_id
+                FROM memory_entry_revisions entry
+                WHERE entry.entry_id = source.source_id AND entry.revision = source.kmb_entry_revision
               )
               ELSE NULL
             END AS preview
@@ -908,6 +911,7 @@ function mapStatementSource(row: StatementSourceRow): PreparationStatementSource
     title: row.title,
     materialId: row.material_id ?? undefined,
     materialRevisionId: row.material_revision_id ?? undefined,
+    kmbEntryRevision: row.kmb_entry_revision ?? undefined,
     page: row.page ?? undefined,
     section: row.section ?? undefined,
     contentHash: row.content_hash ?? undefined,

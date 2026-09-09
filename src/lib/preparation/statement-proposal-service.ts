@@ -473,6 +473,7 @@ function buildProposalSourceManifest(
         content: labeledEvidence.get(label) ?? "",
         materialId: source.materialId,
         materialRevisionId: source.materialRevisionId,
+        kmbEntryRevision: source.kmbEntryRevision,
         page: source.page,
         section: source.section,
         contentHash: stablePreparationHash(
@@ -514,6 +515,7 @@ function proposalSourceToStatementSource(
     title: source.title,
     materialId: source.materialId,
     materialRevisionId: source.materialRevisionId,
+    kmbEntryRevision: source.kmbEntryRevision,
     page: source.page,
     section: source.section,
     contentHash: source.contentHash,

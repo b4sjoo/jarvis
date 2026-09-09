@@ -30,6 +30,7 @@ export interface PreparationConversation {
 }
 
 export interface PreparationContextSourceRef {
+  kmbEntryRevision?: number;
   kind: "material" | "kmb";
   id: string;
   title: string;

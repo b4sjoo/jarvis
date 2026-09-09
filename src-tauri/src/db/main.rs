@@ -135,5 +135,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("migrations/preparation-immutable-extraction-revisions.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 20,
+            description: "immutable_kmb_content_and_snapshot_pins",
+            sql: include_str!("migrations/memory-content-revisions-and-snapshot-pins.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

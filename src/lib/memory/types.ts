@@ -63,6 +63,8 @@ export type MemorySourceRole =
   | "misc";
 
 export interface MemorySource {
+  contentRevision?: number;
+  contentHash?: string;
   id: string;
   title: string;
   collection: MemoryCollection;
@@ -175,6 +177,9 @@ export interface RuntimeMemoryRoleDecision {
 }
 
 export interface MemoryEntry {
+  contentRevision?: number;
+  contentHash?: string;
+  sourceRevisions?: Record<string, number | null>;
   id: string;
   sourceIds: string[];
   type: MemoryEntryType;
@@ -223,6 +228,14 @@ export interface ParsedMemoryDraft {
 }
 
 export interface MemoryImportSummary {
+  publication?: {
+    sourceRevisionsCreated: number;
+    entryRevisionsCreated: number;
+    revisionsReused: number;
+    retainedStaleEntries: number;
+    transactionMs: number;
+    lockWaitMs: number;
+  };
   importedAt: number;
   draftCount: number;
   sourceCount: number;

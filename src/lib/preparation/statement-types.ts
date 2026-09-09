@@ -48,6 +48,7 @@ export type PreparationStatementSourceType =
   | "user-confirmation";
 
 export interface PreparationStatementSource {
+  kmbEntryRevision?: number;
   id: string;
   statementId: string;
   sourceType: PreparationStatementSourceType;
@@ -104,6 +105,7 @@ export interface PreparationStatementReviewEvent {
 }
 
 export interface PreparationProposalSourceManifestItem {
+  kmbEntryRevision?: number;
   label: string;
   sourceType: Exclude<PreparationStatementSourceType, "user-confirmation">;
   sourceId: string;

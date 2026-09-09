@@ -17,6 +17,7 @@ export function getDatabase(): Promise<Database> {
       try {
         const database = await Database.load(DB_NAME);
         await invoke("preparation_extraction_initialize");
+        await invoke("memory_content_initialize");
         return database;
       } catch (error) {
         databaseReady = undefined;

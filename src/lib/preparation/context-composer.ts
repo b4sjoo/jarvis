@@ -667,6 +667,7 @@ function selectKmbContext(
   const sourceRefs: PreparationContextSourceRef[] = selected.map((item) => ({
     kind: "kmb",
     id: item.entry.id,
+    kmbEntryRevision: item.entry.contentRevision,
     title: item.entry.title,
     score: item.score,
     selectedChars: item.injectedContent.length,

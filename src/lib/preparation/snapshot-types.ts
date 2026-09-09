@@ -176,6 +176,7 @@ export interface PreparationSnapshotSourceManifest {
   }>;
   kmbEntries: Array<{
     entryId: string;
+    entryRevision?: number;
     contentHash: string;
   }>;
   compilerVersion: string;
@@ -234,6 +235,7 @@ export interface PreparationSnapshotArtifactManifest {
 }
 
 export interface InterviewPreparationSnapshot {
+  schemaVersion?: number;
   id: string;
   processId: string;
   roundId: string;
@@ -340,7 +342,7 @@ export interface PreparationSnapshotRepository {
       outputHash?: string;
       ordinal: number;
     }>;
-    kmbEntries: Array<{ entryId: string; contentHash: string; ordinal: number }>;
+    kmbEntries: Array<{ entryId: string; entryRevision?: number; contentHash: string; ordinal: number }>;
   }): Promise<void>;
   activate(input: {
     processId: string;
