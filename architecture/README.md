@@ -37,6 +37,10 @@ flowchart LR
   admission and delayed settlement boundaries and the existing periodic timer.
   Store and lifecycle reducers share command-field limits. Ordinary execution
   plans are cloned and frozen; legal rebasing produces a new plan.
+- Context source groups resolve effective revisions once per construction. Initial
+  Advisor context and final settled context retain distinct scopes/read moments;
+  they use the shared projection rules without a cross-request cache. Generation
+  continuity is excluded from Type/Relation/RO source evidence and retrieval facts.
 - `src/lib/preparation/` owns Interview Preparation Workspace services and the
   immutable snapshot context consumed by meeting runtime adapters.
 - `src/lib/memory/` owns local retrieval and KMB boundaries. Generated answers
@@ -84,8 +88,17 @@ and artifact authority boundaries.
   readers; live producers must not depend on those readers.
 - Unverifiable historical Snapshot pins remain inspectable, not newly authorized.
   Runtime pinning uses the checked reader. Source history is not manufactured
-  from current content. Pure generated continuity still lives partly in task
-  state; its output/TTL migration remains pending explicit retention alignment.
+  from current content.
+- Committed generated continuity lives in the existing bounded output holder:
+  the current parent's answer pair, current-child summary and bounded recent
+  capsules. Pure Answer publication does not write task state/revisions. Read-only
+  Advisor projections may include these summaries under existing scope rules.
+- Deadlines have one lifecycle-control owner in Context Manager, outside task
+  semantic state. Source/manual commands carry explicit deadline deltas; authorized
+  output installs its prepared deadline through shared publication. Unpublished,
+  stale or failed candidates cannot renew; pending does not restart its clock.
+  Actual expiry remains a task mutation. Old pure-output task writeback and its
+  dedicated same-owner task rebase are removed; real task/output freshness remains.
 
 ## Tracked Contract Files
 

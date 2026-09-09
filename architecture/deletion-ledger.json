@@ -4,6 +4,33 @@
   "updatedAt": "2026-09-09",
   "entries": [
     {
+      "id": "per-turn-effective-group-reselection",
+      "symbolOrSurface": "Effective source groups repeatedly reconstruct ledger projections for every source turn",
+      "verdict": "migrate-then-delete",
+      "ownerTaskId": 189,
+      "replacement": "One construction-local source index; independent consumers retain their authorized scopes",
+      "persistedDataImpact": "none",
+      "proofCommands": ["npm test", "npm run verify:architecture"],
+      "deletionGate": "Group and Response Opportunity composition tests prove one selection and synchronous projection reuse without a global cache.",
+      "rollbackBoundary": "Source-group computation is independent of output ownership and does not change source authority.",
+      "status": "deleted",
+      "forbiddenPatterns": ["projection: projectEffectiveTextForSourceTurn("]
+    },
+    {
+      "id": "generated-answer-task-writeback",
+      "symbolOrSurface": "Pure generated summaries mutate task state and require a compensating task-token rebase",
+      "verdict": "migrate-then-delete",
+      "ownerTaskId": 176,
+      "replacement": "Bounded output-owned continuity and single Context Manager deadline control through shared publication",
+      "persistedDataImpact": "recording",
+      "historicalReader": "Existing recording readers retain historical metadata; live producers use the current output contract",
+      "proofCommands": ["npm test", "npm run verify:next-major"],
+      "deletionGate": "Real Voice, Screen and pending publication preserve pure-answer task revisions; stale output, deadline rollback and branch context tests pass.",
+      "rollbackBoundary": "Task payload, deadline control, output writer and generated-context consumers migrate as one coherent contract; no live dual write.",
+      "status": "deleted",
+      "forbiddenPatterns": ["commitVisibleUsefulAnswerToParent", "trySameOwnerAnswerCommitRebase", "function buildActiveInterviewChild("]
+    },
+    {
       "id": "task-runtime-legacy-active-screen-root",
       "symbolOrSurface": "MeetingContextState.activeScreenTask live mutable root",
       "verdict": "migrate-then-delete",
