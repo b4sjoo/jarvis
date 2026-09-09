@@ -43,6 +43,92 @@ interface InvokeCall {
   args: Record<string, unknown>;
 }
 
+test("RC1/RC2: failed terminal publication retains a sealed owner and retries only its frozen payload", async () => {
+  const native = new ControlledRecordingInvoke();
+  const manager = new SessionRecordingManager(undefined, native.invoke);
+  const recording = await manager.start(START_OPTIONS);
+  manager.recordTrace(buildCompletedTrace("before-close", Date.now()), "manual");
+  const terminal = (call: InvokeCall) =>
+    stringArg(call, "relativePath") === "manifest.json" &&
+    parsePayload(call).status === "stopped";
+  native.failNext(terminal, new Error("terminal publication failed"));
+  await assert.rejects(manager.stop("first-stop"), /terminal publication failed/);
+  const failed = manager.getState();
+  assert.equal(failed.lifecycle, "close-failed");
+  assert.equal(failed.active, false);
+  assert.equal(failed.sessionId, recording.sessionId);
+  assert.equal(failed.folderPath, recording.folderPath);
+  const firstPayload = stringArg(native.calls.find(terminal)!, "payload");
+  assert.equal(failed.endedAt, JSON.parse(firstPayload).endedAt);
+  const countAtFailure = native.calls.length;
+  manager.recordTrace(buildCompletedTrace("late-close", Date.now()), "manual");
+  await assert.rejects(manager.start(START_OPTIONS), /retry|abandon/i);
+  assert.equal(native.calls.length, countAtFailure);
+  await Promise.all([manager.stop("retry"), manager.stop("duplicate")]);
+  const retries = native.calls.slice(countAtFailure);
+  assert.equal(retries.length, 1);
+  assert.equal(stringArg(retries[0]!, "payload"), firstPayload);
+  assert.equal(stringArg(retries[0]!, "folderName"), recording.folderName);
+  assert.equal(manager.getState().lifecycle, "idle");
+  assert.equal(native.calls.filter((call) =>
+    stringArg(call, "relativePath") === "timeline.jsonl" &&
+    stringArg(call, "payload").includes('"kind":"session-stopped"')
+  ).length, 1);
+  const next = await manager.start(START_OPTIONS);
+  await settle();
+  const afterStart = native.calls.length;
+  manager.recordTrace(buildCompletedTrace("before-close", Date.now()), "manual");
+  await settle();
+  assert.equal(native.calls.length, afterStart);
+  assert.notEqual(next.folderName, recording.folderName);
+  await manager.stop();
+});
+
+test("RC2: successful publication retry preserves earlier incomplete content and its error", async () => {
+  const native = new ControlledRecordingInvoke();
+  const manager = new SessionRecordingManager(undefined, native.invoke);
+  await manager.start(START_OPTIONS);
+  await settle();
+  native.failNext((call) => stringArg(call, "relativePath") === "timeline.jsonl", new Error("content lost"));
+  manager.recordCaptureLifecycle({ stage: "content-error-test" });
+  await settle();
+  native.failNext((call) => stringArg(call, "relativePath") === "manifest.json", new Error("manifest unavailable"));
+  await assert.rejects(manager.stop(), /manifest unavailable/);
+  const payload = native.calls.filter((call) => stringArg(call, "relativePath") === "manifest.json").pop()!;
+  assert.equal((parsePayload(payload).recordingIntegrity as { status: string }).status, "incomplete");
+  const count = native.calls.length;
+  await manager.stop();
+  assert.equal(native.calls.length, count + 1);
+  assert.equal(stringArg(native.calls[count]!, "payload"), stringArg(payload, "payload"));
+  assert.match(manager.getState().lastError ?? "", /content lost/);
+});
+
+for (const markerFails of [false, true]) {
+  test(`RC2: explicit abandon releases only failed owner without deleting folder (marker failure=${markerFails})`, async () => {
+    const native = new ControlledRecordingInvoke();
+    const manager = new SessionRecordingManager(undefined, native.invoke);
+    const recording = await manager.start(START_OPTIONS);
+    await assert.rejects(manager.abandon(), /Only a failed/);
+    native.failNext((call) => stringArg(call, "relativePath") === "manifest.json", new Error("disk failure"));
+    await assert.rejects(manager.stop(), /disk failure/);
+    if (markerFails) {
+      native.failNext((call) => stringArg(call, "relativePath") === "abandon.json", new Error("still unwritable"));
+    }
+    const state = await manager.abandon("explicit-user-choice");
+    assert.equal(state.lifecycle, "idle");
+    assert.equal(state.active, false);
+    if (markerFails) assert.match(state.lastError ?? "", /marker could not be persisted/);
+    else assert.equal(state.lastError, undefined);
+    const marker = native.calls.find((call) => stringArg(call, "relativePath") === "abandon.json")!;
+    assert.equal(stringArg(marker, "folderName"), recording.folderName);
+    assert.equal(parsePayload(marker).status, "incomplete");
+    assert.equal(native.calls.some((call) => /delete|remove/.test(call.command)), false);
+    const next = await manager.start(START_OPTIONS);
+    assert.notEqual(next.folderName, recording.folderName);
+    await manager.stop();
+  });
+}
+
 test("serializes concurrent starts into one recording generation", async () => {
   const native = new ControlledRecordingInvoke();
   const manager = new SessionRecordingManager(undefined, native.invoke);

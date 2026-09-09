@@ -1611,7 +1611,7 @@ export interface MeetingTraceExportRecord {
 
 export interface MeetingSessionRecordingState {
   active: boolean;
-  lifecycle: "idle" | "starting" | "active" | "closing";
+  lifecycle: "idle" | "starting" | "active" | "closing" | "close-failed";
   scriptedValidation?: true;
   scriptedValidationForced?: true;
   scriptedValidationSource?: "scenario-runner";

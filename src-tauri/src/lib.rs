@@ -4,6 +4,7 @@ mod preparation_material_extraction;
 mod preparation_material_storage;
 mod preparation_ocr;
 mod preparation_storage;
+mod session_recording_files;
 mod shortcuts;
 mod stt_evaluation;
 mod window;
@@ -220,6 +221,9 @@ fn write_meeting_session_recording_text(
         use std::io::Write;
         file.write_all(payload.as_bytes())
             .map_err(|error| format!("Failed to append session recording file: {}", error))?;
+    } else if relative_path == "manifest.json" {
+        session_recording_files::replace_manifest(&path, payload.as_bytes())
+            .map_err(|error| format!("Failed to replace session recording manifest: {}", error))?;
     } else {
         fs::write(&path, payload)
             .map_err(|error| format!("Failed to write session recording file: {}", error))?;

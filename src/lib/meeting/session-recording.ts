@@ -99,6 +99,10 @@ interface SessionRecordingStartOptions {
   interviewSessionContext?: InterviewSessionContext;
   providerSummary: SessionRecordingProviderSummary;
   scriptedValidation?: boolean;
+  preparationRuntimeContext?: PreparationRuntimeProvenanceSnapshot;
+  isCurrent?: () => boolean;
+  // Synchronous existing-owner reset, after all fallible preparation.
+  commit?: () => void;
   scriptedValidationLock?: {
     source: "scenario-runner";
     scenarioRunId: string;
@@ -205,6 +209,8 @@ interface ActiveSessionRecording {
   artifactCount: number;
   lastError?: string;
   manifestBase: ReturnType<typeof buildSessionRecordingManifest>;
+  terminalPayload?: string;
+  terminalError?: string;
   recordedTraceIds: Set<string>;
   recordedTaskIds: Set<string>;
   recordedTurnIds: Set<string>;
@@ -1438,13 +1444,14 @@ export class SessionRecordingManager {
     }
 
     return {
-      active: true,
+      active: this.activeSession.phase !== "sealed",
       lifecycle: this.lifecycle,
       sessionId: this.activeSession.sessionId,
       meetingSessionId: this.activeSession.meetingSessionId,
       folderName: this.activeSession.folderName,
       folderPath: this.activeSession.folderPath,
       startedAt: this.activeSession.startedAt,
+      endedAt: this.activeSession.closingAt,
       ...(this.activeSession.scriptedValidation
         ? { scriptedValidation: true as const }
         : {}),
@@ -1466,15 +1473,23 @@ export class SessionRecordingManager {
     };
   }
 
-  async start(options: SessionRecordingStartOptions) {
+  async start(input: SessionRecordingStartOptions | (() => Promise<SessionRecordingStartOptions>)) {
+    if (this.lifecycle === "close-failed") {
+      throw new Error("Recording close failed. Retry Stop or explicitly abandon before starting another recording.");
+    }
     return this.serializeTransition(async () => {
+      if (this.lifecycle === "close-failed") {
+        throw new Error("Recording close failed. Retry Stop or explicitly abandon before starting another recording.");
+      }
       if (this.activeSession) return this.getState();
 
       this.lifecycle = "starting";
       this.lastError = undefined;
       this.emit();
 
+      let startupFolder: string | undefined;
       try {
+        const options = typeof input === "function" ? await input() : input;
         const startedAt = Date.now();
         const scriptedValidationForced = Boolean(
           options.scriptedValidationLock
@@ -1487,6 +1502,7 @@ export class SessionRecordingManager {
           options.scriptedValidationLock?.scenarioRunId;
         const sessionId = createMeetingId("session_recording");
         const folderName = buildSessionRecordingFolderName(sessionId, startedAt);
+        startupFolder = folderName;
         const initialManifest = buildSessionRecordingManifest({
           status: "running",
           sessionId,
@@ -1502,6 +1518,7 @@ export class SessionRecordingManager {
           scriptedValidationForced,
           scriptedValidationSource,
           scenarioRunId,
+          preparationRuntimeContext: options.preparationRuntimeContext,
         });
 
         const folderPath = await this.invokeCommand<string>(
@@ -1527,6 +1544,7 @@ export class SessionRecordingManager {
           scriptedValidationForced,
           scriptedValidationSource,
           scenarioRunId,
+          preparationRuntimeContext: options.preparationRuntimeContext,
         });
         const session: ActiveSessionRecording = {
           generationId: createMeetingId("recording_generation"),
@@ -1595,6 +1613,14 @@ export class SessionRecordingManager {
           providerSummary: options.providerSummary,
         });
 
+        if (options.preparationRuntimeContext) {
+          await this.writeJson(session, "preparation/runtime-context.latest.json", options.preparationRuntimeContext);
+        }
+        if (options.isCurrent && !options.isCurrent()) {
+          throw new Error("Recording start superseded by a newer Meeting boundary or preparation context.");
+        }
+        options.commit?.();
+
         this.activeSession = session;
         this.lifecycle = "active";
         this.emit();
@@ -1616,6 +1642,15 @@ export class SessionRecordingManager {
         }
         return this.getState();
       } catch (error) {
+        if (startupFolder) {
+          // Best effort only: absent terminal evidence already means incomplete.
+          await this.invokeCommand("write_meeting_session_recording_text", {
+            folderName: startupFolder,
+            relativePath: "startup-failure.json",
+            append: false,
+            payload: JSON.stringify({ status: "incomplete", failedAt: Date.now(), reason: String(error) }),
+          }).catch(() => undefined);
+        }
         this.lifecycle = "idle";
         this.lastError = error instanceof Error ? error.message : String(error);
         this.emit();
@@ -1749,6 +1784,10 @@ export class SessionRecordingManager {
     return this.serializeTransition(async () => {
       const session = this.activeSession;
       if (!session) return this.getState();
+      if (session.terminalPayload) return this.publishTerminal(session);
+      if (session.phase === "sealed") {
+        throw new Error("Recording terminal payload could not be prepared. Explicitly abandon this owner.");
+      }
 
       const endedAt = Date.now();
       session.phase = "closing";
@@ -1853,7 +1892,8 @@ export class SessionRecordingManager {
           derivationVersions:
             evaluationView.report.derivationVersions,
         };
-        await this.writeJson(session, "manifest.json", {
+        session.terminalError = session.lastError;
+        session.terminalPayload = JSON.stringify({
           ...session.manifestBase,
           status: "stopped",
           endedAt,
@@ -1896,19 +1936,58 @@ export class SessionRecordingManager {
             untraceableArtifactUseCount:
               session.untraceablePreparationArtifactUseCount,
           },
-        });
+        }, null, 2);
       } catch (error) {
-        this.lastError = error instanceof Error ? error.message : String(error);
+        session.phase = "sealed";
+        this.lifecycle = "close-failed";
+        this.setSessionError(session, error instanceof Error ? error.message : String(error));
         throw error;
-      } finally {
-        if (this.activeSession === session) {
-          this.activeSession = undefined;
-        }
-        this.lifecycle = "idle";
-        this.lastError = session.lastError ?? this.lastError;
-        this.emit();
       }
 
+      return this.publishTerminal(session);
+    });
+  }
+
+  private async publishTerminal(session: ActiveSessionRecording) {
+    this.lifecycle = "closing";
+    this.emit();
+    try {
+      await this.writeText(session, "manifest.json", session.terminalPayload!);
+      this.activeSession = undefined;
+      this.lifecycle = "idle";
+      this.lastError = session.terminalError;
+      this.emit();
+      return this.getState();
+    } catch (error) {
+      this.lifecycle = "close-failed";
+      this.setSessionError(session, error instanceof Error ? error.message : String(error));
+      throw error;
+    }
+  }
+
+  async abandon(reason = "manual") {
+    return this.serializeTransition(async () => {
+      const session = this.activeSession;
+      if (!session) return this.getState();
+      if (this.lifecycle !== "close-failed") {
+        throw new Error("Only a failed recording close can be explicitly abandoned.");
+      }
+      try {
+        await this.writeJson(session, "abandon.json", {
+          status: "incomplete",
+          outcome: "abandoned",
+          generationId: session.generationId,
+          endedAt: session.closingAt,
+          abandonedAt: Date.now(),
+          reason,
+        });
+        this.lastError = undefined;
+      } catch (error) {
+        this.lastError = `Recording owner abandoned; marker could not be persisted: ${String(error)}`;
+      }
+      this.activeSession = undefined;
+      this.lifecycle = "idle";
+      this.emit();
       return this.getState();
     });
   }
@@ -4553,6 +4632,7 @@ function buildSessionRecordingManifest({
   scriptedValidationForced,
   scriptedValidationSource,
   scenarioRunId,
+  preparationRuntimeContext,
 }: {
   status: "running";
   sessionId: string;
@@ -4568,6 +4648,7 @@ function buildSessionRecordingManifest({
   scriptedValidationForced: boolean;
   scriptedValidationSource?: "scenario-runner";
   scenarioRunId?: string;
+  preparationRuntimeContext?: PreparationRuntimeProvenanceSnapshot;
 }) {
   return {
     version: SESSION_RECORDING_SCHEMA_VERSION,
@@ -4587,6 +4668,7 @@ function buildSessionRecordingManifest({
     interviewSessionBrief,
     interviewSessionContext,
     providerSummary,
+    ...(preparationRuntimeContext ? { preparationRuntimeContext } : {}),
     ...(scriptedValidation ? { scriptedValidation: true as const } : {}),
     ...(scriptedValidationForced
       ? { scriptedValidationForced: true as const }

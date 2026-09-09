@@ -97,13 +97,14 @@ class Clock {
   }
 }
 
-type Mode = "enabled" | "disabled" | "slow" | "failing";
+type Mode = "enabled" | "disabled" | "slow" | "failing" | "close-failed";
 class DiskRecorder {
   calls: Array<{ command: string; args: Record<string, unknown> }> = [];
   writeMs: number[] = [];
   blocked = gate<void>();
   blockedStarted = gate<void>();
   failures = 0;
+  failTerminal = false;
   manager: SessionRecordingManager;
   folder = "";
   constructor(readonly root: string, readonly mode: Mode) {
@@ -115,6 +116,10 @@ class DiskRecorder {
         return folder as T;
       }
       if (command === "write_meeting_session_recording_text") {
+        if (this.failTerminal && args.relativePath === "manifest.json") {
+          this.failTerminal = false;
+          throw new Error("controlled terminal publication failure");
+        }
         if (mode === "slow" && String(args.relativePath).includes("task-relation-decisions")) {
           this.blockedStarted.resolve();
           await this.blocked.promise;
@@ -141,6 +146,12 @@ class DiskRecorder {
       providerSummary: { hasMainProvider: false, hasCodingProvider: false, hasTaxonomyAdjudicationProvider: false, hasSttProvider: false, mainSupportsImages: false, codingSupportsImages: false },
     });
     this.folder = path.join(this.root, state.folderName!);
+    if (this.mode === "close-failed") {
+      this.failTerminal = true;
+      await assert.rejects(this.manager.stop(), /controlled terminal publication failure/);
+      assert.equal(this.manager.getState().active, false);
+      assert.equal(this.manager.getState().lifecycle, "close-failed");
+    }
   }
   async stop() {
     this.blocked.resolve();
@@ -181,7 +192,7 @@ function bytes(kind: string, fault: Fault) {
     : JSON.stringify({ v: 1, d: kind === "task-relation-child-affinity" ? "n" : "i", c: 0.99, q: "Implement a queue.", b: null });
 }
 
-async function harness(options: { mode?: Mode; child?: boolean; source?: string; omitObservation?: boolean } = {}) {
+async function harness(options: { mode?: Mode; child?: boolean; source?: string; omitObservation?: boolean; runtimeReleaseRequested?: boolean } = {}) {
   const root = await mkdtemp("/private/tmp/task183-evidence-");
   const disk = new DiskRecorder(root, options.mode ?? "enabled");
   const clock = new Clock();
@@ -290,7 +301,7 @@ async function harness(options: { mode?: Mode; child?: boolean; source?: string;
   }
   const schedule = compile(`(${declaration(options.source ?? hookSource, "scheduleTaskRelationSplitRuntime", true)})`, environment);
   const request = buildTaskRelationAdjudicationRequest({ logicalQuestionUnit: unit, activeMeetingTask: state.activeMeetingTask });
-  const handle = schedule({ traceId: "trace", taskId: "task-a", request, runtimeReleaseRequested: true,
+  const handle = schedule({ traceId: "trace", taskId: "task-a", request, runtimeReleaseRequested: options.runtimeReleaseRequested ?? true,
     authorizeSourceOperation: () => ({ authorized: true, reason: "source-operation-current" }) });
   await clock.startPending();
   return {
@@ -537,7 +548,7 @@ test("D6 paired completion effects match with disabled, slow and failing disk; b
   for (const fault of ["success", "malformed", "cancel"] as const) {
     let expected: unknown;
     for (const source of baselineSource ? [baselineSource, hookSource] : [hookSource]) {
-      for (const mode of ["enabled", "disabled", "slow", "failing"] as const) {
+      for (const mode of ["enabled", "disabled", "slow", "failing", "close-failed"] as const) {
         const h = await harness({ mode, source });
         try {
           const affinity = await h.affinities(fault);
@@ -570,4 +581,15 @@ test("D6 paired completion effects match with disabled, slow and failing disk; b
     }
   }
   for (const sample of samples) t.diagnostic(JSON.stringify(sample));
+});
+
+test("RC3: a retained close-failed owner cannot activate observation-only inference", async () => {
+  for (const mode of ["disabled", "close-failed"] as const) {
+    const h = await harness({ mode, runtimeReleaseRequested: false });
+    try {
+      assert.equal(h.executions.length, 0);
+      assert.equal(h.handle, undefined);
+      assert.equal(h.disk.manager.getState().active, false);
+    } finally { await h.close(); }
+  }
 });

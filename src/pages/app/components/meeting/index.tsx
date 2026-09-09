@@ -159,6 +159,15 @@ import {
   useState,
 } from "react";
 import { WhiteboardViewer } from "./whiteboard-viewer";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 
 const statusLabel = {
   idle: "Ready",
@@ -1911,6 +1920,8 @@ export const MeetingAssistant = ({
                 sessionRecording={meeting.sessionRecording}
                 scriptedValidation={meeting.scriptedValidation}
                 onSessionRecordingChange={meeting.setSessionRecordingEnabled}
+                onSessionRecordingStop={meeting.stopSessionRecording}
+                onSessionRecordingAbandon={meeting.abandonSessionRecording}
                 onSessionScriptedValidationChange={
                   meeting.setSessionScriptedValidation
                 }
@@ -4145,6 +4156,8 @@ const ConfigurationsPanel = ({
   sessionRecording,
   scriptedValidation,
   onSessionRecordingChange,
+  onSessionRecordingStop,
+  onSessionRecordingAbandon,
   onSessionScriptedValidationChange,
   runtimeRegression,
   onStartRuntimeRegressionRun,
@@ -4195,6 +4208,13 @@ const ConfigurationsPanel = ({
   sessionRecording: MeetingSessionRecordingState;
   scriptedValidation: boolean;
   onSessionRecordingChange: (enabled: boolean) => void;
+  onSessionRecordingStop: (
+    reason: string,
+    options?: { throwOnError?: boolean }
+  ) => Promise<MeetingSessionRecordingState | undefined>;
+  onSessionRecordingAbandon: (
+    reason: string
+  ) => Promise<MeetingSessionRecordingState | undefined>;
   onSessionScriptedValidationChange: (enabled: boolean) => void;
   runtimeRegression: RuntimeRegressionRunnerPresentation;
   onStartRuntimeRegressionRun: () => Promise<boolean>;
@@ -4208,6 +4228,36 @@ const ConfigurationsPanel = ({
 }) => {
   const [replayLabOpen, setReplayLabOpen] = useState(false);
   const [replayText, setReplayText] = useState("");
+  const [recordingRecoveryError, setRecordingRecoveryError] = useState<string | null>(null);
+  useEffect(() => {
+    setRecordingRecoveryError(null);
+  }, [sessionRecording.sessionId]);
+
+  const retryRecordingClose = useCallback(async () => {
+    if (sessionRecording.lifecycle !== "close-failed") return;
+    setRecordingRecoveryError(null);
+    try {
+      const result = await onSessionRecordingStop("manual-close-retry", { throwOnError: true });
+      if (!result || result.lifecycle !== "idle") {
+        throw new Error("Recording close is still unresolved.");
+      }
+    } catch (error) {
+      setRecordingRecoveryError(error instanceof Error ? error.message : String(error));
+    }
+  }, [sessionRecording.lifecycle, onSessionRecordingStop]);
+
+  const abandonRecordingClose = useCallback(async () => {
+    if (sessionRecording.lifecycle !== "close-failed") return;
+    setRecordingRecoveryError(null);
+    try {
+      const result = await onSessionRecordingAbandon("explicit-settings-abandon");
+      if (!result || result.lifecycle !== "idle") {
+        throw new Error("Recording close could not be abandoned.");
+      }
+    } catch (error) {
+      setRecordingRecoveryError(error instanceof Error ? error.message : String(error));
+    }
+  }, [sessionRecording.lifecycle, onSessionRecordingAbandon]);
 
   const submitReplayText = useCallback(async () => {
     const accepted = await onSubmitRuntimeRegressionText(replayText);
@@ -4764,7 +4814,8 @@ const ConfigurationsPanel = ({
                   checked={sessionRecording.active}
                   disabled={
                     sessionRecording.lifecycle === "starting" ||
-                    sessionRecording.lifecycle === "closing"
+                    sessionRecording.lifecycle === "closing" ||
+                    sessionRecording.lifecycle === "close-failed"
                   }
                   onCheckedChange={onSessionRecordingChange}
                 />
@@ -4790,7 +4841,7 @@ const ConfigurationsPanel = ({
                   />
                 </div>
               ) : null}
-              {sessionRecording.active ? (
+              {sessionRecording.active || sessionRecording.lifecycle === "close-failed" ? (
                 <div className="space-y-1 text-[10px] text-muted-foreground">
                   <div className="flex min-w-0 items-center gap-1">
                     <span className="shrink-0">Session:</span>
@@ -4813,6 +4864,49 @@ const ConfigurationsPanel = ({
                   </div>
                 </div>
               ) : null}
+              {sessionRecording.lifecycle === "close-failed" ? (
+                <div className="space-y-2">
+                  <p role="status" className="text-[10px] text-destructive">
+                    Recording stopped; final save failed. New recordings are blocked.
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <Button type="button" size="sm" variant="outline"
+                      onClick={() => void retryRecordingClose()}>
+                      <RotateCcwIcon className="h-3.5 w-3.5" />
+                      Retry save
+                    </Button>
+                    <Dialog>
+                      <DialogTrigger asChild>
+                        <Button type="button" size="sm" variant="outline">
+                          <XIcon className="h-3.5 w-3.5" />
+                          Abandon close
+                        </Button>
+                      </DialogTrigger>
+                      <DialogContent className="rounded-lg">
+                        <DialogTitle>Abandon this recording close?</DialogTitle>
+                        <DialogDescription>
+                          This ends the in-process retry for this recording. Its folder
+                          will remain on disk and may be incomplete. No files will be
+                          deleted. This does not stop the Meeting or quit Jarvis.
+                        </DialogDescription>
+                        <p className="break-all font-mono text-xs">{sessionRecording.folderPath}</p>
+                        <DialogFooter>
+                          <DialogClose asChild>
+                            <Button type="button" variant="outline">Cancel</Button>
+                          </DialogClose>
+                          <DialogClose asChild>
+                            <Button type="button" variant="destructive"
+                              onClick={() => void abandonRecordingClose()}>
+                              <XIcon className="h-3.5 w-3.5" />
+                              Confirm abandon
+                            </Button>
+                          </DialogClose>
+                        </DialogFooter>
+                      </DialogContent>
+                    </Dialog>
+                  </div>
+                </div>
+              ) : null}
               {sessionRecording.lifecycle === "starting" ||
               sessionRecording.lifecycle === "closing" ? (
                 <div className="text-[10px] text-muted-foreground">
@@ -4821,9 +4915,9 @@ const ConfigurationsPanel = ({
                     : "Finalizing recording..."}
                 </div>
               ) : null}
-              {sessionRecording.lastError ? (
-                <div className="text-[10px] text-red-600">
-                  {sessionRecording.lastError}
+              {recordingRecoveryError || sessionRecording.lastError ? (
+                <div role="alert" className="break-words text-[10px] text-red-600">
+                  {recordingRecoveryError || sessionRecording.lastError}
                 </div>
               ) : null}
             </div>

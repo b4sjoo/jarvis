@@ -100,17 +100,21 @@ export class MeetingContextManager {
     };
   }
 
-  reset(options: MeetingContextManagerOptions = {}) {
+  reset(options: MeetingContextManagerOptions & {
+    sessionId?: string;
+    interviewSessionContext?: InterviewSessionContext;
+  } = {}) {
     const interviewSessionBrief =
       options.interviewSessionBrief ?? this.state.interviewSessionBrief;
     this.taskRuntimeState = createMeetingTaskRuntimeState();
     this.state = {
-      sessionId: createMeetingId("meeting"),
+      sessionId: options.sessionId ?? createMeetingId("meeting"),
       startedAt: Date.now(),
       transcriptTurns: [],
       screenObservations: [],
       interviewSessionBrief: cloneInterviewSessionBrief(interviewSessionBrief),
       interviewSessionContext:
+        cloneInterviewSessionContext(options.interviewSessionContext) ??
         createInterviewSessionContextFromBrief(interviewSessionBrief),
       rollingSummary: "",
       userProfileContext: options.userProfileContext ?? "",

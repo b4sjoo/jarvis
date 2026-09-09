@@ -317,6 +317,7 @@ import {
   InterviewSubtaskIntent,
   InterviewTaskRelation,
   InterviewSessionBrief,
+  InterviewSessionContext,
   MeetingPrivacyMode,
   PersonalEvidenceDecision,
   PersonalEvidenceGuardrailMode,
@@ -6677,7 +6678,11 @@ export function useMeetingAssistant() {
   );
 
   const resetMeetingRuntimeForNewSession = useCallback(
-    async (reason: string) => {
+    (reason: string, prepared?: {
+      context: PreparationRuntimeContext;
+      interviewSessionBrief: InterviewSessionBrief | undefined;
+      interviewSessionContext: InterviewSessionContext | undefined;
+    }) => {
       const runtimeBoundary = advanceRuntimeEpoch(reason);
       const previousContext = contextManagerRef.current.getState();
       const previousTraceCount = traceStoreRef.current
@@ -6728,7 +6733,11 @@ export function useMeetingAssistant() {
       clearPendingSentenceCompletionForRuntimeReset(reason);
 
       contextManagerRef.current.reset({
-        interviewSessionBrief: previousContext.interviewSessionBrief,
+        sessionId: prepared?.context.meetingSessionId,
+        interviewSessionContext: prepared?.interviewSessionContext,
+        interviewSessionBrief: prepared
+          ? prepared.interviewSessionBrief
+          : previousContext.interviewSessionBrief,
         userProfileContext: previousContext.userProfileContext,
         glossary: previousContext.glossary,
       });
@@ -6767,11 +6776,10 @@ export function useMeetingAssistant() {
         displayTranscriptWindow: undefined,
       }));
 
-      const preparationPin = await pinPreparationRuntimeForSession(
-        contextState.sessionId
-      );
-
-      return {
+      const finishBoundary = (preparationPin: {
+        applied: boolean;
+        context: PreparationRuntimeContext;
+      }) => ({
         ...runtimeBoundary,
         reason,
         hadExistingRuntimeState,
@@ -6817,7 +6825,30 @@ export function useMeetingAssistant() {
         ],
         currentSessionOnly: true,
         backfill: false,
-      };
+      });
+
+      if (prepared) {
+        preparationPinRequestRef.current += 1;
+        preparationContextRevisionRef.current =
+          prepared.context.preparationContextRevision;
+        preparationRuntimeContextRef.current = prepared.context;
+        latestPreparationSelectionRevisionRef.current = Math.max(
+          latestPreparationSelectionRevisionRef.current,
+          prepared.context.selectionRevision
+        );
+        preparationProvenanceLedgerRef.current =
+          new PreparationRuntimeProvenanceLedger(prepared.context);
+        setPreparationArtifactUses([]);
+        setPreparationArtifactEvaluations([]);
+        setState((previous) => ({
+          ...previous,
+          preparationRuntime: toPreparationRuntimePresentation(prepared.context),
+        }));
+        return finishBoundary({ applied: true, context: prepared.context });
+      }
+      return pinPreparationRuntimeForSession(contextState.sessionId).then(
+        finishBoundary
+      );
     },
     [
       abortActiveSttRequests,
@@ -8243,59 +8274,108 @@ export function useMeetingAssistant() {
     };
   }) => {
     try {
-      const resetBoundary = await resetMeetingRuntimeForNewSession(
-        "session-recording-started"
-      );
-      const contextState = contextManagerRef.current.getState();
-      sessionRecordedTraceIdsRef.current.clear();
+      const requestedEpoch = runtimeEpochRef.current;
+      const requestedSessionId = contextManagerRef.current.getState().sessionId;
+      let resetBoundary:
+        | ReturnType<typeof resetMeetingRuntimeForNewSession>
+        | undefined;
       const taxonomyAdjudicationRoute =
         resolveTaxonomyAdjudicationModelRouteFromSnapshot({
           snapshot: meetingModelProviderSnapshotRef.current,
           reason: "session-recording-provider-summary",
         });
-      const sessionRecording = await sessionRecordingManagerRef.current?.start({
-        meetingSessionId: contextState.sessionId,
-        settings: state.settings,
-        interviewSessionBrief: contextState.interviewSessionBrief,
-        interviewSessionContext: contextState.interviewSessionContext,
-        providerSummary: buildSessionRecordingProviderSummary({
-          mainProvider: aiProvider,
-          codingProvider: codingAiProvider,
-          taxonomyAdjudicationProvider: taxonomyAdjudicationRoute.provider,
-          sttProvider,
-          mainProviderId: selectedAIProvider.provider,
-          codingProviderId: state.settings.codingModel.provider,
-          taxonomyAdjudicationProviderId:
-            taxonomyAdjudicationRoute.resolvedProviderId,
-          sttProviderId: selectedSttProvider.provider,
-          taxonomyAdjudicationConfigurationStatus:
-            taxonomyAdjudicationRoute.configurationStatus,
-          taxonomyAdjudicationInheritedVariableKeys:
-            taxonomyAdjudicationRoute.inheritedVariableKeys,
-          taxonomyAdjudicationMissingRequiredVariables:
-            taxonomyAdjudicationRoute.missingRequiredVariables,
-        }),
-        scriptedValidation:
-          Boolean(options?.scriptedValidationLock) ||
-          scriptedValidationRef.current,
-        scriptedValidationLock: options?.scriptedValidationLock,
-      });
-      sessionRecordingManagerRef.current?.recordPreparationRuntimeContext(
-        preparationProvenanceLedgerRef.current.getSnapshot()
-      );
-      sessionRecordingManagerRef.current?.recordRuntimeBoundary(
-        "runtime-reset",
-        {
-          ...resetBoundary,
-          transcriptTurns: contextState.transcriptTurns.length,
-          screenObservations: contextState.screenObservations.length,
-          hasActiveMeetingTask: Boolean(contextState.activeMeetingTask),
-          ...getActiveMeetingTaskTraceMetadata(contextState.activeMeetingTask),
-          hasActiveScreenTask: Boolean(contextState.taskRuntime.screenAttachment),
-          hasActiveInterviewTask: Boolean(contextState.taskRuntime.parent),
-          completedTraces: 0,
+      const sessionRecording = await sessionRecordingManagerRef.current?.start(async () => {
+        const contextState = contextManagerRef.current.getState();
+        const preparationRevision = preparationContextRevisionRef.current;
+        const preparationRequest = preparationPinRequestRef.current;
+        const meetingSessionId = createMeetingId("meeting");
+        const preparationContext = await loadPreparationRuntimeContext({
+          meetingSessionId,
+          preparationContextRevision: preparationRevision + 1,
+          loader: {
+            readSelection: () =>
+              interviewPreparationSnapshotService.getCurrentContext(),
+            readSelectedSnapshot: () =>
+              interviewPreparationSnapshotService.getCurrentSnapshot(),
+          },
+        });
+        if (preparationContext.loadState === "failed") {
+          throw new Error(
+            preparationContext.loadFailure?.message ?? "Recording Preparation failed."
+          );
         }
-      );
+        const interviewSessionContext = createInterviewSessionContextFromBrief(
+          contextState.interviewSessionBrief
+        );
+        return {
+          meetingSessionId,
+          settings: state.settings,
+          interviewSessionBrief: contextState.interviewSessionBrief,
+          interviewSessionContext,
+          preparationRuntimeContext: new PreparationRuntimeProvenanceLedger(
+            preparationContext
+          ).getSnapshot(),
+          isCurrent: () =>
+            runtimeEpochRef.current === requestedEpoch &&
+            contextManagerRef.current.getState().sessionId === requestedSessionId &&
+            preparationContextRevisionRef.current === preparationRevision &&
+            preparationPinRequestRef.current === preparationRequest &&
+            JSON.stringify(contextManagerRef.current.getState().interviewSessionBrief) ===
+              JSON.stringify(contextState.interviewSessionBrief),
+          commit: () => {
+            resetBoundary = resetMeetingRuntimeForNewSession(
+              "session-recording-started",
+              {
+                context: preparationContext,
+                interviewSessionBrief: contextState.interviewSessionBrief,
+                interviewSessionContext,
+              }
+            );
+            sessionRecordedTraceIdsRef.current.clear();
+          },
+          providerSummary: buildSessionRecordingProviderSummary({
+            mainProvider: aiProvider,
+            codingProvider: codingAiProvider,
+            taxonomyAdjudicationProvider: taxonomyAdjudicationRoute.provider,
+            sttProvider,
+            mainProviderId: selectedAIProvider.provider,
+            codingProviderId: state.settings.codingModel.provider,
+            taxonomyAdjudicationProviderId:
+              taxonomyAdjudicationRoute.resolvedProviderId,
+            sttProviderId: selectedSttProvider.provider,
+            taxonomyAdjudicationConfigurationStatus:
+              taxonomyAdjudicationRoute.configurationStatus,
+            taxonomyAdjudicationInheritedVariableKeys:
+              taxonomyAdjudicationRoute.inheritedVariableKeys,
+            taxonomyAdjudicationMissingRequiredVariables:
+              taxonomyAdjudicationRoute.missingRequiredVariables,
+          }),
+          scriptedValidation:
+            Boolean(options?.scriptedValidationLock) ||
+            scriptedValidationRef.current,
+          scriptedValidationLock: options?.scriptedValidationLock,
+        };
+      });
+      if (resetBoundary) {
+        const committedBoundary = await resetBoundary;
+        const contextState = contextManagerRef.current.getState();
+        sessionRecordingManagerRef.current?.recordPreparationRuntimeContext(
+          preparationProvenanceLedgerRef.current.getSnapshot()
+        );
+        sessionRecordingManagerRef.current?.recordRuntimeBoundary(
+          "runtime-reset",
+          {
+            ...committedBoundary,
+            transcriptTurns: contextState.transcriptTurns.length,
+            screenObservations: contextState.screenObservations.length,
+            hasActiveMeetingTask: Boolean(contextState.activeMeetingTask),
+            ...getActiveMeetingTaskTraceMetadata(contextState.activeMeetingTask),
+            hasActiveScreenTask: Boolean(contextState.taskRuntime.screenAttachment),
+            hasActiveInterviewTask: Boolean(contextState.taskRuntime.parent),
+            completedTraces: 0,
+          }
+        );
+      }
 
       if (sessionRecording) {
         if (sessionRecording.scriptedValidationForced) {
@@ -8334,7 +8414,13 @@ export function useMeetingAssistant() {
     resetMeetingRuntimeForNewSession,
   ]);
 
-  const stopSessionRecording = useCallback(async (reason = "manual") => {
+  const stopSessionRecording = useCallback(async (
+    reason = "manual",
+    options?: { throwOnError?: boolean }
+  ) => {
+    const priorRecording = sessionRecordingManagerRef.current?.getState();
+    const recoveringError = priorRecording?.lifecycle === "close-failed"
+      ? priorRecording.lastError : undefined;
     try {
       const sessionRecording =
         await sessionRecordingManagerRef.current?.stop(reason);
@@ -8342,10 +8428,11 @@ export function useMeetingAssistant() {
         setState((previous) => ({
           ...previous,
           sessionRecording,
+          error: recoveringError && !sessionRecording.lastError && previous.error === recoveringError
+            ? null : previous.error,
         }));
       }
-      scriptedValidationRef.current = false;
-      setScriptedValidation(false);
+      return sessionRecording;
     } catch (error) {
       const message =
         error instanceof Error
@@ -8359,11 +8446,36 @@ export function useMeetingAssistant() {
           sessionRecordingManagerRef.current?.getState() ??
           previous.sessionRecording,
       }));
+      if (options?.throwOnError) throw error;
+      return undefined;
+    } finally {
+      scriptedValidationRef.current = false;
+      setScriptedValidation(false);
     }
+  }, []);
+
+  const abandonSessionRecording = useCallback(async (reason = "manual") => {
+    const priorRecording = sessionRecordingManagerRef.current?.getState();
+    const recoveringError = priorRecording?.lifecycle === "close-failed"
+      ? priorRecording.lastError : undefined;
+    const sessionRecording =
+      await sessionRecordingManagerRef.current?.abandon(reason);
+    if (sessionRecording) {
+      setState((previous) => ({
+        ...previous,
+        sessionRecording,
+        error: recoveringError && !sessionRecording.lastError && previous.error === recoveringError
+          ? null : previous.error,
+      }));
+    }
+    scriptedValidationRef.current = false;
+    setScriptedValidation(false);
+    return sessionRecording;
   }, []);
 
   const setSessionRecordingEnabled = useCallback(
     (enabled: boolean) => {
+      if (shutdownRequestedRef.current) return;
       if (enabled) {
         void startSessionRecording();
       } else {
@@ -37115,6 +37227,8 @@ export function useMeetingAssistant() {
     setMicrophoneContextEnabled,
     toggleMicrophoneContext,
     setSessionRecordingEnabled,
+    stopSessionRecording,
+    abandonSessionRecording,
     scriptedValidation,
     setSessionScriptedValidation,
     startRuntimeRegressionRun,
