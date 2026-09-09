@@ -146,7 +146,6 @@ test("builds a bounded continuity capsule without prior generated answers", () =
     playbookPhase: "design_framing",
     phaseProgress: { requirement_clarification: true },
     supportedFactAnchors: [],
-    latestUsefulAnswer: "A generated answer that must not enter retrieval.",
     canonicalQuestionSourceTurnIds: ["turn-parent"],
     createdAt: 1,
     updatedAt: 1,
@@ -156,6 +155,9 @@ test("builds a bounded continuity capsule without prior generated answers", () =
     parent: parent,
     runtimeRevision: 1,
   });
+  assert.ok(task);
+  task.parent.latestUsefulAnswer = "A generated answer that must not enter retrieval.";
+  assert.equal("latestUsefulAnswer" in parent, false);
   const packet = buildAdvisorEvidencePacket({
     currentQuestion: {
       text: "How should location updates be stored?",
@@ -171,6 +173,7 @@ test("builds a bounded continuity capsule without prior generated answers", () =
     packet.continuity?.capsule ?? "",
     /generated answer/
   );
+  assert.doesNotMatch(buildAdvisorEvidenceRetrievalQuery(packet, "live"), /generated answer/);
 });
 
 test("records evidence roles without copying private Brief text", () => {

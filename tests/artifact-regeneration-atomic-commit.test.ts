@@ -70,8 +70,6 @@ function parent(stable: StableAnswerRevision): ActiveInterviewParent {
     playbookPhase: "design_framing",
     phaseProgress: { requirement_clarification: true },
     supportedFactAnchors: ["fact-1"],
-    latestUsefulAnswer: "Keep latest useful answer.",
-    previousUsefulAnswer: "Keep previous useful answer.",
     whiteboardArtifact: {
       id: "whiteboard-1",
       parentTaskId: "parent-1",
@@ -260,10 +258,7 @@ test("co-commits the canonical Whiteboard and Stable Answer section", () => {
     visibleStable.suggestion.meetingAnswer?.sections.answer,
     fixture.currentStable.suggestion.meetingAnswer?.sections.answer
   );
-  assert.equal(
-    committedParent.latestUsefulAnswer,
-    fixture.currentParent.latestUsefulAnswer
-  );
+  assert.equal("latestUsefulAnswer" in committedParent, false);
   const display = resolveWhiteboardArtifactDisplay({
     activeParentTaskId: committedParent.id,
     activeParentQuestionType: committedParent.stableKind,

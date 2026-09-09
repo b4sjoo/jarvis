@@ -628,7 +628,6 @@ export interface ActiveScreenTask {
   observationId: string;
   createdAt: number;
   updatedAt: number;
-  expiresAt?: number;
   question?: string;
   kind: ScreenQuestionType;
   language?: string;
@@ -705,7 +704,6 @@ export interface ActiveInterviewChild {
   relation: "child-probe";
   intent: InterviewSubtaskIntent;
   question: string;
-  compactSummary?: string;
   artifactId?: string;
   basedOnTurnIds: string[];
   basedOnObservationIds: string[];
@@ -838,12 +836,9 @@ export interface ActiveInterviewParent {
   phaseProgress: Record<string, boolean>;
   projectBinding?: ProjectBinding;
   supportedFactAnchors: string[];
-  latestUsefulAnswer?: string;
-  previousUsefulAnswer?: string;
   whiteboardArtifact?: WhiteboardArtifact;
   createdAt: number;
   updatedAt: number;
-  expiresAt?: number;
   originQuestionId?: string;
   startTurnId?: string;
   startObservationId?: string;

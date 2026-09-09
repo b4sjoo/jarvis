@@ -12,11 +12,12 @@ import { createEffectiveQuestionSourceRecord, EffectiveQuestionSourceLedger, res
 import { buildEffectiveAdvisorSettlementView, buildSettledAdvisorExecutionPlan, formatSettledAdvisorExecutionPlanForTrace, authorizeSettledAdvisorExecutionPlan } from "../src/lib/meeting/settled-advisor-execution-plan.js";
 import * as responseTargets from "../src/lib/meeting/response-action-target.js";
 import { selectInterviewPlaybook } from "../src/lib/meeting/interview-playbook.js";
-import type { MeetingContextState } from "../src/lib/meeting/types.js";
+import type { MeetingContextState, TranscriptTurn } from "../src/lib/meeting/types.js";
 import type { StableAnswerRevision } from "../src/lib/meeting/stable-answer.js";
 import { commitStableAnswerRevision, commitStableArtifactOnlyRevision } from "../src/lib/meeting/stable-answer.js";
 import { parseMeetingAnswer, buildMeetingAnswerSummary } from "../src/lib/meeting/meeting-answer.js";
-import { commitVisibleUsefulAnswerToParent } from "../src/lib/meeting/interview-task-continuity.js";
+import { prepareBoundedGeneratedContinuity, type BoundedGeneratedContinuityState } from "../src/lib/meeting/bounded-recent-history.js";
+import { createEffectiveAdvisorBaseBuilder } from "./helpers/advisor-base-context-hook.js";
 import * as phase from "../src/lib/meeting/active-branch-phase.js";
 import * as history from "../src/lib/meeting/playbook-phase-history.js";
 import * as manual from "../src/lib/meeting/manual-runtime-action.js";
@@ -183,6 +184,7 @@ function actionHarness(f = screenFixture()) {
   const runtimeCommands: string[] = [];
   const historyRef = { current: history.createPlaybookPhaseHistoryState() };
   const stableRef = { current: visible(f) };
+  const continuityRef = { current: { recentCapsules: [] } as BoundedGeneratedContinuityState };
   const currentRef = { current: undefined as typeof f.unit | undefined };
   const context = f.context;
   const environment: any = {
@@ -191,12 +193,14 @@ function actionHarness(f = screenFixture()) {
     state: { status: "listening", activeMeetingTask: context.activeMeetingTask },
     currentSuggestionText: "Answer: Use a sliding window.",
     logicalQuestionUnitRef: currentRef, stableAnswerRevisionRef: stableRef,
+    recentAdvisorContinuityRef: continuityRef,
     runtimeEpochRef: { current: 3 }, effectiveQuestionSourceLedgerRef: { current: f.ledger },
     contextManagerRef: { current: {
       getState: () => context,
       clearExpiredActiveMeetingTask: () => {
         const result = reduceMeetingTaskRuntimeMutation({ state: context.taskRuntime, mutation: {
           id: "fixture-expire", kind: "expire", reason: "active-task-expiration", now: Date.now(),
+          deadlineControl: {},
         } });
         if (result.mutationApplied) {
           context.taskRuntime = result.state;
@@ -303,11 +307,18 @@ function actionHarness(f = screenFixture()) {
       assert.ok(result.stable);
       stableRef.current = result.stable;
     } else {
-      stableRef.current = commitStableAnswerRevision({ current: previous, candidate, authorizedArtifacts: plan.requestedArtifacts, taskId: f.parent.id, logicalQuestionUnitId: unit.id, logicalQuestionRevision: unit.revision, sessionId: "session", runtimeEpoch: 3, questionSourceHash: provisional.sourceHash, settlementId: settled.settlementId, settlementSnapshot: settled })!;
+      stableRef.current = commitStableAnswerRevision({ current: previous, candidate, authorizedArtifacts: plan.requestedArtifacts, taskId: f.parent.id, sectionOwner: binding.owner, logicalQuestionUnitId: unit.id, logicalQuestionRevision: unit.revision, sessionId: "session", runtimeEpoch: 3, questionSourceHash: provisional.sourceHash, settlementId: settled.settlementId, settlementSnapshot: settled })!;
       assert.ok(stableRef.current);
-      const prepare = evaluate(`(${declaration("prepareGenerationDerivedTaskRuntimeTransition").getText(hook)})`, { buildMeetingAnswerSummary, commitVisibleUsefulAnswerToParent });
+      const prepare = evaluate(`(${declaration("prepareGenerationDerivedTaskRuntimeTransition").getText(hook)})`, { buildMeetingAnswerSummary });
       const publication = prepare({ currentRevision: context.taskRuntime.revision, currentParent: context.taskRuntime.parent, stable: stableRef.current, commitLatestUsefulAnswer: plan.artifactPolicy.allowLatestUsefulAnswer && binding.owner.kind === "parent-mainline" });
-      if (publication.transition) environment.submitTaskRuntimeTransition(environment.contextManagerRef.current, publication.transition);
+      assert.equal(publication.transition, undefined);
+      continuityRef.current = prepareBoundedGeneratedContinuity({
+        state: continuityRef.current,
+        stable: stableRef.current,
+        currentOwner: { sessionId: "session", runtimeEpoch: 3, parentTaskId: f.parent.id, childTaskId: context.activeMeetingTask?.child?.id },
+        parentRevision: context.taskRuntime.parent?.revisions ?? 0,
+        parentSummaryAllowed: publication.latestUsefulAnswerCommitted,
+      });
     }
     const trace = traces.find((t) => t.id === job.traceId)!;
     Object.assign(trace.metadata, formatSettledAdvisorExecutionPlanForTrace(plan, authorization), { advisorOutputCommittedToUi: true, currentQuestionSettlementRelation: settled.relation });
@@ -318,7 +329,7 @@ function actionHarness(f = screenFixture()) {
     const node = declaration(name) as ts.VariableDeclaration;
     return evaluate(`(${(node.initializer as ts.CallExpression).arguments[0].getText(hook)})`, environment);
   };
-  return { f, context, events, plans, observations, traces, runtimeCommands, stableRef, currentRef, apply: callback("applyResponseAction"), regenerate: callback("regenerateSuggestion"), environment };
+  return { f, context, events, plans, observations, traces, runtimeCommands, stableRef, continuityRef, currentRef, apply: callback("applyResponseAction"), regenerate: callback("regenerateSuggestion"), environment };
 }
 
 // Keep the real callback/factory and executor admission in one test path. Only
@@ -335,19 +346,24 @@ function withRegenerateExecution(h: ReturnType<typeof actionHarness>) {
   };
   Object.assign(env, advisorJobs, advisorIntent, runtimeCommit, logicalOwnership, {
     decideRefreshAuthority, resolveResponseOpportunityRefreshAuthority,
-    recentAdvisorContinuityRef: { current: [] },
+    recentAdvisorContinuityRef: h.continuityRef,
     responseActionRevisionRef: { current: 0 }, manualCorrectionRevisionRef: { current: 0 },
     currentQuestionLineageRef: { current: undefined },
     activeAdvisorJobRef: { current: undefined },
     runtimeActiveRef: { get current() { return control.runtimeActive; } },
     responseOpportunityGenerationGateRef: { current: { findOperationId: () => undefined, read: () => undefined } },
   });
-  env.contextManagerRef.current.buildAdvisorPromptContext = () => ({
-    transcript: h.context.transcriptTurns.map(t => `${t.speaker}: ${t.text}`).join("\n"),
+  env.contextManagerRef.current.buildAdvisorPromptContext = (projectTranscript?: (turns: TranscriptTurn[], sessionId: string) => string) => ({
+    transcript: projectTranscript
+      ? projectTranscript(h.context.transcriptTurns, h.context.sessionId)
+      : h.context.transcriptTurns.map(t => `${t.speaker}: ${t.text}`).join("\n"),
     latestTurn: h.context.transcriptTurns.at(-1),
     screenContext: h.f.unit.normalizedText, taskRuntime: h.context.taskRuntime,
     activeMeetingTask: h.context.activeMeetingTask, rollingSummary: "", userProfileContext: "", glossaryText: "",
   });
+  env.buildEffectiveAdvisorBasePromptContext = createEffectiveAdvisorBaseBuilder(
+    env.contextManagerRef.current, h.f.ledger, env.runtimeEpochRef, undefined, h.continuityRef
+  );
   const callbackNode = declaration("buildAdvisorJob") as ts.VariableDeclaration;
   env.buildAdvisorJob = evaluate(`(${(callbackNode.initializer as ts.CallExpression).arguments[0].getText(hook)})`, env);
   env.activateAdvisorJob = (job: any) => { env.activeAdvisorJobRef.current = job; return true; };
@@ -375,7 +391,6 @@ function withRegenerateExecution(h: ReturnType<typeof actionHarness>) {
       pendingAdvisorGenerationSupersessionRef: { current: undefined },
       settledExecutionPlan: undefined, answerGenerationLease: undefined,
       readRuntimeCommitSnapshot: () => runtimeCommit.buildRuntimeCommitSnapshot({ runtimeEpoch: env.runtimeEpochRef.current, contextState: h.context }),
-      trySameOwnerAnswerCommitRebase: () => { throw new Error("fixture does not exercise a revision rebase"); },
       terminalizeAuthorizationRejection: () => {}, updateForceAdviseTargetForAdvisorOutcome: () => {},
       finishRunningAdvisorJobTrace: (job: any, status: string, metadata: any, reason: string) => {
         env.traceStoreRef.current.updateMetadata(job.traceId, metadata);
@@ -539,17 +554,17 @@ test("real manual ingress composes Next Next Back Regenerate and Artifacts witho
   await h.apply("next-phase");
   assert.equal(h.context.taskRuntime.parent?.playbookPhase, "implementation_validation");
   const code = h.stableRef.current.suggestion.meetingAnswer?.sections.code;
-  const oldAnswer = h.context.taskRuntime.parent?.latestUsefulAnswer;
+  const oldAnswer = h.continuityRef.current.latestUsefulAnswer;
   h.currentRef.current = { ...h.f.unit, id: "ambient-new-question", revision: 9 };
   await h.regenerate();
   assert.equal(h.plans.length, 3, JSON.stringify(h.events));
-  assert.notEqual(h.context.taskRuntime.parent?.latestUsefulAnswer, oldAnswer);
+  assert.notEqual(h.continuityRef.current.latestUsefulAnswer, oldAnswer);
   assert.deepEqual(h.stableRef.current.suggestion.meetingAnswer?.sections.code, code);
   const answerBeforeArtifacts = h.stableRef.current.suggestion.meetingAnswer?.sections.answer;
-  const continuityBeforeArtifacts = h.context.taskRuntime.parent?.latestUsefulAnswer;
+  const continuityBeforeArtifacts = h.continuityRef.current.latestUsefulAnswer;
   await h.apply("regenerate-artifacts");
   assert.deepEqual(h.stableRef.current.suggestion.meetingAnswer?.sections.answer, answerBeforeArtifacts);
-  assert.equal(h.context.taskRuntime.parent?.latestUsefulAnswer, continuityBeforeArtifacts);
+  assert.equal(h.continuityRef.current.latestUsefulAnswer, continuityBeforeArtifacts);
   assert.notDeepEqual(h.stableRef.current.suggestion.meetingAnswer?.sections.code, code);
   await h.apply("previous-phase");
   assert.equal(h.plans.length, 5);
@@ -647,7 +662,7 @@ test("active Coding child owns manual phase and retains its identity independent
   assert.deepEqual(h.plans[0].taskMutationPolicy, { kind: "set-phase", owner: { kind: "child", id: childId }, phase: "implementation_validation" });
   assert.equal(h.context.taskRuntime.parent?.playbookPhase, parentPhase);
   assert.equal(h.context.taskRuntime.parent?.child?.id, childId);
-  assert.equal(h.context.taskRuntime.parent?.latestUsefulAnswer, undefined);
+  assert.equal(h.continuityRef.current.latestUsefulAnswer, undefined);
   assert.equal(selectSource({ currentLogicalQuestionUnit: f.unit, effectiveQuestionSources: f.ledger.list(), meetingContext: h.context, runtimeEpoch: 3, preferScreen: true, phaseOwner: { kind: "parent", id: f.parent.id } }), undefined);
   await h.apply("next-phase");
   assert.equal(h.plans.length, 1);

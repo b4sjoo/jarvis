@@ -127,8 +127,8 @@ test("expires parent and screen attachment through one runtime mutation", () => 
       kind: "commit-transition",
       transition: "create-parent",
       reason: "seed",
-      parent: parent({ expiresAt: 50 }),
-      screenAttachment: screen({ expiresAt: 50 }),
+      parent: parent(),
+      screenAttachment: screen(),
     },
   }).state;
   const result = reduceMeetingTaskRuntimeMutation({
@@ -138,12 +138,20 @@ test("expires parent and screen attachment through one runtime mutation", () => 
       kind: "expire",
       reason: "timer",
       now: 50,
+      deadlineControl: {
+        parent: { ownerId: "parent-1", deadline: 50 },
+        screen: { ownerId: "screen-1", deadline: 50 },
+      },
     },
   });
 
   assert.equal(result.mutationApplied, true);
+  assert.equal(result.state.revision, state.revision + 1);
+  assert.equal(result.state.lastMutation?.kind, "expire");
   assert.equal(result.state.parent, undefined);
   assert.equal(result.state.screenAttachment, undefined);
+  assert.equal("expiresAt" in state.parent!, false);
+  assert.equal("expiresAt" in state.screenAttachment!, false);
 });
 
 test("accepts a semantic phase command and rejects a mislabeled transition", () => {

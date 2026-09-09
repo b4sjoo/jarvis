@@ -5,8 +5,8 @@ import {
   createSourceOwnedTransitionCandidate,
   sourceOwnedTransitionSurvivesModelOutcome,
   resolveLatestScreenObservationId,
+  type SourceOwnedTransitionCandidate,
 } from "../src/lib/meeting/source-owned-transition-transaction.js";
-import { mergeGeneratedChildContinuity } from "../src/lib/meeting/interview-task-continuity.js";
 import {
   decideInterviewerAssumptionAuthorization,
   decidePlaybookPhaseProgression,
@@ -17,6 +17,73 @@ import type {
   InterviewPlaybookPhase,
   SelectedInterviewPlaybook,
 } from "../src/lib/meeting/types.js";
+
+test("all source-owned mutations keep candidate deadlines out of parent payloads", () => {
+  const cases: {
+    kind: SourceOwnedTransitionCandidate["kind"];
+    preserveChildId?: string;
+  }[] = [
+    { kind: "new-parent" },
+    { kind: "reseed-parent" },
+    { kind: "child-probe" },
+    { kind: "child-probe", preserveChildId: "child-existing" },
+    { kind: "resume-parent" },
+    { kind: "phase-progress" },
+  ];
+  for (const scenario of cases) {
+    const parent = makeParent({
+      child: {
+        id: "child-existing",
+        createdAt: 50,
+        updatedAt: 50,
+        questionType: "field-knowledge",
+        relation: "child-probe",
+        intent: "concept-probe",
+        question: "What is HNSW?",
+        basedOnTurnIds: ["turn-child-root"],
+        basedOnObservationIds: [],
+      },
+    });
+    const candidate = createSourceOwnedTransitionCandidate({
+      sessionId: "session-a",
+      runtimeEpoch: 3,
+      source: "voice",
+      sourceTurnIds: ["turn-next"],
+      existingTask: parent,
+      relation: "new-parent",
+      authoritySource: "accepted-transcript",
+      mutationAuthorized: true,
+      questionType: "general-system-design",
+      question: "Design a ticket selling system.",
+      playbook: makePlaybook(
+        "general_system_design",
+        "general-system-design",
+        "requirement_clarification"
+      ),
+      expiresAt: 60_100,
+      now: 100,
+    });
+    assert.ok(candidate);
+    const result = prepareSourceOwnedTransition({
+      candidate: { ...candidate, ...scenario },
+      currentTask: parent,
+      currentSessionId: "session-a",
+      currentRuntimeEpoch: 3,
+      now: 110,
+    });
+
+    assert.equal(result.mutationApplied, true, scenario.kind);
+    assert.equal(result.candidate.expiresAt, 60_100);
+    assert.ok(result.task);
+    assert.equal(result.task.updatedAt, 110);
+    assert.equal("expiresAt" in result.task, false, scenario.kind);
+    assert.equal("latestUsefulAnswer" in result.task, false, scenario.kind);
+    assert.equal("previousUsefulAnswer" in result.task, false, scenario.kind);
+    if (result.task.child) {
+      assert.equal("compactSummary" in result.task.child, false, scenario.kind);
+    }
+  }
+});
 
 test("commits a child before output and preserves parent artifacts", () => {
   const parent = makeParent();
@@ -150,7 +217,7 @@ test("preserves active child identity for a settled same-branch follow-up", () =
   assert.equal(result.task?.whiteboardArtifact, parent.whiteboardArtifact);
 });
 
-test("carries one source-owned child through generation, follow-up, and parent resume", () => {
+test("carries one source-owned child through follow-up and parent resume", () => {
   const parent = makeParent();
   const attachCandidate = createSourceOwnedTransitionCandidate({
     sessionId: "session-a",
@@ -183,16 +250,7 @@ test("carries one source-owned child through generation, follow-up, and parent r
   });
   assert.ok(attached.task?.child);
 
-  const generated = mergeGeneratedChildContinuity({
-    sourceOwnedChild: attached.task.child,
-    generatedChild: {
-      ...attached.task.child,
-      compactSummary: "Implemented the loss function with the required edge cases.",
-      updatedAt: 120,
-    },
-    now: 120,
-  });
-  const afterGeneration = { ...attached.task, child: generated };
+  const child = attached.task.child;
   const followupCandidate = createSourceOwnedTransitionCandidate({
     sessionId: "session-a",
     runtimeEpoch: 3,
@@ -200,8 +258,8 @@ test("carries one source-owned child through generation, follow-up, and parent r
     sourceTurnIds: ["turn-child-followup"],
     logicalQuestionUnitId: "lqu-child-followup",
     logicalQuestionRevision: 1,
-    existingTask: afterGeneration,
-    preserveChildId: generated.id,
+    existingTask: attached.task,
+    preserveChildId: child.id,
     relation: "child-probe",
     authoritySource: "committed-settlement",
     mutationAuthorized: true,
@@ -218,15 +276,15 @@ test("carries one source-owned child through generation, follow-up, and parent r
   assert.ok(followupCandidate);
   const followed = prepareSourceOwnedTransition({
     candidate: followupCandidate,
-    currentTask: afterGeneration,
+    currentTask: attached.task,
     currentSessionId: "session-a",
     currentRuntimeEpoch: 3,
     now: 140,
   });
-  assert.equal(followed.task?.child?.id, generated.id);
+  assert.equal(followed.task?.child?.id, child.id);
   assert.equal(
     followed.task?.child?.returnCapsule,
-    generated.returnCapsule
+    child.returnCapsule
   );
   assert.equal(
     followed.task?.child?.phaseState?.phase,
@@ -730,7 +788,10 @@ test("creates a screen parent before its model produces an answer", () => {
   assert.equal(result.task?.stableKind, "general-system-design");
   assert.equal(result.task?.startObservationId, "screen-a");
   assert.equal(result.task?.latestScreenObservationId, "screen-a");
-  assert.equal(result.task?.latestUsefulAnswer, undefined);
+  assert.ok(result.task);
+  assert.equal("latestUsefulAnswer" in result.task, false);
+  assert.equal("previousUsefulAnswer" in result.task, false);
+  assert.equal("expiresAt" in result.task, false);
   assert.equal(result.task?.admission?.durability, "durable");
   assert.equal(result.task?.admission?.action, "create-parent");
   assert.equal(

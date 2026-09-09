@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { MeetingContextManager } from "../src/lib/meeting/context-manager.js";
 import { buildSpeechBiasContext } from "../src/lib/meeting/speech-bias.js";
+import { projectBoundedGeneratedContinuityForTask } from "../src/lib/meeting/bounded-recent-history.js";
 import type {
   ActiveInterviewParent,
   ActiveScreenTask,
@@ -20,15 +21,22 @@ test("J1: expired state and prompt reads are pure until the explicit execution b
   t.mock.method(Date, "now", () => clock);
   const manager = new MeetingContextManager();
   setTestTaskRuntime(manager, {
-    screenAttachment: makeScreenTask({ expiresAt: now + 100 }),
-    parent: makeInterviewTask({ source: "screen", expiresAt: now + 100 }),
+    screenAttachment: makeScreenTask(),
+    parent: makeInterviewTask({ source: "screen" }),
+  }, {
+    screen: { ownerId: "screen_task_1", deadline: now + 100 },
+    parent: { ownerId: "parent_1", deadline: now + 100 },
   });
   const original = manager.getTaskRuntimeState();
+  const originalDeadlines = manager.getTaskDeadlineControl();
+  assert.equal("expiresAt" in original.parent!, false);
+  assert.equal("expiresAt" in original.screenAttachment!, false);
   clock = now + 101;
   for (let count = 0; count < 5; count += 1) {
     manager.getState();
     manager.buildAdvisorPromptContext();
     assert.deepEqual(manager.getTaskRuntimeState(), original);
+    assert.deepEqual(manager.getTaskDeadlineControl(), originalDeadlines);
   }
   assert.equal(manager.clearExpiredActiveMeetingTask(), true);
   const executionSnapshot = manager.getState();
@@ -37,6 +45,36 @@ test("J1: expired state and prompt reads are pure until the explicit execution b
   assert.equal(executionSnapshot.taskRuntime.lastMutation?.kind, "expire");
   assert.equal(manager.clearExpiredActiveMeetingTask(), false);
   assert.equal(manager.getTaskRuntimeState().revision, original.revision + 1);
+  assert.equal(manager.getTaskDeadlineControl().parent, undefined);
+  assert.equal(manager.getTaskDeadlineControl().screen, undefined);
+});
+
+test("O1: output deadline updates preserve every canonical task field and revision", () => {
+  const manager = new MeetingContextManager();
+  setTestTaskRuntime(manager, {
+    parent: makeInterviewTask(),
+    screenAttachment: makeScreenTask(),
+  }, {
+    parent: { ownerId: "parent_1", deadline: now + 600_000 },
+    screen: { ownerId: "screen_task_1", deadline: now + 600_000 },
+  });
+  const original = manager.getTaskRuntimeState();
+  const update = manager.prepareTaskDeadlineUpdate({
+    expectedSessionId: manager.getState().sessionId,
+    deadlineDelta: { parent: { ownerId: "parent_1", deadline: now + 660_000 } },
+  });
+  assert.equal(manager.getTaskDeadlineControl().parent?.deadline, now + 600_000);
+  assert.deepEqual(manager.getTaskRuntimeState(), original);
+  assert.equal(manager.installPreparedTaskDeadlineUpdate(update), true);
+  assert.equal(manager.getTaskDeadlineControl().parent?.deadline, now + 660_000);
+  assert.equal(manager.getTaskDeadlineControl().screen?.deadline, now + 600_000);
+  assert.deepEqual(manager.getTaskRuntimeState(), original);
+  assert.equal("expiresAt" in manager.getState().activeMeetingTask!.parent, false);
+  assert.equal("latestUsefulAnswer" in original.parent!, false);
+  assert.equal("previousUsefulAnswer" in original.parent!, false);
+  assert.equal(manager.rollbackPreparedTaskDeadlineUpdate(update), true);
+  assert.equal(manager.getTaskDeadlineControl().parent?.deadline, now + 600_000);
+  assert.deepEqual(manager.getTaskRuntimeState(), original);
 });
 
 test("context manager exposes canonical active meeting task for screen state", () => {
@@ -200,25 +238,29 @@ test("prepares task runtime transitions with reducer parity and bounded rollback
   const direct = new MeetingContextManager();
   const prepared = new MeetingContextManager();
   const parent = makeInterviewTask();
-  setTestTaskRuntime(direct, { parent });
-  setTestTaskRuntime(prepared, { parent });
+  const deadlines = { parent: { ownerId: parent.id, deadline: now + 30_000 } };
+  setTestTaskRuntime(direct, { parent }, deadlines);
+  setTestTaskRuntime(prepared, { parent }, deadlines);
   const before = prepared.getTaskRuntimeState();
+  const beforeDeadlines = prepared.getTaskDeadlineControl();
   const input = {
-    id: "generation-transition",
+    id: "source-context-transition",
     transition: "update-parent-context" as const,
-    reason: "generation-result-atomic-commit",
+    reason: "source-context-atomic-commit",
     expectedRevision: before.revision,
     parent: {
       ...parent,
-      latestUsefulAnswer: "Use the committed answer.",
+      supportedFactAnchors: [...parent.supportedFactAnchors, "source-confirmed fact"],
       revisions: parent.revisions + 1,
     },
+    deadlineDelta: { parent: { ownerId: parent.id, deadline: now + 60_000 } },
     appliedAt: now + 20,
   };
 
   const directResult = direct.commitTaskRuntimeTransition(input);
   const preparedTransition = prepared.prepareTaskRuntimeTransition(input);
   assert.deepEqual(prepared.getTaskRuntimeState(), before);
+  assert.deepEqual(prepared.getTaskDeadlineControl(), beforeDeadlines);
   assert.deepEqual(preparedTransition.result, directResult);
 
   const preparedResult =
@@ -228,12 +270,14 @@ test("prepares task runtime transitions with reducer parity and bounded rollback
     prepared.getTaskRuntimeState(),
     direct.getTaskRuntimeState()
   );
+  assert.deepEqual(prepared.getTaskDeadlineControl(), direct.getTaskDeadlineControl());
 
   assert.equal(
     prepared.rollbackPreparedTaskRuntimeTransition(preparedTransition),
     true
   );
   assert.deepEqual(prepared.getTaskRuntimeState(), before);
+  assert.deepEqual(prepared.getTaskDeadlineControl(), beforeDeadlines);
 });
 
 test("scopes advisor transcript to a re-rooted parent boundary", () => {
@@ -298,17 +342,16 @@ test("freezes only later-confirmed Me facts into the advisor snapshot", () => {
   ]);
 });
 
-test("keeps generated screen answers out of source prompt and speech bias evidence", () => {
+test("keeps screen scaffold and generated continuity out of source prompt and speech bias evidence", () => {
   const manager = new MeetingContextManager();
   setTestTaskRuntime(manager, {
     screenAttachment: makeScreenTask({
       question: "Implement a queue",
-      content: "Answer: Use FAKEGEN as the generated implementation.",
+      content: "Manual scaffold: Use FAKEGEN as the implementation placeholder.",
     }),
     parent: makeInterviewTask({
       stableKind: "coding",
       topic: "Implement a queue",
-      latestUsefulAnswer: "Use FAKEPARENT in the generated answer.",
     }),
   });
 
@@ -316,7 +359,20 @@ test("keeps generated screen answers out of source prompt and speech bias eviden
   assert.match(context.screenContext, /Implement a queue/);
   assert.doesNotMatch(context.screenContext, /FAKEGEN/);
 
-  const bias = buildSpeechBiasContext(manager.getState(), []);
+  const state = manager.getState();
+  const projectedTask = projectBoundedGeneratedContinuityForTask({
+    state: {
+      owner: { sessionId: state.sessionId, runtimeEpoch: 1, parentTaskId: "parent_1" },
+      latestUsefulAnswer: "Use FAKEPARENT in the generated answer.",
+      recentCapsules: [],
+    },
+    task: state.activeMeetingTask,
+    sessionId: state.sessionId,
+    runtimeEpoch: 1,
+  });
+  assert.match(projectedTask!.parent.latestUsefulAnswer!, /FAKEPARENT/);
+  assert.equal("latestUsefulAnswer" in state.taskRuntime.parent!, false);
+  const bias = buildSpeechBiasContext({ ...state, activeMeetingTask: projectedTask }, []);
   assert.equal(
     bias.terms.some((term) =>
       ["FAKEGEN", "FAKEPARENT"].includes(term.term)
@@ -342,14 +398,26 @@ test("keeps full task text out of speech bias while extracting bounded technical
         relation: "child-probe",
         intent: "concept-probe",
         question: "How does HNSW connect to OpenSearch?",
-        compactSummary: "Generated GENSUMMARY must not bias STT.",
         basedOnTurnIds: ["turn_child"],
         basedOnObservationIds: [],
       },
     }),
   });
 
-  const terms = buildSpeechBiasContext(manager.getState(), []).terms.map(
+  const state = manager.getState();
+  const projectedTask = projectBoundedGeneratedContinuityForTask({
+    state: {
+      owner: { sessionId: state.sessionId, runtimeEpoch: 1, parentTaskId: "parent_1" },
+      child: { childTaskId: "child_1", compactSummary: "Generated GENSUMMARY must not bias STT." },
+      recentCapsules: [],
+    },
+    task: state.activeMeetingTask,
+    sessionId: state.sessionId,
+    runtimeEpoch: 1,
+  });
+  assert.match(projectedTask!.child!.compactSummary!, /GENSUMMARY/);
+  assert.equal("compactSummary" in state.taskRuntime.parent!.child!, false);
+  const terms = buildSpeechBiasContext({ ...state, activeMeetingTask: projectedTask }, []).terms.map(
     (term) => term.term
   );
   assert.equal(terms.includes(parentTopic), false);
@@ -368,7 +436,6 @@ function makeScreenTask(
     observationId: "obs_1",
     createdAt: now,
     updatedAt: now + 1,
-    expiresAt: now + 30_000,
     question: "Solve two sum",
     kind: "coding",
     language: "python",
@@ -396,11 +463,8 @@ function makeInterviewTask(
     playbookPhase: "story_selection",
     phaseProgress: {},
     supportedFactAnchors: ["AOS cleanup"],
-    latestUsefulAnswer: "Use AOS cleanup story.",
-    previousUsefulAnswer: "Use model interface story.",
     createdAt: now,
     updatedAt: now + 1,
-    expiresAt: now + 30_000,
     revisions: 1,
     ...overrides,
   };

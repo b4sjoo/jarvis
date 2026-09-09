@@ -18,7 +18,6 @@ import type {
 } from "./types";
 import { isCurrentQuestionLineage } from "./question-lineage.js";
 import {
-  areCompatibleParentContinuityTypes,
   canParentQuestionTypeOwnChild,
   isParentCanonicalQuestionType,
   normalizeCanonicalQuestionType,
@@ -836,13 +835,11 @@ export function applyManualQuestionTypeCorrectionToParent({
   decision,
   correctedPlaybook,
   now = Date.now(),
-  expiresAt,
 }: {
   parent: ActiveInterviewParent;
   decision: ManualQuestionTypeCorrectionDecision;
   correctedPlaybook?: SelectedInterviewPlaybook;
   now?: number;
-  expiresAt?: number;
 }): ActiveInterviewParent {
   if (decision.noOp || !decision.target) return parent;
 
@@ -851,7 +848,6 @@ export function applyManualQuestionTypeCorrectionToParent({
       ...parent,
       child: undefined,
       updatedAt: now,
-      expiresAt,
       revisions: parent.revisions + 1,
     };
   }
@@ -863,7 +859,6 @@ export function applyManualQuestionTypeCorrectionToParent({
       child: {
         ...parent.child,
         questionType: decision.correctedType,
-        compactSummary: undefined,
         phaseState: preserveOrCreateCodingChildPhaseState({
           questionType: decision.correctedType,
           existing: parent.child.phaseState,
@@ -872,7 +867,6 @@ export function applyManualQuestionTypeCorrectionToParent({
         updatedAt: now,
       },
       updatedAt: now,
-      expiresAt,
       revisions: parent.revisions + 1,
     };
   }
@@ -889,10 +883,6 @@ export function applyManualQuestionTypeCorrectionToParent({
   const preserveWhiteboard =
     isWhiteboardParentType(parent.stableKind) &&
     parent.stableKind === decision.correctedType;
-  const preserveAnswerContinuity = areCompatibleParentContinuityTypes(
-    parent.stableKind,
-    decision.correctedType
-  );
 
   return {
     ...parent,
@@ -903,17 +893,10 @@ export function applyManualQuestionTypeCorrectionToParent({
     child: undefined,
     projectBinding: undefined,
     supportedFactAnchors: [],
-    previousUsefulAnswer: preserveAnswerContinuity
-      ? parent.previousUsefulAnswer
-      : undefined,
-    latestUsefulAnswer: preserveAnswerContinuity
-      ? parent.latestUsefulAnswer
-      : undefined,
     whiteboardArtifact: preserveWhiteboard
       ? parent.whiteboardArtifact
       : undefined,
     updatedAt: now,
-    expiresAt,
     revisions: parent.revisions + 1,
   };
 }
@@ -929,7 +912,6 @@ export function buildManualCorrectionParentTransition({
   newParentId,
   source = parent.source,
   now = Date.now(),
-  expiresAt,
 }: {
   parent: ActiveInterviewParent;
   decision: ManualQuestionTypeCorrectionDecision;
@@ -941,7 +923,6 @@ export function buildManualCorrectionParentTransition({
   newParentId: string;
   source?: "screen" | "voice";
   now?: number;
-  expiresAt?: number;
 }): ManualCorrectionParentTransition {
   if (scopeDecision.scope === "current-only") {
     return {
@@ -969,34 +950,25 @@ export function buildManualCorrectionParentTransition({
       decision,
       correctedPlaybook,
       now,
-      expiresAt,
     });
-    const isolatedCorrectedParent =
-      scopeDecision.scope === "same-question-retype"
-        ? {
-            ...correctedParent,
-            latestUsefulAnswer: undefined,
-            previousUsefulAnswer: undefined,
-          }
-        : correctedParent;
     const questionInstanceId = lineage?.questionInstanceId;
-    const whiteboardArtifact = isolatedCorrectedParent.whiteboardArtifact
+    const whiteboardArtifact = correctedParent.whiteboardArtifact
       ? {
-          ...isolatedCorrectedParent.whiteboardArtifact,
+          ...correctedParent.whiteboardArtifact,
           questionInstanceId:
-            isolatedCorrectedParent.whiteboardArtifact.questionInstanceId ??
+            correctedParent.whiteboardArtifact.questionInstanceId ??
             questionInstanceId,
         }
       : undefined;
     return {
       parent: {
-        ...isolatedCorrectedParent,
+        ...correctedParent,
         originQuestionId:
-          isolatedCorrectedParent.originQuestionId ?? questionInstanceId,
+          correctedParent.originQuestionId ?? questionInstanceId,
         whiteboardArtifact,
       },
       previousParentId: parent.id,
-      nextParentId: isolatedCorrectedParent.id,
+      nextParentId: correctedParent.id,
       preservedContextFields: [
         "parent-id",
         "question-origin",
@@ -1012,7 +984,7 @@ export function buildManualCorrectionParentTransition({
               "incompatible-project-binding",
             ],
       promptTranscriptStartTurnId:
-        isolatedCorrectedParent.promptTranscriptStartTurnId,
+        correctedParent.promptTranscriptStartTurnId,
       startedNewParent: false,
     };
   }
@@ -1053,7 +1025,6 @@ export function buildManualCorrectionParentTransition({
     supportedFactAnchors: [],
     createdAt: now,
     updatedAt: now,
-    expiresAt,
     originQuestionId: lineage?.questionInstanceId,
     startTurnId,
     promptTranscriptStartTurnId: startTurnId,

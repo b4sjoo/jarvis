@@ -3,22 +3,27 @@ import type {
   ActiveInterviewParent,
   ActiveScreenTask,
 } from "../../src/lib/meeting/types.js";
-import type { MeetingTaskRuntimeTransitionKind } from "../../src/lib/meeting/active-meeting-task.js";
+import type {
+  MeetingTaskDeadlineDelta,
+  MeetingTaskRuntimeTransitionKind,
+} from "../../src/lib/meeting/active-meeting-task.js";
 
 let testMutationSequence = 0;
 
 export function setTestActiveParent(
   manager: MeetingContextManager,
-  parent: ActiveInterviewParent
+  parent: ActiveInterviewParent,
+  deadlineDelta?: MeetingTaskDeadlineDelta
 ) {
-  return setTestTaskRuntime(manager, { parent });
+  return setTestTaskRuntime(manager, { parent }, deadlineDelta);
 }
 
 export function setTestScreenAttachment(
   manager: MeetingContextManager,
-  screenAttachment: ActiveScreenTask
+  screenAttachment: ActiveScreenTask,
+  deadlineDelta?: MeetingTaskDeadlineDelta
 ) {
-  return setTestTaskRuntime(manager, { screenAttachment });
+  return setTestTaskRuntime(manager, { screenAttachment }, deadlineDelta);
 }
 
 export function setTestTaskRuntime(
@@ -26,7 +31,8 @@ export function setTestTaskRuntime(
   patch: {
     parent?: ActiveInterviewParent | null;
     screenAttachment?: ActiveScreenTask | null;
-  }
+  },
+  deadlineDelta?: MeetingTaskDeadlineDelta
 ) {
   const before = manager.getTaskRuntimeState();
   const hasParent = Object.prototype.hasOwnProperty.call(patch, "parent");
@@ -61,6 +67,7 @@ export function setTestTaskRuntime(
     transition,
     reason: "test-seed-task-runtime",
     expectedRevision: current.revision,
+    deadlineDelta,
     ...(hasParent ? { parent: parent ?? null } : {}),
     ...(hasScreen ? { screenAttachment: screenAttachment ?? null } : {}),
   });

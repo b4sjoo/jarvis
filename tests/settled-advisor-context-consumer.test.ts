@@ -7,7 +7,7 @@ import { MeetingContextManager } from "../src/lib/meeting/context-manager.js";
 import { composeLogicalQuestionUnit, type LogicalQuestionUnit } from "../src/lib/meeting/logical-question-unit.js";
 import { applyActiveQuestionTermCorrection } from "../src/lib/meeting/active-question-term-correction.js";
 import { createProvisionalCurrentQuestion } from "../src/lib/meeting/current-question-settlement.js";
-import { EffectiveQuestionSourceLedger, type EffectiveQuestionSourceRecord } from "../src/lib/meeting/effective-question-source-ledger.js";
+import { EffectiveQuestionSourceLedger, selectOwnerScopedRelationEvidence, type EffectiveQuestionSourceRecord } from "../src/lib/meeting/effective-question-source-ledger.js";
 import { projectEffectiveLogicalQuestionSources, projectAdvisorTranscriptForLogicalQuestion } from "../src/lib/meeting/logical-question-effective-projection.js";
 import { compileSettledAdvisorPromptContext, formatSettledAdvisorContextCompilationForTrace, type SettledAdvisorContextCompilation } from "../src/lib/meeting/settled-advisor-context.js";
 import { buildAdvisorUserMessage } from "../src/lib/meeting/advisor-prompt.js";
@@ -17,6 +17,10 @@ import { composePhaseNavigationPromptContext, formatPhaseNavigationPromptMetrics
 import { resolveAdvisorScreenSourceRead } from "../src/lib/meeting/screen-task-scope.js";
 import { resolveResponseActionLogicalQuestionUnit } from "../src/lib/meeting/response-action-target.js";
 import { setTestTaskRuntime } from "./helpers/meeting-task-runtime.js";
+import { createEffectiveAdvisorBaseBuilder } from "./helpers/advisor-base-context-hook.js";
+import { projectBoundedGeneratedContinuityForTask, type BoundedGeneratedContinuityState } from "../src/lib/meeting/bounded-recent-history.js";
+import { buildQuestionTypeAdjudicationRequest } from "../src/lib/meeting/question-type-adjudication.js";
+import { buildTaskRelationAdjudicationRequest } from "../src/lib/meeting/task-relation-adjudication.js";
 import type { ActiveInterviewParent, AdvisorPromptContext, AdvisorContextScopeSnapshot, AdvisorSourceOwnedSemanticContext, TranscriptTurn } from "../src/lib/meeting/types.js";
 import type { AdvisorContextReadScope } from "../src/lib/meeting/advisor-context-read-scope.js";
 
@@ -72,26 +76,32 @@ function consume(f: ReturnType<typeof fixture>, unit: LogicalQuestionUnit | unde
   scope?: AdvisorContextReadScope;
   recent?: AdvisorSourceOwnedSemanticContext;
   receipt?: AdvisorContextScopeSnapshot;
+  continuity?: BoundedGeneratedContinuityState;
+  publishedContinuityAfterBase?: BoundedGeneratedContinuityState;
+  action?: "next-phase";
 } = {}) {
-  const base = f.manager.buildAdvisorPromptContext();
+  const recentAdvisorContinuityRef = { current: input.continuity ?? { recentCapsules: [] } };
+  const base = createEffectiveAdvisorBaseBuilder(f.manager, f.ledger, undefined, undefined, recentAdvisorContinuityRef)(unit);
   const source = unit && createProvisionalCurrentQuestion({ logicalQuestionUnit: unit, sourceKind: "voice" });
   const effective = unit && projectEffectiveLogicalQuestionSources(unit);
   base.currentQuestionProjection = effective && { answerFocusText: effective.answerFocusText, semanticEvidenceText: effective.effectiveText, sourceTurnIds: unit!.sourceTurnIds };
-  base.advisorEvidencePacket = buildAdvisorEvidencePacket({ currentQuestion: source && {
+  base.advisorEvidencePacket = buildAdvisorEvidencePacket({ activeMeetingTask: base.activeMeetingTask, currentQuestion: source && {
     text: effective!.effectiveText, source: "voice-lqu", sourceTurnIds: source.sourceTurnIds,
     logicalQuestionUnitId: source.logicalQuestionUnitId, revision: source.revision, sourceHash: source.sourceHash,
   } });
   base.responseActionContextScope = input.receipt;
+  if (input.publishedContinuityAfterBase) recentAdvisorContinuityRef.current = input.publishedContinuityAfterBase;
   const metadata: Record<string, unknown> = {};
   const environment = vm.createContext({
     transientPersonalStatusDecision: undefined, promptContext: base,
     settledExecutionPlan: { contextReadScope: input.scope ?? "current-only" },
     advisorJob: { logicalQuestionUnit: unit, expectedSessionId: f.manager.getState().sessionId, runtimeCommitToken: { runtimeEpoch: 1 } },
     contextManagerRef: { current: f.manager }, effectiveQuestionSourceRecords: f.ledger.list(),
+    recentAdvisorContinuityRef, projectBoundedGeneratedContinuityForTask, runtimeEpochRef: { current: 1 },
     advisorSourceOwnedSemanticContext: input.recent, advisorScreenScopeDecision: { action: "keep", reason: "existing-task-continuity" },
     responseActionContextSelection: undefined, traceId: "context-trace",
     traceStoreRef: { current: { updateMetadata: (_id: string, fields: Record<string, unknown>) => Object.assign(metadata, fields) } },
-    options: {}, responseOwner: { questionType: "general-system-design" },
+    options: { responseAction: input.action }, responseOwner: { questionType: "general-system-design" },
     compileSettledAdvisorPromptContext, formatSettledAdvisorContextCompilationForTrace,
     isPhaseNavigationAction, composePhaseNavigationPromptContext, formatPhaseNavigationPromptMetricsForTrace,
   });
@@ -298,4 +308,73 @@ test("C2 a non-LQU candidate from another parent cannot enter the compiler", () 
   const selected = selectSourceOwnedSemanticContext({ candidate, sessionId: state.sessionId, runtimeEpoch: 1, logicalQuestionUnit: unit, activeMeetingTask: f.manager.getState().activeMeetingTask, transcriptTurns: f.manager.getState().transcriptTurns });
   assert.equal(selected.reason, "active-parent-mismatch");
   assert.doesNotMatch(consume(f, unit, { scope: "active-parent-read", recent: selected.context }).prompt, /confidential documents/);
+});
+
+test("O2/O3 final context reads a newer authorized output without task-token rebase", () => {
+  const root = turn("root", "Design a retrieval service.", 1_000);
+  const ask = turn("ask", "Explain the isolation tradeoff.", 2_000);
+  const f = fixture([root, ask]);
+  const rootParent = parent(root.id);
+  setTestTaskRuntime(f.manager, { parent: rootParent });
+  const before = f.manager.getState();
+  const unit = f.unit(ask);
+  const oldOutput: BoundedGeneratedContinuityState = {
+    owner: { sessionId: unit.sessionId, runtimeEpoch: 1, parentTaskId: rootParent.id },
+    latestUsefulAnswer: "OUTPUT_A", recentCapsules: [],
+  };
+  const published = { ...oldOutput, previousUsefulAnswer: "OUTPUT_A", latestUsefulAnswer: "OUTPUT_B" };
+  const result = consume(f, unit, {
+    scope: "active-parent-read", continuity: oldOutput, publishedContinuityAfterBase: published,
+  });
+  assert.equal(result.context.activeMeetingTask?.parent.latestUsefulAnswer, "OUTPUT_B");
+  assert.equal(result.context.activeMeetingTask?.parent.previousUsefulAnswer, "OUTPUT_A");
+  assert.deepEqual(f.manager.getState(), before);
+  assert.doesNotMatch(result.query, /OUTPUT_/);
+});
+
+test("C2/C3/C4 generated parent and child read projections stay Advisor-only and follow final scope", () => {
+  const root = turn("root", "Design a car-sharing system.", 1_000);
+  const child = turn("child", "Implement a tenant filter.", 2_000);
+  const ask = turn("ask", "How should failures be handled?", 3_000);
+  const f = fixture([root, child, ask]);
+  const rootParent = parent(root.id);
+  setTestTaskRuntime(f.manager, { parent: { ...rootParent, child: {
+    id: "child-a", createdAt: 2_000, updatedAt: 2_100, questionType: "coding", relation: "child-probe", intent: "implementation-probe",
+    question: child.text, basedOnTurnIds: [child.id], basedOnObservationIds: [],
+  } } });
+  remember(f.ledger, correct(f.unit(root)));
+  const canonical = f.manager.getState();
+  const unit = f.unit(ask);
+  const continuity: BoundedGeneratedContinuityState = {
+    owner: { sessionId: unit.sessionId, runtimeEpoch: 1, parentTaskId: rootParent.id },
+    latestUsefulAnswer: "GENERATED_PARENT_LATEST: bounded answer output.",
+    previousUsefulAnswer: "GENERATED_PARENT_PREVIOUS: earlier answer output.",
+    child: { childTaskId: "child-a", compactSummary: "GENERATED_CHILD_COMPACT: child answer output." },
+    recentCapsules: [],
+  };
+  const childRead = consume(f, unit, { scope: "active-child-read", continuity });
+  assert.equal(childRead.context.activeMeetingTask?.parent.latestUsefulAnswer, continuity.latestUsefulAnswer);
+  assert.equal(childRead.context.activeMeetingTask?.parent.previousUsefulAnswer, continuity.previousUsefulAnswer);
+  assert.equal(childRead.context.activeMeetingTask?.child?.compactSummary, continuity.child!.compactSummary);
+  assert.match(childRead.prompt, /GENERATED_PARENT_LATEST|GENERATED_CHILD_COMPACT/);
+  assert.doesNotMatch(childRead.query, /GENERATED_/);
+  const wrongChild = consume(f, unit, { scope: "active-child-read", continuity: { ...continuity, child: { ...continuity.child!, childTaskId: "another-child" } } });
+  assert.equal(wrongChild.context.activeMeetingTask?.child?.compactSummary, undefined);
+  assert.equal(wrongChild.context.activeMeetingTask?.parent.latestUsefulAnswer, continuity.latestUsefulAnswer);
+  const parentRead = consume(f, unit, { scope: "active-parent-read", continuity });
+  assert.equal(parentRead.context.activeMeetingTask?.child, undefined);
+  assert.equal(parentRead.context.activeMeetingTask?.parent.latestUsefulAnswer, continuity.latestUsefulAnswer);
+  const narrowed = consume(f, unit, { scope: "current-only", continuity });
+  assert.doesNotMatch(narrowed.prompt, /GENERATED_/);
+  const phase = consume(f, unit, { scope: "active-child-read", continuity, action: "next-phase" });
+  assert.equal(phase.context.activeMeetingTask?.parent.latestUsefulAnswer, undefined);
+  assert.equal(phase.context.activeMeetingTask?.parent.previousUsefulAnswer, undefined);
+
+  const ownerEvidenceSelection = selectOwnerScopedRelationEvidence({ records: f.ledger.list(), currentLogicalQuestionUnit: unit, activeMeetingTask: canonical.activeMeetingTask!, transcriptTurns: canonical.transcriptTurns });
+  const relation = buildTaskRelationAdjudicationRequest({ logicalQuestionUnit: unit, activeMeetingTask: canonical.activeMeetingTask!, recentTurns: canonical.transcriptTurns, ownerEvidenceSelection });
+  assert.doesNotMatch(JSON.stringify(relation), /GENERATED_/);
+  assert.doesNotMatch(JSON.stringify(buildQuestionTypeAdjudicationRequest({ logicalQuestionUnit: unit })), /GENERATED_/);
+  assert.equal(canonical.activeMeetingTask?.parent.latestUsefulAnswer, undefined);
+  assert.equal(canonical.activeMeetingTask?.child?.compactSummary, undefined);
+  assert.deepEqual(f.manager.getState(), canonical);
 });

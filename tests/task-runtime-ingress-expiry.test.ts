@@ -9,6 +9,12 @@ import { decideRefreshAuthority } from "../src/lib/meeting/answer-generation-lea
 import { resolveResponseOpportunityRefreshAuthority } from "../src/lib/meeting/response-opportunity-generation-gate.js";
 import { authorizeRuntimeCommit, buildRuntimeCommitSnapshot } from "../src/lib/meeting/runtime-commit-authorization.js";
 import { MeetingTraceStore } from "../src/lib/meeting/trace.js";
+import { EffectiveQuestionSourceLedger } from "../src/lib/meeting/effective-question-source-ledger.js";
+import { projectAdvisorTranscriptForLogicalQuestion } from "../src/lib/meeting/logical-question-effective-projection.js";
+import {
+  clearBoundedGeneratedContinuity,
+  projectBoundedGeneratedContinuityForTask,
+} from "../src/lib/meeting/bounded-recent-history.js";
 import { setTestActiveParent } from "./helpers/meeting-task-runtime.js";
 
 const source = readFileSync("src/hooks/useMeetingAssistant.ts", "utf8");
@@ -52,21 +58,27 @@ function harness() {
   setTestActiveParent(manager, {
     id: "expiring-owner", source: "voice", stableKind: "general-system-design", topic: "Design a cache",
     playbookPhase: "requirement_clarification", phaseProgress: {}, supportedFactAnchors: [],
-    latestUsefulAnswer: "Preserve until TTL", createdAt: 1, updatedAt: 1, expiresAt: 100, revisions: 1,
+    createdAt: 1, updatedAt: 1, revisions: 1,
+  }, {
+    parent: { ownerId: "expiring-owner", deadline: 100 },
   });
   const context = vm.createContext({
     Date, Promise, createMeetingId, createAdvisorTriggerJob, decideRefreshAuthority,
     resolveResponseOpportunityRefreshAuthority, buildRuntimeCommitSnapshot,
+    projectAdvisorTranscriptForLogicalQuestion, projectBoundedGeneratedContinuityForTask,
+    clearBoundedGeneratedContinuity,
+    effectiveQuestionSourceLedgerRef: { current: new EffectiveQuestionSourceLedger() },
     contextManagerRef: { current: manager }, runtimeEpochRef: { current: 7 },
     runtimeActiveRef: { current: true }, activeRef: { current: true },
     shutdownRequestedRef: { current: false },
     whiteboardSyntaxRepairRuntimeRef: { current: { cancelAll() {} } },
     responseOpportunityGenerationGateRef: { current: { read: () => undefined, findOperationId: () => undefined } },
-    recentAdvisorContinuityRef: { current: [] }, responseActionRevisionRef: { current: 0 },
+    recentAdvisorContinuityRef: { current: { recentCapsules: [] } }, responseActionRevisionRef: { current: 0 },
     manualCorrectionRevisionRef: { current: 0 },
     traceStoreRef: { current: new MeetingTraceStore() },
     flushPendingSentenceCompletion: () => {},
   });
+  compile("buildEffectiveAdvisorBasePromptContext", context);
   compile("buildAdvisorJob", context);
   return { manager, context };
 }
@@ -77,12 +89,16 @@ for (const expired of [false, true]) {
     t.mock.method(Date, "now", () => now);
     const h = harness();
     const original = h.manager.getTaskRuntimeState();
+    assert.equal("expiresAt" in original.parent!, false);
+    assert.equal(h.manager.getTaskDeadlineControl().parent?.deadline, 100);
     now = expired ? 101 : 99;
     compile("runAdvisor", h.context, "advisorJob");
     const job = await h.context.runAdvisor({});
     assert.equal(job.expectedParentId, expired ? undefined : "expiring-owner");
     assert.equal(job.promptContextSnapshot.activeMeetingTask?.id, job.expectedParentId);
     assert.equal(h.manager.getTaskRuntimeState().revision, original.revision + (expired ? 1 : 0));
+    assert.equal(h.manager.getTaskDeadlineControl().parent?.deadline, expired ? undefined : 100);
+    if (!expired) assert.deepEqual(h.manager.getTaskRuntimeState(), original);
     assert.equal(authorizeRuntimeCommit({
       token: job.runtimeCommitToken,
       current: buildRuntimeCommitSnapshot({ runtimeEpoch: 7, contextState: h.manager.getState() }),
@@ -126,6 +142,7 @@ for (const [name, snapshotName, args] of [
     assert.equal(snapshot.activeMeetingTask, undefined);
     assert.equal(snapshot.taskRuntime.revision, before.revision + 1);
     assert.equal(snapshot.taskRuntime.lastMutation.kind, "expire");
+    assert.equal(h.manager.getTaskDeadlineControl().parent, undefined);
   });
 }
 

@@ -21,7 +21,12 @@ test("commits a project binding before model output", () => {
   assert.equal(result.committed, true);
   assert.equal(result.task?.projectBinding?.projectId, "agentic-memory");
   assert.equal(result.task?.revisions, 5);
+  assert.equal(result.invalidateProjectState, false);
   assert.deepEqual(result.invalidatedState, []);
+  assert.deepEqual(result.task?.supportedFactAnchors, parent.supportedFactAnchors);
+  assert.deepEqual(result.task?.child, { ...parent.child, returnCapsule: undefined });
+  assert.equal(result.task?.whiteboardArtifact, parent.whiteboardArtifact);
+  assertPureParentPayload(result.task);
 });
 
 test("rebind invalidates stale project state atomically", () => {
@@ -44,8 +49,54 @@ test("rebind invalidates stale project state atomically", () => {
   assert.equal(result.task?.playbookPhase, "project_narrative");
   assert.equal(result.task?.child, undefined);
   assert.equal(result.task?.whiteboardArtifact, undefined);
-  assert.equal(result.task?.latestUsefulAnswer, undefined);
-  assert.ok(result.invalidatedState.includes("whiteboard-artifact"));
+  assert.equal(result.invalidateProjectState, true);
+  assert.deepEqual(result.invalidatedState, [
+    "supported-fact-anchors",
+    "playbook-phase",
+    "child",
+    "whiteboard-artifact",
+    "latest-answer",
+    "previous-answer",
+  ]);
+  assertPureParentPayload(result.task);
+});
+
+test("invalidate exposes the same output clear decision as rebind", () => {
+  const parent = makeParent({
+    projectBinding: makeDecision("bind", "throttling", 2).binding,
+  });
+  const result = commitProjectBindingSettlement({
+    currentTask: parent,
+    decision: {
+      ...makeDecision("rebind", "agentic-memory", 3),
+      action: "invalidate",
+      binding: undefined,
+    },
+    expectedParentRevision: parent.revisions,
+  });
+
+  assert.equal(result.committed, true);
+  assert.equal(result.invalidateProjectState, true);
+  assert.equal(result.task?.projectBinding, undefined);
+  assert.deepEqual(result.task?.supportedFactAnchors, []);
+  assert.equal(result.task?.child, undefined);
+  assert.equal(result.task?.whiteboardArtifact, undefined);
+  assert.deepEqual(result.task?.phaseProgress, {});
+  assert.ok(result.invalidatedState.includes("latest-answer"));
+  assert.ok(result.invalidatedState.includes("previous-answer"));
+  assertPureParentPayload(result.task);
+});
+
+test("an already settled binding preserves output clear intent", () => {
+  const decision = makeDecision("bind", "agentic-memory", 1);
+  const parent = makeParent({ projectBinding: decision.binding });
+  const result = commitProjectBindingSettlement({ currentTask: parent, decision });
+
+  assert.equal(result.committed, false);
+  assert.equal(result.reason, "binding-already-settled");
+  assert.equal(result.invalidateProjectState, false);
+  assert.deepEqual(result.invalidatedState, []);
+  assertPureParentPayload(result.task);
 });
 
 test("rejects a stale parent revision", () => {
@@ -59,7 +110,31 @@ test("rejects a stale parent revision", () => {
   assert.equal(result.committed, false);
   assert.equal(result.reason, "stale-parent-revision");
   assert.equal(result.task?.revisions, parent.revisions);
+  assert.equal(result.invalidateProjectState, false);
+  assert.deepEqual(result.invalidatedState, []);
+  assertPureParentPayload(result.task);
 });
+
+test("a rejected rebind does not request output clearing", () => {
+  const parent = makeParent();
+  const result = commitProjectBindingSettlement({
+    currentTask: parent,
+    decision: makeDecision("rebind", "agentic-memory", 2),
+    expectedParentRevision: parent.revisions - 1,
+  });
+
+  assert.equal(result.committed, false);
+  assert.equal(result.invalidateProjectState, false);
+  assert.deepEqual(result.invalidatedState, []);
+});
+
+function assertPureParentPayload(parent: ActiveInterviewParent | undefined) {
+  assert.ok(parent);
+  assert.equal("latestUsefulAnswer" in parent, false);
+  assert.equal("previousUsefulAnswer" in parent, false);
+  assert.equal("expiresAt" in parent, false);
+  if (parent.child) assert.equal("compactSummary" in parent.child, false);
+}
 
 function makeDecision(
   action: "bind" | "rebind",
@@ -135,8 +210,6 @@ function makeParent(
       updatedAt: 1,
       revision: 1,
     },
-    latestUsefulAnswer: "Old answer",
-    previousUsefulAnswer: "Older answer",
     createdAt: 1,
     updatedAt: 1,
     revisions: 4,

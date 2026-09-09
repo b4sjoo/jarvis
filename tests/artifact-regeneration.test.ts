@@ -111,8 +111,6 @@ function canonicalParent(): ActiveInterviewParent {
     playbookPhase: "design_framing",
     phaseProgress: { requirement_clarification: true },
     supportedFactAnchors: ["fact-a"],
-    latestUsefulAnswer: "Keep this answer.",
-    previousUsefulAnswer: "Keep the previous answer.",
     whiteboardArtifact: {
       id: "whiteboard-a",
       parentTaskId: "parent-a",
@@ -571,14 +569,8 @@ test("projects only the generated Whiteboard into the canonical parent", () => {
     decision.parent?.whiteboardArtifact?.content,
     "Client --> API --> Cache"
   );
-  assert.equal(
-    decision.parent?.latestUsefulAnswer,
-    currentParent.latestUsefulAnswer
-  );
-  assert.equal(
-    decision.parent?.previousUsefulAnswer,
-    currentParent.previousUsefulAnswer
-  );
+  assert.equal("latestUsefulAnswer" in decision.parent!, false);
+  assert.equal("previousUsefulAnswer" in decision.parent!, false);
   assert.equal(decision.parent?.playbookPhase, currentParent.playbookPhase);
   assert.deepEqual(decision.parent?.phaseProgress, currentParent.phaseProgress);
   assert.deepEqual(

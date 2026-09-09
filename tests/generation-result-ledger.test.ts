@@ -435,7 +435,7 @@ test("rolls back prepared task and publication state after an install exception"
   assert.equal(result.entry.applyFailure?.rollbackSucceeded, true);
 });
 
-test("commits each generation consumer shape through the shared prepared coordinator", async (t) => {
+test("commits source-backed context or output-only publication through each prepared consumer shape", async (t) => {
   const consumerCases = [
     { name: "voice", commitsTask: true },
     { name: "screen", commitsTask: true },
@@ -477,7 +477,7 @@ test("commits each generation consumer shape through the shared prepared coordin
                   expectedRevision: before.revision,
                   parent: {
                     ...parent,
-                    latestUsefulAnswer: `${consumerCase.name}-answer`,
+                    supportedFactAnchors: [`source-fact-${consumerCase.name}`],
                     revisions: parent.revisions + 1,
                   },
                 });
@@ -512,9 +512,9 @@ test("commits each generation consumer shape through the shared prepared coordin
       assert.equal(result.committed, true);
       assert.equal(visiblePublication, `${consumerCase.name}-visible`);
       if (consumerCase.commitsTask) {
-        assert.equal(
-          manager.getTaskRuntimeState().parent?.latestUsefulAnswer,
-          `${consumerCase.name}-answer`
+        assert.deepEqual(
+          manager.getTaskRuntimeState().parent?.supportedFactAnchors,
+          [`source-fact-${consumerCase.name}`]
         );
         assert.equal(
           manager.getTaskRuntimeState().revision,
@@ -523,6 +523,7 @@ test("commits each generation consumer shape through the shared prepared coordin
       } else {
         assert.deepEqual(manager.getTaskRuntimeState(), before);
       }
+      assert.equal("latestUsefulAnswer" in manager.getTaskRuntimeState().parent!, false);
       assert.equal(result.entry.commitDisposition, "committed");
       assert.ok((result.entry.prepareDurationMs ?? -1) >= 0);
       assert.ok((result.entry.installDurationMs ?? -1) >= 0);
@@ -586,7 +587,6 @@ function generationConsumerParent(
     supportedFactAnchors: [],
     createdAt: 100,
     updatedAt: 101,
-    expiresAt: 10_000,
     revisions: 2,
   };
 }

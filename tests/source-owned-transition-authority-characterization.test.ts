@@ -519,7 +519,6 @@ function makeParent(
     supportedFactAnchors: [],
     createdAt: now,
     updatedAt: now,
-    expiresAt: now + 60_000,
     revisions: 1,
   };
 }

@@ -2,6 +2,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useMicVAD } from "@ricky0123/vad-react";
+import {
+  clearBoundedGeneratedContinuity,
+  clearBoundedGeneratedSummaries,
+  prepareBoundedGeneratedContinuity,
+  projectBoundedGeneratedContinuityForTask,
+  type BoundedGeneratedContinuityState,
+} from "@/lib/meeting/bounded-recent-history";
+import { equalTaskRuntimeValues, type MeetingTaskDeadlineDelta } from "@/lib/meeting/active-meeting-task";
+import type { PreparedMeetingTaskDeadlineUpdate } from "@/lib/meeting/context-manager";
 import { useApplicationShutdown } from "./useApplicationShutdown";
 import type { NativeAudioLifecycleEvent } from "@/lib/meeting/native-audio-lifecycle";
 import {
@@ -146,9 +155,6 @@ import {
   type CommittedBranchPhaseTransition,
 } from "@/lib/meeting/active-branch-phase";
 import {
-  createCodingChildPhaseState,
-} from "@/lib/meeting/coding-child-phase";
-import {
   buildHumanEvaluationAttemptEvidenceIndexV2,
   buildHumanEvaluationAttemptEvidenceV2,
   materializeHumanEvaluationAttemptProjectionV2,
@@ -181,6 +187,7 @@ import {
   type EffectiveQuestionSourceOwner,
 } from "@/lib/meeting/effective-question-source-ledger";
 import {
+  projectAdvisorTranscriptForLogicalQuestion,
   projectEffectiveSourceTurnGroup,
   projectEffectiveLogicalQuestionSources,
 } from "@/lib/meeting/logical-question-effective-projection";
@@ -246,7 +253,6 @@ import {
   buildAdvisorEvidenceRetrievalQuery,
   AdvisorPromptContext,
   AdvisorSuggestion,
-  AdvisorGeneratedContinuityCapsule,
   AdvisorRequestMode,
   AdvisorTriggerJob,
   AdvisorJobSource,
@@ -320,7 +326,6 @@ import {
   InterviewBriefType,
   FactAnchorState,
   InterviewPlaybookPhase,
-  SelectedInterviewPlaybook,
   ProjectTrajectoryChildContinuity,
   InterviewSubtaskIntent,
   InterviewTaskRelation,
@@ -627,7 +632,6 @@ import {
   type RuntimeRegressionStepTerminalDisposition,
   SttEvaluationCaptureManager,
   areCompatibleQuestionTypes,
-  appendAdvisorGeneratedContinuityCapsule,
   authorizeAdvisorExecution,
   authorizeAdvisorOutputCommit,
   createAdvisorTriggerJob,
@@ -640,7 +644,6 @@ import {
   authorizeAdvisorTaskMutation,
   buildRuntimeCommitSnapshot,
   buildActiveMeetingTask,
-  createAdvisorGeneratedContinuityCapsule,
   buildBoundedParentContextHandoff,
   buildCommittedTaskBoundaryParent,
   buildEffectiveAdvisorSettlementView,
@@ -826,9 +829,6 @@ import {
   formatInterviewTaskBoundaryForTrace,
   type PendingInterviewSectionHint,
   type PendingInterviewTaskBoundary,
-  applyInterviewChildProbeTransition,
-  mergeGeneratedChildContinuity,
-  commitVisibleUsefulAnswerToParent,
   persistTraceHumanEvaluations,
   persistQuestionHumanEvaluations,
   buildSessionRecordingProviderSummary,
@@ -916,10 +916,6 @@ import {
   PENDING_ANSWER_TTL_MS,
 } from "@/lib/meeting";
 import {
-  decideSameOwnerAnswerCommitRebase,
-  formatSameOwnerAnswerCommitRebaseForTrace,
-} from "@/lib/meeting/same-owner-answer-commit-rebase";
-import {
   composePhaseNavigationPromptContext,
   formatPhaseNavigationPromptMetricsForTrace,
   isPhaseNavigationAction,
@@ -973,6 +969,9 @@ interface GenerationTaskRuntimeTransition {
 }
 
 interface PendingGenerationAnswerRevision extends PendingAnswerRevision {
+  childSummary?: string;
+  deadlineDelta?: MeetingTaskDeadlineDelta;
+  deadlineCalculatedAt?: number;
   resultTaskId: string | null;
   taskRuntimeRevision: number;
   taskRuntimeTransition?: GenerationTaskRuntimeTransition;
@@ -1008,7 +1007,13 @@ interface PreparedStableAnswerPublication {
     latestUsefulAnswerCommitted?: boolean;
     latestUsefulAnswerChars?: number;
     artifactOnly?: boolean;
+    deadlineDelta?: MeetingTaskDeadlineDelta;
+    childSummary?: string;
+    deadlineCalculatedAt?: number;
   };
+  previousGeneratedContinuity: BoundedGeneratedContinuityState;
+  nextGeneratedContinuity: BoundedGeneratedContinuityState;
+  deadlineUpdate?: PreparedMeetingTaskDeadlineUpdate;
   pending: PendingAnswerRevision | null;
   previousStable: StableAnswerRevision | null;
   previousVisibleAnswerRevision: number;
@@ -1023,7 +1028,6 @@ interface PreparedStableAnswerPublication {
 function prepareGenerationDerivedTaskRuntimeTransition(input: {
   currentRevision: number;
   currentParent?: ActiveInterviewParent;
-  currentScreenAttachment?: ActiveScreenTask;
   transition?: GenerationTaskRuntimeTransition;
   stable: StableAnswerRevision;
   commitLatestUsefulAnswer: boolean;
@@ -1050,41 +1054,19 @@ function prepareGenerationDerivedTaskRuntimeTransition(input: {
         input.stable.suggestion.meetingAnswer
       ).text.trim()
     : "";
-  const transitionOwnsParent =
-    input.transition && input.transition.parent !== undefined;
-  const parent = transitionOwnsParent
+  const parent = input.transition && input.transition.parent !== undefined
     ? input.transition?.parent ?? undefined
     : input.currentParent;
-  const usefulAnswerCommit = commitVisibleUsefulAnswerToParent({
-    parent,
-    taskId: input.stable.taskId,
-    summary,
-    committedAt: input.stable.committedAt,
-  });
-  if (!usefulAnswerCommit.committed || !usefulAnswerCommit.parent) {
-    return {
-      transition: input.transition,
-      latestUsefulAnswerCommitted: false,
-      latestUsefulAnswerChars: 0,
-    };
-  }
-
+  const summaryAuthorized = Boolean(parent && parent.id === input.stable.taskId && summary);
   return {
     transition: input.transition
       ? {
           ...input.transition,
           expectedRevision: input.currentRevision,
-          parent: usefulAnswerCommit.parent,
         }
-      : {
-          expectedRevision: input.currentRevision,
-          transition: "update-parent-context",
-          reason: "generation-result-atomic-commit",
-          parent: usefulAnswerCommit.parent,
-          screenAttachment: input.currentScreenAttachment,
-        },
-    latestUsefulAnswerCommitted: true,
-    latestUsefulAnswerChars: summary.length,
+      : undefined,
+    latestUsefulAnswerCommitted: summaryAuthorized,
+    latestUsefulAnswerChars: summaryAuthorized ? summary.length : 0,
   };
 }
 
@@ -1094,6 +1076,7 @@ function submitTaskRuntimeTransition(
     operationId?: string;
     transition: MeetingTaskRuntimeTransitionKind;
     authorizedArtifacts?: readonly AnswerArtifactSection[];
+    deadlineDelta?: MeetingTaskDeadlineDelta;
     reason: string;
     parent?: ActiveInterviewParent | null;
     screenAttachment?: ActiveScreenTask | null;
@@ -1149,6 +1132,9 @@ function commitSourceOwnedTransitionWithManager(input: {
         transition: runtimeTransition,
         reason: input.reason,
         expectedRevision: expectedTaskRuntimeRevision,
+        deadlineDelta: sourceResult.task && sourceResult.mutationApplied
+          ? { parent: { ownerId: sourceResult.task.id, deadline: sourceResult.candidate.expiresAt } }
+          : undefined,
         screenAttachment:
           sourceResult.candidate.kind === "new-parent" ||
           sourceResult.candidate.kind === "reseed-parent"
@@ -1162,6 +1148,7 @@ function commitSourceOwnedTransitionWithManager(input: {
 }
 
 function commitCorrectionLifecycleWithManager(input: {
+  deadlineDelta?: MeetingTaskDeadlineDelta;
   manager: MeetingContextManager;
   plan: SettledAdvisorExecutionPlan;
   settlement: CurrentQuestionSettlementDecision;
@@ -1244,6 +1231,7 @@ function commitCorrectionLifecycleWithManager(input: {
         transition: runtimeTransition,
         reason: "correction-lifecycle-command-committed",
         authorizedArtifacts: input.plan.artifactPolicy.allowWhiteboard ? ["whiteboard"] : [],
+        deadlineDelta: input.deadlineDelta,
         expectedRevision: input.currentContext.taskRuntime.revision,
         screenAttachment: reduction.screenAttachment ?? null,
         parent: reduction.parent ?? null,
@@ -1757,7 +1745,6 @@ function applyManualQuestionTypeCorrectionToScreenTask({
   askFrame,
   topicDomain,
   now,
-  expiresAt,
 }: {
   task: ActiveScreenTask;
   correctedType: CanonicalQuestionType;
@@ -1765,12 +1752,10 @@ function applyManualQuestionTypeCorrectionToScreenTask({
   askFrame: TaskAskFrame;
   topicDomain?: TaskTopicDomain;
   now: number;
-  expiresAt?: number;
 }): ActiveScreenTask {
   return {
     ...task,
     updatedAt: now,
-    expiresAt,
     question: task.question,
     kind: correctedType,
     classifier: {
@@ -2091,6 +2076,9 @@ function isCacheableReliableSuggestion(suggestion: AdvisorSuggestion) {
 }
 
 interface InterviewTaskContinuityResult {
+  deadlineDelta?: MeetingTaskDeadlineDelta;
+  childSummary?: string;
+  deadlineCalculatedAt?: number;
   task?: ActiveInterviewParent;
   startedNewParent: boolean;
   clearedParent: boolean;
@@ -3540,8 +3528,8 @@ export function useMeetingAssistant() {
     new Map<string, AdvisorResponseFingerprintSourceContext>()
   );
   const recentAdvisorContinuityRef = useRef<
-    AdvisorGeneratedContinuityCapsule[]
-  >([]);
+    BoundedGeneratedContinuityState
+  >({ recentCapsules: [] });
   const latestSourceOwnedSetupRef =
     useRef<SourceOwnedSetupCandidate | undefined>(undefined);
   const effectiveQuestionSourceLedgerRef = useRef(
@@ -4490,6 +4478,9 @@ export function useMeetingAssistant() {
         latestUsefulAnswerCommitted?: boolean;
         latestUsefulAnswerChars?: number;
         artifactOnly?: boolean;
+        childSummary?: string;
+        deadlineDelta?: MeetingTaskDeadlineDelta;
+        deadlineCalculatedAt?: number;
       } = {}
     ): PreparedStableAnswerPublication => {
       const pending = pendingAnswerRevisionRef.current;
@@ -4521,9 +4512,37 @@ export function useMeetingAssistant() {
           resolvedAt: stable.committedAt,
         };
       }
+      const context = contextManagerRef.current.getState();
+      const task = context.activeMeetingTask;
+      const currentOwner = task ? {
+        sessionId: context.sessionId,
+        runtimeEpoch: runtimeEpochRef.current,
+        parentTaskId: task.parent.id,
+        childTaskId: task.child?.id,
+      } : undefined;
+      const previousGeneratedContinuity = recentAdvisorContinuityRef.current;
+      const nextGeneratedContinuity = prepareBoundedGeneratedContinuity({
+        state: options.clearPrevious && !options.artifactOnly
+          ? clearBoundedGeneratedContinuity({ state: previousGeneratedContinuity, scope: "recent" })
+          : previousGeneratedContinuity,
+        stable,
+        currentOwner,
+        parentRevision: task?.parent.revisions ?? 0,
+        parentSummaryAllowed: options.latestUsefulAnswerCommitted === true,
+        childSummary: options.childSummary,
+        artifactOnly: options.artifactOnly,
+      });
       return {
         stable,
         options,
+        previousGeneratedContinuity,
+        nextGeneratedContinuity,
+        deadlineUpdate: options.deadlineDelta
+          ? contextManagerRef.current.prepareTaskDeadlineUpdate({
+              expectedSessionId: context.sessionId,
+              deadlineDelta: options.deadlineDelta,
+            })
+          : undefined,
         pending,
         previousStable,
         previousVisibleAnswerRevision: visibleAnswerRevisionRef.current,
@@ -4540,6 +4559,11 @@ export function useMeetingAssistant() {
 
   const installPreparedStableAnswerPublication = useCallback(
     (prepared: PreparedStableAnswerPublication) => {
+      if (prepared.deadlineUpdate &&
+        !contextManagerRef.current.installPreparedTaskDeadlineUpdate(prepared.deadlineUpdate)) {
+        throw new Error("Output deadline no longer belongs to the authorized task.");
+      }
+      recentAdvisorContinuityRef.current = prepared.nextGeneratedContinuity;
       stableAnswerRevisionRef.current = prepared.stable;
       visibleAnswerRevisionRef.current = prepared.stable.revision;
       manualCorrectionTargetHistoryRef.current =
@@ -4555,6 +4579,9 @@ export function useMeetingAssistant() {
 
   const rollbackPreparedStableAnswerPublication = useCallback(
     (prepared: PreparedStableAnswerPublication) => {
+      const deadlineRestored = !prepared.deadlineUpdate ||
+        contextManagerRef.current.rollbackPreparedTaskDeadlineUpdate(prepared.deadlineUpdate);
+      recentAdvisorContinuityRef.current = prepared.previousGeneratedContinuity;
       stableAnswerRevisionRef.current = prepared.previousStable;
       visibleAnswerRevisionRef.current =
         prepared.previousVisibleAnswerRevision;
@@ -4566,7 +4593,7 @@ export function useMeetingAssistant() {
         prepared.previousPendingAnswerRevision;
       answerDeliveryProgressRef.current =
         prepared.previousAnswerDeliveryProgress;
-      return true;
+      return deadlineRestored;
     },
     []
   );
@@ -4576,6 +4603,14 @@ export function useMeetingAssistant() {
       clearPendingAnswerCommitTimer();
       const { stable, options, pending, previousStable } = prepared;
       const activeContextState = contextManagerRef.current.getState();
+      if (options.artifactOnly && stable.suggestion.sourceTraceId) {
+        traceStoreRef.current.updateMetadata(stable.suggestion.sourceTraceId, {
+          artifactOnlyParentLatestUsefulAnswerPreserved:
+            prepared.previousGeneratedContinuity.latestUsefulAnswer === prepared.nextGeneratedContinuity.latestUsefulAnswer,
+          artifactOnlyParentPreviousUsefulAnswerPreserved:
+            prepared.previousGeneratedContinuity.previousUsefulAnswer === prepared.nextGeneratedContinuity.previousUsefulAnswer,
+        });
+      }
       if (
         options.latestUsefulAnswerCommitted &&
         stable.suggestion.sourceTraceId
@@ -4642,22 +4677,10 @@ export function useMeetingAssistant() {
       } else if (sourceTraceId) {
         pendingAnswerResolutionCommitByTraceRef.current.delete(sourceTraceId);
       }
-      const generatedContinuityCapsule =
-        activeParent && !options.artifactOnly
-          ? createAdvisorGeneratedContinuityCapsule({
-              stable,
-              parentRevision: activeParent.revisions ?? 0,
-              childTaskId: activeMeetingTask?.child?.id,
-            })
-          : undefined;
-      recentAdvisorContinuityRef.current =
-        options.artifactOnly
-          ? recentAdvisorContinuityRef.current
-          : appendAdvisorGeneratedContinuityCapsule({
-              history: recentAdvisorContinuityRef.current,
-              capsule: generatedContinuityCapsule,
-              reset: options.clearPrevious,
-            });
+      const latestCapsule = prepared.nextGeneratedContinuity.recentCapsules.at(-1);
+      const generatedContinuityCapsule = !options.artifactOnly &&
+        latestCapsule?.sourceSuggestionId === stable.suggestion.id &&
+        latestCapsule.answerRevision === stable.revision ? latestCapsule : undefined;
       setState((previous) => ({
         ...previous,
         ...(options.artifactOnly
@@ -4694,7 +4717,7 @@ export function useMeetingAssistant() {
           generatedContinuityCapsule
         ),
         generatedContinuityHistoryCount:
-          recentAdvisorContinuityRef.current.length,
+          recentAdvisorContinuityRef.current.recentCapsules.length,
         generatedContinuityCapsuleChars:
           generatedContinuityCapsule?.text.length ?? 0,
         generatedContinuityParentTaskId:
@@ -4707,6 +4730,12 @@ export function useMeetingAssistant() {
           options.latestUsefulAnswerCommitted === true,
         stableAnswerArtifactOnlyPublication:
           options.artifactOnly === true,
+        generationDeadlineCalculatedAt: options.deadlineCalculatedAt,
+        generationDeadlineCandidate: options.deadlineDelta,
+        generationDeadlineRequested: Boolean(options.deadlineDelta),
+        generationDeadlineApplied: Boolean(prepared.deadlineUpdate?.installedDeadlineControl),
+        generationDeadlineBefore: prepared.deadlineUpdate?.previousDeadlineControl,
+        generationDeadlineAfter: prepared.deadlineUpdate?.installedDeadlineControl,
       });
       if (!options.artifactOnly) {
         scheduleAdvisorResponseConsistencyShadow({
@@ -5057,8 +5086,6 @@ export function useMeetingAssistant() {
       prepareGenerationDerivedTaskRuntimeTransition({
         currentRevision: pendingTaskRuntimeState.revision,
         currentParent: pendingTaskRuntimeState.parent,
-        currentScreenAttachment:
-          pendingTaskRuntimeState.screenAttachment,
         transition: pending.taskRuntimeTransition,
         stable,
         commitLatestUsefulAnswer:
@@ -5113,6 +5140,9 @@ export function useMeetingAssistant() {
             pendingPublication = prepareStableAnswerPublication(stable, {
               clearPrevious: pending.resetSections,
               pendingDisposition: "committed",
+              childSummary: pending.childSummary,
+              deadlineDelta: pending.deadlineDelta,
+              deadlineCalculatedAt: pending.deadlineCalculatedAt,
               latestUsefulAnswerCommitted:
                 preparedPendingTransition.latestUsefulAnswerCommitted,
               latestUsefulAnswerChars:
@@ -5262,6 +5292,9 @@ export function useMeetingAssistant() {
       resetSections: boolean;
       reason: string;
       latestUsefulAnswerMutationAuthorized: boolean;
+      childSummary?: string;
+      deadlineDelta?: MeetingTaskDeadlineDelta;
+      deadlineCalculatedAt?: number;
       taskRuntimeRevision: number;
       taskRuntimeTransition?: PendingGenerationAnswerRevision["taskRuntimeTransition"];
       advisorJobId?: string;
@@ -5416,6 +5449,9 @@ export function useMeetingAssistant() {
         resetSections: input.resetSections,
         latestUsefulAnswerMutationAuthorized:
           input.latestUsefulAnswerMutationAuthorized,
+        childSummary: input.childSummary,
+        deadlineDelta: input.deadlineDelta,
+        deadlineCalculatedAt: input.deadlineCalculatedAt,
         advisorJobId: input.advisorJobId,
         advisorJobSource: input.advisorJobSource,
         runtimeTypeAdjudicationOutputAuthority:
@@ -6736,7 +6772,7 @@ export function useMeetingAssistant() {
       codingSolutionManifestCacheRef.current.clear();
       generationResultLedgerRef.current.clear();
       activeAdvisorGenerationLeaseRef.current = undefined;
-      recentAdvisorContinuityRef.current = [];
+      recentAdvisorContinuityRef.current = { recentCapsules: [] };
       answerDeliveryProgressRef.current = null;
       pendingAnswerRevisionRef.current = null;
       visibleAnswerRevisionRef.current = 0;
@@ -9561,7 +9597,6 @@ export function useMeetingAssistant() {
         const updatedScreenTask = {
           ...activeScreenTask,
           updatedAt: now,
-          expiresAt: now + normalizedTimeoutMinutes * 60_000,
         };
         const activeInterviewTask =
           contextManagerRef.current.getState().taskRuntime.parent;
@@ -9570,12 +9605,17 @@ export function useMeetingAssistant() {
             ? {
                 ...activeInterviewTask,
                 updatedAt: now,
-                expiresAt: now + normalizedTimeoutMinutes * 60_000,
               }
             : activeInterviewTask;
         submitTaskRuntimeTransition(contextManagerRef.current, {
           transition: "update-source-attachment",
           reason: "active-screen-task-timeout-updated",
+          deadlineDelta: {
+            screen: { ownerId: activeScreenTask.id, deadline: now + normalizedTimeoutMinutes * 60_000 },
+            parent: activeInterviewTask?.source === "screen"
+              ? { ownerId: activeInterviewTask.id, deadline: now + normalizedTimeoutMinutes * 60_000 }
+              : undefined,
+          },
           screenAttachment: updatedScreenTask,
           parent: updatedInterviewTask,
         });
@@ -10179,7 +10219,7 @@ export function useMeetingAssistant() {
     logicalQuestionUnitRef.current = undefined;
     latestManualCorrectionTargetRef.current = undefined;
     manualCorrectionTargetHistoryRef.current = [];
-    recentAdvisorContinuityRef.current = [];
+    recentAdvisorContinuityRef.current = { recentCapsules: [] };
     submitTaskRuntimeClear(contextManagerRef.current, {
       scope: "all",
       reason: "active-task-cleared",
@@ -10458,11 +10498,39 @@ export function useMeetingAssistant() {
     stopSessionRecording,
   ]);
 
+  const buildEffectiveAdvisorBasePromptContext = useCallback(
+    (logicalQuestionUnit?: LogicalQuestionUnit) => {
+      const effectiveRecords = effectiveQuestionSourceLedgerRef.current.list();
+      const runtimeEpoch = runtimeEpochRef.current;
+      const context = contextManagerRef.current.buildAdvisorPromptContext(
+        (turns, sessionId) =>
+          projectAdvisorTranscriptForLogicalQuestion({
+            turns,
+            effectiveRecords,
+            logicalQuestionUnit,
+            sessionId,
+            runtimeEpoch,
+            meTurnLabel: "Me (clarification)",
+          }).transcript
+      );
+      return {
+        ...context,
+        activeMeetingTask: projectBoundedGeneratedContinuityForTask({
+          state: recentAdvisorContinuityRef.current,
+          task: context.activeMeetingTask,
+          sessionId: logicalQuestionUnit?.sessionId ?? contextManagerRef.current.getState().sessionId,
+          runtimeEpoch,
+        }),
+      };
+    },
+    []
+  );
+
   const buildAdvisorJob = useCallback((options: RunAdvisorOptions) => {
     const contextState = contextManagerRef.current.getState();
     const basePromptContext =
       options.promptContextOverride ??
-      contextManagerRef.current.buildAdvisorPromptContext();
+      buildEffectiveAdvisorBasePromptContext(options.logicalQuestionUnit);
     const promptContext = options.promptTurnOverride
       ? {
           ...basePromptContext,
@@ -10504,7 +10572,9 @@ export function useMeetingAssistant() {
       source === "manual-correction" ||
       options.responseAction === "narrow-context"
     ) {
-      recentAdvisorContinuityRef.current = [];
+      recentAdvisorContinuityRef.current = clearBoundedGeneratedContinuity({
+        state: recentAdvisorContinuityRef.current, scope: "recent",
+      });
     }
     const responseOpportunityGenerationGateOperationId =
       options.logicalQuestionUnit && !options.artifactRegenerationTarget
@@ -10576,7 +10646,7 @@ export function useMeetingAssistant() {
       traceId,
       triggerTurnId: options.triggerTurnId,
       promptContext,
-      generatedContinuity: recentAdvisorContinuityRef.current,
+      generatedContinuity: recentAdvisorContinuityRef.current.recentCapsules,
       turnIntentDecision: options.turnIntentDecision,
       sessionId: contextState.sessionId,
       runtimeEpoch: runtimeEpochRef.current,
@@ -10596,7 +10666,7 @@ export function useMeetingAssistant() {
       manualCorrectionRevision: manualCorrectionRevisionRef.current,
       responseActionRevision: responseActionRevisionRef.current,
     });
-  }, []);
+  }, [buildEffectiveAdvisorBasePromptContext]);
 
   const runAdvisor = useCallback(async (options: RunAdvisorOptions = {}) => {
     if (shutdownRequestedRef.current) {
@@ -10851,99 +10921,6 @@ export function useMeetingAssistant() {
         current: readRuntimeCommitSnapshot(),
         currentOperationId: activeAdvisorJobRef.current?.id,
       });
-    const trySameOwnerAnswerCommitRebase = (stage: string) => {
-      if (!advisorJob.logicalQuestionUnit) return false;
-      const startedAt = performance.now();
-      const currentContext = contextManagerRef.current.getState();
-      const rebaseDecision = decideSameOwnerAnswerCommitRebase({
-        expectedTask: promptContext.activeMeetingTask,
-        currentTask: currentContext.activeMeetingTask,
-        expectedTaskRuntimeRevision: promptContext.taskRuntime.revision,
-        currentTaskRuntime: currentContext.taskRuntime,
-        stableAnswer: stableAnswerRevisionRef.current,
-        sessionId: advisorJob.expectedSessionId,
-        runtimeEpoch: advisorJob.runtimeCommitToken.runtimeEpoch,
-        logicalQuestionUnitId: advisorJob.logicalQuestionUnit.id,
-        jobScheduledAt: advisorJob.scheduledAt,
-      });
-      const currentTask = currentContext.activeMeetingTask;
-      const rebasedPlan =
-        rebaseDecision.authorized && settledExecutionPlan && currentTask
-          ? rebaseSettledAdvisorExecutionPlanAfterOwnedParentMutation({
-              plan: settledExecutionPlan,
-              activeMeetingTask: currentTask,
-            })
-          : undefined;
-      const rebasedLease =
-        rebaseDecision.authorized && answerGenerationLease && currentTask
-          ? rebaseAnswerGenerationLeaseAfterOwnedParentMutation({
-              lease: answerGenerationLease,
-              taskId: currentTask.parent.id,
-              taskRevision: currentTask.parent.revisions,
-              visibleAnswerRevision: visibleAnswerRevisionRef.current,
-              expectedVisibleAnswerRevisionDelta: 1,
-            })
-          : undefined;
-      const integrationAuthorized = Boolean(
-        rebaseDecision.authorized &&
-          currentTask &&
-          (!settledExecutionPlan || rebasedPlan) &&
-          (!answerGenerationLease || rebasedLease)
-      );
-      const durationMs = Math.max(0, performance.now() - startedAt);
-      if (traceId) {
-        traceStoreRef.current.updateMetadata(traceId, {
-          ...formatSameOwnerAnswerCommitRebaseForTrace(
-            rebaseDecision,
-            durationMs,
-            stage
-          ),
-          sameOwnerAnswerCommitRebaseApplied: integrationAuthorized,
-          sameOwnerAnswerCommitRebaseIntegrationReason:
-            integrationAuthorized
-              ? "authorized"
-              : rebaseDecision.authorized
-                ? "dependent-lease-rebase-rejected"
-                : rebaseDecision.reason,
-        });
-      }
-      if (!integrationAuthorized || !currentTask) return false;
-
-      const currentPromptContext =
-        contextManagerRef.current.getState();
-      const rebasePromptContext = (context: AdvisorPromptContext) => ({
-        ...context,
-        taskRuntime: currentPromptContext.taskRuntime,
-        activeMeetingTask: currentPromptContext.activeMeetingTask,
-        interviewPlaybook: currentPromptContext.activeMeetingTask?.parent.playbook,
-      });
-      effectiveRuntimeCommitToken = rebaseRuntimeCommitToken({
-        token: effectiveRuntimeCommitToken,
-        snapshot: readRuntimeCommitSnapshot(),
-      });
-      promptContext = rebasePromptContext(promptContext);
-      originalPromptContext = rebasePromptContext(originalPromptContext);
-      if (rebasedPlan) {
-        const previousPlanId = settledExecutionPlan?.id;
-        settledExecutionPlan = rebasedPlan;
-        if (settledAdvisorExecutionPlanRef.current?.id === previousPlanId) {
-          settledAdvisorExecutionPlanRef.current = rebasedPlan;
-        }
-      }
-      if (rebasedLease) {
-        answerGenerationLease = rebasedLease;
-        if (
-          activeAdvisorGenerationLeaseRef.current?.advisorJobId ===
-          advisorJob.id
-        ) {
-          activeAdvisorGenerationLeaseRef.current = {
-            advisorJobId: advisorJob.id,
-            lease: rebasedLease,
-          };
-        }
-      }
-      return true;
-    };
     const terminalizeAuthorizationRejection = (input: {
       reason: string;
       source: string;
@@ -10965,13 +10942,6 @@ export function useMeetingAssistant() {
       stage: string,
       decision = readCommitDecision()
     ) => {
-      if (
-        !decision.authorized &&
-        decision.reason === "parent-revision-mismatch" &&
-        trySameOwnerAnswerCommitRebase(stage)
-      ) {
-        decision = readCommitDecision();
-      }
       if (traceId) {
         traceStoreRef.current.updateMetadata(
           traceId,
@@ -11837,7 +11807,9 @@ export function useMeetingAssistant() {
         "new-parent-boundary" ||
       boundedRecentHistoryDecision.reason === "source-conflict"
     ) {
-      recentAdvisorContinuityRef.current = [];
+      recentAdvisorContinuityRef.current = clearBoundedGeneratedContinuity({
+        state: recentAdvisorContinuityRef.current, scope: "recent",
+      });
     }
     if (traceId) {
       const boundedRecentHistoryMetadata =
@@ -12875,7 +12847,12 @@ export function useMeetingAssistant() {
         promptContext = {
           ...promptContext,
           taskRuntime: phaseUpdatedContext.taskRuntime,
-          activeMeetingTask: phaseUpdatedContext.activeMeetingTask,
+          activeMeetingTask: projectBoundedGeneratedContinuityForTask({
+            state: recentAdvisorContinuityRef.current,
+            task: phaseUpdatedContext.activeMeetingTask,
+            sessionId: phaseUpdatedContext.sessionId,
+            runtimeEpoch: runtimeEpochRef.current,
+          }),
           interviewPlaybook: phaseUpdatedContext.activeMeetingTask?.parent.playbook,
         };
         manualPhaseAdvanceCommitted = true;
@@ -12989,6 +12966,7 @@ export function useMeetingAssistant() {
                   advisorJob.logicalQuestionUnit.sourceTurnIds[0],
               })
             : undefined;
+        const boundaryDeadline = getActiveScreenTaskExpiresAt(state.settings);
         const boundaryParent = buildCommittedTaskBoundaryParent({
           candidate: taskBoundaryCandidate,
           logicalQuestionUnit: advisorJob.logicalQuestionUnit,
@@ -13000,7 +12978,6 @@ export function useMeetingAssistant() {
           playbook: advisorRuntimePlaybook,
           phaseDecision: playbookPhaseDecision,
           settlementId: currentQuestionSettlement?.settlementId,
-          expiresAt: getActiveScreenTaskExpiresAt(state.settings),
           parentContextHandoff,
         });
 
@@ -13011,6 +12988,7 @@ export function useMeetingAssistant() {
               ? "replace-parent"
               : "create-parent",
             reason: "task-boundary-parent-committed",
+            deadlineDelta: { parent: { ownerId: boundaryParent.id, deadline: boundaryDeadline } },
             screenAttachment:
               advisorScreenScopeDecision.action === "clear"
                 ? null
@@ -13018,7 +12996,9 @@ export function useMeetingAssistant() {
             parent: boundaryParent,
           });
           const boundaryContext =
-            contextManagerRef.current.buildAdvisorPromptContext();
+            buildEffectiveAdvisorBasePromptContext(
+              advisorJob.logicalQuestionUnit
+            );
           promptContext = { ...promptContext, ...boundaryContext };
           activeMeetingTaskId = getAdvisorActiveTaskId(promptContext);
           effectiveRuntimeCommitToken = rebaseRuntimeCommitToken({
@@ -13150,6 +13130,13 @@ export function useMeetingAssistant() {
           sourceOwnedTransitionDurableMutationApplied(
             sourceOwnedTransitionReceipt
           );
+        if (sourceTransitionMutationApplied && sourceOwnedTransitionCandidate.kind === "reseed-parent") {
+          recentAdvisorContinuityRef.current = clearBoundedGeneratedSummaries(recentAdvisorContinuityRef.current);
+        } else if (sourceTransitionMutationApplied && sourceOwnedTransitionCandidate.kind === "child-probe" &&
+          sourceOwnedTransitionCandidate.preserveChildId &&
+          transitionContextBefore.taskRuntime.parent?.child?.questionType !== sourceOwnedTransitionCandidate.questionType) {
+          recentAdvisorContinuityRef.current = clearBoundedGeneratedContinuity({ state: recentAdvisorContinuityRef.current, scope: "child" });
+        }
         if (traceId) {
           traceStoreRef.current.updateMetadata(
             traceId,
@@ -13193,8 +13180,12 @@ export function useMeetingAssistant() {
           promptContext = {
             ...promptContext,
             taskRuntime: transitionContextAfter.taskRuntime,
-            activeMeetingTask:
-              transitionContextAfter.activeMeetingTask,
+            activeMeetingTask: projectBoundedGeneratedContinuityForTask({
+              state: recentAdvisorContinuityRef.current,
+              task: transitionContextAfter.activeMeetingTask,
+              sessionId: transitionContextAfter.sessionId,
+              runtimeEpoch: runtimeEpochRef.current,
+            }),
             interviewPlaybook:
               transitionContextAfter.activeMeetingTask?.parent.playbook,
           };
@@ -14366,20 +14357,27 @@ export function useMeetingAssistant() {
       !responseMutationSuppressed &&
       !options.artifactRegenerationTarget
     ) {
-      submitTaskRuntimeTransition(contextManagerRef.current, {
+      const bindingRuntimeCommit = submitTaskRuntimeTransition(contextManagerRef.current, {
         transition: "update-parent-context",
         reason: "project-binding-settlement-committed",
         screenAttachment:
           projectBindingContextBefore.taskRuntime.screenAttachment,
         parent: projectBindingCommitResult.task ?? null,
       });
+      if (bindingRuntimeCommit.authorized && bindingRuntimeCommit.mutationApplied && projectBindingCommitResult.invalidateProjectState) {
+        recentAdvisorContinuityRef.current = clearBoundedGeneratedSummaries(recentAdvisorContinuityRef.current);
+      }
       const projectBindingContextAfter =
         contextManagerRef.current.getState();
       promptContext = {
         ...promptContext,
         taskRuntime: projectBindingContextAfter.taskRuntime,
-        activeMeetingTask:
-          projectBindingContextAfter.activeMeetingTask,
+        activeMeetingTask: projectBoundedGeneratedContinuityForTask({
+          state: recentAdvisorContinuityRef.current,
+          task: projectBindingContextAfter.activeMeetingTask,
+          sessionId: projectBindingContextAfter.sessionId,
+          runtimeEpoch: runtimeEpochRef.current,
+        }),
       };
       effectiveAdvisorSettlementView =
         buildEffectiveAdvisorSettlementView({
@@ -14664,7 +14662,15 @@ export function useMeetingAssistant() {
     const settledAdvisorContextCompilation = transientPersonalStatusDecision
       ? undefined
       : compileSettledAdvisorPromptContext({
-          baseContext: promptContext,
+          baseContext: {
+            ...promptContext,
+            activeMeetingTask: projectBoundedGeneratedContinuityForTask({
+              state: recentAdvisorContinuityRef.current,
+              task: promptContext.activeMeetingTask,
+              sessionId: advisorJob.expectedSessionId,
+              runtimeEpoch: advisorJob.runtimeCommitToken.runtimeEpoch,
+            }),
+          },
           contextReadScope:
             settledExecutionPlan?.contextReadScope ??
             effectiveAdvisorSettlementView.contextReadScope,
@@ -15802,6 +15808,7 @@ export function useMeetingAssistant() {
         options.artifactRegenerationTarget
           ? artifactOnlyWhiteboard && Boolean(existingInterviewTask)
           : shouldCommitAdvisorParent;
+      const continuityCalculatedAt = Date.now();
       const continuity = continuityMutationAuthorized
         ? updateInterviewTaskContinuityForAnswer({
             existingTask: existingInterviewTask,
@@ -15819,18 +15826,6 @@ export function useMeetingAssistant() {
                 : continuityRelation === "none"
                 ? "unknown"
                 : continuityRelation,
-            subtaskIntent: options.artifactRegenerationTarget
-              ? "unknown"
-              : advisorTaskSignals.subtaskIntent,
-            question:
-              options.artifactRegenerationTarget
-                ? existingInterviewTask?.topic
-                : advisorEvidenceSource === "screen"
-                ? promptContext.taskRuntime.screenAttachment?.question ?? latestTurn?.text
-                : advisorQuestionSemanticEvidenceText || latestTurn?.text,
-            questionInstanceId: questionLineage?.questionInstanceId,
-            canonicalQuestionSourceTurnIds:
-              advisorJob.logicalQuestionUnit?.sourceTurnIds,
             finalContent,
             parsedAnswer: parsedMeetingAnswer,
             whiteboardRenderValidation,
@@ -15840,9 +15835,6 @@ export function useMeetingAssistant() {
             phaseDecision: options.artifactRegenerationTarget
               ? undefined
               : outputPhaseDecision,
-            sourceTransitionPrecommitted:
-              postModelContinuityAuthority.lifecycleCommittedBeforeAdvisor,
-            latestTurn,
             observationId:
               advisorEvidenceSource === "screen"
                 ? promptContext.taskRuntime.screenAttachment?.basedOnObservationId
@@ -15854,7 +15846,8 @@ export function useMeetingAssistant() {
               : options.artifactRegenerationTarget
                 ? "manual-artifact-regeneration"
               : "model-output",
-            expiresAt: getActiveScreenTaskExpiresAt(state.settings),
+            expiresAt: getActiveScreenTaskExpiresAt(state.settings, continuityCalculatedAt),
+            deadlineCalculatedAt: continuityCalculatedAt,
             supportedFactAnchors:
               options.artifactRegenerationTarget
                 ? existingInterviewTask?.supportedFactAnchors
@@ -15910,16 +15903,6 @@ export function useMeetingAssistant() {
             ? "produced"
             : "ignored"
           : "none",
-        artifactOnlyParentLatestUsefulAnswerPreserved:
-          options.artifactRegenerationTarget
-            ? existingInterviewTask?.latestUsefulAnswer ===
-                continuity.task?.latestUsefulAnswer
-            : undefined,
-        artifactOnlyParentPreviousUsefulAnswerPreserved:
-          options.artifactRegenerationTarget
-            ? existingInterviewTask?.previousUsefulAnswer ===
-                continuity.task?.previousUsefulAnswer
-            : undefined,
         answerWhiteboardArtifactDecision: whiteboardArtifactDecision,
         ...formatWhiteboardRenderValidationForTrace({
           decision: whiteboardRenderValidation,
@@ -16323,6 +16306,9 @@ export function useMeetingAssistant() {
               settlementSnapshot: currentQuestionSettlement,
               resetSections: resetVisibleSections,
               reason: stableAnswerCommitDecision.reason,
+              childSummary: continuity.childSummary,
+              deadlineDelta: continuity.deadlineDelta,
+              deadlineCalculatedAt: continuity.deadlineCalculatedAt,
               latestUsefulAnswerMutationAuthorized:
                 effectiveArtifactAuthorization.allowLatestUsefulAnswer &&
                 shouldCommitAdvisorParent,
@@ -16351,8 +16337,6 @@ export function useMeetingAssistant() {
           prepareGenerationDerivedTaskRuntimeTransition({
             currentRevision: advisorCommitTaskRuntimeState.revision,
             currentParent: advisorCommitTaskRuntimeState.parent,
-            currentScreenAttachment:
-              advisorCommitTaskRuntimeState.screenAttachment,
             transition: advisorGenerationTaskRuntimeTransition,
             stable: candidateStableAnswer,
             commitLatestUsefulAnswer:
@@ -16413,6 +16397,9 @@ export function useMeetingAssistant() {
                   candidateStableAnswer,
                   {
                     clearPrevious: resetVisibleSections,
+                    childSummary: continuity.childSummary,
+                    deadlineDelta: continuity.deadlineDelta,
+                    deadlineCalculatedAt: continuity.deadlineCalculatedAt,
                     latestUsefulAnswerCommitted:
                       preparedAdvisorTransition.latestUsefulAnswerCommitted,
                     latestUsefulAnswerChars:
@@ -16510,12 +16497,6 @@ export function useMeetingAssistant() {
                         stableWhiteboard?.trim()
                   )
                 : undefined,
-            artifactOnlyParentLatestUsefulAnswerPreserved:
-              existingInterviewTask?.latestUsefulAnswer ===
-              committedParent?.latestUsefulAnswer,
-            artifactOnlyParentPreviousUsefulAnswerPreserved:
-              existingInterviewTask?.previousUsefulAnswer ===
-              committedParent?.previousUsefulAnswer,
           });
         }
         if (traceId) {
@@ -17002,6 +16983,7 @@ export function useMeetingAssistant() {
     activateAdvisorJob,
     aiProvider,
     buildAdvisorJob,
+    buildEffectiveAdvisorBasePromptContext,
     finishRunningAdvisorJobTrace,
     finalizeStableAnswerPublication,
     finalizeAnswerRecoveryAdjudication,
@@ -23460,17 +23442,28 @@ export function useMeetingAssistant() {
         }
       );
       if (turnGate.action === "state-update") {
+        const updatedAt = Date.now();
         const stateUpdatedTask = buildStateUpdatedInterviewTask(
           contextState.taskRuntime.parent,
-          turn
+          turn,
+          updatedAt
         );
         if (stateUpdatedTask) {
+          const previousDeadline = contextManagerRef.current.getTaskDeadlineControl().parent;
           submitTaskRuntimeTransition(contextManagerRef.current, {
             transition: contextState.taskRuntime.parent?.child && !stateUpdatedTask.child
               ? "resume-parent"
               : "update-parent-context",
             reason: "turn-gate-state-update",
             parent: stateUpdatedTask,
+            deadlineDelta: {
+              parent: {
+                ownerId: stateUpdatedTask.id,
+                deadline: previousDeadline?.ownerId === stateUpdatedTask.id && previousDeadline.deadline
+                  ? Math.max(previousDeadline.deadline, updatedAt + 5 * 60_000)
+                  : undefined,
+              },
+            },
           });
         }
         const nextContextState = contextManagerRef.current.getState();
@@ -26202,9 +26195,7 @@ export function useMeetingAssistant() {
       let screenGenerationTaskRuntimeTransition:
         | PendingGenerationAnswerRevision["taskRuntimeTransition"]
         | undefined;
-      let screenGenerationContinuityTask:
-        | ActiveInterviewParent
-        | undefined;
+      let screenGenerationContinuity: InterviewTaskContinuityResult | undefined;
       let screenGenerationRequestedArtifacts:
         AnswerArtifactSection[] = [];
       let screenPresentationAuthorizedArtifacts:
@@ -28574,6 +28565,14 @@ export function useMeetingAssistant() {
             sourceOwnedTransitionDurablySatisfied(
               screenSourceOwnedTransitionReceipt
             );
+          if (sourceOwnedTransitionDurableMutationApplied(screenSourceOwnedTransitionReceipt)) {
+            if (screenTransitionCandidate.kind === "reseed-parent") {
+              recentAdvisorContinuityRef.current = clearBoundedGeneratedSummaries(recentAdvisorContinuityRef.current);
+            } else if (screenTransitionCandidate.kind === "child-probe" && screenTransitionCandidate.preserveChildId &&
+              preflightContextState.taskRuntime.parent?.child?.questionType !== screenTransitionCandidate.questionType) {
+              recentAdvisorContinuityRef.current = clearBoundedGeneratedContinuity({ state: recentAdvisorContinuityRef.current, scope: "child" });
+            }
+          }
           const screenTransitionMetadata =
             formatSourceOwnedDurableTransitionForTrace(
               screenSourceOwnedTransitionReceipt
@@ -30166,7 +30165,9 @@ export function useMeetingAssistant() {
               relation: provisionalScreenTaskRelation,
               meetingContext: sufficiencyMeetingContext,
               basePromptContext:
-                contextManagerRef.current.buildAdvisorPromptContext(),
+                buildEffectiveAdvisorBasePromptContext(
+                  screenLogicalQuestionUnit
+                ),
               originalModelPromptText: screenModelPromptText,
             });
           screenAnswerSufficiencyDecision = answerSufficiencyDecision;
@@ -30395,8 +30396,6 @@ export function useMeetingAssistant() {
             source: "screen",
             questionType: settledScreenTaskKind,
             relation: screenContinuityRelation,
-            subtaskIntent: screenSubtaskIntent,
-            question: screenTaskTopic,
             finalContent: committedScreenTaskContent,
             parsedAnswer: parsedScreenMeetingAnswer,
             whiteboardRenderValidation:
@@ -30405,8 +30404,6 @@ export function useMeetingAssistant() {
             phaseDecision: screenDurableTransitionSatisfiedBeforeModel
               ? undefined
               : screenPhaseDecision,
-            sourceTransitionPrecommitted:
-              screenDurableTransitionSatisfiedBeforeModel,
             observationId: observation.id,
             traceId: trace.id,
             selectedOverlayIds: extractSelectedOverlayIdsFromMemory(memoryContext),
@@ -30415,6 +30412,7 @@ export function useMeetingAssistant() {
                 ? "screen-merge"
                 : "model-output",
             expiresAt: getActiveScreenTaskExpiresAt(state.settings, now),
+            deadlineCalculatedAt: now,
             supportedFactAnchors:
               extractSupportedFactAnchorsFromMemory(memoryContext),
             projectBinding:
@@ -30427,7 +30425,7 @@ export function useMeetingAssistant() {
               ? "revise-whiteboard"
               : "preserve",
           });
-          screenGenerationContinuityTask = screenContinuity.task;
+          screenGenerationContinuity = screenContinuity;
           const previousWhiteboard =
             existingInterviewTask?.whiteboardArtifact;
           const nextWhiteboard = screenContinuity.task?.whiteboardArtifact;
@@ -30589,15 +30587,15 @@ export function useMeetingAssistant() {
         );
 
         const screenGeneratedTaskMetadata =
-          screenGenerationContinuityTask
+          screenGenerationContinuity?.task
             ? {
-                taskId: screenGenerationContinuityTask.id,
-                parentTaskId: screenGenerationContinuityTask.id,
+                taskId: screenGenerationContinuity.task.id,
+                parentTaskId: screenGenerationContinuity.task.id,
                 childTaskId:
-                  screenGenerationContinuityTask.child?.id,
-                taskSource: screenGenerationContinuityTask.source,
+                  screenGenerationContinuity.task.child?.id,
+                taskSource: screenGenerationContinuity.task.source,
                 questionType:
-                  screenGenerationContinuityTask.stableKind,
+                  screenGenerationContinuity.task.stableKind,
               }
             : buildSuggestionTaskMetadata(
                 updatedContextState.activeMeetingTask
@@ -30613,7 +30611,7 @@ export function useMeetingAssistant() {
               answerProfile: parsedScreenMeetingAnswer.profile,
               createdAt: Date.now(),
               ...(screenTaskContextCommitted ||
-              screenGenerationContinuityTask
+              screenGenerationContinuity?.task
                 ? screenGeneratedTaskMetadata
                 : {}),
               questionType: settledScreenTaskKind,
@@ -30637,7 +30635,7 @@ export function useMeetingAssistant() {
               content: "",
               createdAt: Date.now(),
               ...(screenTaskContextCommitted ||
-              screenGenerationContinuityTask
+              screenGenerationContinuity?.task
                 ? screenGeneratedTaskMetadata
                 : {}),
               questionType: settledScreenTaskKind,
@@ -30687,7 +30685,7 @@ export function useMeetingAssistant() {
           deliveryLockActive: false,
         });
         const screenCommitTaskId =
-          screenGenerationContinuityTask?.id ??
+          screenGenerationContinuity?.task?.id ??
           updatedContextState.activeMeetingTask?.parent.id ??
           previousStableAnswer?.taskId ??
           null;
@@ -30744,8 +30742,6 @@ export function useMeetingAssistant() {
             prepareGenerationDerivedTaskRuntimeTransition({
               currentRevision: screenCommitTaskRuntimeState.revision,
               currentParent: screenCommitTaskRuntimeState.parent,
-              currentScreenAttachment:
-                screenCommitTaskRuntimeState.screenAttachment,
               transition: screenGenerationTaskRuntimeTransition,
               stable: candidateStableAnswer,
               commitLatestUsefulAnswer:
@@ -30810,6 +30806,9 @@ export function useMeetingAssistant() {
                     candidateStableAnswer,
                     {
                       clearPrevious: screenStartedNewInterviewParent,
+                      childSummary: screenGenerationContinuity?.childSummary,
+                      deadlineDelta: screenGenerationContinuity?.deadlineDelta,
+                      deadlineCalculatedAt: screenGenerationContinuity?.deadlineCalculatedAt,
                       latestUsefulAnswerCommitted:
                         preparedScreenTransition.latestUsefulAnswerCommitted,
                       latestUsefulAnswerChars:
@@ -31348,6 +31347,7 @@ export function useMeetingAssistant() {
     },
     [
       aiProvider,
+      buildEffectiveAdvisorBasePromptContext,
       cancelActiveAdvisorJob,
       clearPendingAnswerCommitTimer,
       flushPendingSentenceCompletion,
@@ -31589,7 +31589,6 @@ export function useMeetingAssistant() {
               suggestion: state.latestSuggestion,
               questionText: correctionQuestionText,
               logicalQuestionUnit: correctionLogicalQuestionUnit,
-              expiresAt: getActiveScreenTaskExpiresAt(state.settings),
             }));
       const nonDurableCurrentOnlyCorrection = Boolean(
         correctionScopeDecision.scope === "current-only" &&
@@ -32461,6 +32460,7 @@ export function useMeetingAssistant() {
             });
             return;
           }
+          const correctedParentDeadline = getActiveScreenTaskExpiresAt(state.settings);
           const parentTransition = buildManualCorrectionParentTransition({
             parent: parentBefore,
             decision,
@@ -32472,7 +32472,6 @@ export function useMeetingAssistant() {
             newParentId: createMeetingId("interview_parent"),
             source: activeTask.screen ? "screen" : "voice",
             now: Date.now(),
-            expiresAt: getActiveScreenTaskExpiresAt(state.settings),
           });
           const preserveExistingParentOrigin =
             !correctionTargetOwnsActiveParent;
@@ -32489,6 +32488,8 @@ export function useMeetingAssistant() {
               : correctionLogicalQuestionUnit.revision,
             settlementId: correctionCurrentQuestionSettlement.settlementId,
           };
+          const correctedScreenDeadline = contextState.taskRuntime.screenAttachment
+            ? getActiveScreenTaskExpiresAt(state.settings) : undefined;
           const screenAfter = contextState.taskRuntime.screenAttachment
             ? applyManualQuestionTypeCorrectionToScreenTask({
                 task: contextState.taskRuntime.screenAttachment,
@@ -32497,7 +32498,6 @@ export function useMeetingAssistant() {
                 askFrame,
                 topicDomain,
                 now: Date.now(),
-                expiresAt: getActiveScreenTaskExpiresAt(state.settings),
               })
             : undefined;
           const projectedTask = buildActiveMeetingTask({
@@ -32553,6 +32553,10 @@ export function useMeetingAssistant() {
           });
           const lifecycleCommit = commitCorrectionLifecycleWithManager({
             manager: contextManagerRef.current,
+            deadlineDelta: {
+              parent: { ownerId: parentAfter.id, deadline: correctedParentDeadline },
+              screen: screenAfter ? { ownerId: screenAfter.id, deadline: correctedScreenDeadline } : undefined,
+            },
             plan: correctionExecutionPlan,
             settlement: correctionCurrentQuestionSettlement,
             currentContext: contextState,
@@ -32610,6 +32614,9 @@ export function useMeetingAssistant() {
             return;
           }
           parentLifecycleMutationApplied = true;
+          if (parentTransition.clearedContextFields.includes("generated-answers")) {
+            recentAdvisorContinuityRef.current = clearBoundedGeneratedSummaries(recentAdvisorContinuityRef.current);
+          }
           currentQuestionSettlementRef.current =
             correctionCurrentQuestionSettlement;
           settledAdvisorExecutionPlanRef.current = correctionExecutionPlan;
@@ -33427,7 +33434,7 @@ export function useMeetingAssistant() {
         codingSolutionManifestCacheRef.current.clear();
         pendingAnswerRevisionRef.current = null;
         answerDeliveryProgressRef.current = null;
-        recentAdvisorContinuityRef.current = [];
+        recentAdvisorContinuityRef.current = { recentCapsules: [] };
         visibleAnswerRevisionRef.current += 1;
         const parent = contextState.taskRuntime.parent;
         const activeScreenTask = contextState.taskRuntime.screenAttachment;
@@ -33442,8 +33449,6 @@ export function useMeetingAssistant() {
         const resetParent = parent
           ? {
               ...parent,
-              latestUsefulAnswer: undefined,
-              previousUsefulAnswer: undefined,
               whiteboardArtifact: undefined,
               supportedFactAnchors: [],
               projectBinding: undefined,
@@ -34638,7 +34643,7 @@ export function useMeetingAssistant() {
         }
 
         const baseContext =
-          contextManagerRef.current.buildAdvisorPromptContext();
+          buildEffectiveAdvisorBasePromptContext(logicalQuestionUnit);
         const selection = composeContextScopeAdvisorPromptContext({
           action: responseAction,
           baseContext,
@@ -34809,6 +34814,7 @@ export function useMeetingAssistant() {
       });
     },
     [
+      buildEffectiveAdvisorBasePromptContext,
       currentSuggestionText,
       flushPendingSentenceCompletion,
       recordManualRuntimeAction,
@@ -35857,6 +35863,7 @@ export function useMeetingAssistant() {
                   latestParent.questionType
                 ) ?? correctedType
               )!;
+            const correctedParentDeadline = getActiveScreenTaskExpiresAt(state.settings);
             const parentTransition =
               buildManualCorrectionParentTransition({
                 parent: lifecycleParentBefore,
@@ -35872,9 +35879,6 @@ export function useMeetingAssistant() {
                 ),
                 source: latestTask.screen ? "screen" : "voice",
                 now: Date.now(),
-                expiresAt: getActiveScreenTaskExpiresAt(
-                  state.settings
-                ),
               });
             const resettledParent = {
               ...parentTransition.parent,
@@ -35891,6 +35895,8 @@ export function useMeetingAssistant() {
                 correctionOwnedResettlement.settlement
                   ?.settlementId,
             };
+            const correctedScreenDeadline = latestContext.taskRuntime.screenAttachment
+              ? getActiveScreenTaskExpiresAt(state.settings) : undefined;
             const resettledScreenTask =
               latestContext.taskRuntime.screenAttachment
                 ? applyManualQuestionTypeCorrectionToScreenTask({
@@ -35900,10 +35906,6 @@ export function useMeetingAssistant() {
                     askFrame,
                     topicDomain,
                     now: Date.now(),
-                    expiresAt:
-                      getActiveScreenTaskExpiresAt(
-                        state.settings
-                      ),
                   })
                 : undefined;
             const projectedActiveMeetingTask =
@@ -35997,6 +35999,10 @@ export function useMeetingAssistant() {
               const lifecycleCommit =
                 commitCorrectionLifecycleWithManager({
                   manager: contextManagerRef.current,
+                  deadlineDelta: {
+                    parent: { ownerId: resettledParent.id, deadline: correctedParentDeadline },
+                    screen: resettledScreenTask ? { ownerId: resettledScreenTask.id, deadline: correctedScreenDeadline } : undefined,
+                  },
                   plan: proposedExecutionPlan,
                   settlement: settledCorrection,
                   currentContext: latestContext,
@@ -36011,6 +36017,9 @@ export function useMeetingAssistant() {
                   screenAfter: resettledScreenTask ?? null,
                   operationId: repairTrace.id,
                 });
+              if (lifecycleCommit.authorized && parentTransition.clearedContextFields.includes("generated-answers")) {
+                recentAdvisorContinuityRef.current = clearBoundedGeneratedSummaries(recentAdvisorContinuityRef.current);
+              }
               const lifecycleReduction = lifecycleCommit.reduction;
               const postMutationPlanAuthorization =
                 lifecycleCommit.postMutationAuthorization;
@@ -38397,17 +38406,14 @@ function inferAdvisorSubtaskIntent(
 
 function buildStateUpdatedInterviewTask(
   task: ActiveInterviewParent | undefined,
-  turn: TranscriptTurn
+  turn: TranscriptTurn,
+  now = Date.now()
 ): ActiveInterviewParent | undefined {
   if (!task) return undefined;
 
-  const now = Date.now();
   return {
     ...task,
     updatedAt: now,
-    expiresAt: task.expiresAt
-      ? Math.max(task.expiresAt, now + 5 * 60_000)
-      : undefined,
     revisions: task.revisions + 1,
     child:
       task.child && isExplicitResumeParentTranscript(turn.text)
@@ -38417,332 +38423,124 @@ function buildStateUpdatedInterviewTask(
 }
 
 function updateInterviewTaskContinuityForAnswer({
-  existingTask,
-  source,
-  questionType,
-  relation,
-  subtaskIntent,
-  question,
-  questionInstanceId,
-  canonicalQuestionSourceTurnIds,
-  finalContent,
-  parsedAnswer,
-  whiteboardRenderValidation,
-  playbook,
-  phaseDecision,
-  latestTurn,
-  observationId,
-  traceId,
-  whiteboardUpdateSource,
-  selectedOverlayIds,
-  expiresAt,
-  supportedFactAnchors,
-  projectBinding,
-  artifactAuthorization,
-  artifactIntent,
-  sourceTransitionPrecommitted = false,
+  existingTask, source, questionType, relation, finalContent, parsedAnswer,
+  whiteboardRenderValidation, playbook, phaseDecision, observationId, traceId,
+  whiteboardUpdateSource, selectedOverlayIds, expiresAt, supportedFactAnchors,
+  projectBinding, artifactAuthorization, artifactIntent, deadlineCalculatedAt,
 }: {
   existingTask?: ActiveInterviewParent;
   source: "screen" | "voice";
   questionType: MemoryQuestionType | ScreenTaskKind;
   relation: InterviewTaskRelation;
-  subtaskIntent: InterviewSubtaskIntent;
-  question?: string;
-  questionInstanceId?: string;
-  canonicalQuestionSourceTurnIds?: string[];
   finalContent: string;
   parsedAnswer?: ParsedMeetingAnswer;
   whiteboardRenderValidation?: WhiteboardRenderValidationDecision;
   playbook?: ActiveInterviewParent["playbook"];
   phaseDecision?: PlaybookPhaseDecision;
-  latestTurn?: TranscriptTurn;
   observationId?: string;
   traceId?: string;
   whiteboardUpdateSource?: WhiteboardUpdateSource;
   selectedOverlayIds?: string[];
   expiresAt?: number;
+  deadlineCalculatedAt?: number;
   supportedFactAnchors?: string[];
   projectBinding?: ActiveInterviewParent["projectBinding"];
-  artifactAuthorization: ReturnType<
-    typeof authorizeResponseArtifactMutation
-  >;
+  artifactAuthorization: ReturnType<typeof authorizeResponseArtifactMutation>;
   artifactIntent?: SettledAdvisorExecutionPlan["artifactIntent"];
-  sourceTransitionPrecommitted?: boolean;
 }): InterviewTaskContinuityResult {
-  const kind = normalizeInterviewParentKind(questionType);
-  const childQuestionType =
-    normalizeCanonicalQuestionType(questionType) ?? "unknown";
-  const now = Date.now();
-  const trimmedContent = finalContent.trim();
-  const parsed = parsedAnswer ?? parseMeetingAnswer(trimmedContent);
-  const summaryDecision = buildMeetingAnswerSummary(parsed);
-  const isUsefulAnswer = Boolean(summaryDecision.text);
-  const topic =
-    question?.trim() ||
-    latestTurn?.text.trim() ||
-    existingTask?.topic ||
-    "Unknown interview task";
-  const continuingTaskAnchors = mergeSupportedFactAnchors(
-    existingTask?.supportedFactAnchors,
-    supportedFactAnchors
-  );
-  const newParentAnchors = mergeSupportedFactAnchors(
-    undefined,
-    supportedFactAnchors
-  );
-  const continuityDecision = decideInterviewTaskContinuityBranch({
+  const decision = decideInterviewTaskContinuityBranch({
     hasExistingParent: Boolean(existingTask),
     existingParentQuestionType: existingTask?.stableKind,
     candidateQuestionType: questionType,
     relation,
   });
-  const whiteboardMutationAuthorized =
-    isWhiteboardRevisionAuthorized({
+  if (decision.branch === "new-parent") {
+    throw new Error("Generated output requires its parent to be committed before generation.");
+  }
+  if (!existingTask) return { task: undefined, startedNewParent: false, clearedParent: false };
+  if (decision.branch === "child-probe" && !existingTask.child) {
+    throw new Error("Generated child output requires a committed child owner.");
+  }
+  const now = Date.now();
+  const parsed = parsedAnswer ?? parseMeetingAnswer(finalContent.trim());
+  const latestScreenObservationId = resolveLatestScreenObservationId({
+    source,
+    sourceObservationIds: observationId ? [observationId] : [],
+    current: existingTask.latestScreenObservationId,
+  });
+  let proposed = existingTask;
+  if (decision.branch === "preserve") {
+    if (latestScreenObservationId !== existingTask.latestScreenObservationId) {
+      proposed = { ...existingTask, latestScreenObservationId };
+    }
+  } else {
+    const parentPhaseOwned = decision.branch === "continue-parent";
+    const nextPhase = parentPhaseOwned
+      ? phaseDecision?.phase ?? playbook?.phase ?? existingTask.playbookPhase
+      : existingTask.playbookPhase;
+    const storedPlaybook = parentPhaseOwned
+      ? withInterviewPlaybookPhase(playbook ?? existingTask.playbook, nextPhase)
+      : existingTask.playbook;
+    const whiteboardAuthorized = isWhiteboardRevisionAuthorized({
       artifactIntent,
       policyAllowsWhiteboard: artifactAuthorization.allowWhiteboard,
     });
-
-  if (continuityDecision.branch === "child-probe" && existingTask) {
-    const generatedChild = isUsefulAnswer
-      ? buildActiveInterviewChild({
-          questionType: childQuestionType,
-          subtaskIntent,
-          question: topic,
-          parsedAnswer: parsed,
-          playbook,
-          latestTurn,
-          observationId,
-        })
-      : undefined;
-    const child =
-      sourceTransitionPrecommitted &&
-      existingTask.child
-        ? mergeGeneratedChildContinuity({
-            sourceOwnedChild: existingTask.child,
-            generatedChild,
-            now,
-          })
-        : generatedChild;
-    const whiteboardArtifact = whiteboardMutationAuthorized
-      ? updateWhiteboardArtifactFromAnswer({
-          existing: existingTask.whiteboardArtifact,
-          parentTaskId: existingTask.id,
-          questionInstanceId: existingTask.originQuestionId,
-          parentQuestionType: existingTask.stableKind,
-          parentTopic: existingTask.topic,
-          finalContent: trimmedContent,
-          parsedAnswer: parsed,
-          phase: phaseDecision?.phase ?? existingTask.playbookPhase,
-          traceId,
-          selectedOverlayIds,
-          updateSource: whiteboardUpdateSource ?? "model-output",
-          provisional: phaseDecision?.whiteboardProvisional,
-          openConstraintCategories:
-            phaseDecision?.whiteboardOpenConstraintCategories,
-          revisionReason: phaseDecision?.whiteboardRevisionReason,
-          renderValidation: whiteboardRenderValidation,
-          now,
-        })
-      : existingTask.whiteboardArtifact;
-
-    return {
-      task: applyInterviewChildProbeTransition({
-        parent: existingTask,
-        child,
-        projectBinding: artifactAuthorization.allowParentContextMutation
-          ? projectBinding
-          : existingTask.projectBinding,
-        supportedFactAnchors: artifactAuthorization.allowParentContextMutation
-          ? continuingTaskAnchors
-          : existingTask.supportedFactAnchors,
-        whiteboardArtifact,
-        now,
-        expiresAt,
-      }),
-      startedNewParent: false,
-      clearedParent: false,
-    };
-  }
-
-  if (continuityDecision.branch === "preserve") {
-    const latestScreenObservationId = resolveLatestScreenObservationId({
-      source,
-      sourceObservationIds: observationId ? [observationId] : [],
-      current: existingTask?.latestScreenObservationId,
-    });
-    return {
-      task:
-        existingTask &&
-        latestScreenObservationId !== existingTask.latestScreenObservationId
-          ? {
-              ...existingTask,
-              latestScreenObservationId,
-              updatedAt: now,
-              expiresAt,
-              revisions: existingTask.revisions + 1,
-            }
-          : existingTask,
-      startedNewParent: false,
-      clearedParent: false,
-    };
-  }
-
-  if (continuityDecision.branch === "new-parent") {
-    if (!kind || !isParentInterviewKind(kind)) {
-      return {
-        task: existingTask,
-        startedNewParent: false,
-        clearedParent: false,
-      };
-    }
-    const parentId = createMeetingId("interview_parent");
-    const nextPhase = phaseDecision?.phase ?? playbook?.phase ?? "follow_up";
-    const storedPlaybook = withInterviewPlaybookPhase(playbook, nextPhase);
-    const whiteboardArtifact = whiteboardMutationAuthorized
-      ? updateWhiteboardArtifactFromAnswer({
-          parentTaskId: parentId,
-          parentQuestionType: kind,
-          parentTopic: topic,
-          finalContent: trimmedContent,
-          parsedAnswer: parsed,
-          phase: nextPhase,
-          traceId,
-          selectedOverlayIds,
-          updateSource: whiteboardUpdateSource ?? "new-parent",
-          provisional: phaseDecision?.whiteboardProvisional,
-          openConstraintCategories:
-            phaseDecision?.whiteboardOpenConstraintCategories,
-          revisionReason: phaseDecision?.whiteboardRevisionReason,
-          renderValidation: whiteboardRenderValidation,
-          now,
-        })
-      : undefined;
-
-    return {
-      task: {
-        id: parentId,
-        source,
-        stableKind: kind,
-        topic,
-        playbook: storedPlaybook,
-        playbookPhase: nextPhase,
-        phaseProgress: applyPlaybookPhaseDecisionToProgress(
-          createInitialPlaybookPhaseProgress(kind, storedPlaybook?.phase),
-          phaseDecision,
-          storedPlaybook?.phase
-        ),
-        projectBinding: artifactAuthorization.allowParentContextMutation
-          ? projectBinding
-          : undefined,
-        supportedFactAnchors: artifactAuthorization.allowParentContextMutation
-          ? newParentAnchors
-          : [],
-        latestUsefulAnswer:
-          artifactAuthorization.allowLatestUsefulAnswer && isUsefulAnswer
-            ? summaryDecision.text
-            : undefined,
-        previousUsefulAnswer: undefined,
-        whiteboardArtifact,
-        createdAt: now,
-        updatedAt: now,
-        expiresAt,
-        originQuestionId: questionInstanceId,
-        startTurnId:
-          canonicalQuestionSourceTurnIds?.[0] ?? latestTurn?.id,
-        startObservationId: observationId,
-        latestScreenObservationId: resolveLatestScreenObservationId({
-          source,
-          sourceObservationIds: observationId ? [observationId] : [],
-        }),
-        promptTranscriptStartTurnId:
-          canonicalQuestionSourceTurnIds?.[0] ?? latestTurn?.id,
-        canonicalQuestionSourceTurnIds:
-          canonicalQuestionSourceTurnIds?.length
-            ? [...canonicalQuestionSourceTurnIds]
-            : latestTurn?.id
-              ? [latestTurn.id]
-              : [],
-        revisions: 1,
-      },
-      startedNewParent: true,
-      clearedParent: false,
-    };
-  }
-
-  if (!existingTask) {
-    return {
-      task: undefined,
-      startedNewParent: false,
-      clearedParent: false,
-    };
-  }
-
-  const nextPhase =
-    phaseDecision?.phase ?? playbook?.phase ?? existingTask.playbookPhase;
-  const storedPlaybook = withInterviewPlaybookPhase(
-    playbook ?? existingTask.playbook,
-    nextPhase
-  );
-
-  return {
-    task: {
+    proposed = {
       ...existingTask,
-      updatedAt: now,
-      expiresAt,
       playbook: storedPlaybook,
       playbookPhase: nextPhase,
-      phaseProgress: applyPlaybookPhaseDecisionToProgress(
-        existingTask.phaseProgress,
-        phaseDecision,
-        storedPlaybook?.phase
-      ),
+      phaseProgress: parentPhaseOwned
+        ? applyPlaybookPhaseDecisionToProgress(existingTask.phaseProgress, phaseDecision, storedPlaybook?.phase)
+        : existingTask.phaseProgress,
       projectBinding: artifactAuthorization.allowParentContextMutation
-        ? projectBinding ?? existingTask.projectBinding
-        : existingTask.projectBinding,
+        ? projectBinding ?? existingTask.projectBinding : existingTask.projectBinding,
       supportedFactAnchors: artifactAuthorization.allowParentContextMutation
-        ? continuingTaskAnchors
+        ? mergeSupportedFactAnchors(existingTask.supportedFactAnchors, supportedFactAnchors)
         : existingTask.supportedFactAnchors,
-      whiteboardArtifact: whiteboardMutationAuthorized
+      whiteboardArtifact: whiteboardAuthorized
         ? updateWhiteboardArtifactFromAnswer({
             existing: existingTask.whiteboardArtifact,
             parentTaskId: existingTask.id,
             questionInstanceId: existingTask.originQuestionId,
             parentQuestionType: existingTask.stableKind,
             parentTopic: existingTask.topic,
-            finalContent: trimmedContent,
+            finalContent: finalContent.trim(),
             parsedAnswer: parsed,
-            phase: nextPhase,
+            phase: phaseDecision?.phase ?? nextPhase,
             traceId,
             selectedOverlayIds,
             updateSource: whiteboardUpdateSource ?? "model-output",
             provisional: phaseDecision?.whiteboardProvisional,
-            openConstraintCategories:
-              phaseDecision?.whiteboardOpenConstraintCategories,
+            openConstraintCategories: phaseDecision?.whiteboardOpenConstraintCategories,
             revisionReason: phaseDecision?.whiteboardRevisionReason,
             renderValidation: whiteboardRenderValidation,
             now,
           })
         : existingTask.whiteboardArtifact,
-      previousUsefulAnswer:
-        artifactAuthorization.allowLatestUsefulAnswer &&
-        isUsefulAnswer &&
-        existingTask.latestUsefulAnswer
-          ? existingTask.latestUsefulAnswer
-          : existingTask.previousUsefulAnswer,
-      latestUsefulAnswer:
-        artifactAuthorization.allowLatestUsefulAnswer && isUsefulAnswer
-          ? summaryDecision.text
-          : existingTask.latestUsefulAnswer,
       child: relation === "resume-parent" ? undefined : existingTask.child,
-      latestScreenObservationId: resolveLatestScreenObservationId({
-        source,
-        sourceObservationIds: observationId ? [observationId] : [],
-        current: existingTask.latestScreenObservationId,
-      }),
-      revisions: existingTask.revisions + 1,
-    },
+      latestScreenObservationId: decision.branch === "child-probe"
+        ? existingTask.latestScreenObservationId : latestScreenObservationId,
+    };
+  }
+  const changed = !equalTaskRuntimeValues(existingTask, proposed);
+  return {
+    task: changed
+      ? { ...proposed, updatedAt: now, revisions: existingTask.revisions + 1 }
+      : existingTask,
     startedNewParent: false,
     clearedParent: false,
+    childSummary: decision.branch === "child-probe" && existingTask.child && buildMeetingAnswerSummary(parsed).text
+      ? buildCompactChildSummary({
+          questionType: existingTask.child.questionType,
+          subtaskIntent: existingTask.child.intent,
+          question: existingTask.child.question,
+          parsedAnswer: parsed,
+        })
+      : undefined,
+    deadlineDelta: decision.branch !== "preserve" || changed
+      ? { parent: { ownerId: existingTask.id, deadline: expiresAt } }
+      : undefined,
+    deadlineCalculatedAt: decision.branch !== "preserve" || changed ? deadlineCalculatedAt : undefined,
   };
 }
 
@@ -38775,12 +38573,9 @@ function buildInterviewParentFromScreenTask(
       task.playbook?.phase
     ),
     supportedFactAnchors: [],
-    latestUsefulAnswer: buildCompactAnswerSummary(task.content),
-    previousUsefulAnswer: undefined,
     whiteboardArtifact,
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
-    expiresAt: task.expiresAt,
     startObservationId: task.basedOnObservationId,
     latestScreenObservationId: task.basedOnObservationId,
     revisions: 1,
@@ -38812,12 +38607,9 @@ function buildCorrectionParentFromActiveMeetingTask(
         }
       : undefined,
     supportedFactAnchors: task.parent.supportedFactAnchors,
-    latestUsefulAnswer: task.parent.latestUsefulAnswer,
-    previousUsefulAnswer: task.parent.previousUsefulAnswer,
     whiteboardArtifact: task.parent.whiteboardArtifact,
     createdAt: task.parent.createdAt,
     updatedAt: task.parent.updatedAt,
-    expiresAt: task.parent.expiresAt,
     originQuestionId: task.parent.originQuestionId,
     startTurnId: task.parent.startTurnId,
     startObservationId: task.parent.startObservationId,
@@ -38839,7 +38631,6 @@ function buildCorrectionParentFromProvisionalQuestion({
   suggestion,
   questionText,
   logicalQuestionUnit,
-  expiresAt,
 }: {
   lineage: QuestionInstanceLineage | undefined;
   correctedType: CanonicalQuestionType;
@@ -38847,7 +38638,6 @@ function buildCorrectionParentFromProvisionalQuestion({
   suggestion: AdvisorSuggestion | null;
   questionText?: string;
   logicalQuestionUnit?: LogicalQuestionUnit;
-  expiresAt?: number;
 }): ActiveInterviewParent | undefined {
   if (!lineage || !isParentCanonicalQuestionType(correctedType)) {
     return undefined;
@@ -38878,7 +38668,6 @@ function buildCorrectionParentFromProvisionalQuestion({
     supportedFactAnchors: [],
     createdAt: now,
     updatedAt: now,
-    expiresAt,
     startTurnId:
       logicalQuestionUnit?.sourceTurnIds[0] ??
       originTurn?.id ??
@@ -39206,47 +38995,6 @@ function hasAimlDesignOverlap(left: string, right: string) {
   return hasRagOrRetrieval && countSignificantTokenOverlap(left, right) >= 1;
 }
 
-function buildActiveInterviewChild({
-  questionType,
-  subtaskIntent,
-  question,
-  parsedAnswer,
-  playbook,
-  latestTurn,
-  observationId,
-}: {
-  questionType: CanonicalQuestionType;
-  subtaskIntent: InterviewSubtaskIntent;
-  question: string;
-  parsedAnswer: ParsedMeetingAnswer;
-  playbook?: SelectedInterviewPlaybook;
-  latestTurn?: TranscriptTurn;
-  observationId?: string;
-}) {
-  const now = Date.now();
-  return {
-    id: createMeetingId("interview_child"),
-    createdAt: now,
-    updatedAt: now,
-    questionType,
-    relation: "child-probe" as const,
-    intent: subtaskIntent,
-    question,
-    compactSummary: buildCompactChildSummary({
-      questionType,
-      subtaskIntent,
-      question,
-      parsedAnswer,
-    }),
-    basedOnTurnIds: latestTurn ? [latestTurn.id] : [],
-    basedOnObservationIds: observationId ? [observationId] : [],
-    latestScreenObservationId: observationId,
-    phaseState: createCodingChildPhaseState({
-      questionType,
-      playbook,
-    }),
-  };
-}
 
 function buildCompactChildSummary({
   questionType,
@@ -39289,9 +39037,6 @@ function isCompatibleParentKind(
   return areCompatibleQuestionTypes(left, right);
 }
 
-function buildCompactAnswerSummary(content: string) {
-  return buildMeetingAnswerSummary(parseMeetingAnswer(content)).text;
-}
 
 function mergeSupportedFactAnchors(
   previous: string[] | undefined,

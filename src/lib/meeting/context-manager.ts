@@ -28,6 +28,8 @@ import {
   type MeetingTaskRuntimeMutation,
   type MeetingTaskRuntimeState,
   type MeetingTaskRuntimeTransitionKind,
+  type MeetingTaskDeadlineControl,
+  type MeetingTaskDeadlineDelta,
 } from "./active-meeting-task.js";
 
 const DEFAULT_TRANSCRIPT_WINDOW_MS = 2 * 60 * 1000;
@@ -42,9 +44,21 @@ export interface MeetingContextManagerOptions {
 }
 
 export interface PreparedMeetingTaskRuntimeTransition {
+  expectedSessionId: string;
   expectedRevision: number;
   previousState: MeetingTaskRuntimeState;
   result: ReturnType<typeof reduceMeetingTaskRuntimeMutation>;
+  deadlineDelta?: MeetingTaskDeadlineDelta;
+  installedState?: MeetingTaskRuntimeState;
+  previousDeadlineControl?: MeetingTaskDeadlineControl;
+  installedDeadlineControl?: MeetingTaskDeadlineControl;
+}
+
+export interface PreparedMeetingTaskDeadlineUpdate {
+  expectedSessionId: string;
+  deadlineDelta: MeetingTaskDeadlineDelta;
+  previousDeadlineControl?: MeetingTaskDeadlineControl;
+  installedDeadlineControl?: MeetingTaskDeadlineControl;
 }
 
 type StoredMeetingContextState = Omit<
@@ -55,6 +69,7 @@ type StoredMeetingContextState = Omit<
 export class MeetingContextManager {
   private state: StoredMeetingContextState;
   private taskRuntimeState: MeetingTaskRuntimeState;
+  private taskDeadlineControl: MeetingTaskDeadlineControl = {};
   private readonly transcriptWindowMs: number;
   private readonly maxScreenObservations: number;
 
@@ -109,6 +124,7 @@ export class MeetingContextManager {
     const interviewSessionBrief =
       options.interviewSessionBrief ?? this.state.interviewSessionBrief;
     this.taskRuntimeState = createMeetingTaskRuntimeState();
+    this.taskDeadlineControl = {};
     this.state = {
       sessionId: options.sessionId ?? createMeetingId("meeting"),
       startedAt: Date.now(),
@@ -209,6 +225,68 @@ export class MeetingContextManager {
     return cloneMeetingTaskRuntimeState(this.taskRuntimeState);
   }
 
+  getTaskDeadlineControl(): MeetingTaskDeadlineControl {
+    return {
+      parent: this.taskDeadlineControl.parent
+        ? { ...this.taskDeadlineControl.parent }
+        : undefined,
+      screen: this.taskDeadlineControl.screen
+        ? { ...this.taskDeadlineControl.screen }
+        : undefined,
+    };
+  }
+
+  prepareTaskDeadlineUpdate(input: {
+    expectedSessionId: string;
+    deadlineDelta: MeetingTaskDeadlineDelta;
+  }): PreparedMeetingTaskDeadlineUpdate {
+    return {
+      expectedSessionId: input.expectedSessionId,
+      deadlineDelta: cloneTaskDeadlineDelta(input.deadlineDelta),
+    };
+  }
+
+  // The caller's existing publication lease authorizes renewal. This boundary
+  // validates ownership only, after any task transition in the same transaction.
+  installPreparedTaskDeadlineUpdate(prepared: PreparedMeetingTaskDeadlineUpdate) {
+    if (prepared.installedDeadlineControl ||
+      this.state.sessionId !== prepared.expectedSessionId ||
+      !validTaskDeadlineDelta(prepared.deadlineDelta, this.taskRuntimeState)) {
+      return false;
+    }
+    prepared.previousDeadlineControl = this.taskDeadlineControl;
+    this.taskDeadlineControl = applyTaskDeadlineDelta(
+      this.taskDeadlineControl, prepared.deadlineDelta, this.taskRuntimeState
+    );
+    prepared.installedDeadlineControl = this.taskDeadlineControl;
+    return true;
+  }
+
+  rollbackPreparedTaskDeadlineUpdate(prepared: PreparedMeetingTaskDeadlineUpdate) {
+    const before = prepared.previousDeadlineControl;
+    const installed = prepared.installedDeadlineControl;
+    if (!before || !installed) return true;
+    if (this.state.sessionId !== prepared.expectedSessionId ||
+      !validTaskDeadlineDelta(prepared.deadlineDelta, this.taskRuntimeState)) return false;
+    for (const scope of ["parent", "screen"] as const) {
+      if (prepared.deadlineDelta[scope] &&
+        (this.taskDeadlineControl[scope] !== installed[scope] ||
+          (!installed[scope] && this.taskDeadlineControl !== installed))) return false;
+    }
+    if (this.taskDeadlineControl === installed) {
+      this.taskDeadlineControl = before;
+    } else {
+      const restored = { ...this.taskDeadlineControl };
+      for (const scope of ["parent", "screen"] as const) {
+        if (prepared.deadlineDelta[scope]) restored[scope] = before[scope];
+      }
+      this.taskDeadlineControl = restored;
+    }
+    prepared.previousDeadlineControl = undefined;
+    prepared.installedDeadlineControl = undefined;
+    return true;
+  }
+
   commitTaskRuntimeTransition(input: {
     id: string;
     transition: MeetingTaskRuntimeTransitionKind;
@@ -217,6 +295,7 @@ export class MeetingContextManager {
     expectedRevision?: number;
     parent?: ActiveInterviewParent | null;
     screenAttachment?: ActiveScreenTask | null;
+    deadlineDelta?: MeetingTaskDeadlineDelta;
     appliedAt?: number;
   }) {
     const prepared = this.prepareTaskRuntimeTransition(input);
@@ -231,27 +310,37 @@ export class MeetingContextManager {
     expectedRevision?: number;
     parent?: ActiveInterviewParent | null;
     screenAttachment?: ActiveScreenTask | null;
+    deadlineDelta?: MeetingTaskDeadlineDelta;
     appliedAt?: number;
   }): PreparedMeetingTaskRuntimeTransition {
     const previousState = cloneMeetingTaskRuntimeState(this.taskRuntimeState);
+    const deadlineDelta = input.deadlineDelta
+      ? cloneTaskDeadlineDelta(input.deadlineDelta)
+      : undefined;
     const result = reduceMeetingTaskRuntimeMutation({
       state: previousState,
+      deadlineControl: this.taskDeadlineControl,
       mutation: {
         ...input,
+        deadlineDelta,
         kind: "commit-transition",
       },
     });
     return {
+      expectedSessionId: this.state.sessionId,
       expectedRevision: previousState.revision,
       previousState,
       result,
+      deadlineDelta,
     };
   }
 
   commitPreparedTaskRuntimeTransition(
     prepared: PreparedMeetingTaskRuntimeTransition
   ) {
-    if (this.taskRuntimeState.revision !== prepared.expectedRevision) {
+    if (this.state.sessionId !== prepared.expectedSessionId ||
+      this.taskRuntimeState.revision !== prepared.expectedRevision ||
+      prepared.installedState) {
       return {
         state: cloneMeetingTaskRuntimeState(this.taskRuntimeState),
         authorized: false,
@@ -260,20 +349,45 @@ export class MeetingContextManager {
       };
     }
     if (!prepared.result.authorized) return prepared.result;
-    this.taskRuntimeState = prepared.result.state;
+    if (prepared.deadlineDelta &&
+      (!prepared.result.mutationApplied ||
+        !validTaskDeadlineDelta(prepared.deadlineDelta, prepared.result.state))) {
+      return {
+        state: cloneMeetingTaskRuntimeState(this.taskRuntimeState),
+        authorized: false,
+        mutationApplied: false,
+        reason: "invalid-transition" as const,
+      };
+    }
+    prepared.previousDeadlineControl = this.taskDeadlineControl;
+    if (prepared.result.mutationApplied) this.taskRuntimeState = prepared.result.state;
+    prepared.installedState = this.taskRuntimeState;
+    this.taskDeadlineControl = applyTaskDeadlineDelta(
+      this.taskDeadlineControl, prepared.deadlineDelta, this.taskRuntimeState
+    );
+    prepared.installedDeadlineControl = this.taskDeadlineControl;
     return prepared.result;
   }
 
   rollbackPreparedTaskRuntimeTransition(
     prepared: PreparedMeetingTaskRuntimeTransition
   ) {
-    if (!prepared.result.authorized) return true;
+    if (!prepared.installedState) return true;
     if (
-      this.taskRuntimeState.revision !== prepared.result.state.revision
+      this.state.sessionId !== prepared.expectedSessionId ||
+      this.taskRuntimeState !== prepared.installedState ||
+      this.taskDeadlineControl.parent !== prepared.installedDeadlineControl?.parent ||
+      this.taskDeadlineControl.screen !== prepared.installedDeadlineControl?.screen ||
+      ((!prepared.installedDeadlineControl?.parent || !prepared.installedDeadlineControl?.screen) &&
+        this.taskDeadlineControl !== prepared.installedDeadlineControl)
     ) {
       return false;
     }
-    this.taskRuntimeState = prepared.previousState;
+    if (prepared.result.mutationApplied) this.taskRuntimeState = prepared.previousState;
+    this.taskDeadlineControl = prepared.previousDeadlineControl!;
+    prepared.installedState = undefined;
+    prepared.previousDeadlineControl = undefined;
+    prepared.installedDeadlineControl = undefined;
     return true;
   }
 
@@ -359,6 +473,7 @@ export class MeetingContextManager {
     return this.applyTaskRuntimeMutation({
       id: createMeetingId("task_runtime_expire"),
       kind: "expire",
+      deadlineControl: this.taskDeadlineControl,
       reason: "active-task-expiration",
       now,
       appliedAt: now,
@@ -397,7 +512,9 @@ export class MeetingContextManager {
     };
   }
 
-  buildAdvisorPromptContext(): AdvisorPromptContext {
+  buildAdvisorPromptContext(
+    projectTranscript?: (turns: TranscriptTurn[], sessionId: string) => string
+  ): AdvisorPromptContext {
     const taskRuntime = this.getTaskRuntimeState();
     const latestTurn =
       this.state.transcriptTurns[this.state.transcriptTurns.length - 1];
@@ -407,7 +524,9 @@ export class MeetingContextManager {
     );
 
     return {
-      transcript: this.formatTranscriptTurns(promptTranscriptTurns),
+      transcript: projectTranscript
+        ? projectTranscript(promptTranscriptTurns, this.state.sessionId)
+        : this.formatTranscriptTurns(promptTranscriptTurns),
       advisorPromptSourceTurnIds: promptTranscriptTurns.map(
         (turn) => turn.id
       ),
@@ -449,7 +568,12 @@ export class MeetingContextManager {
       state: this.taskRuntimeState,
       mutation,
     });
-    this.taskRuntimeState = result.state;
+    if (result.mutationApplied) {
+      this.taskRuntimeState = result.state;
+      this.taskDeadlineControl = applyTaskDeadlineDelta(
+        this.taskDeadlineControl, undefined, this.taskRuntimeState
+      );
+    }
     return result;
   }
 
@@ -535,6 +659,41 @@ export class MeetingContextManager {
 
 export function createMeetingId(prefix: string) {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function cloneTaskDeadlineDelta(delta: MeetingTaskDeadlineDelta): MeetingTaskDeadlineDelta {
+  return {
+    parent: delta.parent ? { ...delta.parent } : undefined,
+    screen: delta.screen ? { ...delta.screen } : undefined,
+  };
+}
+
+function validTaskDeadlineDelta(delta: MeetingTaskDeadlineDelta, state: MeetingTaskRuntimeState) {
+  return (["parent", "screen"] as const).every((scope) => {
+    const update = delta[scope];
+    const ownerId = scope === "parent" ? state.parent?.id : state.screenAttachment?.id;
+    return !update || (Boolean(ownerId) && update.ownerId === ownerId &&
+      (update.deadline === undefined || Number.isFinite(update.deadline)));
+  });
+}
+
+function applyTaskDeadlineDelta(
+  current: MeetingTaskDeadlineControl,
+  delta: MeetingTaskDeadlineDelta | undefined,
+  state: MeetingTaskRuntimeState
+): MeetingTaskDeadlineControl {
+  const next = { ...current };
+  for (const scope of ["parent", "screen"] as const) {
+    const ownerId = scope === "parent" ? state.parent?.id : state.screenAttachment?.id;
+    const update = delta?.[scope];
+    if (update) {
+      next[scope] = update.deadline === undefined
+        ? undefined
+        : { ownerId: update.ownerId, deadline: update.deadline };
+    }
+    if (!ownerId || next[scope]?.ownerId !== ownerId) next[scope] = undefined;
+  }
+  return next;
 }
 
 function cloneInterviewSessionContext(

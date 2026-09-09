@@ -456,7 +456,6 @@ export function buildCommittedTaskBoundaryParent(input: {
   playbook?: SelectedInterviewPlaybook;
   phaseDecision?: PlaybookPhaseDecision;
   settlementId?: string;
-  expiresAt?: number;
   parentContextHandoff?: ParentContextHandoff;
   now?: number;
 }): ActiveInterviewParent | undefined {
@@ -494,7 +493,6 @@ export function buildCommittedTaskBoundaryParent(input: {
     supportedFactAnchors: [],
     createdAt: now,
     updatedAt: now,
-    expiresAt: input.expiresAt,
     originQuestionId: input.questionInstanceId,
     startTurnId: input.logicalQuestionUnit.sourceTurnIds[0],
     promptTranscriptStartTurnId: input.logicalQuestionUnit.sourceTurnIds[0],

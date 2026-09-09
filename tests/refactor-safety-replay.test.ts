@@ -50,6 +50,7 @@ test("rejects replay steps that move the manual clock backward", async () => {
 async function runOutOfOrderAnswerReplay() {
   const manager = new MeetingContextManager();
   setTestActiveParent(manager, makeParent());
+  const taskBefore = manager.getTaskRuntimeState();
   const harness = new MeetingOrchestrationHarness(manager);
   let visibleAnswerRevision = 0;
   let visibleAnswer = "initial answer";
@@ -127,6 +128,9 @@ async function runOutOfOrderAnswerReplay() {
       },
     },
   ]);
+  assert.deepEqual(manager.getTaskRuntimeState(), taskBefore);
+  assert.equal(visibleAnswerRevision, 1);
+  assert.equal("latestUsefulAnswer" in manager.getTaskRuntimeState().parent!, false);
 
   return {
     digest,
@@ -170,7 +174,6 @@ function makeParent(): ActiveInterviewParent {
     playbookPhase: "requirement_clarification",
     phaseProgress: {},
     supportedFactAnchors: [],
-    latestUsefulAnswer: "initial answer",
     createdAt: 100,
     updatedAt: 110,
     revisions: 1,

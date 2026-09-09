@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { MeetingContextManager } from "../src/lib/meeting/context-manager.js";
 import {
+  readBoundedGeneratedContinuity,
+  type BoundedGeneratedContinuityState,
+} from "../src/lib/meeting/bounded-recent-history.js";
+import {
   decideCrossDomainParentTransition,
   formatCrossDomainParentTransitionForTrace,
 } from "../src/lib/meeting/cross-domain-task-transition.js";
@@ -30,7 +34,6 @@ function parent(
     playbookPhase: "follow_up",
     phaseProgress: { follow_up: true },
     supportedFactAnchors: [],
-    latestUsefulAnswer: "Generated answer that must not cross the boundary",
     createdAt: 1,
     updatedAt: 2,
     startTurnId: "turn-general",
@@ -116,6 +119,19 @@ test("the linked handoff carries source facts but excludes old QPS and answers",
     "general-system-design",
     "Design a food delivery app"
   );
+  const previousOwner = {
+    sessionId: "session-output",
+    runtimeEpoch: 1,
+    parentTaskId: previousParent.id,
+  };
+  const output: BoundedGeneratedContinuityState = {
+    owner: previousOwner,
+    latestUsefulAnswer: "Generated answer that must not cross the boundary",
+    recentCapsules: [],
+  };
+  assert.equal(readBoundedGeneratedContinuity({
+    state: output, currentOwner: previousOwner,
+  }).latestUsefulAnswer, output.latestUsefulAnswer);
   const transcriptTurns: TranscriptTurn[] = [
     {
       id: "turn-general",
@@ -202,6 +218,12 @@ test("the linked handoff carries source facts but excludes old QPS and answers",
   assert.match(serialized, /10 million daily active users/);
   assert.doesNotMatch(serialized, /50 thousand GPS writes/);
   assert.doesNotMatch(serialized, /Generated answer/);
+  assert.ok(handoff.excludedContextKinds.includes("generated-answers"));
+  assert.equal("latestUsefulAnswer" in nextParent, false);
+  assert.deepEqual(readBoundedGeneratedContinuity({
+    state: output,
+    currentOwner: { ...previousOwner, parentTaskId: nextParent.id },
+  }), { source: "generated-continuity", recentCapsules: [] });
   assert.equal(activeTask?.parent.playbookPhase, "follow_up");
 });
 

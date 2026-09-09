@@ -3,7 +3,6 @@ import test from "node:test";
 import { MeetingContextManager } from "../src/lib/meeting/context-manager.js";
 import type { ActiveInterviewParent, ActiveInterviewChild, ProjectBindingDecision, SelectedInterviewPlaybook, WhiteboardArtifact } from "../src/lib/meeting/types.js";
 import { setTestActiveParent } from "./helpers/meeting-task-runtime.js";
-import { commitVisibleUsefulAnswerToParent, applyInterviewChildProbeTransition, mergeGeneratedChildContinuity } from "../src/lib/meeting/interview-task-continuity.js";
 import { applyActiveBranchPhase, resolveEffectiveBranchPhase } from "../src/lib/meeting/active-branch-phase.js";
 import { commitProjectBindingSettlement } from "../src/lib/meeting/project-binding-transaction.js";
 
@@ -63,7 +62,6 @@ function child(): ActiveInterviewChild {
   return {
     id: "child", createdAt: 1, updatedAt: 2, questionType: "coding", relation: "child-probe",
     intent: "implementation-probe", question: "Implement the cache", basedOnTurnIds: ["turn"], basedOnObservationIds: [],
-    compactSummary: "Earlier child summary",
     phaseState: { playbook: codingPlaybook(), phase: "baseline_reasoning", phaseProgress: {}, revision: 1 },
   };
 }
@@ -76,46 +74,78 @@ function codingPlaybook(): SelectedInterviewPlaybook {
   };
 }
 
-test("J2: visible useful-answer producer retains current summaries without a parent revision change", () => {
-  const manager = new MeetingContextManager();
-  const before = { ...parent(), latestUsefulAnswer: "Previous answer", whiteboardArtifact: whiteboard() };
-  setTestActiveParent(manager, before);
-  const snapshot = manager.getTaskRuntimeState();
-  const candidate = commitVisibleUsefulAnswerToParent({ parent: before, taskId: before.id, summary: "New answer", committedAt: 30 });
-  assert.equal(candidate.committed, true);
-  const input = {
-    id: "visible-answer", transition: "update-parent-context" as const, reason: "generation-result-atomic-commit",
-    parent: candidate.parent, expectedRevision: snapshot.revision,
-  };
-  const result = manager.commitTaskRuntimeTransition(input);
-  assert.equal(result.authorized, true);
-  assert.equal(result.state.parent?.revisions, before.revisions);
-  assert.equal(result.state.parent?.latestUsefulAnswer, "New answer");
-  assert.equal(result.state.parent?.previousUsefulAnswer, "Previous answer");
-  assert.deepEqual(result.state.parent?.whiteboardArtifact, before.whiteboardArtifact);
-  const duplicate = manager.commitTaskRuntimeTransition(input);
-  assert.equal(duplicate.reason, "revision-mismatch");
-  assert.deepEqual(manager.getTaskRuntimeState(), result.state);
-});
+for (const field of ["latestUsefulAnswer", "previousUsefulAnswer"] as const) {
+  for (const incrementRevision of [false, true]) {
+    test(`Task176: generated ${field} cannot write Task Fields, revision increment=${incrementRevision}`, () => {
+      const manager = new MeetingContextManager();
+      const before = { ...parent(), whiteboardArtifact: whiteboard() };
+      setTestActiveParent(manager, before);
+      const snapshot = manager.getTaskRuntimeState();
+      const candidate = {
+        ...before,
+        [field]: "Generated answer summary",
+        updatedAt: 30,
+        revisions: before.revisions + Number(incrementRevision),
+      };
+      const result = manager.commitTaskRuntimeTransition({
+        id: "visible-answer", transition: "update-parent-context", reason: "generation-result-atomic-commit",
+        parent: candidate, expectedRevision: snapshot.revision,
+      });
+      assert.equal(result.authorized, false);
+      assert.equal(result.reason, "invalid-transition");
+      assert.equal(result.mutationApplied, false);
+      assert.deepEqual(manager.getTaskRuntimeState(), snapshot);
+      assert.equal(field in manager.getTaskRuntimeState().parent!, false);
+    });
+  }
+}
 
-test("J2: generated child continuity preserves source identity and commits its existing summary fields", () => {
+test("Task176: generated child summary cannot enter Task Fields alongside a legal artifact update", () => {
   const manager = new MeetingContextManager();
   const before = { ...parent(), child: child() };
   setTestActiveParent(manager, before);
-  const merged = mergeGeneratedChildContinuity({
-    sourceOwnedChild: before.child, now: 30,
-    generatedChild: { ...before.child, compactSummary: "New child summary", artifactId: "existing-artifact-ref" },
-  });
-  const candidate = applyInterviewChildProbeTransition({ parent: before, child: merged, supportedFactAnchors: [], now: 30 });
+  const snapshot = manager.getTaskRuntimeState();
+  const candidate = {
+    ...before, updatedAt: 30, revisions: before.revisions + 1,
+    child: { ...before.child, updatedAt: 30, compactSummary: "New child summary", artifactId: "existing-artifact-ref" },
+  };
   const result = manager.commitTaskRuntimeTransition({
-    id: "child-continuity", transition: "update-parent-context", reason: "advisor-answer-continuity-committed",
-    expectedRevision: manager.getTaskRuntimeState().revision, parent: candidate,
+    id: "child-summary", transition: "update-parent-context", reason: "advisor-answer-continuity-committed",
+    expectedRevision: snapshot.revision, parent: candidate,
   });
+  assert.equal(result.authorized, false);
+  assert.equal(result.reason, "invalid-transition");
+  assert.equal(result.mutationApplied, false);
+  assert.deepEqual(manager.getTaskRuntimeState(), snapshot);
+});
+
+test("Task176: a real child artifact reference remains a legal context mutation", () => {
+  const manager = new MeetingContextManager();
+  const before = { ...parent(), child: child() };
+  setTestActiveParent(manager, before);
+  const snapshot = manager.getTaskRuntimeState();
+  const candidate: ActiveInterviewParent = {
+    ...before, updatedAt: 30, revisions: before.revisions + 1,
+    child: { ...before.child, updatedAt: 30, artifactId: "existing-artifact-ref" },
+  };
+  const input = {
+    id: "child-artifact", transition: "update-parent-context" as const, reason: "artifact-reference-committed",
+    expectedRevision: snapshot.revision, parent: candidate,
+  };
+  const result = manager.commitTaskRuntimeTransition(input);
   assert.equal(result.authorized, true);
-  assert.equal(result.state.parent?.child?.compactSummary, "New child summary");
+  assert.equal(result.mutationApplied, true);
+  assert.equal(result.state.revision, snapshot.revision + 1);
+  assert.equal(result.state.parent?.revisions, before.revisions + 1);
   assert.equal(result.state.parent?.child?.artifactId, "existing-artifact-ref");
-  assert.deepEqual(result.state.parent?.child?.phaseState, before.child.phaseState);
-  assert.equal(result.state.parent?.child?.id, before.child.id);
+  assert.deepEqual(result.state.parent?.child, {
+    ...before.child, updatedAt: 30, artifactId: "existing-artifact-ref",
+  });
+  assert.equal("compactSummary" in result.state.parent!.child!, false);
+  const duplicate = manager.commitTaskRuntimeTransition(input);
+  assert.equal(duplicate.reason, "revision-mismatch");
+  assert.equal(duplicate.authorized, false);
+  assert.deepEqual(manager.getTaskRuntimeState(), result.state);
 });
 
 for (const mutation of ["identity", "type", "phase", "phase-extra-field"] as const) {
@@ -216,12 +246,15 @@ for (const action of ["bind", "rebind", "invalidate"] as const) {
       playbook: { ...codingPlaybook(), questionType: "project-deep-dive", phase: "follow_up" },
       projectBinding: action === "bind" ? undefined : bindingDecision("bind", 1).binding,
       child: { ...child(), questionType: "field-knowledge", phaseState: undefined },
-      supportedFactAnchors: ["old-fact"], latestUsefulAnswer: "Previous answer", previousUsefulAnswer: "Older answer",
+      supportedFactAnchors: ["old-fact"],
       whiteboardArtifact: whiteboard(),
     };
     setTestActiveParent(manager, before);
     const producer = commitProjectBindingSettlement({ currentTask: before, decision: bindingDecision(action, 2), now: 30 });
     assert.equal(producer.committed, true);
+    assert.equal(producer.invalidateProjectState, action !== "bind");
+    assert.equal(producer.invalidatedState.includes("latest-answer"), action !== "bind");
+    assert.equal(producer.invalidatedState.includes("previous-answer"), action !== "bind");
     const result = manager.commitTaskRuntimeTransition({
       id: `project-${action}`, transition: "update-parent-context", reason: "project-binding-settlement-committed", parent: producer.task,
     });
@@ -230,7 +263,8 @@ for (const action of ["bind", "rebind", "invalidate"] as const) {
     if (action !== "bind") {
       assert.equal(result.state.parent?.child, undefined);
       assert.equal(result.state.parent?.playbookPhase, "project_narrative");
-      assert.equal(result.state.parent?.latestUsefulAnswer, undefined);
     }
+    assert.equal("latestUsefulAnswer" in result.state.parent!, false);
+    assert.equal("previousUsefulAnswer" in result.state.parent!, false);
   });
 }

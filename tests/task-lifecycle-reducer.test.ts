@@ -450,7 +450,7 @@ test("consumes a settled follow-up as one same-parent context update", () => {
   });
   const afterParent = parent("coding", {
     topic: "Implement an LRU cache",
-    latestUsefulAnswer: "Explain the eviction helper.",
+    phaseProgress: { eviction_helper: true },
     revisions: 4,
     updatedAt: 30,
   });
@@ -509,10 +509,8 @@ test("consumes a settled follow-up as one same-parent context update", () => {
   assert.equal(reduction.parentBeforeId, "parent-a");
   assert.equal(reduction.parentAfterId, "parent-a");
   assert.equal(reduction.parentAfterRevision, 4);
-  assert.equal(
-    reduction.parent?.latestUsefulAnswer,
-    "Explain the eviction helper."
-  );
+  assert.deepEqual(reduction.parent?.phaseProgress, { eviction_helper: true });
+  assert.equal("latestUsefulAnswer" in reduction.parent!, false);
   assert.equal(reduction.screenAttachment?.id, "screen-a");
 });
 

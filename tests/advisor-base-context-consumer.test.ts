@@ -12,6 +12,12 @@ import { MeetingTraceStore } from "../src/lib/meeting/trace.js";
 import { composePhaseNavigationPromptContext } from "../src/lib/meeting/phase-navigation-prompt-context.js";
 import { selectInterviewPlaybookForCommittedType } from "../src/lib/meeting/interview-playbook.js";
 import { setTestTaskRuntime } from "./helpers/meeting-task-runtime.js";
+import { createEffectiveAdvisorBaseBuilder } from "./helpers/advisor-base-context-hook.js";
+import { EffectiveQuestionSourceLedger } from "../src/lib/meeting/effective-question-source-ledger.js";
+import { composeLogicalQuestionUnit } from "../src/lib/meeting/logical-question-unit.js";
+import { applyActiveQuestionTermCorrection } from "../src/lib/meeting/active-question-term-correction.js";
+import { projectAdvisorTranscriptForLogicalQuestion } from "../src/lib/meeting/logical-question-effective-projection.js";
+import { clearBoundedGeneratedContinuity, projectBoundedGeneratedContinuityForTask, type BoundedGeneratedContinuityState } from "../src/lib/meeting/bounded-recent-history.js";
 import type { ActiveInterviewParent, AdvisorPromptContext, TranscriptTurn } from "../src/lib/meeting/types.js";
 
 const hook = ts.createSourceFile("hook.ts", readFileSync("src/hooks/useMeetingAssistant.ts", "utf8"), ts.ScriptTarget.Latest, true);
@@ -57,19 +63,39 @@ function managerWithParent() {
 function countBuilds(manager: MeetingContextManager) {
   const build = manager.buildAdvisorPromptContext.bind(manager);
   let calls = 0;
-  manager.buildAdvisorPromptContext = () => { calls += 1; return build(); };
+  manager.buildAdvisorPromptContext = (...args) => { calls += 1; return build(...args); };
   return () => calls;
 }
 
-for (const name of ["currentPromptContext", "phaseUpdatedContext", "transitionContextAfter", "projectBindingContextAfter"]) {
-  test(`C5 actual Hook ${name} refresh reads task metadata without formatting evidence`, () => {
+function continuityFor(manager: MeetingContextManager): BoundedGeneratedContinuityState {
+  return {
+    owner: { sessionId: manager.getState().sessionId, runtimeEpoch: 1, parentTaskId: "parent" },
+    latestUsefulAnswer: "Generated latest output: prefer replicated indexes.",
+    previousUsefulAnswer: "Generated previous output: compare consistency options.",
+    recentCapsules: [],
+  };
+}
+
+for (const name of ["phaseUpdatedContext", "transitionContextAfter", "projectBindingContextAfter"]) {
+  test(`C3/C5 actual Hook ${name} retains generated read projection without formatting evidence`, () => {
     const manager = managerWithParent();
-    const previous = manager.buildAdvisorPromptContext();
+    const continuity = { current: continuityFor(manager) };
+    const buildBase = createEffectiveAdvisorBaseBuilder(manager, new EffectiveQuestionSourceLedger(), { current: 1 }, undefined, continuity);
+    const previous = buildBase();
     const task = manager.getTaskRuntimeState().parent!;
     setTestTaskRuntime(manager, {
-      parent: { ...task, revisions: task.revisions + 1, updatedAt: Date.now(), supportedFactAnchors: ["Tenant isolation requirement"] },
+      parent: {
+        ...task, revisions: task.revisions + 1, updatedAt: Date.now(),
+        supportedFactAnchors: name === "transitionContextAfter" ? task.supportedFactAnchors : ["Tenant isolation requirement"],
+        ...(name === "transitionContextAfter" ? { child: {
+          id: "attached-child", createdAt: Date.now(), updatedAt: Date.now(), questionType: "coding" as const,
+          relation: "child-probe" as const, intent: "implementation-probe" as const, question: "Implement the tenant filter.",
+          basedOnTurnIds: ["source"], basedOnObservationIds: [],
+        } } : {}),
+      },
     });
-    const expected = manager.buildAdvisorPromptContext();
+    const canonical = manager.getState();
+    const expected = buildBase();
     const originalTranscript = previous.transcript;
     const originalSourceIds = [...previous.advisorPromptSourceTurnIds!];
     const count = countBuilds(manager);
@@ -81,9 +107,11 @@ for (const name of ["currentPromptContext", "phaseUpdatedContext", "transitionCo
     assert.ok(next);
     const result = evaluate([
       statement.getText(hook), next.getText(hook),
-      name === "currentPromptContext" ? "promptContext = rebasePromptContext(promptContext);" : "",
       "globalThis.result = promptContext;",
-    ].join("\n"), { contextManagerRef: { current: manager }, promptContext: previous }).result as AdvisorPromptContext;
+    ].join("\n"), {
+      contextManagerRef: { current: manager }, promptContext: previous,
+      projectBoundedGeneratedContinuityForTask, recentAdvisorContinuityRef: continuity, runtimeEpochRef: { current: 1 },
+    }).result as AdvisorPromptContext;
     assert.equal(count(), 0);
     assert.deepEqual(result.taskRuntime, expected.taskRuntime);
     assert.deepEqual(result.activeMeetingTask, expected.activeMeetingTask);
@@ -91,6 +119,12 @@ for (const name of ["currentPromptContext", "phaseUpdatedContext", "transitionCo
     assert.equal(result.transcript, originalTranscript);
     assert.deepEqual(result.advisorPromptSourceTurnIds, originalSourceIds);
     assert.equal(result.screenContext, previous.screenContext);
+    assert.equal(result.activeMeetingTask?.parent.latestUsefulAnswer, continuity.current.latestUsefulAnswer);
+    assert.equal(result.activeMeetingTask?.parent.previousUsefulAnswer, continuity.current.previousUsefulAnswer);
+    if (name === "transitionContextAfter") assert.equal(result.activeMeetingTask?.child?.id, "attached-child");
+    assert.equal(canonical.activeMeetingTask?.parent.latestUsefulAnswer, undefined);
+    assert.equal(canonical.activeMeetingTask?.parent.previousUsefulAnswer, undefined);
+    assert.deepEqual(manager.getState(), canonical);
   });
 }
 
@@ -98,9 +132,11 @@ function buildJob(manager: MeetingContextManager, options: Record<string, unknow
   const node = declaration("buildAdvisorJob").initializer;
   assert.ok(node && ts.isCallExpression(node));
   const callback = node.arguments[0];
+  const recentAdvisorContinuityRef = { current: { recentCapsules: [] } as BoundedGeneratedContinuityState };
   const result = evaluate(`globalThis.build = (${callback.getText(hook)});`, {
     contextManagerRef: { current: manager },
-    recentAdvisorContinuityRef: { current: [] },
+    buildEffectiveAdvisorBasePromptContext: createEffectiveAdvisorBaseBuilder(manager, new EffectiveQuestionSourceLedger(), undefined, undefined, recentAdvisorContinuityRef),
+    recentAdvisorContinuityRef, clearBoundedGeneratedContinuity,
     responseOpportunityGenerationGateRef: { current: new ResponseOpportunityGenerationGateCoordinator() },
     responseActionRevisionRef: { current: 0 }, manualCorrectionRevisionRef: { current: 0 },
     runtimeEpochRef: { current: 1 }, traceStoreRef: { current: new MeetingTraceStore() },
@@ -152,4 +188,143 @@ test("C5 actual Hook reuses a supplied phase context without another base build"
   assert.equal(job.promptContextSnapshot.transcript, phaseContext.transcript);
   assert.deepEqual(job.promptContextSnapshot.interviewPlaybook, phaseContext.interviewPlaybook);
   assert.equal(hasContext(job), true);
+});
+
+test("C1/C5 initial Hook job resolves correction before formatting and preserves raw latestTurn", () => {
+  const manager = new MeetingContextManager();
+  const raw = { ...sourceTurn(), text: "Design a car-sharing system." };
+  manager.addTranscriptTurn(raw);
+  const original = composeLogicalQuestionUnit({ currentTurn: raw, sessionId: manager.getState().sessionId, runtimeEpoch: 1, now: raw.endedAt });
+  const corrected = applyActiveQuestionTermCorrection({
+    logicalQuestionUnit: original,
+    correction: { id: "correction", input: "RAG not car-sharing", term: "RAG", from: "car-sharing", to: "RAG", createdAt: 1_200, appliedCount: 0 },
+    correctionTraceId: "correction-trace", manualCorrectionRevision: 1, now: 1_200,
+  }).logicalQuestionUnit;
+  const stateBefore = manager.getState();
+  const job = buildJob(manager, { logicalQuestionUnit: corrected });
+  assert.match(job.promptContextSnapshot.transcript, /Design a RAG system/);
+  assert.doesNotMatch(job.promptContextSnapshot.transcript, /car-sharing/);
+  assert.deepEqual(job.promptContextSnapshot.advisorPromptSourceTurnIds, [raw.id]);
+  assert.deepEqual(job.promptContextSnapshot.latestTurn, raw);
+  assert.deepEqual(manager.getState(), stateBefore);
+  assert.equal(original.sources[0].text, raw.text);
+});
+
+test("C2/C5 LQU base formatter receives eligible parent turns without raw formatting or another state read", () => {
+  const manager = new MeetingContextManager();
+  manager.addTranscriptTurn(sourceTurn());
+  const boundary = { ...sourceTurn(), id: "boundary", text: "Use per-tenant indexes.", startedAt: 2_000, endedAt: 2_100 };
+  const clarification: TranscriptTurn = { ...boundary, id: "clarification", text: "One index per tenant?", speaker: "me", source: "microphone", contextPromptEligible: true, contextTier: "me_clarification_short", startedAt: 3_000, endedAt: 3_100 };
+  manager.addTranscriptTurn(boundary);
+  manager.addTranscriptTurn(clarification);
+  const parent = managerWithParent().getTaskRuntimeState().parent!;
+  setTestTaskRuntime(manager, { parent: { ...parent, promptTranscriptStartTurnId: boundary.id } });
+  const before = manager.buildAdvisorPromptContext();
+  const sessionId = manager.getState().sessionId;
+  const unit = composeLogicalQuestionUnit({ currentTurn: boundary, sessionId, runtimeEpoch: 1, now: boundary.endedAt });
+  const rawFormatter = manager as unknown as { formatTranscriptTurns: () => string };
+  rawFormatter.formatTranscriptTurns = () => { throw new Error("raw formatter must not run"); };
+  manager.getState = () => { throw new Error("base projection must not clone a second state snapshot"); };
+  let calls = 0;
+  const build = createEffectiveAdvisorBaseBuilder(manager, new EffectiveQuestionSourceLedger(), { current: 1 }, (input) => {
+    calls += 1;
+    assert.equal(input.sessionId, sessionId);
+    assert.deepEqual(input.turns.map((turn) => turn.id), before.advisorPromptSourceTurnIds);
+    return projectAdvisorTranscriptForLogicalQuestion(input);
+  });
+  const after = build(unit);
+  assert.equal(calls, 1);
+  assert.deepEqual({ ...after }, {
+    ...before,
+    activeMeetingTask: projectBoundedGeneratedContinuityForTask({ state: { recentCapsules: [] }, task: before.activeMeetingTask, sessionId, runtimeEpoch: 1 }),
+  });
+  assert.match(after.transcript, /Me \(clarification\): One index per tenant/);
+  assert.doesNotMatch(after.transcript, /Design a retrieval service/);
+});
+
+test("C2 base latestTurn remains the latest raw turn even when excluded from the prompt", () => {
+  const manager = new MeetingContextManager();
+  manager.addTranscriptTurn(sourceTurn());
+  const excluded: TranscriptTurn = { ...sourceTurn(), id: "excluded", text: "Background speech.", speaker: "me", source: "microphone", startedAt: 2_000, endedAt: 2_100 };
+  manager.addTranscriptTurn(excluded);
+  const before = manager.buildAdvisorPromptContext();
+  assert.doesNotMatch(before.transcript, /Background speech/);
+  const after = createEffectiveAdvisorBaseBuilder(manager, new EffectiveQuestionSourceLedger())();
+  assert.deepEqual({ ...after }, before);
+  assert.deepEqual(after.latestTurn, excluded);
+});
+
+test("C5 all production base calls use the sole effective Hook builder", () => {
+  assert.doesNotMatch(hook.getFullText(), /const currentPromptContext\b/);
+  const calls: ts.CallExpression[] = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === "buildAdvisorPromptContext") calls.push(node);
+    ts.forEachChild(node, visit);
+  };
+  visit(hook);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].arguments.length, 1);
+  const builder = declaration("buildEffectiveAdvisorBasePromptContext");
+  assert.ok(calls[0].pos > builder.pos && calls[0].end < builder.end);
+  for (const name of ["basePromptContext", "boundaryContext", "baseContext"]) {
+    assert.match(declaration(name).getText(hook), /buildEffectiveAdvisorBasePromptContext/);
+  }
+  assert.match(hook.getFullText(), /basePromptContext:\s*buildEffectiveAdvisorBasePromptContext\(\s*screenLogicalQuestionUnit\s*\)/);
+});
+
+test("C3/C5 boundary, action and Screen sufficiency snippets pass their own LQU to the effective builder", () => {
+  const manager = new MeetingContextManager();
+  const turn = sourceTurn();
+  manager.addTranscriptTurn(turn);
+  const unit = composeLogicalQuestionUnit({ currentTurn: turn, sessionId: manager.getState().sessionId, runtimeEpoch: 1, now: turn.endedAt });
+  const build = createEffectiveAdvisorBaseBuilder(manager, new EffectiveQuestionSourceLedger());
+  let calls = 0;
+  const buildEffectiveAdvisorBasePromptContext = (selected: typeof unit) => {
+    calls += 1;
+    assert.equal(selected, unit);
+    return build(selected);
+  };
+  const expressions = [declaration("boundaryContext").initializer!, declaration("baseContext").initializer!];
+  const visit = (node: ts.Node) => {
+    if (ts.isPropertyAssignment(node) && node.name.getText(hook) === "basePromptContext" &&
+      node.initializer.getText(hook).includes("buildEffectiveAdvisorBasePromptContext")) expressions.push(node.initializer);
+    ts.forEachChild(node, visit);
+  };
+  visit(hook);
+  assert.equal(expressions.length, 3);
+  for (const expression of expressions) {
+    const result = evaluate(`globalThis.result = ${expression.getText(hook)};`, {
+      buildEffectiveAdvisorBasePromptContext, advisorJob: { logicalQuestionUnit: unit }, logicalQuestionUnit: unit, screenLogicalQuestionUnit: unit,
+    }).result as AdvisorPromptContext;
+    assert.equal(result.transcript, `Them: ${turn.text}`);
+    assert.deepEqual(result.advisorPromptSourceTurnIds, [turn.id]);
+    assert.deepEqual(result.latestTurn, turn);
+  }
+  assert.equal(calls, 3);
+});
+
+test("C3/C4 no-LQU base scopes generated output with the Manager session without mutating canonical state", () => {
+  const manager = managerWithParent();
+  const canonical = manager.getState();
+  const published = continuityFor(manager);
+  const continuity = { current: published };
+  const getState = manager.getState.bind(manager);
+  let reads = 0;
+  manager.getState = () => { reads += 1; return getState(); };
+  const build = createEffectiveAdvisorBaseBuilder(manager, new EffectiveQuestionSourceLedger(), { current: 1 }, undefined, continuity);
+  const context = build();
+  assert.equal(reads, 1);
+  assert.equal(context.activeMeetingTask?.parent.latestUsefulAnswer, published.latestUsefulAnswer);
+  assert.equal(context.activeMeetingTask?.parent.previousUsefulAnswer, published.previousUsefulAnswer);
+  assert.doesNotMatch(context.transcript, /Generated latest|Generated previous/);
+  for (const owner of [
+    { ...published.owner!, sessionId: "another-session" },
+    { ...published.owner!, runtimeEpoch: 2 },
+    { ...published.owner!, parentTaskId: "another-parent" },
+  ]) {
+    continuity.current = { ...published, owner };
+    assert.equal(build().activeMeetingTask?.parent.latestUsefulAnswer, undefined);
+    assert.equal(build().activeMeetingTask?.parent.previousUsefulAnswer, undefined);
+  }
+  assert.deepEqual(getState(), canonical);
 });

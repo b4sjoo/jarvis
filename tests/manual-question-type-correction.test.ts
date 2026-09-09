@@ -17,6 +17,7 @@ import {
   selectManualCorrectionTargetFromHistory,
   upsertManualCorrectionTargetHistory,
   ManualCorrectionOperationCoordinator,
+  type ManualQuestionTypeCorrectionDecision,
   type ManualCorrectionTargetHistoryEntry,
 } from "../src/lib/meeting/manual-question-type-correction.js";
 import {
@@ -1094,6 +1095,12 @@ test("does not let a current-only correction mutate the active parent", () => {
   assert.equal(transition.startedNewParent, false);
   assert.equal(transition.previousParentId, "parent_coding");
   assert.equal(transition.nextParentId, "parent_coding");
+  assert.deepEqual(transition.clearedContextFields, []);
+  assert.deepEqual(transition.preservedContextFields, [
+    "active-parent-read-only",
+    "current-question-type-authority",
+  ]);
+  assertPureParentPayload(transition.parent);
 });
 
 test("creates a linked parent for a recommendation extension of the same app", () => {
@@ -1125,8 +1132,6 @@ test("re-roots an independent correction without old answers, QPS, or artifacts"
     stableKind: "general-system-design",
     topic: "Design a ride-sharing app",
     startTurnId: "turn_ride_share",
-    latestUsefulAnswer: "Use GPS fanout at 50K QPS",
-    previousUsefulAnswer: "Protect payment with idempotency",
     whiteboardArtifact: makeWhiteboard("general_sd"),
     phaseProgress: { deep_dive: true },
   });
@@ -1178,8 +1183,9 @@ test("re-roots an independent correction without old answers, QPS, or artifacts"
   assert.equal(transition.previousParentId, "parent_ride_share");
   assert.equal(transition.nextParentId, "parent_travel_agent");
   assert.equal(transition.parent.parentContextHandoff, undefined);
-  assert.equal(transition.parent.latestUsefulAnswer, undefined);
-  assert.equal(transition.parent.previousUsefulAnswer, undefined);
+  assertPureParentPayload(transition.parent);
+  assert.ok(transition.clearedContextFields.includes("generated-answers"));
+  assert.deepEqual(transition.preservedContextFields, []);
   assert.equal(transition.parent.whiteboardArtifact, undefined);
   assert.equal(
     transition.parent.promptTranscriptStartTurnId,
@@ -1196,7 +1202,6 @@ test("creates a bounded linked handoff without subsystem QPS or generated answer
     stableKind: "general-system-design",
     topic: "Design a food delivery app",
     startTurnId: "turn_food_delivery",
-    latestUsefulAnswer: "Generated answer about order dispatch",
     whiteboardArtifact: makeWhiteboard("general_sd"),
   });
   const task = makeActiveTask({ questionType: "general-system-design" });
@@ -1260,7 +1265,14 @@ test("creates a bounded linked handoff without subsystem QPS or generated answer
     },
   ]);
   assert.doesNotMatch(JSON.stringify(handoff), /5000 QPS|payment|idempotency/i);
-  assert.equal(transition.parent.latestUsefulAnswer, undefined);
+  assertPureParentPayload(transition.parent);
+  assert.ok(transition.clearedContextFields.includes("generated-answers"));
+  assert.deepEqual(transition.preservedContextFields, [
+    "shared-product-identity",
+    "shared-domain-entities",
+    "applicable-source-backed-assumptions",
+  ]);
+  assert.ok(handoff?.excludedContextKinds.includes("generated-answers"));
   assert.equal(transition.parent.whiteboardArtifact, undefined);
 });
 
@@ -1345,7 +1357,6 @@ test("resumes the existing parent when a child probe is corrected to the parent 
     parent,
     decision,
     now: now + 10,
-    expiresAt: now + 60_000,
   });
 
   assert.equal(decision.target, "resume-parent");
@@ -1355,6 +1366,65 @@ test("resumes the existing parent when a child probe is corrected to the parent 
   assert.equal(next.child, undefined);
   assert.equal(next.whiteboardArtifact, whiteboard);
   assert.equal(next.revisions, parent.revisions + 1);
+  assertPureParentPayload(next);
+});
+
+test("child retype and resume keep parent output clear intent unchanged", () => {
+  const child = makeChild({
+    questionType: "field-knowledge",
+    basedOnTurnIds: ["turn_child"],
+  });
+  const parent = makeInterviewParent({
+    stableKind: "ai-ml-system-design",
+    child,
+  });
+  const task = makeActiveTask({ questionType: "ai-ml-system-design", child });
+
+  for (const correctedType of ["coding", "ai-ml-system-design"] as const) {
+    const decision: ManualQuestionTypeCorrectionDecision = {
+      ...decideManualQuestionTypeCorrection(task, correctedType),
+      target: correctedType === "coding" ? "child" : "resume-parent",
+    };
+    const scopeDecision = decideManualCorrectionScope({
+      task,
+      decision,
+      lineage: makeLineage("turn_child"),
+      latestQuestionText: child.question,
+      currentQuestionRelation:
+        correctedType === "coding" ? "child-probe" : "resume-parent",
+    });
+    const transition = buildManualCorrectionParentTransition({
+      parent,
+      decision,
+      scopeDecision,
+      correctedPlaybook: makePlaybook("coding", "implementation_validation"),
+      latestQuestionText: child.question,
+      transcriptTurns: [],
+      newParentId: "unused-parent",
+      now: now + 10,
+    });
+
+    assert.deepEqual(transition.clearedContextFields, []);
+    assert.deepEqual(transition.preservedContextFields, [
+      "parent-id",
+      "question-origin",
+    ]);
+    assert.equal(transition.startedNewParent, false);
+    assert.equal(transition.parent.revisions, parent.revisions + 1);
+    assertPureParentPayload(transition.parent);
+    if (correctedType === "coding") {
+      assert.equal(scopeDecision.scope, "child-retype");
+      assert.equal(transition.parent.child?.id, child.id);
+      assert.equal(transition.parent.child?.questionType, "coding");
+      assert.equal(
+        transition.parent.child?.phaseState?.phase,
+        "implementation_validation"
+      );
+    } else {
+      assert.equal(scopeDecision.scope, "resume-parent");
+      assert.equal(transition.parent.child, undefined);
+    }
+  }
 });
 
 test("retypes a parent in place while resetting incompatible runtime state", () => {
@@ -1363,8 +1433,6 @@ test("retypes a parent in place while resetting incompatible runtime state", () 
     playbookPhase: "solution_planning",
     phaseProgress: { solution_planning: true },
     supportedFactAnchors: ["old-anchor"],
-    latestUsefulAnswer: "latest coding answer",
-    previousUsefulAnswer: "older answer",
     whiteboardArtifact: makeWhiteboard("general_sd"),
   });
   const decision = decideManualQuestionTypeCorrection(
@@ -1378,7 +1446,6 @@ test("retypes a parent in place while resetting incompatible runtime state", () 
     decision,
     correctedPlaybook: playbook,
     now: now + 20,
-    expiresAt: now + 60_000,
   });
 
   assert.equal(decision.target, "parent");
@@ -1388,8 +1455,7 @@ test("retypes a parent in place while resetting incompatible runtime state", () 
   assert.equal(next.playbookPhase, "project_narrative");
   assert.deepEqual(next.phaseProgress, { project_narrative: true });
   assert.deepEqual(next.supportedFactAnchors, []);
-  assert.equal(next.previousUsefulAnswer, undefined);
-  assert.equal(next.latestUsefulAnswer, undefined);
+  assertPureParentPayload(next);
   assert.equal(next.whiteboardArtifact, undefined);
 });
 
@@ -1417,11 +1483,9 @@ test("clears the current whiteboard pointer when system-design type changes", ()
   assert.equal(next.whiteboardArtifact, undefined);
 });
 
-test("preserves useful-answer continuity only across compatible system-design retypes", () => {
+test("returns only parent state across compatible system-design retypes", () => {
   const parent = makeInterviewParent({
     stableKind: "general-system-design",
-    latestUsefulAnswer: "Current architecture summary",
-    previousUsefulAnswer: "Requirements summary",
   });
   const decision = decideManualQuestionTypeCorrection(
     makeActiveTask({ questionType: "general-system-design" }),
@@ -1437,16 +1501,15 @@ test("preserves useful-answer continuity only across compatible system-design re
     ),
   });
 
-  assert.equal(next.latestUsefulAnswer, "Current architecture summary");
-  assert.equal(next.previousUsefulAnswer, "Requirements summary");
+  assert.equal(next.id, parent.id);
+  assert.equal(next.stableKind, "ai-ml-system-design");
+  assertPureParentPayload(next);
 });
 
 test("clears a cross-type whiteboard even for the same source-owned question", () => {
   const parent = makeInterviewParent({
     stableKind: "general-system-design",
     startTurnId: "turn_origin",
-    latestUsefulAnswer: "Generated GSD answer",
-    previousUsefulAnswer: "Earlier generated answer",
     whiteboardArtifact: makeWhiteboard("general_sd"),
   });
   const task = makeActiveTask({ questionType: "general-system-design" });
@@ -1481,10 +1544,25 @@ test("clears a cross-type whiteboard even for the same source-owned question", (
 
   assert.equal(transition.startedNewParent, false);
   assert.equal(transition.parent.id, parent.id);
-  assert.equal(transition.parent.latestUsefulAnswer, undefined);
-  assert.equal(transition.parent.previousUsefulAnswer, undefined);
+  assertPureParentPayload(transition.parent);
+  assert.deepEqual(transition.clearedContextFields, [
+    "generated-answers",
+    "unsupported-fact-anchors",
+    "incompatible-project-binding",
+  ]);
+  assert.deepEqual(transition.preservedContextFields, [
+    "parent-id",
+    "question-origin",
+  ]);
   assert.equal(transition.parent.whiteboardArtifact, undefined);
 });
+
+function assertPureParentPayload(parent: ActiveInterviewParent) {
+  assert.equal("latestUsefulAnswer" in parent, false);
+  assert.equal("previousUsefulAnswer" in parent, false);
+  assert.equal("expiresAt" in parent, false);
+  if (parent.child) assert.equal("compactSummary" in parent.child, false);
+}
 
 function makeActiveTask({
   questionType,

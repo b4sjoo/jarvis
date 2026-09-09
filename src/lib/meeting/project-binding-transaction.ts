@@ -13,6 +13,7 @@ export interface ProjectBindingSettlementCommitResult {
   nextBindingRevision: number;
   parentRevisionBefore?: number;
   parentRevisionAfter?: number;
+  invalidateProjectState: boolean;
   invalidatedState: string[];
   reason: string;
 }
@@ -86,6 +87,7 @@ export function commitProjectBindingSettlement({
       nextBindingRevision: nextBinding?.revision ?? 0,
       parentRevisionBefore: currentTask.revisions,
       parentRevisionAfter: currentTask.revisions,
+      invalidateProjectState: false,
       invalidatedState: [],
       reason: "binding-already-settled",
     };
@@ -141,12 +143,6 @@ export function commitProjectBindingSettlement({
     whiteboardArtifact: invalidateProjectState
       ? undefined
       : currentTask.whiteboardArtifact,
-    latestUsefulAnswer: invalidateProjectState
-      ? undefined
-      : currentTask.latestUsefulAnswer,
-    previousUsefulAnswer: invalidateProjectState
-      ? undefined
-      : currentTask.previousUsefulAnswer,
     updatedAt: now,
     revisions: currentTask.revisions + 1,
   };
@@ -160,6 +156,7 @@ export function commitProjectBindingSettlement({
     nextBindingRevision: nextBinding?.revision ?? 0,
     parentRevisionBefore: currentTask.revisions,
     parentRevisionAfter: task.revisions,
+    invalidateProjectState,
     invalidatedState,
     reason:
       decision.action === "invalidate"
@@ -209,6 +206,7 @@ function createRejectedResult(
     nextBindingRevision: decision.bindingRevision,
     parentRevisionBefore: currentTask?.revisions,
     parentRevisionAfter: currentTask?.revisions,
+    invalidateProjectState: false,
     invalidatedState: [],
     reason,
   };

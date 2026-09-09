@@ -77,6 +77,9 @@ test("commits a complete high-authority new parent before advisor execution", ()
     now: 110,
   });
   assert.ok(parent);
+  assert.equal("expiresAt" in parent, false);
+  assert.equal("latestUsefulAnswer" in parent, false);
+  assert.equal("previousUsefulAnswer" in parent, false);
   const committed = commitTaskBoundaryCandidate(candidate, parent.id, 110);
 
   assert.equal(parent.topic, "Design a food delivery service");

@@ -7,6 +7,7 @@ import test from "node:test";
 import vm from "node:vm";
 
 const root = process.cwd();
+const compiledRoot = path.resolve(root, process.env.JARVIS_TEST_OUTPUT_DIR ?? ".tmp-tests");
 const repoRequire = createRequire(path.join(root, "package.json"));
 const ts = repoRequire("typescript");
 const hookSource = readFileSync(
@@ -77,6 +78,9 @@ const callbackSources = {
   queuePendingAnswerRevision: findCallbackSource("queuePendingAnswerRevision"),
 };
 const helperSources = {
+  updateInterviewTaskContinuityForAnswer: findFunctionSource("updateInterviewTaskContinuityForAnswer"),
+  buildCompactChildSummary: findFunctionSource("buildCompactChildSummary"),
+  mergeSupportedFactAnchors: findFunctionSource("mergeSupportedFactAnchors"),
   prepareGenerationDerivedTaskRuntimeTransition: findFunctionSource(
     "prepareGenerationDerivedTaskRuntimeTransition"
   ),
@@ -113,7 +117,7 @@ for (const node of sourceFile.statements) {
   try {
     const loaded = await import(
       pathToFileURL(
-        path.join(root, ".tmp-tests", "src", `${moduleName.slice(2)}.js`)
+        path.join(compiledRoot, "src", `${moduleName.slice(2)}.js`)
       )
     );
     for (const binding of bindings) {
@@ -133,10 +137,15 @@ for (const moduleName of [
   "visual-evidence-recovery",
   "bounded-recent-history",
   "suggestion-task",
+  "interview-task-continuity",
+  "source-owned-transition-transaction",
+  "interview-playbook",
+  "playbook-phase",
+  "whiteboard-artifact",
 ]) {
   const loaded = await import(
     pathToFileURL(
-      path.join(root, ".tmp-tests", "src", "lib", "meeting", `${moduleName}.js`)
+      path.join(compiledRoot, "src", "lib", "meeting", `${moduleName}.js`)
     )
   );
   for (const [key, value] of Object.entries(loaded)) {
@@ -154,12 +163,12 @@ const transpile = (source) =>
 
 const stableAnswerModule = await import(
   pathToFileURL(
-    path.join(root, ".tmp-tests", "src", "lib", "meeting", "stable-answer.js")
+    path.join(compiledRoot, "src", "lib", "meeting", "stable-answer.js")
   )
 );
 const meetingAnswerModule = await import(
   pathToFileURL(
-    path.join(root, ".tmp-tests", "src", "lib", "meeting", "meeting-answer.js")
+    path.join(compiledRoot, "src", "lib", "meeting", "meeting-answer.js")
   )
 );
 const parseMeetingAnswer = meetingAnswerModule.parseMeetingAnswer;
@@ -168,8 +177,7 @@ assert.ok(parseMeetingAnswer && commitStableAnswerRevision);
 const generationResultModule = await import(
   pathToFileURL(
     path.join(
-      root,
-      ".tmp-tests",
+      compiledRoot,
       "src",
       "lib",
       "meeting",
@@ -177,6 +185,12 @@ const generationResultModule = await import(
     )
   )
 );
+const { MeetingContextManager } = await import(pathToFileURL(
+  path.join(compiledRoot, "src/lib/meeting/context-manager.js")
+));
+const { authorizeResponseArtifactMutation } = await import(pathToFileURL(
+  path.join(compiledRoot, "src/lib/meeting/response-artifact-authorization.js")
+));
 
 function suggestion(id, content) {
   return {
@@ -208,8 +222,8 @@ function stableAnswer() {
   });
 }
 
-function createHarness() {
-  let now = 2_000;
+function createHarness(options = {}) {
+  let now = options.now ?? 2_000;
   const realNow = Date.now;
   Date.now = () => now;
   const initialStable = stableAnswer();
@@ -245,17 +259,34 @@ function createHarness() {
     manualCorrectionTargetHistoryRef: { current: [] },
     latestManualCorrectionTargetRef: { current: undefined },
     pendingAnswerResolutionCommitByTraceRef: { current: new Map() },
-    recentAdvisorContinuityRef: { current: [] },
+    recentAdvisorContinuityRef: { current: imports.prepareBoundedGeneratedContinuity({
+      state: { recentCapsules: [] }, stable: initialStable,
+      currentOwner: { sessionId: "session-a", runtimeEpoch: 1, parentTaskId: "parent-a" },
+      parentRevision: 1, parentSummaryAllowed: true,
+    }) },
   };
-  const taskRuntime = { revision: 1 };
-  const contextState = {
-    sessionId: "session-a",
-    activeMeetingTask: {
-      id: "parent-a",
-      parent: { id: "parent-a", revisions: 1 },
+  const manager = new MeetingContextManager();
+  manager.reset({ sessionId: "session-a" });
+  const seeded = manager.commitTaskRuntimeTransition({
+    id: "publication-fixture-source", transition: "create-parent", reason: "accepted-source",
+    parent: {
+      id: "parent-a", source: options.source ?? "voice", stableKind: "coding",
+      topic: "Explain the queue invariant", playbookPhase: "baseline_reasoning",
+      phaseProgress: {}, supportedFactAnchors: [], revisions: 1, createdAt: 1000, updatedAt: 1000,
+      ...options.parent,
     },
-    taskRuntime,
-  };
+    ...(options.source === "screen" ? { screenAttachment: {
+      id: "screen-a", observationId: "screen-observation", basedOnObservationId: "screen-observation",
+      basedOnTurnIds: [], createdAt: 1000, updatedAt: 1000, kind: "coding",
+      question: "Explain the queue invariant", content: "Screen source",
+    } } : {}),
+    deadlineDelta: {
+      parent: { ownerId: "parent-a", deadline: 600_000 },
+      ...(options.source === "screen" ? { screen: { ownerId: "screen-a", deadline: 600_000 } } : {}),
+    },
+    appliedAt: 1000,
+  });
+  assert.equal(seeded.authorized, true);
   let uiState = {
     latestSuggestion: initialStable.suggestion,
     latestReliableSuggestion: initialStable.suggestion,
@@ -278,12 +309,7 @@ function createHarness() {
     PENDING_ANSWER_TTL_MS: 60_000,
     ANSWER_DELIVERY_IDLE_RELEASE_MS: 6_000,
     ...refs,
-    contextManagerRef: {
-      current: {
-        getState: () => contextState,
-        getTaskRuntimeState: () => taskRuntime,
-      },
-    },
+    contextManagerRef: { current: manager },
     generationResultLedgerRef: {
       current: generationResultLedger,
     },
@@ -324,6 +350,12 @@ function createHarness() {
   return {
     environment,
     refs,
+    manager,
+    setNow(value) { now = value; },
+    evaluate(source, globals = {}) {
+      Object.assign(environment, globals);
+      return vm.runInContext(transpile(source), context);
+    },
     get uiState() {
       return uiState;
     },
@@ -361,6 +393,302 @@ function lease() {
     startedAt: 2_000,
   };
 }
+
+function publicationCommitSource(source) {
+  const callback = parse(findCallbackSource(source === "voice" ? "runAdvisor" : "captureScreenContext"));
+  const matches = [];
+  const visit = (node) => {
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)
+      && node.expression.name.text === "commitStaged"
+      && node.arguments[0]?.getText(callback).includes(source === "voice"
+        ? "deadlineDelta: continuity.deadlineDelta" : "deadlineDelta: screenGenerationContinuity?.deadlineDelta")) {
+      matches.push(node.getText(callback));
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(callback);
+  assert.equal(matches.length, 1, `${source} production publication owner`);
+  return matches[0];
+}
+
+function prepareOutputCandidate(h, options = {}) {
+  const source = options.source ?? "voice";
+  const parent = h.manager.getTaskRuntimeState().parent;
+  assert.ok(parent);
+  const child = parent.child;
+  const relation = options.relation ?? (child ? "child-probe" : "followup-parent");
+  const artifactAuthorization = authorizeResponseArtifactMutation({
+    parentTaskId: parent.id, parentQuestionType: parent.stableKind,
+    responseOwnerQuestionType: child?.questionType ?? parent.stableKind,
+    responseOwnerSource: child ? "active-child" : "canonical-parent", relation,
+    requiredArtifacts: ["answer"],
+  });
+  const candidate = suggestion(options.id ?? "visible-b", "Answer: The queue preserves FIFO order.");
+  const continuity = h.evaluate("updateInterviewTaskContinuityForAnswer(continuityInput)", {
+    continuityInput: {
+      existingTask: parent, source, questionType: child?.questionType ?? parent.stableKind, relation,
+      finalContent: candidate.content, parsedAnswer: candidate.meetingAnswer,
+      observationId: parent.latestScreenObservationId,
+      expiresAt: options.deadline ?? Date.now() + 600_000,
+      deadlineCalculatedAt: Date.now(),
+      artifactAuthorization,
+    },
+  });
+  const generationLease = { ...lease(), id: options.leaseId ?? "lease-b",
+    sessionId: h.manager.getState().sessionId, runtimeEpoch: h.refs.runtimeEpochRef.current,
+    taskRevision: parent.revisions, baseVisibleAnswerRevision: h.refs.visibleAnswerRevisionRef.current,
+    logicalQuestionUnitId: options.lqu ?? h.refs.logicalQuestionUnitRef.current.id,
+    manualCorrectionRevision: h.refs.manualCorrectionRevisionRef.current,
+    responseActionRevision: h.refs.responseActionRevisionRef.current, startedAt: Date.now() };
+  const sectionOwner = child ? { kind: "active-child", parentId: parent.id, childId: child.id }
+    : { kind: "parent-mainline", parentId: parent.id };
+  const stable = commitStableAnswerRevision({
+    current: h.refs.stableAnswerRevisionRef.current, candidate, authorizedArtifacts: ["answer"],
+    taskId: parent.id, sectionOwner, logicalQuestionUnitId: generationLease.logicalQuestionUnitId,
+    logicalQuestionRevision: 1, sessionId: generationLease.sessionId, runtimeEpoch: generationLease.runtimeEpoch,
+    questionSourceHash: "source-b", settlementId: "settlement-b", committedAt: Date.now(),
+  });
+  assert.ok(stable);
+  const preparedTransition = h.evaluate("prepareGenerationDerivedTaskRuntimeTransition(transitionInput)", {
+    transitionInput: { currentRevision: h.manager.getTaskRuntimeState().revision, currentParent: parent,
+      stable, commitLatestUsefulAnswer: artifactAuthorization.allowLatestUsefulAnswer },
+  });
+  return { source, candidate, stable, continuity, preparedTransition, generationLease, sectionOwner,
+    taskRuntimeRevision: h.manager.getTaskRuntimeState().revision,
+    latestUsefulAnswerMutationAuthorized: artifactAuthorization.allowLatestUsefulAnswer };
+}
+
+function publishImmediate(h, candidate) {
+  const state = h.manager.getState();
+  const leaseAuthorization = imports.authorizeAnswerGenerationLease(candidate.generationLease,
+    h.environment.readGenerationLeaseSnapshot({ lease: candidate.generationLease,
+      authorizedArtifacts: ["answer"], candidateMutatedArtifacts: ["answer"],
+      logicalQuestionUnitId: candidate.generationLease.logicalQuestionUnitId, logicalQuestionRevision: 1 }));
+  const result = h.evaluate(publicationCommitSource(candidate.source), {
+    candidateStableAnswer: candidate.stable,
+    answerGenerationLease: candidate.generationLease, screenGenerationLease: candidate.generationLease,
+    advisorLeaseAuthorization: leaseAuthorization, screenLeaseAuthorization: leaseAuthorization,
+    contextState: { ...state, taskRuntime: { ...state.taskRuntime, revision: candidate.taskRuntimeRevision } },
+    advisorCommitTaskRuntimeState: h.manager.getTaskRuntimeState(), screenCommitTaskRuntimeState: h.manager.getTaskRuntimeState(),
+    screenGenerationTaskRuntimeRevision: candidate.taskRuntimeRevision,
+    advisorResponseCandidate: candidate.candidate, screenResponseCandidate: candidate.candidate,
+    preparedAdvisorTransition: candidate.preparedTransition, preparedScreenTransition: candidate.preparedTransition,
+    continuity: candidate.continuity, screenGenerationContinuity: candidate.continuity,
+    resetVisibleSections: false, screenStartedNewInterviewParent: false, options: {},
+    advisorPublication: undefined, screenPublication: undefined,
+  });
+  const prepared = h.environment[candidate.source === "voice" ? "advisorPublication" : "screenPublication"];
+  if (result.committed) h.environment.finalizeStableAnswerPublication(prepared);
+  return { result, prepared };
+}
+
+function queueOutputCandidate(h, candidate) {
+  const l = candidate.generationLease;
+  return h.environment.queuePendingAnswerRevision({
+    lease: l, suggestion: candidate.candidate, authorizedArtifacts: ["answer"], taskId: l.taskId,
+    resultTaskId: l.taskId, sectionOwner: candidate.sectionOwner, taskRevision: l.taskRevision,
+    logicalQuestionUnitId: l.logicalQuestionUnitId, logicalQuestionRevision: l.logicalQuestionRevision,
+    sessionId: l.sessionId, runtimeEpoch: l.runtimeEpoch, questionSourceHash: "source-b", settlementId: "settlement-b",
+    resetSections: false, reason: "delivery-lock-active", taskRuntimeRevision: candidate.taskRuntimeRevision,
+    latestUsefulAnswerMutationAuthorized: candidate.latestUsefulAnswerMutationAuthorized,
+    childSummary: candidate.continuity.childSummary, deadlineDelta: candidate.continuity.deadlineDelta,
+    deadlineCalculatedAt: candidate.continuity.deadlineCalculatedAt,
+    taskRuntimeTransition: candidate.preparedTransition.transition,
+  });
+}
+
+test("O1/O5.1 Voice/Screen actual commitStaged callsites install summary/Visible/deadline660 without task mutation", () => {
+  for (const source of ["voice", "screen"]) {
+    const h = createHarness({ now: 60_000, source });
+    try {
+      const before = h.manager.getTaskRuntimeState();
+      const oldSummary = h.refs.recentAdvisorContinuityRef.current.latestUsefulAnswer;
+      const candidate = prepareOutputCandidate(h, { source });
+      assert.deepEqual(candidate.continuity.task, before.parent);
+      assert.equal(candidate.preparedTransition.transition, undefined);
+      assert.equal(h.manager.getTaskDeadlineControl().parent.deadline, 600_000);
+      assert.equal(publishImmediate(h, candidate).result.committed, true);
+      assert.deepEqual(h.manager.getTaskRuntimeState(), before);
+      assert.equal(h.refs.visibleAnswerRevisionRef.current, 2);
+      assert.match(h.refs.recentAdvisorContinuityRef.current.latestUsefulAnswer, /FIFO/);
+      assert.equal(h.refs.recentAdvisorContinuityRef.current.previousUsefulAnswer, oldSummary);
+      assert.equal(h.uiState.latestSuggestion.id, "visible-b");
+      assert.equal(h.manager.getTaskDeadlineControl().parent.deadline, 660_000);
+    } finally { h.restore(); }
+  }
+});
+
+test("O1/O5.2 pending prepared at t60 commits at t80 with deadline660, never680", () => {
+  const h = createHarness({ now: 60_000 });
+  try {
+    const observations = [];
+    h.environment.sessionRecordingManagerRef.current = { recordCaptureLifecycle: (event) => observations.push(event) };
+    const before = h.manager.getTaskRuntimeState();
+    const outputBefore = h.refs.recentAdvisorContinuityRef.current;
+    const candidate = prepareOutputCandidate(h);
+    assert.ok(queueOutputCandidate(h, candidate));
+    assert.equal(h.environment.tryCommitPendingAnswer(), "waiting");
+    assert.equal(h.manager.getTaskDeadlineControl().parent.deadline, 600_000);
+    assert.equal(h.refs.recentAdvisorContinuityRef.current, outputBefore);
+    assert.equal(h.refs.visibleAnswerRevisionRef.current, 1);
+    h.unlock(); h.setNow(80_000);
+    assert.equal(h.environment.tryCommitPendingAnswer(), "committed");
+    assert.equal(h.manager.getTaskDeadlineControl().parent.deadline, 660_000);
+    assert.deepEqual(h.manager.getTaskRuntimeState(), before);
+    assert.match(h.refs.recentAdvisorContinuityRef.current.latestUsefulAnswer, /FIFO/);
+    const publication = observations.find((event) => event.stage === "stable-answer-visible-commit");
+    assert.ok(publication);
+    assert.equal(publication.generationDeadlineCalculatedAt, 60_000);
+    assert.equal(publication.generationDeadlineCandidate.parent.deadline, 660_000);
+    assert.equal(publication.generationDeadlineBefore.parent.deadline, 600_000);
+    assert.equal(publication.generationDeadlineAfter.parent.deadline, 660_000);
+    assert.equal(publication.generationDeadlineApplied, true);
+  } finally { h.restore(); }
+});
+
+test("O1 generation cannot create a missing child after source settlement", () => {
+  const h = createHarness({ now: 60_000 });
+  try {
+    const task = h.manager.getTaskRuntimeState();
+    const output = h.refs.recentAdvisorContinuityRef.current;
+    const deadline = h.manager.getTaskDeadlineControl();
+    assert.throws(() => prepareOutputCandidate(h, { relation: "child-probe" }), /committed child owner/);
+    assert.deepEqual(h.manager.getTaskRuntimeState(), task);
+    assert.equal(h.refs.recentAdvisorContinuityRef.current, output);
+    assert.deepEqual(h.manager.getTaskDeadlineControl(), deadline);
+  } finally { h.restore(); }
+});
+
+test("O5.3 manual Screen timeout at t70 remains130 when old pending tries at t80", () => {
+  const h = createHarness({ now: 60_000, source: "screen" });
+  try {
+    const oldSummary = h.refs.recentAdvisorContinuityRef.current.latestUsefulAnswer;
+    const candidate = prepareOutputCandidate(h, { source: "screen" });
+    candidate.continuity.deadlineDelta.screen = { ownerId: "screen-a", deadline: 660_000 };
+    queueOutputCandidate(h, candidate);
+    h.setNow(70_000);
+    const runtime = h.manager.getTaskRuntimeState();
+    const manual = h.manager.commitTaskRuntimeTransition({
+      id: "manual-screen-timeout", transition: "update-source-attachment", reason: "manual-timeout",
+      parent: runtime.parent, screenAttachment: runtime.screenAttachment,
+      deadlineDelta: { screen: { ownerId: "screen-a", deadline: Date.now() + 60_000 } },
+    });
+    assert.equal(manual.authorized, true);
+    assert.equal(manual.mutationApplied, true);
+    const accepted = h.manager.getTaskRuntimeState();
+    h.unlock(); h.setNow(80_000);
+    assert.equal(h.environment.tryCommitPendingAnswer(), "stale");
+    assert.equal(h.manager.getTaskDeadlineControl().screen.deadline, 130_000);
+    assert.equal(h.manager.getTaskDeadlineControl().parent.deadline, 600_000);
+    assert.deepEqual(h.manager.getTaskRuntimeState(), accepted);
+    assert.equal(h.refs.visibleAnswerRevisionRef.current, 1);
+    assert.equal(h.refs.recentAdvisorContinuityRef.current.latestUsefulAnswer, oldSummary);
+  } finally { h.restore(); }
+});
+
+for (const kind of ["immediate-voice", "immediate-screen", "pending"]) {
+  test(`O4/O5.7 ${kind} failed install rolls back Stable/output/deadline, preserving prior accepted source`, () => {
+    const h = createHarness({ now: 60_000, source: kind === "immediate-screen" ? "screen" : "voice" });
+    try {
+      const beforeSource = h.manager.getTaskRuntimeState();
+      assert.equal(h.manager.commitTaskRuntimeTransition({
+        id: "accepted-facts", transition: "update-parent-context", reason: "accepted-source-facts",
+        parent: { ...beforeSource.parent, supportedFactAnchors: ["accepted-fact"], revisions: 2, updatedAt: 59_000 },
+      }).authorized, true);
+      const accepted = h.manager.getTaskRuntimeState();
+      const stable = h.refs.stableAnswerRevisionRef.current;
+      const continuity = h.refs.recentAdvisorContinuityRef.current;
+      const deadline = h.manager.getTaskDeadlineControl();
+      const original = h.environment.installPreparedStableAnswerPublication;
+      h.environment.installPreparedStableAnswerPublication = (prepared) => {
+        original(prepared);
+        assert.equal(h.manager.getTaskDeadlineControl().parent.deadline, 660_000);
+        assert.equal(h.refs.visibleAnswerRevisionRef.current, 2);
+        throw new Error("injected failure after real install");
+      };
+      const candidate = prepareOutputCandidate(h, { source: kind === "immediate-screen" ? "screen" : "voice" });
+      if (kind === "pending") {
+        queueOutputCandidate(h, candidate); h.unlock();
+        assert.equal(h.environment.tryCommitPendingAnswer(), "stale");
+      } else assert.equal(publishImmediate(h, candidate).result.committed, false);
+      assert.equal(h.refs.stableAnswerRevisionRef.current, stable);
+      assert.equal(h.refs.visibleAnswerRevisionRef.current, 1);
+      assert.equal(h.refs.recentAdvisorContinuityRef.current, continuity);
+      assert.deepEqual(h.manager.getTaskDeadlineControl(), deadline);
+      assert.deepEqual(h.manager.getTaskRuntimeState(), accepted);
+      assert.equal(h.generationResultLedger.getEntry(candidate.generationLease.id).applyFailure.rollbackSucceeded, true);
+      assert.equal(h.uiState.latestSuggestion.id, "visible-a");
+    } finally { h.restore(); }
+  });
+}
+
+for (const change of ["clear", "new-parent", "session", "epoch", "phase", "source", "visible", "correction", "expired"]) {
+  test(`O4/O5 pending ${change} rejects without output or deadline revival`, () => {
+    const h = createHarness({ now: 60_000 });
+    try {
+      const candidate = prepareOutputCandidate(h);
+      queueOutputCandidate(h, candidate);
+      const state = h.manager.getTaskRuntimeState();
+      if (change === "clear") h.manager.clearTaskRuntime({ id: "clear", scope: "all", reason: "user-clear" });
+      if (change === "new-parent") assert.equal(h.manager.commitTaskRuntimeTransition({
+        id: "replace", transition: "replace-parent", reason: "new-source",
+        parent: { ...state.parent, id: "parent-b", revisions: 1 },
+        deadlineDelta: { parent: { ownerId: "parent-b", deadline: 700_000 } },
+      }).authorized, true);
+      if (change === "session") h.manager.reset({ sessionId: "session-b" });
+      if (change === "epoch") h.refs.runtimeEpochRef.current++;
+      if (change === "phase" || change === "source") assert.equal(h.manager.commitTaskRuntimeTransition({
+        id: "task-change", transition: change === "phase" ? "set-phase" : "update-parent-context", reason: "accepted-source",
+        parent: { ...state.parent, revisions: 2, updatedAt: 70_000,
+          ...(change === "phase" ? { playbookPhase: "optimized_pseudocode" } : { supportedFactAnchors: ["new-source-fact"] }) },
+      }).authorized, true);
+      if (change === "visible") h.refs.visibleAnswerRevisionRef.current++;
+      if (change === "correction") h.refs.manualCorrectionRevisionRef.current++;
+      const deadline = h.manager.getTaskDeadlineControl();
+      const output = h.refs.recentAdvisorContinuityRef.current;
+      const visible = h.refs.visibleAnswerRevisionRef.current;
+      h.unlock(); h.setNow(change === "expired" ? 121_000 : 80_000);
+      assert.equal(h.environment.tryCommitPendingAnswer(), "stale");
+      assert.deepEqual(h.manager.getTaskDeadlineControl(), deadline);
+      assert.equal(h.refs.recentAdvisorContinuityRef.current, output);
+      assert.equal(h.refs.visibleAnswerRevisionRef.current, visible);
+      assert.equal(h.uiState.latestSuggestion.id, "visible-a");
+    } finally { h.restore(); }
+  });
+}
+
+test("O5.4 successful unqualified continuation output does not renew deadline", () => {
+  const h = createHarness({ now: 60_000 });
+  try {
+    const candidate = prepareOutputCandidate(h, { relation: "unknown" });
+    assert.equal(candidate.continuity.deadlineDelta, undefined);
+    const before = h.manager.getTaskRuntimeState();
+    assert.equal(publishImmediate(h, candidate).result.committed, true);
+    assert.equal(h.manager.getTaskDeadlineControl().parent.deadline, 600_000);
+    assert.deepEqual(h.manager.getTaskRuntimeState(), before);
+  } finally { h.restore(); }
+});
+
+test("O1/O4 child publication updates generated child summary while preserving parent continuity and task", () => {
+  const h = createHarness({ now: 60_000, parent: {
+    stableKind: "ai-ml-system-design", playbookPhase: "design_framing",
+    child: { id: "child-a", questionType: "coding", relation: "child-probe", intent: "implementation-probe",
+      question: "Implement a queue", basedOnTurnIds: ["turn-current"], basedOnObservationIds: [], createdAt: 1000, updatedAt: 1000 },
+  } });
+  try {
+    const before = h.manager.getTaskRuntimeState();
+    const parentSummary = h.refs.recentAdvisorContinuityRef.current.latestUsefulAnswer;
+    const candidate = prepareOutputCandidate(h);
+    assert.equal(candidate.preparedTransition.transition, undefined);
+    assert.match(candidate.continuity.childSummary, /FIFO/);
+    assert.equal(publishImmediate(h, candidate).result.committed, true);
+    assert.deepEqual(h.manager.getTaskRuntimeState(), before);
+    assert.equal(h.refs.recentAdvisorContinuityRef.current.latestUsefulAnswer, parentSummary);
+    assert.equal(h.refs.recentAdvisorContinuityRef.current.child.childTaskId, "child-a");
+    assert.match(h.refs.recentAdvisorContinuityRef.current.child.compactSummary, /FIFO/);
+    assert.equal(h.manager.getTaskDeadlineControl().parent.deadline, 660_000);
+  } finally { h.restore(); }
+});
 
 test("runs pending delivery callbacks once from lock through final unlock publication", () => {
   const harness = createHarness();

@@ -85,6 +85,8 @@ test("removes task-owned context from a new voice parent prompt projection", () 
     parent: makeParent(),
   });
   const original = manager.buildAdvisorPromptContext();
+  assert.ok(original.activeMeetingTask);
+  original.activeMeetingTask.parent.latestUsefulAnswer = "Clarify scale.";
   const projected = applyAdvisorScreenScopeToPromptContext(
     original,
     decideAdvisorScreenScope({
@@ -101,6 +103,7 @@ test("removes task-owned context from a new voice parent prompt projection", () 
   assert.equal(projected.activeMeetingTask, undefined);
   assert.equal(projected.interviewPlaybook, undefined);
   assert.equal(manager.getState().activeMeetingTask?.id, "parent-screen");
+  assert.equal("latestUsefulAnswer" in manager.getTaskRuntimeState().parent!, false);
 });
 
 test("keeps unknown and ambiguous screen answers provisional", () => {
@@ -196,7 +199,6 @@ function makeParent(): ActiveInterviewParent {
     playbookPhase: "requirement_clarification",
     phaseProgress: {},
     supportedFactAnchors: [],
-    latestUsefulAnswer: "Clarify scale.",
     createdAt: 100,
     updatedAt: 110,
     revisions: 1,

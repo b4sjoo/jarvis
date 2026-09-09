@@ -1,6 +1,4 @@
 import type {
-  ActiveInterviewChild,
-  ActiveInterviewParent,
   InterviewTaskRelation,
 } from "./types.js";
 import {
@@ -107,75 +105,5 @@ export function decideInterviewTaskContinuityBranch(input: {
   return {
     branch: "continue-parent",
     reason: `compatible-parent-${input.relation}`,
-  };
-}
-
-export function applyInterviewChildProbeTransition(input: {
-  parent: ActiveInterviewParent;
-  child?: ActiveInterviewChild;
-  projectBinding?: ActiveInterviewParent["projectBinding"];
-  supportedFactAnchors: string[];
-  whiteboardArtifact?: ActiveInterviewParent["whiteboardArtifact"];
-  now: number;
-  expiresAt?: number;
-}): ActiveInterviewParent {
-  return {
-    ...input.parent,
-    updatedAt: input.now,
-    expiresAt: input.expiresAt,
-    child: input.child ?? input.parent.child,
-    projectBinding: input.projectBinding ?? input.parent.projectBinding,
-    supportedFactAnchors: input.supportedFactAnchors,
-    whiteboardArtifact: input.whiteboardArtifact,
-    revisions: input.parent.revisions + 1,
-  };
-}
-
-export function mergeGeneratedChildContinuity(input: {
-  sourceOwnedChild: ActiveInterviewChild;
-  generatedChild?: ActiveInterviewChild;
-  now: number;
-}): ActiveInterviewChild {
-  const generated = input.generatedChild;
-  if (!generated) return { ...input.sourceOwnedChild };
-
-  // A source-owned transition has already settled identity, lineage, phase,
-  // and the parent return target. Generation may only refresh its summary.
-  return {
-    ...input.sourceOwnedChild,
-    compactSummary:
-      generated.compactSummary ?? input.sourceOwnedChild.compactSummary,
-    artifactId: generated.artifactId ?? input.sourceOwnedChild.artifactId,
-    updatedAt: input.now,
-  };
-}
-
-export function commitVisibleUsefulAnswerToParent(input: {
-  parent?: ActiveInterviewParent;
-  taskId: string | null;
-  summary: string;
-  committedAt: number;
-}): {
-  parent?: ActiveInterviewParent;
-  committed: boolean;
-} {
-  const summary = input.summary.trim();
-  if (!input.parent || input.parent.id !== input.taskId || !summary) {
-    return { parent: input.parent, committed: false };
-  }
-
-  const previousUsefulAnswer =
-    input.parent.latestUsefulAnswer &&
-    input.parent.latestUsefulAnswer !== summary
-      ? input.parent.latestUsefulAnswer
-      : input.parent.previousUsefulAnswer;
-  return {
-    parent: {
-      ...input.parent,
-      previousUsefulAnswer,
-      latestUsefulAnswer: summary,
-      updatedAt: input.committedAt,
-    },
-    committed: true,
   };
 }

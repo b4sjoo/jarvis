@@ -47,12 +47,12 @@ export interface ActiveMeetingParent {
   phaseProgress: Record<string, boolean>;
   projectBinding?: ProjectBinding;
   supportedFactAnchors: string[];
+  // Generated read projection supplied by the output owner, never stored in Task Runtime.
   latestUsefulAnswer?: string;
   previousUsefulAnswer?: string;
   whiteboardArtifact?: WhiteboardArtifact;
   createdAt: number;
   updatedAt: number;
-  expiresAt?: number;
   originQuestionId?: string;
   startTurnId?: string;
   startObservationId?: string;
@@ -120,6 +120,16 @@ export interface MeetingTaskRuntimeState {
   lastMutation?: MeetingTaskRuntimeMutationReceipt;
 }
 
+export interface MeetingTaskDeadlineControl {
+  parent?: { ownerId: string; deadline: number };
+  screen?: { ownerId: string; deadline: number };
+}
+
+export interface MeetingTaskDeadlineDelta {
+  parent?: { ownerId: string; deadline: number | undefined };
+  screen?: { ownerId: string; deadline: number | undefined };
+}
+
 export interface MeetingTaskRuntimeMutationReceipt {
   id: string;
   kind: MeetingTaskRuntimeMutation["kind"];
@@ -142,6 +152,7 @@ export type MeetingTaskRuntimeMutation =
   | (MeetingTaskRuntimeMutationBase & {
       kind: "expire";
       now: number;
+      deadlineControl: MeetingTaskDeadlineControl;
     })
   | (MeetingTaskRuntimeMutationBase & {
       kind: "commit-transition";
@@ -149,6 +160,7 @@ export type MeetingTaskRuntimeMutation =
       authorizedArtifacts?: readonly AnswerArtifactSection[];
       parent?: ActiveInterviewParent | null;
       screenAttachment?: ActiveScreenTask | null;
+      deadlineDelta?: MeetingTaskDeadlineDelta;
     });
 
 export interface MeetingTaskRuntimeMutationResult {
@@ -165,17 +177,17 @@ export interface MeetingTaskRuntimeMutationResult {
 }
 
 type ParentContextChanges = Pick<ActiveInterviewParent,
-  | "updatedAt" | "expiresAt" | "revisions" | "playbook" | "phaseProgress"
-  | "projectBinding" | "supportedFactAnchors" | "latestUsefulAnswer"
-  | "previousUsefulAnswer" | "whiteboardArtifact" | "latestScreenObservationId"
+  | "updatedAt" | "revisions" | "playbook" | "phaseProgress"
+  | "projectBinding" | "supportedFactAnchors"
+  | "whiteboardArtifact" | "latestScreenObservationId"
 >;
 const PARENT_CONTEXT_FIELDS: readonly (keyof ParentContextChanges)[] = [
-  "updatedAt", "expiresAt", "revisions", "playbook", "phaseProgress",
-  "projectBinding", "supportedFactAnchors", "latestUsefulAnswer",
-  "previousUsefulAnswer", "whiteboardArtifact", "latestScreenObservationId",
+  "updatedAt", "revisions", "playbook", "phaseProgress",
+  "projectBinding", "supportedFactAnchors",
+  "whiteboardArtifact", "latestScreenObservationId",
 ];
 const PARENT_PHASE_FIELDS: readonly (keyof ActiveInterviewParent)[] = [
-  "updatedAt", "expiresAt", "revisions", "playbook", "playbookPhase",
+  "updatedAt", "revisions", "playbook", "playbookPhase",
   "phaseProgress", "latestScreenObservationId", "child",
 ];
 
@@ -208,17 +220,17 @@ export function validateTaskTransitionFieldChanges(input: {
     if (transition === "update-source-attachment") return true;
     if (Boolean(input.beforeScreen) !== Boolean(input.afterScreen)) return false;
     return !input.beforeScreen || !input.afterScreen || hasOnlyFieldChanges(
-      input.beforeScreen, input.afterScreen, ["content", "updatedAt", "expiresAt", "basedOnTurnIds"]
+      input.beforeScreen, input.afterScreen, ["content", "updatedAt", "basedOnTurnIds"]
     );
   }
   if (!before || !after) return false;
   if (!sameRuntimeValue(input.beforeScreen, input.afterScreen)) return false;
   if (transition === "attach-child") {
-    return hasOnlyFieldChanges(before, after, ["child", "updatedAt", "expiresAt", "revisions"]);
+    return hasOnlyFieldChanges(before, after, ["child", "updatedAt", "revisions"]);
   }
   if (transition === "resume-parent") {
     return hasOnlyFieldChanges(before, after, [
-      "child", "updatedAt", "expiresAt", "revisions", "playbook", "playbookPhase",
+      "child", "updatedAt", "revisions", "playbook", "playbookPhase",
       "supportedFactAnchors", "latestScreenObservationId",
     ]) && samePhasePlaybook(after.playbook, after.stableKind, after.playbookPhase);
   }
@@ -241,7 +253,7 @@ function validChildContextChanges(
   after: RuntimeActiveInterviewChild | undefined
 ) {
   if (!before || !after) return before === after;
-  if (!hasOnlyFieldChanges(before, after, ["updatedAt", "compactSummary", "artifactId", "phaseState"])) return false;
+  if (!hasOnlyFieldChanges(before, after, ["updatedAt", "artifactId", "phaseState"])) return false;
   const beforePhase = before.phaseState;
   const afterPhase = after.phaseState;
   if (!beforePhase || !afterPhase) return beforePhase === afterPhase;
@@ -268,7 +280,7 @@ function isProjectBindingContextReset(before: ActiveInterviewParent, after: Acti
     after.playbookPhase === "project_narrative" &&
     Object.keys(after.phaseProgress).length === 0 &&
     after.supportedFactAnchors.length === 0 && !after.child &&
-    !after.whiteboardArtifact && !after.latestUsefulAnswer && !after.previousUsefulAnswer;
+    !after.whiteboardArtifact;
 }
 
 function hasOnlyFieldChanges<T extends object>(before: T, after: T, fields: readonly (keyof T)[]) {
@@ -290,6 +302,8 @@ function sameRuntimeValue(left: unknown, right: unknown): boolean {
     (left as Record<string, unknown>)[key], (right as Record<string, unknown>)[key]
   ));
 }
+
+export { sameRuntimeValue as equalTaskRuntimeValues };
 
 function constructCommandParent(
   before: ActiveInterviewParent | undefined,
@@ -313,6 +327,7 @@ export function createMeetingTaskRuntimeState(): MeetingTaskRuntimeState {
 export function reduceMeetingTaskRuntimeMutation(input: {
   state: MeetingTaskRuntimeState;
   mutation: MeetingTaskRuntimeMutation;
+  deadlineControl?: MeetingTaskDeadlineControl;
 }): MeetingTaskRuntimeMutationResult {
   const current = cloneMeetingTaskRuntimeState(input.state);
   const { mutation } = input;
@@ -328,7 +343,7 @@ export function reduceMeetingTaskRuntimeMutation(input: {
     };
   }
 
-  const next = applyRuntimeMutation(current, mutation);
+  const next = applyRuntimeMutation(current, mutation, input.deadlineControl);
   if (next.rejectionReason) {
     return {
       state: current,
@@ -767,14 +782,11 @@ function buildParentFromInterviewTask(
           evidenceEntryIds: [...task.projectBinding.evidenceEntryIds],
         }
       : undefined,
-    latestUsefulAnswer: task.latestUsefulAnswer,
-    previousUsefulAnswer: task.previousUsefulAnswer,
     whiteboardArtifact: task.whiteboardArtifact
       ? { ...task.whiteboardArtifact }
       : undefined,
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
-    expiresAt: task.expiresAt,
     originQuestionId: task.originQuestionId,
     startTurnId: task.startTurnId,
     startObservationId: task.startObservationId,
@@ -861,7 +873,6 @@ function buildParentFromScreenTask(task: ActiveScreenTask): ActiveMeetingParent 
     latestUsefulAnswer: task.content,
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
-    expiresAt: task.expiresAt,
     startObservationId: task.basedOnObservationId,
     latestScreenObservationId: task.basedOnObservationId,
     revisions: 0,
@@ -1020,7 +1031,8 @@ function uniqueStrings(values: Array<string | undefined>) {
 
 function applyRuntimeMutation(
   state: MeetingTaskRuntimeState,
-  mutation: MeetingTaskRuntimeMutation
+  mutation: MeetingTaskRuntimeMutation,
+  deadlineControl?: MeetingTaskDeadlineControl
 ): {
   changed: boolean;
   patch: Partial<MeetingTaskRuntimeState>;
@@ -1042,6 +1054,11 @@ function applyRuntimeMutation(
       beforeScreen: state.screenAttachment,
       afterScreen: screenAttachment,
       authorizedArtifacts: mutation.authorizedArtifacts,
+      screenDeadlineChanged: Boolean(
+        mutation.deadlineDelta?.screen &&
+        mutation.deadlineDelta.screen.ownerId === screenAttachment?.id &&
+        mutation.deadlineDelta.screen.deadline !== deadlineControl?.screen?.deadline
+      ),
     });
     if (rejectionReason) {
       return {
@@ -1092,14 +1109,16 @@ function applyRuntimeMutation(
   let screenAttachment = cloneRuntimeValue(state.screenAttachment);
   let changed = false;
   if (
-    screenAttachment?.expiresAt &&
-    screenAttachment.expiresAt <= mutation.now
+    screenAttachment &&
+    mutation.deadlineControl.screen?.ownerId === screenAttachment.id &&
+    mutation.deadlineControl.screen.deadline <= mutation.now
   ) {
     screenAttachment = undefined;
     if (parent?.source === "screen") parent = undefined;
     changed = true;
   }
-  if (parent?.expiresAt && parent.expiresAt <= mutation.now) {
+  if (parent && mutation.deadlineControl.parent?.ownerId === parent.id &&
+    mutation.deadlineControl.parent.deadline <= mutation.now) {
     parent = undefined;
     changed = true;
   }
@@ -1121,6 +1140,7 @@ function validateRuntimeTransition(input: {
   beforeScreen?: ActiveScreenTask;
   afterScreen?: ActiveScreenTask;
   authorizedArtifacts?: readonly AnswerArtifactSection[];
+  screenDeadlineChanged?: boolean;
 }): RuntimeTransitionRejectionReason | undefined {
   const { transition, beforeParent, afterParent } = input;
   if (!validateTaskTransitionFieldChanges(input)) return "invalid-transition";
@@ -1221,7 +1241,7 @@ function validateRuntimeTransition(input: {
     input.beforeScreen?.id !== input.afterScreen?.id ||
       input.beforeScreen?.updatedAt !== input.afterScreen?.updatedAt ||
       input.beforeScreen?.content !== input.afterScreen?.content ||
-      input.beforeScreen?.expiresAt !== input.afterScreen?.expiresAt ||
+      input.screenDeadlineChanged ||
       input.beforeParent?.id !== input.afterParent?.id ||
       input.beforeParent?.revisions !== input.afterParent?.revisions
   )

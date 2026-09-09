@@ -79,9 +79,8 @@ test("uses the committed runtime parent for post-model continuity", () => {
     source,
     /postModelContinuityAuthority\.lifecycleCommittedBeforeAdvisor[\s\S]*contextState\.taskRuntime\.parent \?\? promptInterviewTask/
   );
-  assert.match(
-    source,
-    /sourceTransitionPrecommitted:\s*postModelContinuityAuthority\.lifecycleCommittedBeforeAdvisor/
-  );
+  assert.doesNotMatch(source, /sourceTransitionPrecommitted:/);
+  assert.doesNotMatch(source, /function buildActiveInterviewChild/);
+  assert.match(source, /Generated child output requires a committed child owner/);
   assert.doesNotMatch(source, /parentMutationCommittedBeforeAdvisor/);
 });
