@@ -10,9 +10,9 @@ test("accepts the tracked privacy-safe deletion ledger", () => {
   assert.equal(result.ok, true, result.errors.join("\n"));
   assert.equal(result.entryCount, 16);
   assert.deepEqual(result.statusCounts, {
-    candidate: 2,
+    candidate: 0,
     "migration-ready": 0,
-    deleted: 14,
+    deleted: 16,
     retained: 0,
   });
 });
@@ -35,7 +35,7 @@ test("rejects duplicate ids and incomplete migration contracts", () => {
 test("requires deleted entries to provide recurrence guards", () => {
   const ledger = loadDeletionLedger();
   const candidate = ledger.entries.find(
-    (entry) => entry.status === "candidate"
+    (entry) => entry.status === "deleted"
   );
   assert.ok(candidate);
   candidate.status = "deleted";

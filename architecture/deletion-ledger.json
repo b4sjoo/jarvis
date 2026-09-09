@@ -207,7 +207,8 @@
       ],
       "deletionGate": "Publish complete immutable content revisions atomically, preserve existing user policy, and pin exact source revisions and hashes.",
       "rollbackBoundary": "Task 165 immutable-content publication is separate from ranking, curation and Snapshot product policy.",
-      "status": "candidate"
+      "status": "deleted",
+      "forbiddenPatterns": ["buildUpsertMemoryEntryStatement", "buildUpsertMemorySourceStatement", "buildCuratedMemoryRebuildRetentionPlan"]
     },
     {
       "id": "unversioned-preparation-snapshot-envelope",
@@ -224,7 +225,8 @@
       ],
       "deletionGate": "Snapshot activation revalidates every pinned revision and hash inside the final database transaction.",
       "rollbackBoundary": "Task 165 envelope migration and activation cutover remain independently revertible.",
-      "status": "candidate"
+      "status": "deleted",
+      "forbiddenPatterns": ["stablePreparationHash(entry.content)"]
     },
     {
       "id": "best-effort-legacy-chat-startup-migration",
