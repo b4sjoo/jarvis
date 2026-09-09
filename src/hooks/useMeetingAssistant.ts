@@ -3020,7 +3020,7 @@ export function useMeetingAssistant() {
           readSelection: () =>
             interviewPreparationSnapshotService.getCurrentContext(),
           readSelectedSnapshot: () =>
-            interviewPreparationSnapshotService.getCurrentSnapshot(),
+            interviewPreparationSnapshotService.getCurrentSnapshotForRuntimePin(),
         },
       });
       const currentMeetingSessionId =
@@ -8320,7 +8320,7 @@ export function useMeetingAssistant() {
             readSelection: () =>
               interviewPreparationSnapshotService.getCurrentContext(),
             readSelectedSnapshot: () =>
-              interviewPreparationSnapshotService.getCurrentSnapshot(),
+              interviewPreparationSnapshotService.getCurrentSnapshotForRuntimePin(),
           },
         });
         if (preparationContext.loadState === "failed") {

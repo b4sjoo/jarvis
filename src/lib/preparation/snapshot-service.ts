@@ -134,7 +134,7 @@ export function createPreparationSnapshotService(dependencies: {
       validateKmbPins(snapshot, await dependencies.getKmbEntries());
       const current = await dependencies.snapshots.getActive({ processId: context.processId, roundId: context.roundId });
       if (!current || current.id !== snapshot.id) {
-        throw new Error("The selected Snapshot's KMB sources changed. Deactivate it, or review current KMB statements and compile and activate a new Snapshot.");
+        throw new Error("The selected Snapshot's sources changed or are unverified. Deactivate it, or review current sources and compile and activate a new Snapshot.");
       }
       return current;
     },

@@ -116,7 +116,7 @@ function harness() {
     getActiveMeetingTaskTraceMetadata: () => ({}),
     interviewPreparationSnapshotService: {
       getCurrentContext: () => selection(),
-      getCurrentSnapshot: async () => undefined,
+      getCurrentSnapshotForRuntimePin: async () => undefined,
     },
     state: ui,
     setState: (update: (previous: any) => any) => { ui = update(ui); },
@@ -215,6 +215,33 @@ for (const failure of ["folder", "manifest.json", "settings/meeting-assistant-se
   });
 }
 
+for (const entry of ["recording", "session-pin"] as const) {
+  test(`K4/RS1: ${entry} uses the checked Snapshot reader, not the inspection reader`, async () => {
+    const h = harness();
+    const before = h.context.getState();
+    h.setSelection(async () => ({ revision: 8, updatedAt: 200, processId: "process", roundId: "round", selectedSnapshotId: "snapshot" }));
+    let checkedReads = 0;
+    h.globals.interviewPreparationSnapshotService.getCurrentSnapshot = async () => {
+      throw new Error("Inspection reader must not authorize a runtime pin.");
+    };
+    h.globals.interviewPreparationSnapshotService.getCurrentSnapshotForRuntimePin = async () => {
+      checkedReads += 1;
+      throw new Error("Selected Snapshot evidence is unverified.");
+    };
+    if (entry === "recording") {
+      assert.equal(await h.start(), undefined);
+      assert.deepEqual(h.context.getState(), before);
+      assert.deepEqual(h.cancellations, []);
+      assert.equal(h.manager.getState().active, false);
+      assert.match(h.ui().error, /unverified/);
+    } else {
+      const result = await h.globals.pinPreparationRuntimeForSession(before.sessionId);
+      assert.equal(result.context.loadState, "failed");
+    }
+    assert.equal(checkedReads, 1);
+  });
+}
+
 test("RS2: duplicate start commits one real fresh reset and matching runtime/pin/manifest identities", async (t) => {
   let now = Date.now();
   t.mock.method(Date, "now", () => now);
@@ -274,7 +301,7 @@ test("RS2: selected Preparation snapshot is pinned before reset and matches the 
     artifactManifest: buildPreparationSnapshotArtifactManifest({ snapshotId: "snapshot", payload }),
   };
   h.setSelection(async () => ({ revision: 8, updatedAt: 200, processId: "process", roundId: "round", selectedSnapshotId: "snapshot" }));
-  h.globals.interviewPreparationSnapshotService.getCurrentSnapshot = async () => snapshot;
+  h.globals.interviewPreparationSnapshotService.getCurrentSnapshotForRuntimePin = async () => snapshot;
   assert.ok((await h.start())?.active, h.ui().error);
   const pin = h.globals.preparationRuntimeContextRef.current;
   assert.equal(pin.mode, "prepared");
