@@ -4,6 +4,9 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import test from "node:test";
 import vm from "node:vm";
+import { DatabaseSync } from "node:sqlite";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 
 const root = process.cwd();
 const ts = createRequire(path.join(root, "package.json"))("typescript");
@@ -112,5 +115,60 @@ test("SQLite Chat APIs remain usable without importing a storage migration depen
   assert.equal(api.generateConversationTitle(" hello "), "hello");
   for (const name of ["getConversationById", "deleteConversation", "deleteAllConversations"]) {
     assert.equal(typeof api[name], "function", name);
+  }
+});
+
+test("LC3: production Chat CRUD roundtrips through the real SQLite migration", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "jarvis-chat-crud-"));
+  const sqlite = new DatabaseSync(path.join(directory, "chat.sqlite"));
+  try {
+    sqlite.exec("PRAGMA foreign_keys = ON");
+    sqlite.exec(readFileSync(path.join(root, "src-tauri/src/db/migrations/chat-history.sql"), "utf8"));
+    // Only the plugin transport is adapted; SQL, row mapping and CRUD stay production-owned.
+    const database = {
+      execute: async (sql, values = []) => ({ rowsAffected: Number(sqlite.prepare(sql).run(...values).changes) }),
+      select: async (sql, values = []) => sqlite.prepare(sql).all(...values),
+    };
+    const api = loadModule(databaseSource, { "./config": { getDatabase: async () => database } });
+    const plain = (value) => JSON.parse(JSON.stringify(value));
+    const first = {
+      id: "first", title: "First", createdAt: 10, updatedAt: 30,
+      messages: [
+        { id: "user-1", role: "user", content: "Question", timestamp: 20 },
+        { id: "answer-1", role: "assistant", content: "Answer", timestamp: 30,
+          attachedFiles: [{ name: "fixture.txt", type: "text/plain", content: "local fixture" }] },
+      ],
+    };
+    const second = { id: "second", title: "Second", createdAt: 40, updatedAt: 40, messages: [] };
+    assert.equal(await api.getConversationById("absent"), null);
+    await api.createConversation(first);
+    await api.saveConversation(second);
+    assert.deepEqual(plain(await api.getConversationById(first.id)), first);
+    assert.deepEqual(plain(await api.getAllConversations()), [second, first]);
+
+    const updated = { ...first, title: "Revised", updatedAt: 60, messages: [
+      { id: "replacement", role: "system", content: "Replacement", timestamp: 60 },
+    ] };
+    await api.updateConversation(updated);
+    assert.deepEqual(plain(await api.getConversationById(first.id)), updated);
+    assert.equal(sqlite.prepare("SELECT count(*) AS n FROM messages WHERE id IN ('user-1', 'answer-1')").get().n, 0);
+    const saved = { ...updated, title: "Saved again", updatedAt: 70,
+      messages: [{ ...updated.messages[0], timestamp: 70 }] };
+    await api.saveConversation(saved);
+    assert.deepEqual(plain(await api.getAllConversations()), [saved, second]);
+
+    assert.equal(await api.deleteConversation(first.id), true);
+    assert.equal(await api.deleteConversation(first.id), false);
+    assert.equal(await api.getConversationById(first.id), null);
+    assert.equal(sqlite.prepare("SELECT count(*) AS n FROM messages").get().n, 0);
+    assert.deepEqual(plain(await api.getAllConversations()), [second]);
+    await api.createConversation(first);
+    await api.deleteAllConversations();
+    assert.deepEqual(plain(await api.getAllConversations()), []);
+    assert.equal(sqlite.prepare("SELECT count(*) AS n FROM messages").get().n, 0);
+    assert.deepEqual(plain(sqlite.prepare("PRAGMA foreign_key_check").all()), []);
+  } finally {
+    sqlite.close();
+    await rm(directory, { recursive: true, force: true });
   }
 });
