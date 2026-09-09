@@ -17389,16 +17389,18 @@ export function useMeetingAssistant() {
           logicalQuestionUnit: unit,
           transcriptTurns: latestContext.transcriptTurns,
         });
+        const logicalQuestionProjection =
+          projectEffectiveLogicalQuestionSources(unit);
         const contextProjection = projectEffectiveSourceTurnGroup({
           sources: rawContextSources,
           effectiveRecords: effectiveQuestionSourceLedgerRef.current.list(),
           logicalQuestionUnit: unit,
+          logicalQuestionProjection,
           sessionId: latestContext.sessionId,
           runtimeEpoch: runtimeEpochRef.current,
         });
         return {
-          effectiveSources:
-            projectEffectiveLogicalQuestionSources(unit).sources,
+          effectiveSources: logicalQuestionProjection.sources,
           contextSources: contextProjection.sources,
           contextProjection,
         };

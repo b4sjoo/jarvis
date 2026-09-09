@@ -242,33 +242,34 @@ export function projectEffectiveTextForSourceTurn(input: {
   sessionId: string;
   runtimeEpoch: number;
 }): EffectiveSourceTurnTextProjection {
-  const projection = selectLatestModelContextProjections(input)
-    .filter(
-      (candidate) =>
-        candidate.correctionIds.length > 0 &&
-        candidate.effectiveText &&
-        candidate.sourceTurnIds.includes(input.turnId)
+  return projectSelectedSourceTurn(
+    input.text,
+    indexEffectiveSourceTurnProjections(input, new Set([input.turnId])).get(
+      input.turnId
     )
-    .sort(compareProjectionOwnership)
-    .at(-1);
-  if (!projection) {
+  );
+}
+
+function projectSelectedSourceTurn(
+  text: string,
+  selected: { projection: ModelContextProjection; sourceText?: string } | undefined
+): EffectiveSourceTurnTextProjection {
+  if (!selected) {
     return {
-      text: input.text,
+      text,
       replaced: false,
       correctionIds: [],
     };
   }
-  const sourceText = projection.effectiveSourceTexts.find(
-    (source) => source.turnId === input.turnId
-  )?.text;
+  const { projection, sourceText } = selected;
   const effectiveText =
     sourceText ??
     (projection.sourceTurnIds.length === 1
       ? projection.effectiveText
-      : input.text);
+      : text);
   return {
     text: effectiveText,
-    replaced: effectiveText !== input.text,
+    replaced: effectiveText !== text,
     logicalQuestionUnitId: projection.logicalQuestionUnitId,
     logicalQuestionRevision: projection.logicalQuestionRevision,
     correctionIds: [...projection.correctionIds],
@@ -281,19 +282,21 @@ export function projectEffectiveSourceTurnGroup<
   sources: readonly TSource[];
   effectiveRecords?: EffectiveLogicalQuestionModelRecord[];
   logicalQuestionUnit?: LogicalQuestionUnit;
+  // Only reuse the projection of this unit from the same synchronous read.
+  logicalQuestionProjection?: EffectiveLogicalQuestionSourceProjection;
   sessionId: string;
   runtimeEpoch: number;
 }): EffectiveSourceTurnGroupProjection<TSource> {
+  const projectionByTurnId = indexEffectiveSourceTurnProjections(
+    input,
+    new Set(input.sources.map((source) => source.turnId))
+  );
   const projections = input.sources.map((source) => ({
     source,
-    projection: projectEffectiveTextForSourceTurn({
-      turnId: source.turnId,
-      text: source.text,
-      effectiveRecords: input.effectiveRecords,
-      logicalQuestionUnit: input.logicalQuestionUnit,
-      sessionId: input.sessionId,
-      runtimeEpoch: input.runtimeEpoch,
-    }),
+    projection: projectSelectedSourceTurn(
+      source.text,
+      projectionByTurnId.get(source.turnId)
+    ),
   }));
   return {
     sources: projections.map(({ source, projection }) => ({
@@ -355,9 +358,43 @@ interface ModelContextProjection {
   inFlight: boolean;
 }
 
+function indexEffectiveSourceTurnProjections(
+  input: Parameters<typeof selectLatestModelContextProjections>[0],
+  selectedTurnIds: Set<string>
+) {
+  const byTurnId = new Map<
+    string,
+    { projection: ModelContextProjection; sourceText?: string }
+  >();
+  if (selectedTurnIds.size === 0) return byTurnId;
+  const projections = selectLatestModelContextProjections(input)
+    .filter(
+      (candidate) =>
+        candidate.correctionIds.length > 0 &&
+        candidate.effectiveText &&
+        candidate.sourceTurnIds.some((turnId) => selectedTurnIds.has(turnId))
+    )
+    .sort(compareProjectionOwnership);
+  for (const projection of projections) {
+    const sourceTexts = new Map<string, string>();
+    for (const source of projection.effectiveSourceTexts) {
+      if (selectedTurnIds.has(source.turnId) && !sourceTexts.has(source.turnId)) {
+        sourceTexts.set(source.turnId, source.text);
+      }
+    }
+    for (const turnId of projection.sourceTurnIds) {
+      if (selectedTurnIds.has(turnId)) {
+        byTurnId.set(turnId, { projection, sourceText: sourceTexts.get(turnId) });
+      }
+    }
+  }
+  return byTurnId;
+}
+
 function selectLatestModelContextProjections(input: {
   effectiveRecords?: EffectiveLogicalQuestionModelRecord[];
   logicalQuestionUnit?: LogicalQuestionUnit;
+  logicalQuestionProjection?: EffectiveLogicalQuestionSourceProjection;
   sessionId?: string;
   runtimeEpoch?: number;
 }) {
@@ -394,9 +431,9 @@ function selectLatestModelContextProjections(input: {
     (runtimeEpoch === undefined ||
       logicalQuestionUnit.runtimeEpoch === runtimeEpoch)
   ) {
-    const projection = projectEffectiveLogicalQuestionSources(
-      logicalQuestionUnit
-    );
+    const projection =
+      input.logicalQuestionProjection ??
+      projectEffectiveLogicalQuestionSources(logicalQuestionUnit);
     candidates.push({
       streamKey: modelContextRevisionStreamKey({
         sessionId: logicalQuestionUnit.sessionId,
