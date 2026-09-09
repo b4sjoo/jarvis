@@ -229,6 +229,40 @@ test("projects every corrected source in a bounded setup group", () => {
   assert.deepEqual(projection.correctionIds, ["correction-1"]);
 });
 
+test("an explicit empty source selection remains empty with corrected ledger evidence", () => {
+  const corrected = correct(unit("Design a ride-sharing system for delivery."));
+  const projection = projectAdvisorTranscriptForLogicalQuestion({
+    turns: [turn("turn-1", "them", "Design a ride-sharing system for delivery.", 1)],
+    includedTurnIds: [],
+    effectiveRecords: [modelRecord(corrected)],
+  });
+  assert.equal(projection.transcript, "");
+  assert.equal(projection.latestTurn, undefined);
+  assert.equal(projection.rawChars, 0);
+  assert.equal(projection.projectedTurnCount, 0);
+});
+
+test("partial corrected source selection bounds both transcript and latest-turn text", () => {
+  const original = unit("The ride-sharing corpus is private.");
+  const second = { turnId: "turn-2", text: "The ride-sharing index is public.", startedAt: 3, endedAt: 4 };
+  const corrected = correct({
+    ...original,
+    currentTurnId: second.turnId,
+    sourceTurnIds: ["turn-1", second.turnId],
+    sources: [...original.sources, second],
+    normalizedText: `${original.normalizedText} ${second.text}`,
+  });
+  const projection = projectAdvisorTranscriptForLogicalQuestion({
+    turns: [turn("turn-1", "them", original.normalizedText, 1), turn(second.turnId, "them", second.text, 3)],
+    includedTurnIds: [second.turnId],
+    effectiveRecords: [modelRecord(corrected)],
+  });
+  assert.match(projection.transcript, /RAG index is public/);
+  assert.match(projection.latestTurn?.text ?? "", /RAG index is public/);
+  assert.doesNotMatch(projection.transcript, /corpus is private|ride-sharing/);
+  assert.doesNotMatch(projection.latestTurn?.text ?? "", /corpus is private|ride-sharing/);
+});
+
 function correct(logicalQuestionUnit: LogicalQuestionUnit) {
   const correction: SpeechCorrection = {
     id: "correction-1",

@@ -181,7 +181,6 @@ import {
   type EffectiveQuestionSourceOwner,
 } from "@/lib/meeting/effective-question-source-ledger";
 import {
-  projectAdvisorTranscriptForLogicalQuestion,
   projectEffectiveSourceTurnGroup,
   projectEffectiveLogicalQuestionSources,
 } from "@/lib/meeting/logical-question-effective-projection";
@@ -10911,12 +10910,12 @@ export function useMeetingAssistant() {
       if (!integrationAuthorized || !currentTask) return false;
 
       const currentPromptContext =
-        contextManagerRef.current.buildAdvisorPromptContext();
+        contextManagerRef.current.getState();
       const rebasePromptContext = (context: AdvisorPromptContext) => ({
         ...context,
         taskRuntime: currentPromptContext.taskRuntime,
         activeMeetingTask: currentPromptContext.activeMeetingTask,
-        interviewPlaybook: currentPromptContext.interviewPlaybook,
+        interviewPlaybook: currentPromptContext.activeMeetingTask?.parent.playbook,
       });
       effectiveRuntimeCommitToken = rebaseRuntimeCommitToken({
         token: effectiveRuntimeCommitToken,
@@ -12872,12 +12871,12 @@ export function useMeetingAssistant() {
           });
         }
         const phaseUpdatedContext =
-          contextManagerRef.current.buildAdvisorPromptContext();
+          contextManagerRef.current.getState();
         promptContext = {
           ...promptContext,
           taskRuntime: phaseUpdatedContext.taskRuntime,
           activeMeetingTask: phaseUpdatedContext.activeMeetingTask,
-          interviewPlaybook: phaseUpdatedContext.interviewPlaybook,
+          interviewPlaybook: phaseUpdatedContext.activeMeetingTask?.parent.playbook,
         };
         manualPhaseAdvanceCommitted = true;
         effectiveRuntimeCommitToken = rebaseRuntimeCommitToken({
@@ -13190,14 +13189,14 @@ export function useMeetingAssistant() {
             });
           }
           const transitionContextAfter =
-            contextManagerRef.current.buildAdvisorPromptContext();
+            contextManagerRef.current.getState();
           promptContext = {
             ...promptContext,
             taskRuntime: transitionContextAfter.taskRuntime,
             activeMeetingTask:
               transitionContextAfter.activeMeetingTask,
             interviewPlaybook:
-              transitionContextAfter.interviewPlaybook,
+              transitionContextAfter.activeMeetingTask?.parent.playbook,
           };
           activeMeetingTaskId =
             getAdvisorActiveTaskId(promptContext);
@@ -14375,7 +14374,7 @@ export function useMeetingAssistant() {
         parent: projectBindingCommitResult.task ?? null,
       });
       const projectBindingContextAfter =
-        contextManagerRef.current.buildAdvisorPromptContext();
+        contextManagerRef.current.getState();
       promptContext = {
         ...promptContext,
         taskRuntime: projectBindingContextAfter.taskRuntime,
@@ -14672,6 +14671,9 @@ export function useMeetingAssistant() {
           logicalQuestionUnit: advisorJob.logicalQuestionUnit,
           transcriptTurns:
             contextManagerRef.current.getState().transcriptTurns,
+          effectiveRecords: effectiveQuestionSourceRecords,
+          sessionId: advisorJob.expectedSessionId,
+          runtimeEpoch: advisorJob.runtimeCommitToken.runtimeEpoch,
           recentSourceContext: advisorSourceOwnedSemanticContext,
           screenScopeDecision: advisorScreenScopeDecision,
           responseActionContextSelection,
@@ -14684,7 +14686,7 @@ export function useMeetingAssistant() {
         )
       );
     }
-    const baseAdvisorModelPromptContext = transientPersonalStatusDecision
+    const effectiveBaseAdvisorModelPromptContext = transientPersonalStatusDecision
       ? {
           ...promptContext,
           transcript: advisorCurrentQuestionEvidenceText
@@ -14702,25 +14704,8 @@ export function useMeetingAssistant() {
           projectBindingDecision: undefined,
         }
       : settledAdvisorContextCompilation?.context ?? promptContext;
-    const advisorTranscriptProjection = transientPersonalStatusDecision
-      ? undefined
-      : projectAdvisorTranscriptForLogicalQuestion({
-          turns: contextManagerRef.current.getState().transcriptTurns,
-          includedTurnIds:
-            baseAdvisorModelPromptContext.advisorPromptSourceTurnIds,
-          logicalQuestionUnit: advisorJob.logicalQuestionUnit,
-          effectiveRecords: effectiveQuestionSourceRecords,
-          sessionId: advisorJob.expectedSessionId,
-          runtimeEpoch: advisorJob.runtimeCommitToken.runtimeEpoch,
-        });
-    const effectiveBaseAdvisorModelPromptContext =
-      advisorTranscriptProjection?.replaced
-        ? {
-            ...baseAdvisorModelPromptContext,
-            transcript: advisorTranscriptProjection.transcript,
-            latestTurn: advisorTranscriptProjection.latestTurn,
-          }
-        : baseAdvisorModelPromptContext;
+    const advisorTranscriptProjection =
+      settledAdvisorContextCompilation?.transcriptProjection;
     if (traceId && advisorTranscriptProjection) {
       traceStoreRef.current.updateMetadata(traceId, {
         advisorModelTranscriptProjectionApplied:

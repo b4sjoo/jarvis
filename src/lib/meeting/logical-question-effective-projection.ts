@@ -132,20 +132,24 @@ export function projectAdvisorTranscriptForLogicalQuestion(input: {
   effectiveRecords?: EffectiveLogicalQuestionModelRecord[];
   sessionId?: string;
   runtimeEpoch?: number;
+  meTurnLabel?: "Me" | "Me (clarification)";
 }): AdvisorTranscriptProjection {
   const includedTurnIds = new Set(input.includedTurnIds ?? []);
-  const selectedTurns = input.includedTurnIds?.length
+  const selectedTurns = input.includedTurnIds !== undefined
     ? input.turns.filter((turn) => includedTurnIds.has(turn.id))
-    : [...input.turns];
-  const rawTranscript = formatTranscriptTurns(selectedTurns);
+    : input.turns;
+  const rawChars = selectedTurns.reduce(
+    (chars, turn, index) =>
+      chars +
+      transcriptTurnPrefix(turn, input.meTurnLabel).length +
+      turn.text.length +
+      Number(index > 0),
+    0
+  );
   const projections = selectLatestModelContextProjections(input).filter(
     (projection) =>
       projection.correctionIds.length > 0 && projection.effectiveText
   );
-  if (!projections.length) {
-    return unchangedTranscriptProjection(rawTranscript, selectedTurns);
-  }
-
   const selectedThemTurnIds = new Set(
     selectedTurns
       .filter((turn) => turn.speaker === "them")
@@ -159,24 +163,36 @@ export function projectAdvisorTranscriptForLogicalQuestion(input: {
       }
     }
   }
-  if (!projectionByTurnId.size) {
-    return unchangedTranscriptProjection(rawTranscript, selectedTurns);
-  }
-
   const anchorTurnIdByProjection = new Map<string, string>();
+  const selectedTextByProjection = new Map<string, string[]>();
   for (const turn of selectedTurns) {
     const projection = projectionByTurnId.get(turn.id);
     if (projection) {
       anchorTurnIdByProjection.set(projection.streamKey, turn.id);
+      const texts = selectedTextByProjection.get(projection.streamKey) ?? [];
+      texts.push(
+        projection.effectiveSourceTexts.find(
+          (source) => source.turnId === turn.id
+        )?.text ?? turn.text
+      );
+      selectedTextByProjection.set(projection.streamKey, texts);
     }
   }
+  const fullySelected = (projection: ModelContextProjection) =>
+    projection.sourceTurnIds.every(
+      (turnId) => projectionByTurnId.get(turnId) === projection
+    );
+  const selectedProjectionText = (projection: ModelContextProjection) =>
+    fullySelected(projection)
+      ? projection.effectiveText
+      : (selectedTextByProjection.get(projection.streamKey) ?? []).join(" ");
   const projectedLogicalQuestionUnitIds: string[] = [];
   const projectedCorrectionIds: string[] = [];
   const anchorTurnIds: string[] = [];
   const transcript = selectedTurns
     .flatMap((turn) => {
       const projection = projectionByTurnId.get(turn.id);
-      if (!projection) return [formatTranscriptTurn(turn)];
+      if (!projection) return [formatTranscriptTurn(turn, input.meTurnLabel)];
       if (turn.id !== anchorTurnIdByProjection.get(projection.streamKey)) {
         return [];
       }
@@ -184,7 +200,7 @@ export function projectAdvisorTranscriptForLogicalQuestion(input: {
       projectedCorrectionIds.push(...projection.correctionIds);
       anchorTurnIds.push(turn.id);
       return [
-        `Them: [Corrected LQU ${projection.logicalQuestionUnitId} revision ${projection.logicalQuestionRevision}] ${projection.effectiveText}`,
+        `Them: [Corrected LQU ${projection.logicalQuestionUnitId} revision ${projection.logicalQuestionRevision}] ${selectedProjectionText(projection)}`,
       ];
     })
     .join("\n");
@@ -196,12 +212,17 @@ export function projectAdvisorTranscriptForLogicalQuestion(input: {
   return {
     transcript,
     latestTurn: latestTurnProjection
-      ? { ...latestTurn, text: latestTurnProjection.answerFocusText }
+      ? {
+          ...latestTurn,
+          text: fullySelected(latestTurnProjection)
+            ? latestTurnProjection.answerFocusText
+            : selectedProjectionText(latestTurnProjection),
+        }
         : latestTurn
           ? { ...latestTurn }
           : undefined,
-    replaced: transcript !== rawTranscript,
-    rawChars: rawTranscript.length,
+    replaced: projectionByTurnId.size > 0,
+    rawChars,
     effectiveChars: transcript.length,
     correctionIds: uniqueStrings(projectedCorrectionIds),
     anchorTurnId: anchorTurnIds[anchorTurnIds.length - 1],
@@ -316,24 +337,6 @@ export function collectLogicalQuestionCorrectionIds(unit: LogicalQuestionUnit) {
         .filter(Boolean)
     )
   );
-}
-
-function unchangedTranscriptProjection(
-  transcript: string,
-  turns: TranscriptTurn[]
-): AdvisorTranscriptProjection {
-  const latestTurn = turns[turns.length - 1];
-  return {
-    transcript,
-    latestTurn: latestTurn ? { ...latestTurn } : undefined,
-    replaced: false,
-    rawChars: transcript.length,
-    effectiveChars: transcript.length,
-    correctionIds: [],
-    anchorTurnIds: [],
-    projectedLogicalQuestionUnitIds: [],
-    projectedTurnCount: 0,
-  };
 }
 
 interface ModelContextProjection {
@@ -467,10 +470,10 @@ function uniqueStrings(values: string[]) {
   return Array.from(new Set(values.filter(Boolean)));
 }
 
-function formatTranscriptTurns(turns: TranscriptTurn[]) {
-  return turns.map(formatTranscriptTurn).join("\n");
+function formatTranscriptTurn(turn: TranscriptTurn, meTurnLabel = "Me") {
+  return `${transcriptTurnPrefix(turn, meTurnLabel)}${turn.text}`;
 }
 
-function formatTranscriptTurn(turn: TranscriptTurn) {
-  return `${turn.speaker === "me" ? "Me" : "Them"}: ${turn.text}`;
+function transcriptTurnPrefix(turn: TranscriptTurn, meTurnLabel = "Me") {
+  return turn.speaker === "me" ? `${meTurnLabel}: ` : "Them: ";
 }

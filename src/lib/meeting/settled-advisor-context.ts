@@ -1,5 +1,10 @@
 import type { AdvisorContextReadScope } from "./advisor-context-read-scope.js";
 import type { LogicalQuestionUnit } from "./logical-question-unit.js";
+import {
+  projectAdvisorTranscriptForLogicalQuestion,
+  type AdvisorTranscriptProjection,
+  type EffectiveLogicalQuestionModelRecord,
+} from "./logical-question-effective-projection.js";
 import type { ScreenScopeDecision } from "./screen-task-scope.js";
 import type {
   AdvisorContextScopeSnapshot,
@@ -33,6 +38,7 @@ export interface SettledResponseActionContextSelection {
 
 export interface SettledAdvisorContextCompilation {
   context: AdvisorPromptContext;
+  transcriptProjection: AdvisorTranscriptProjection;
   scope: AdvisorContextReadScope;
   selectedSourceTurnIds: string[];
   recentSourceContextIncluded: boolean;
@@ -129,6 +135,9 @@ export function compileSettledAdvisorPromptContext(input: {
   contextReadScope: AdvisorContextReadScope;
   logicalQuestionUnit?: LogicalQuestionUnit;
   transcriptTurns: TranscriptTurn[];
+  effectiveRecords?: EffectiveLogicalQuestionModelRecord[];
+  sessionId?: string;
+  runtimeEpoch?: number;
   recentSourceContext?: AdvisorSourceOwnedSemanticContext;
   screenScopeDecision?: Pick<ScreenScopeDecision, "action" | "reason">;
   responseActionContextSelection?: SettledResponseActionContextSelection;
@@ -184,8 +193,16 @@ export function compileSettledAdvisorPromptContext(input: {
     input.baseContext.currentQuestionProjection?.answerFocusText?.trim() ||
     input.logicalQuestionUnit?.normalizedText.trim() ||
     "";
+  const transcriptProjection = projectAdvisorTranscriptForLogicalQuestion({
+    turns: selectedTurns,
+    logicalQuestionUnit: input.logicalQuestionUnit,
+    effectiveRecords: input.effectiveRecords,
+    sessionId: input.sessionId,
+    runtimeEpoch: input.runtimeEpoch,
+    meTurnLabel: "Me (clarification)",
+  });
   const transcript = selectedTurns.length
-    ? selectedTurns.map(formatTurn).join("\n")
+    ? transcriptProjection.transcript
     : currentQuestionText
       ? `Them: ${currentQuestionText}`
       : "";
@@ -234,6 +251,7 @@ export function compileSettledAdvisorPromptContext(input: {
 
   return {
     scope,
+    transcriptProjection,
     selectedSourceTurnIds,
     recentSourceContextIncluded: Boolean(
       selectedSourceTurnIds.some((turnId) => contextCandidateIds.has(turnId))
@@ -250,7 +268,7 @@ export function compileSettledAdvisorPromptContext(input: {
       ...input.baseContext,
       transcript,
       advisorPromptSourceTurnIds: selectedSourceTurnIds,
-      latestTurn: selectedTurns.at(-1),
+      latestTurn: transcriptProjection.latestTurn,
       screenContext: screenContextDecision.included
         ? input.baseContext.screenContext
         : "",
@@ -354,10 +372,6 @@ function projectEvidencePacketForScope(
         hint.role !== "continuity" || scope !== "current-only"
     ),
   };
-}
-
-function formatTurn(turn: TranscriptTurn) {
-  return `${turn.speaker === "me" ? "Me (clarification)" : "Them"}: ${turn.text}`;
 }
 
 function uniqueStrings(values: readonly string[]) {
