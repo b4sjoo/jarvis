@@ -33,14 +33,21 @@ flowchart LR
 - `MeetingContextManager` privately owns the only live mutable
   `MeetingTaskRuntimeState`. `ActiveMeetingTask` is its read projection. The
   recognized external task writers pass through transition or clear entry
-  points; expiration is still a mutation-capable read side effect and remains a
-  Task 151 convergence item.
+  points. Reads are pure; expiration uses the existing command at input/manual
+  admission and delayed settlement boundaries and the existing periodic timer.
+  Store and lifecycle reducers share command-field limits. Ordinary execution
+  plans are cloned and frozen; legal rebasing produces a new plan.
 - `src/lib/preparation/` owns Interview Preparation Workspace services and the
   immutable snapshot context consumed by meeting runtime adapters.
 - `src/lib/memory/` owns local retrieval and KMB boundaries. Generated answers
   are not factual evidence merely because a model produced them.
 - `src-tauri/src/` owns native capture, audio lifecycle, windows, local file
   operations, and Tauri command registration.
+- Native capture control holds one generation's lease, metadata, task and signals;
+  old completion cannot clear a newer generation. Genuine Quit uses one bounded
+  main-window operation, waits for accepted terminal evidence, then finalizes the
+  existing recorder. Timeout requires explicit Retry or confirmed Force; hide is
+  not Quit, and crash/SIGKILL recovery is not promised.
 - Provider adapters may call configured external models, but they do not own
   meeting task state or visible artifact commit authority.
 
@@ -63,10 +70,22 @@ and artifact authority boundaries.
   features with separate lifecycle ownership.
 - Preparation materials, current extraction output, reviewed statements, and
   snapshots use database and local-file boundaries owned by Preparation
-  services. Immutable extraction runs are a pending next-major migration, not a
-  current persistence guarantee.
+  services. Completed extraction outputs/chunks are immutable; selected and
+  candidate revisions are distinct. KMB content revisions are immutable while
+  current selection, enabled policy and usage remain on logical rows. Rebuild
+  publishes through a single native database transaction. Snapshot commits and
+  activation verify exact revision/hash/policy pins at the SQL boundary.
+- Recording prepares fallible startup before resetting live runtime. A failed
+  terminal save retains an inactive sealed owner for Retry or explicit Abandon.
+  Manifest replacement is atomic per file, not a multi-file/power-loss guarantee.
+- Legacy ordinary Chat startup migration is removed; current SQLite Chat APIs
+  remain, and old localStorage blobs are neither imported nor deleted.
 - Historical formats remain readable only through explicit migration or replay
   readers; live producers must not depend on those readers.
+- Unverifiable historical Snapshot pins remain inspectable, not newly authorized.
+  Runtime pinning uses the checked reader. Source history is not manufactured
+  from current content. Pure generated continuity still lives partly in task
+  state; its output/TTL migration remains pending explicit retention alignment.
 
 ## Tracked Contract Files
 
