@@ -41,6 +41,12 @@ flowchart LR
   Advisor context and final settled context retain distinct scopes/read moments;
   they use the shared projection rules without a cross-request cache. Generation
   continuity is excluded from Type/Relation/RO source evidence and retrieval facts.
+- Authorized origin references resolve through the existing bounded source ledger,
+  independently of the raw transcript window. Semantic topic/child-question views
+  derive from those origins and honor the same selected-source scope. Canonical
+  task snapshots remain unchanged for commands and historical recording. The
+  96-entry ledger cap and raw-window policy are unchanged; missing sources do not
+  authorize stale revisions, archive reads or generated text as source evidence.
 - `src/lib/preparation/` owns Interview Preparation Workspace services and the
   immutable snapshot context consumed by meeting runtime adapters.
 - `src/lib/memory/` owns local retrieval and KMB boundaries. Generated answers

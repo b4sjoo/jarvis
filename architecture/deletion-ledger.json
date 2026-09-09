@@ -4,6 +4,32 @@
   "updatedAt": "2026-09-09",
   "entries": [
     {
+      "id": "authorized-source-raw-window-intersection",
+      "symbolOrSurface": "Authorized parent and child source bodies depend on membership in the raw transcript window",
+      "verdict": "migrate-then-delete",
+      "ownerTaskId": 189,
+      "replacement": "Shared bounded effective-source resolution with latest-before-owner selection and explicit scope",
+      "persistedDataImpact": "none",
+      "proofCommands": ["npm test", "npm run verify:architecture"],
+      "deletionGate": "Actual Manager pruning, ledger, final consumer, partial-scope and Screen-origin tests pass; missing and rejected records cannot restore stale text.",
+      "rollbackBoundary": "Source reader, origin read view and consumers form one contract; raw evidence and ledger retention are unchanged.",
+      "status": "deleted",
+      "forbiddenPatterns": ["(turn) => selectedIds.has(turn.id) && turn.contextPromptEligible !== false"]
+    },
+    {
+      "id": "live-canonical-topic-semantic-fallbacks",
+      "symbolOrSurface": "Live semantic readers independently copy canonical historical topic text after source correction",
+      "verdict": "migrate-then-delete",
+      "ownerTaskId": 189,
+      "replacement": "Read-only origin-source topic projection; original snapshots remain structural or historical",
+      "persistedDataImpact": "none",
+      "proofCommands": ["npm test", "npm run verify:next-major"],
+      "deletionGate": "Consumer inventory and real Type, Relation, Advisor, phase and Screen serialization tests prove effective text and unchanged canonical task state.",
+      "rollbackBoundary": "Do not restore a topic mutation or output writer as a fallback; migrate the semantic read contract together.",
+      "status": "deleted",
+      "forbiddenPatterns": ["query: task.parent.topic,", "parentQuestionText: latestParent.topic,", "parentTopic: existingTask.topic,"]
+    },
+    {
       "id": "per-turn-effective-group-reselection",
       "symbolOrSurface": "Effective source groups repeatedly reconstruct ledger projections for every source turn",
       "verdict": "migrate-then-delete",
