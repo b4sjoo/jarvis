@@ -52,6 +52,10 @@ export const preparationMaterialContextRepository: PreparationMaterialContextRep
            AND m.id IN (${preferredMaterialIds.map(() => "?").join(", ")})
          )`
       : "";
+    const revisionPointer = preferredMaterialIds.length
+      ? `CASE WHEN m.id IN (${preferredMaterialIds.map(() => "?").join(", ")})
+           THEN m.candidate_revision_id ELSE m.selected_revision_id END`
+      : "m.selected_revision_id";
     const rows = await db.select<PreparationContextChunkRow[]>(
       `SELECT
          c.id AS chunk_id,
@@ -93,11 +97,7 @@ export const preparationMaterialContextRepository: PreparationMaterialContextRep
            )
            ${preferredReviewClause}
          )
-         AND r.revision = (
-           SELECT MAX(latest.revision)
-           FROM preparation_material_revisions latest
-           WHERE latest.material_id = m.id
-         )
+         AND r.id = ${revisionPointer}
          AND (
            m.scope_kind = 'workspace'
            OR (m.scope_kind = 'round' AND m.scope_id = ?)
@@ -110,6 +110,7 @@ export const preparationMaterialContextRepository: PreparationMaterialContextRep
        LIMIT ?`,
       [
         input.processId,
+        ...preferredMaterialIds,
         ...preferredMaterialIds,
         input.roundId ?? "",
         ...searchValues,

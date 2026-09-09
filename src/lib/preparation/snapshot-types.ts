@@ -172,6 +172,7 @@ export interface PreparationSnapshotSourceManifest {
     materialId: string;
     materialRevisionId: string;
     sourceChecksumSha256: string;
+    outputHash?: string;
   }>;
   kmbEntries: Array<{
     entryId: string;
@@ -336,6 +337,7 @@ export interface PreparationSnapshotRepository {
       materialId: string;
       materialRevisionId: string;
       sourceChecksumSha256: string;
+      outputHash?: string;
       ordinal: number;
     }>;
     kmbEntries: Array<{ entryId: string; contentHash: string; ordinal: number }>;

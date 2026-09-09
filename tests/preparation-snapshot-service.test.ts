@@ -505,6 +505,7 @@ function extractionCandidate(input: {
     revisionId: "revision-1",
     revision: 1,
     sourceChecksumSha256: "material-checksum",
+    outputHash: "material-output-hash",
     status: input.status,
     reviewStatus: input.reviewStatus,
     qualitySignals: [],
@@ -843,13 +844,20 @@ function extractionRepository(
 ): PreparationMaterialExtractionRepository {
   return {
     async getCurrent() {
+      throw new Error("Snapshot authority must read the selected output, not the candidate.");
+    },
+    async getSelected() {
       return getCurrent();
+    },
+    async getRevision(_materialId, revisionId) {
+      const candidate = getCurrent();
+      return candidate?.revisionId === revisionId ? candidate : undefined;
     },
     async listRecoverable() {
       return [];
     },
     async claim() {
-      return false;
+      return undefined;
     },
     async complete() {
       return false;

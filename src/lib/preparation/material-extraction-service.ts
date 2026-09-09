@@ -57,13 +57,15 @@ export function createPreparationMaterialExtractionService(
       qualitySignals?: PreparationMaterialQualitySignal[];
     }): Promise<PreparationExtractionInspection | undefined>;
     commitManualText(input: {
+      baseRevisionId?: string;
       workspaceId: string;
       materialId: string;
       text: string;
       markReady: boolean;
     }): Promise<PreparationExtractionInspection | undefined>;
-    approve(workspaceId: string, materialId: string): Promise<boolean>;
+    approve(workspaceId: string, materialId: string, expected: PreparationExtractionCandidate): Promise<boolean>;
     flagQuality(input: {
+      revisionId: string;
       workspaceId: string;
       materialId: string;
       signals: PreparationMaterialQualitySignal[];
@@ -171,13 +173,14 @@ export function createPreparationMaterialExtractionService(
       });
     },
 
-    async approve(workspaceId, materialId) {
-      const candidate = await dependencies.repository.getCurrent(materialId);
-      if (!candidate || candidate.workspaceId !== workspaceId) return false;
+    async approve(workspaceId, materialId, candidate) {
+      if (candidate.workspaceId !== workspaceId || candidate.materialId !== materialId) return false;
       return dependencies.repository.setReviewState({
         workspaceId,
         materialId,
         revisionId: candidate.revisionId,
+        expectedRequestId: candidate.requestId,
+        expectedReviewEventId: candidate.reviewEventId,
         reviewStatus: "approved",
         actor: "user",
         qualitySignals: [],
@@ -188,7 +191,7 @@ export function createPreparationMaterialExtractionService(
     },
 
     async flagQuality(input) {
-      const candidate = await dependencies.repository.getCurrent(input.materialId);
+      const candidate = await dependencies.repository.getRevision(input.materialId, input.revisionId);
       if (!candidate || candidate.workspaceId !== input.workspaceId) return false;
       const qualitySignals = mergeQualitySignals(
         candidate.qualitySignals,
@@ -199,6 +202,8 @@ export function createPreparationMaterialExtractionService(
         materialId: input.materialId,
         revisionId: candidate.revisionId,
         reviewStatus: "needs-review",
+        expectedRequestId: candidate.requestId,
+        expectedReviewEventId: candidate.reviewEventId,
         actor: "model",
         qualitySignals,
         eventId: createId(),
@@ -273,6 +278,7 @@ export function createPreparationMaterialExtractionService(
     });
     const metadata: PreparationExtractionMetadata = {
       method: input.method,
+      transform: { chunker: "preparation-derived-v1", maxChunkChars: 1800, producer: input.method },
       textChars: normalized.length,
       chunkCount: chunks.length,
       warningCodes: input.warningCodes,
@@ -319,6 +325,9 @@ export function createPreparationMaterialExtractionService(
       name: committed
         ? "Preparation extraction finished"
         : "Preparation extraction stale result dropped",
+      outputHash: committed
+        ? (await dependencies.repository.getRevision(input.materialId, revisionId))?.outputHash
+        : undefined,
       workspaceId: input.workspaceId,
       materialId: input.materialId,
       revisionId,
@@ -447,6 +456,7 @@ export function createPreparationMaterialExtractionService(
     });
     const metadata: PreparationExtractionMetadata = {
       method: "multimodal-recovery",
+      transform: { chunker: "preparation-page-patch-v1", maxChunkChars: 1800, baseRevisionId: base.revisionId },
       textChars: materialized.textChars,
       pageCount: input.content.pageCount,
       chunkCount: materialized.chunks.length,
@@ -489,6 +499,9 @@ export function createPreparationMaterialExtractionService(
       name: committed
         ? "Preparation extraction finished"
         : "Preparation extraction stale result dropped",
+      outputHash: committed
+        ? (await dependencies.repository.getRevision(input.materialId, revisionId))?.outputHash
+        : undefined,
       workspaceId: input.workspaceId,
       materialId: input.materialId,
       revisionId,
@@ -542,25 +555,26 @@ export function createPreparationMaterialExtractionService(
     materialId: string,
     force: boolean
   ): Promise<PreparationExtractionInspection | undefined> {
-    const candidate = await dependencies.repository.getCurrent(materialId);
-    if (!candidate || candidate.workspaceId !== workspaceId) return undefined;
-    if (candidate.status === "ready" && !force) {
+    const previous = await dependencies.repository.getCurrent(materialId);
+    if (!previous || previous.workspaceId !== workspaceId) return undefined;
+    if (previous.status === "ready" && !force) {
       return service.inspect(workspaceId, materialId);
     }
 
     const requestId = createId();
     const startedAt = now();
-    const claimed = await dependencies.repository.claim({
+    const candidate = await dependencies.repository.claim({
       workspaceId,
       materialId,
-      revisionId: candidate.revisionId,
-      sourceChecksumSha256: candidate.sourceChecksumSha256,
+      revisionId: previous.revisionId,
+      newRevisionId: createId(),
+      sourceChecksumSha256: previous.sourceChecksumSha256,
       requestId,
       startedAt,
       staleBefore: startedAt - staleAfterMs,
       force,
     });
-    if (!claimed) return service.inspect(workspaceId, materialId);
+    if (!candidate) return service.inspect(workspaceId, materialId);
 
     emit({
       name: "Preparation extraction started",
@@ -587,6 +601,7 @@ export function createPreparationMaterialExtractionService(
       const completedAt = now();
       const metadata: PreparationExtractionMetadata = {
         method: nativeResult.method,
+        transform: nativeResult.transform ?? null,
         textChars: nativeResult.textChars,
         pageCount: nativeResult.pageCount,
         ocrPageCount: nativeResult.ocrPageCount,
@@ -627,7 +642,6 @@ export function createPreparationMaterialExtractionService(
       });
       if (!committed) {
         await discardNativeOutput(candidate, requestId, nativeResult);
-        await discardPreviousOutput(candidate, requestId);
         emit({
           name: "Preparation extraction stale result dropped",
           workspaceId,
@@ -653,9 +667,9 @@ export function createPreparationMaterialExtractionService(
         });
         return undefined;
       }
-      await discardPreviousOutput(candidate, requestId);
       emit({
         name: "Preparation extraction finished",
+        outputHash: (await dependencies.repository.getRevision(materialId, candidate.revisionId))?.outputHash,
         workspaceId,
         materialId,
         revisionId: candidate.revisionId,
@@ -680,10 +694,6 @@ export function createPreparationMaterialExtractionService(
       return service.inspect(workspaceId, materialId);
     } catch (error) {
       const completedAt = now();
-      if (nativeResult) {
-        await discardNativeOutput(candidate, requestId, nativeResult);
-      }
-      await discardPreviousOutput(candidate, requestId);
       const failed = await dependencies.repository
         .fail({
           workspaceId,
@@ -697,6 +707,11 @@ export function createPreparationMaterialExtractionService(
           dependencies.onBackgroundError?.(settlementError);
           return false;
         });
+      // An IPC error may follow a committed transaction. Only a confirmed failed
+      // candidate permits deletion; otherwise retain its file for reconciliation.
+      if (failed && nativeResult) {
+        await discardNativeOutput(candidate, requestId, nativeResult);
+      }
       emit({
         name: "Preparation extraction failed",
         workspaceId,
@@ -741,24 +756,10 @@ export function createPreparationMaterialExtractionService(
       .catch((error) => dependencies.onBackgroundError?.(error));
   }
 
-  async function discardPreviousOutput(
-    candidate: PreparationExtractionCandidate,
-    requestId: string
-  ) {
-    if (!candidate.requestId || candidate.requestId === requestId) return;
-    await dependencies.gateway
-      .discard({
-        workspaceKind: "interview",
-        workspaceId: candidate.workspaceId,
-        materialId: candidate.materialId,
-        revision: candidate.revision,
-        requestId: candidate.requestId,
-      })
-      .catch((error) => dependencies.onBackgroundError?.(error));
-  }
-
   function emit(event: PreparationExtractionTraceEvent) {
-    dependencies.onEvent?.(event);
+    try { dependencies.onEvent?.(event); } catch (error) {
+      dependencies.onBackgroundError?.(error);
+    }
   }
 
   return service;

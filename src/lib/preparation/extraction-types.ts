@@ -48,6 +48,7 @@ export interface NativePreparationMaterialChunk {
 }
 
 export interface NativePreparationMaterialExtractionResult {
+  transform?: Record<string, unknown>;
   method: PreparationExtractionMethod;
   status: Extract<
     PreparationMaterialRevisionStatus,
@@ -68,6 +69,7 @@ export interface NativePreparationMaterialExtractionResult {
 }
 
 export interface PreparationExtractionMetadata {
+  transform?: Record<string, unknown> | null;
   method: PreparationExtractionMethod;
   textChars: number;
   pageCount?: number;
@@ -107,6 +109,8 @@ export type PreparationRecoveredContent =
     };
 
 export interface PreparationExtractionCandidate {
+  outputHash?: string;
+  reviewEventId?: string;
   workspaceId: string;
   materialId: string;
   extension: string;
@@ -133,11 +137,14 @@ export interface PreparationExtractionInspection {
 
 export interface PreparationMaterialExtractionRepository {
   getCurrent(materialId: string): Promise<PreparationExtractionCandidate | undefined>;
+  getSelected(materialId: string): Promise<PreparationExtractionCandidate | undefined>;
+  getRevision(materialId: string, revisionId: string): Promise<PreparationExtractionCandidate | undefined>;
   listRecoverable(
     workspaceId: string,
     staleBefore: number
   ): Promise<PreparationExtractionCandidate[]>;
   claim(input: {
+    newRevisionId: string;
     workspaceId: string;
     materialId: string;
     revisionId: string;
@@ -146,7 +153,7 @@ export interface PreparationMaterialExtractionRepository {
     startedAt: number;
     staleBefore: number;
     force?: boolean;
-  }): Promise<boolean>;
+  }): Promise<PreparationExtractionCandidate | undefined>;
   complete(input: {
     workspaceId: string;
     materialId: string;
@@ -192,6 +199,8 @@ export interface PreparationMaterialExtractionRepository {
     baseRevisionId: string;
   }): Promise<boolean>;
   setReviewState(input: {
+    expectedRequestId?: string;
+    expectedReviewEventId?: string;
     workspaceId: string;
     materialId: string;
     revisionId: string;
@@ -225,6 +234,7 @@ export interface PreparationMaterialExtractionGateway {
 }
 
 export interface PreparationExtractionTraceEvent {
+  outputHash?: string;
   name:
     | "Preparation extraction started"
     | "Preparation extraction finished"

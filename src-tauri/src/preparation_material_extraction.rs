@@ -52,6 +52,7 @@ pub struct ExtractedPreparationChunk {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreparationMaterialExtractionResult {
+    transform: serde_json::Value,
     method: String,
     status: String,
     extracted_text_relative_path: Option<String>,
@@ -226,6 +227,13 @@ fn extract_material_at_root(
     };
 
     Ok(PreparationMaterialExtractionResult {
+        transform: serde_json::json!({
+            "parser": "preparation-local-v1", "chunker": "preparation-native-v1",
+            "lopdf": "0.42.0", "quickXml": "0.38.1", "ocr": "preparation-native-ocr-v1",
+            "maxTextChars": MAX_EXTRACTED_TEXT_CHARS, "maxChunkChars": MAX_CHUNK_CHARS,
+            "maxChunks": MAX_CHUNKS, "ocrMaxPages": PDF_OCR_MAX_PAGES,
+            "ocrMaxDimension": PDF_OCR_MAX_DIMENSION, "ocrMinConfidence": PDF_OCR_MIN_CONFIDENCE
+        }),
         method: parsed.method.to_string(),
         status: status.to_string(),
         extracted_text_relative_path,
@@ -923,10 +931,12 @@ fn write_extracted_text(
         let _ = fs::remove_file(&staging);
         return Err(format!("Failed to write extracted text: {error}"));
     }
-    fs::rename(&staging, &target).map_err(|error| {
+    // Publishing must not overwrite a file belonging to an existing request.
+    fs::hard_link(&staging, &target).map_err(|error| {
         let _ = fs::remove_file(&staging);
         format!("Failed to commit extracted text: {error}")
     })?;
+    let _ = fs::remove_file(&staging);
     Ok(path_to_relative_string(
         &workspace_relative_root
             .join("materials")
@@ -1342,6 +1352,19 @@ mod tests {
         assert_eq!(chunks[0].source_method, "pdf-ocr");
         assert_eq!(chunks[0].confidence, Some(0.87));
         assert_eq!(chunks[0].page, Some(3));
+    }
+
+    #[test]
+    fn task164_extraction_file_publication_never_overwrites_a_request() {
+        let root = std::env::temp_dir().join(format!("jarvis-extraction-test-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let relative = Path::new("interview-preparation/test");
+        write_extracted_text(&root, relative, "material-1", 1, "request-a", "A").unwrap();
+        assert!(write_extracted_text(&root, relative, "material-1", 1, "request-a", "B").is_err());
+        assert_eq!(fs::read_to_string(root.join("materials/material-1/extraction/1/extracted-request-a.txt")).unwrap(), "A");
+        write_extracted_text(&root, relative, "material-1", 2, "request-b", "B").unwrap();
+        assert_eq!(fs::read_to_string(root.join("materials/material-1/extraction/2/extracted-request-b.txt")).unwrap(), "B");
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

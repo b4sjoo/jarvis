@@ -80,6 +80,7 @@ export const MaterialPanel = ({
   const [isUpdatingScope, setIsUpdatingScope] = useState(false);
   const [manualTextOpen, setManualTextOpen] = useState(false);
   const [manualText, setManualText] = useState("");
+  const [manualBaseRevisionId, setManualBaseRevisionId] = useState<string>();
   const [isSavingReview, setIsSavingReview] = useState(false);
 
   const roundTitles = useMemo(
@@ -284,12 +285,13 @@ export const MaterialPanel = ({
   };
 
   const approveMaterial = async () => {
-    if (!inspectTarget) return;
+    if (!inspectTarget || !inspection) return;
     setIsSavingReview(true);
     try {
       const approved = await interviewPreparationMaterialExtractionService.approve(
         processId,
-        inspectTarget.id
+        inspectTarget.id,
+        inspection.candidate
       );
       if (!approved) {
         throw new Error("Material changed; reopen the details and retry.");
@@ -304,6 +306,7 @@ export const MaterialPanel = ({
   };
 
   const openManualText = () => {
+    setManualBaseRevisionId(inspection?.candidate.revisionId);
     setManualText(
       inspection?.chunks.map((chunk) => chunk.content).join("\n\n") ?? ""
     );
@@ -311,12 +314,13 @@ export const MaterialPanel = ({
   };
 
   const saveManualText = async (markReady: boolean) => {
-    if (!inspectTarget || !manualText.trim()) return;
+    if (!inspectTarget || !manualText.trim() || !manualBaseRevisionId) return;
     setIsSavingReview(true);
     try {
       await interviewPreparationMaterialExtractionService.commitManualText({
         workspaceId: processId,
         materialId: inspectTarget.id,
+        baseRevisionId: manualBaseRevisionId,
         text: manualText,
         markReady,
       });

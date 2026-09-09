@@ -40,9 +40,7 @@ const MATERIAL_SELECT = `
             ELSE latest.extraction_status
           END
           FROM preparation_material_revisions latest
-          WHERE latest.material_id = m.id
-          ORDER BY latest.revision DESC
-          LIMIT 1
+          WHERE latest.id = COALESCE(m.selected_revision_id, m.candidate_revision_id)
         ),
         m.status
       )

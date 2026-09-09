@@ -523,13 +523,14 @@ async function validateSnapshotActivationAuthority(
   }
 
   for (const pin of snapshot.sourceManifest.materials) {
-    const candidate = await dependencies.materialExtraction.getCurrent(
+    const candidate = await dependencies.materialExtraction.getSelected(
       pin.materialId
     );
     if (
       !candidate ||
       candidate.revisionId !== pin.materialRevisionId ||
       candidate.sourceChecksumSha256 !== pin.sourceChecksumSha256 ||
+      !pin.outputHash || candidate.outputHash !== pin.outputHash ||
       !isMaterialRevisionEligibleForSnapshot(candidate)
     ) {
       throw new Error(
@@ -912,13 +913,13 @@ async function compileSourceState(input: {
   );
   const materialCandidates = await Promise.all(
     materialRefs.map(async (reference) => {
-      const candidate = await input.materialExtraction.getCurrent(
+      const candidate = await input.materialExtraction.getSelected(
         reference.materialId
       );
       if (
         !candidate ||
         candidate.revisionId !== reference.materialRevisionId ||
-        !isMaterialRevisionEligibleForSnapshot(candidate)
+        !isMaterialRevisionEligibleForSnapshot(candidate) || !candidate.outputHash
       ) {
         throw new Error(
           "A material source is stale or not approved for snapshot compilation."
@@ -928,6 +929,7 @@ async function compileSourceState(input: {
         materialId: reference.materialId,
         materialRevisionId: reference.materialRevisionId,
         sourceChecksumSha256: candidate.sourceChecksumSha256,
+        outputHash: candidate.outputHash,
       };
     })
   );

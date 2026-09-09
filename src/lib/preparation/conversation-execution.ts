@@ -516,14 +516,19 @@ export function createPreparationConversationExecutionService(
               composition
             );
             if (!acceptedSignals.length) continue;
+            const revisionId = sourceRefs.find((source) =>
+              source.materialId === report.materialId && source.materialRevisionId
+            )?.materialRevisionId;
+            if (!revisionId) continue;
             try {
-              await dependencies.materialExtraction.flagQuality({
+              const flagged = await dependencies.materialExtraction.flagQuality({
                 workspaceId: process.id,
                 materialId: report.materialId,
+                revisionId,
                 signals: acceptedSignals,
                 detail: "Preparation Model quality review",
               });
-              qualityFlagCount += 1;
+              if (flagged) qualityFlagCount += 1;
             } catch (error) {
               postCommitWarnings.push(
                 `${report.materialId}: ${errorMessage(error)}`

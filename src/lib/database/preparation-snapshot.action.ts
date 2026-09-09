@@ -292,8 +292,8 @@ export const preparationSnapshotRepository: PreparationSnapshotRepository = {
         const linked = await db.execute(
           `INSERT INTO preparation_snapshot_material_revision_links
             (snapshot_id, material_id, material_revision_id,
-             source_checksum_sha256, ordinal)
-           SELECT ?, material.id, revision.id, revision.source_checksum_sha256, ?
+             source_checksum_sha256, output_hash, ordinal)
+           SELECT ?, material.id, revision.id, revision.source_checksum_sha256, revision.output_hash, ?
            FROM preparation_materials material
            JOIN preparation_material_revisions revision
              ON revision.material_id = material.id
@@ -301,6 +301,9 @@ export const preparationSnapshotRepository: PreparationSnapshotRepository = {
            WHERE material.id = ? AND process.id = ?
              AND revision.id = ?
              AND revision.source_checksum_sha256 = ?
+             AND revision.output_hash = ?
+             AND material.selected_revision_id = revision.id
+             AND (material.scope_kind = 'workspace' OR material.scope_id = ?)
              AND material.status = 'ready'
              AND (
                (revision.extraction_status = 'ready'
@@ -308,12 +311,7 @@ export const preparationSnapshotRepository: PreparationSnapshotRepository = {
                OR (revision.extraction_status = 'needs-review'
                  AND revision.review_status = 'approved')
              )
-             AND material.deleted_at IS NULL
-             AND NOT EXISTS (
-               SELECT 1 FROM preparation_material_revisions newer
-               WHERE newer.material_id = revision.material_id
-                 AND newer.revision > revision.revision
-             )`,
+             AND material.deleted_at IS NULL`,
           [
             snapshot.id,
             link.ordinal,
@@ -321,6 +319,8 @@ export const preparationSnapshotRepository: PreparationSnapshotRepository = {
             snapshot.processId,
             link.materialRevisionId,
             link.sourceChecksumSha256,
+            link.outputHash ?? null,
+            snapshot.roundId,
           ]
         );
         if (linked.rowsAffected === 0) {
@@ -363,10 +363,9 @@ export const preparationSnapshotRepository: PreparationSnapshotRepository = {
     const updated = await db.execute(
       `UPDATE interview_preparation_current_context AS context
        SET process_id = ?, round_id = ?, selected_snapshot_id = ?,
-           revision = revision + 1, updated_at = ?
+           revision = revision + CASE WHEN selected_snapshot_id IS ? THEN 0 ELSE 1 END, updated_at = ?
        WHERE context.singleton_id = 1
          AND context.revision = ?
-         AND context.selected_snapshot_id IS NOT ?
          AND EXISTS (
            SELECT 1 FROM interview_preparation_snapshots snapshot
            WHERE snapshot.id = ? AND snapshot.process_id = ?
@@ -420,11 +419,15 @@ export const preparationSnapshotRepository: PreparationSnapshotRepository = {
              AND NOT EXISTS (
                SELECT 1
                FROM preparation_snapshot_material_revision_links link
-               JOIN preparation_materials material ON material.id = link.material_id
-               JOIN preparation_material_revisions revision
+               LEFT JOIN preparation_materials material ON material.id = link.material_id
+               LEFT JOIN preparation_material_revisions revision
                  ON revision.id = link.material_revision_id
                WHERE link.snapshot_id = snapshot.id
-                 AND (revision.source_checksum_sha256 <>
+                 AND (revision.id IS NULL OR material.id IS NULL
+                   OR link.output_hash IS NULL OR revision.output_hash IS NOT link.output_hash
+                   OR material.selected_revision_id IS NOT revision.id
+                   OR (material.scope_kind = 'round' AND material.scope_id IS NOT snapshot.round_id)
+                   OR revision.source_checksum_sha256 <>
                        link.source_checksum_sha256
                    OR material.status <> 'ready'
                    OR NOT (
@@ -434,11 +437,7 @@ export const preparationSnapshotRepository: PreparationSnapshotRepository = {
                        AND revision.review_status = 'approved')
                    )
                    OR material.deleted_at IS NOT NULL
-                   OR EXISTS (
-                     SELECT 1 FROM preparation_material_revisions newer
-                     WHERE newer.material_id = revision.material_id
-                       AND newer.revision > revision.revision
-                   ))
+                   )
              )
              AND NOT EXISTS (
                SELECT 1
@@ -452,22 +451,16 @@ export const preparationSnapshotRepository: PreparationSnapshotRepository = {
         input.processId,
         input.roundId,
         input.snapshotId,
+        input.snapshotId,
         input.activatedAt,
         input.expectedContextRevision,
-        input.snapshotId,
         input.snapshotId,
         input.processId,
         input.roundId,
         input.expectedContentHash,
       ]
     );
-    if (updated.rowsAffected > 0) return true;
-    const context = await this.getCurrentContext();
-    return (
-      context.processId === input.processId &&
-      context.roundId === input.roundId &&
-      context.selectedSnapshotId === input.snapshotId
-    );
+    return updated.rowsAffected > 0;
   },
 
   async deactivate(input) {

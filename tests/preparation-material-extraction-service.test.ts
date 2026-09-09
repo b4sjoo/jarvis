@@ -381,9 +381,67 @@ test("requires an explicit user action before recovered evidence is approved", a
   });
 
   assert.equal(harness.candidate.reviewStatus, "needs-review");
-  assert.equal(await service.approve("workspace-1", "material-1"), true);
+  assert.equal(await service.approve("workspace-1", "material-1", { ...harness.candidate }), true);
   assert.equal(harness.candidate.reviewStatus, "approved");
   assert.deepEqual(harness.candidate.qualitySignals, []);
+});
+
+test("force extraction uses the claimed output identity and never discards the previous text", async () => {
+  const harness = createHarness();
+  harness.candidate.status = "ready";
+  harness.candidate.requestId = "old-request";
+  harness.candidate.extractedTextRelativePath = "extraction/1/old.txt";
+  const claim = harness.dependencies.repository.claim;
+  harness.dependencies.repository.claim = async (input) => {
+    assert.equal(input.revisionId, "revision-1");
+    const candidate = await claim(input);
+    assert.ok(candidate);
+    harness.candidate.revisionId = input.newRevisionId;
+    harness.candidate.revision = 2;
+    return { ...harness.candidate };
+  };
+  const complete = harness.dependencies.repository.complete;
+  harness.dependencies.repository.complete = async (input) => {
+    assert.equal(input.revisionId, harness.candidate.revisionId);
+    assert.notEqual(input.revisionId, "revision-1");
+    assert.ok(input.chunks.every((chunk) => chunk.materialRevisionId === input.revisionId));
+    return complete(input);
+  };
+  const service = createPreparationMaterialExtractionService(harness.dependencies);
+  const result = await service.schedule("workspace-1", "material-1", { force: true });
+  assert.equal(result?.candidate.revision, 2);
+  assert.deepEqual(harness.discardedRequests, []);
+});
+
+test("a lost completion acknowledgement retains committed output instead of deleting it", async () => {
+  const harness = createHarness();
+  const complete = harness.dependencies.repository.complete;
+  harness.dependencies.repository.complete = async (input) => {
+    assert.equal(await complete(input), true);
+    throw new Error("completion acknowledgement lost");
+  };
+  const service = createPreparationMaterialExtractionService(harness.dependencies);
+  await assert.rejects(service.schedule("workspace-1", "material-1"), /acknowledgement lost/);
+  assert.equal(harness.candidate.status, "ready");
+  assert.equal(harness.chunks.length, 1);
+  assert.deepEqual(harness.discardedRequests, []);
+});
+
+test("approval keeps the inspected revision instead of approving a newer candidate", async () => {
+  const harness = createHarness();
+  const inspected = { ...harness.candidate };
+  harness.candidate.revisionId = "newer-revision";
+  const service = createPreparationMaterialExtractionService(harness.dependencies);
+  assert.equal(await service.approve("workspace-1", "material-1", inspected), false);
+  assert.equal(harness.candidate.reviewStatus, "unreviewed");
+});
+
+test("manual edits reject a changed base revision", async () => {
+  const harness = createHarness();
+  harness.candidate.revisionId = "newer-revision";
+  const service = createPreparationMaterialExtractionService(harness.dependencies);
+  await assert.rejects(service.commitManualText({ workspaceId: "workspace-1", materialId: "material-1",
+    baseRevisionId: "revision-1", text: "old edit", markReady: true }), /changed/);
 });
 
 function createHarness(
@@ -414,6 +472,12 @@ function createHarness(
     async getCurrent(materialId) {
       return materialId === candidate.materialId ? { ...candidate } : undefined;
     },
+    async getSelected(materialId) {
+      return materialId === candidate.materialId ? { ...candidate } : undefined;
+    },
+    async getRevision(materialId, revisionId) {
+      return materialId === candidate.materialId && revisionId === candidate.revisionId ? { ...candidate } : undefined;
+    },
     async listRecoverable(workspaceId, staleBefore) {
       const recoverable =
         candidate.status === "pending" ||
@@ -427,14 +491,14 @@ function createHarness(
       if (
         input.materialId !== candidate.materialId ||
         input.revisionId !== candidate.revisionId ||
-        candidate.status === "ready"
+        (candidate.status === "ready" && !input.force)
       ) {
-        return false;
+        return undefined;
       }
       candidate.status = "extracting";
       candidate.requestId = input.requestId;
       candidate.startedAt = input.startedAt;
-      return true;
+      return { ...candidate };
     },
     async complete(input) {
       if (

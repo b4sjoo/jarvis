@@ -129,5 +129,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("migrations/memory-entry-interview-families.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 19,
+            description: "immutable_preparation_extraction_revisions",
+            sql: include_str!("migrations/preparation-immutable-extraction-revisions.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }
