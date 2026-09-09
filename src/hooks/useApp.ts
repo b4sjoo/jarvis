@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { useTitles, useSystemAudio } from "@/hooks";
 import { listen } from "@tauri-apps/api/event";
-import { safeLocalStorage, migrateLocalStorageToSQLite } from "@/lib";
 import { getShortcutsConfig } from "@/lib/storage";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -23,39 +22,6 @@ export const useApp = () => {
     };
 
     initializeShortcuts();
-  }, []);
-
-  // Migrate localStorage chat history to SQLite on app startup
-  useEffect(() => {
-    const runMigration = async () => {
-      try {
-        // Early exit: Check if migration already completed
-        const migrationKey = "chat_history_migrated_to_sqlite";
-        const alreadyMigrated =
-          safeLocalStorage.getItem(migrationKey) === "true";
-
-        if (alreadyMigrated) {
-          return; // Migration already complete, skip
-        }
-
-        const result = await migrateLocalStorageToSQLite();
-
-        if (result.success) {
-          if (result.migratedCount > 0) {
-            console.log(
-              `Successfully migrated ${result.migratedCount} conversations to SQLite`
-            );
-          }
-        } else if (result.error) {
-          // Migration failed - log error
-          console.error("Migration error:", result.error);
-        }
-      } catch (error) {
-        // Critical error during migration
-        console.error("Critical migration failure:", error);
-      }
-    };
-    runMigration();
   }, []);
 
   const handleSelectConversation = (conversation: any) => {

@@ -10,9 +10,9 @@ test("accepts the tracked privacy-safe deletion ledger", () => {
   assert.equal(result.ok, true, result.errors.join("\n"));
   assert.equal(result.entryCount, 16);
   assert.deepEqual(result.statusCounts, {
-    candidate: 8,
+    candidate: 7,
     "migration-ready": 0,
-    deleted: 8,
+    deleted: 9,
     retained: 0,
   });
 });

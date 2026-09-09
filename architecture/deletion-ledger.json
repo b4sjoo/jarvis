@@ -1,7 +1,7 @@
 {
   "$schema": "./deletion-ledger.schema.json",
   "version": 1,
-  "updatedAt": "2026-09-04",
+  "updatedAt": "2026-09-09",
   "entries": [
     {
       "id": "task-runtime-legacy-active-screen-root",
@@ -211,19 +211,23 @@
     {
       "id": "best-effort-legacy-chat-startup-migration",
       "symbolOrSurface": "Legacy localStorage chat migration deletes source after partial or parse failure",
-      "verdict": "migrate-then-delete",
+      "verdict": "delete",
       "ownerTaskId": 166,
-      "replacement": "preflighted staging import with transactional publication and count/hash receipt",
+      "replacement": "Existing SQLite Chat APIs without legacy automatic import",
       "persistedDataImpact": "database",
-      "historicalReader": "explicit legacy chat upgrade boundary",
       "proofCommands": [
-        "npm run verify:architecture",
-        "npm test",
-        "cargo check"
+        "node --test tests/legacy-chat-retirement.test.mjs",
+        "npm run verify:deletion-ledger",
+        "npm test"
       ],
-      "deletionGate": "Migration is retryable and source deletion requires complete parse, import, count, and hash verification.",
-      "rollbackBoundary": "Task 166 backup, staging, publication, and legacy startup-path retirement remain separate commits.",
-      "status": "candidate"
+      "deletionGate": "Startup never reads, writes or deletes old chat blobs/markers; the migrator and its only effect are removed; current SQLite Chat APIs remain.",
+      "rollbackBoundary": "Code-only compatibility retirement; no stored data is modified. Re-enabling destructive legacy migration needs separate review.",
+      "status": "deleted",
+      "forbiddenPatterns": [
+        "migrateLocalStorageToSQLite",
+        "LEGACY_CHAT_HISTORY_KEY",
+        "chat_history_migrated_to_sqlite"
+      ]
     },
     {
       "id": "runtime-type-relation-release-switches",
