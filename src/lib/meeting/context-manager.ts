@@ -23,6 +23,7 @@ import {
   createMeetingTaskRuntimeState,
   projectActiveMeetingTask,
   reduceMeetingTaskRuntimeMutation,
+  type ActiveMeetingTask,
   type MeetingTaskRuntimeMutation,
   type MeetingTaskRuntimeState,
   type MeetingTaskRuntimeTransitionKind,
@@ -81,8 +82,8 @@ export class MeetingContextManager {
   }
 
   getState(): MeetingContextState {
-    this.clearExpiredActiveMeetingTask();
-    const activeMeetingTask = this.buildActiveMeetingTask();
+    const taskRuntime = this.getTaskRuntimeState();
+    const activeMeetingTask = this.buildActiveMeetingTask(taskRuntime);
 
     return {
       ...this.state,
@@ -94,7 +95,7 @@ export class MeetingContextManager {
       interviewSessionContext: cloneInterviewSessionContext(
         this.state.interviewSessionContext
       ),
-      taskRuntime: cloneMeetingTaskRuntimeState(this.taskRuntimeState),
+      taskRuntime,
       activeMeetingTask,
       glossary: [...this.state.glossary],
     };
@@ -394,11 +395,10 @@ export class MeetingContextManager {
   }
 
   buildAdvisorPromptContext(): AdvisorPromptContext {
-    this.clearExpiredActiveMeetingTask();
-
+    const taskRuntime = this.getTaskRuntimeState();
     const latestTurn =
       this.state.transcriptTurns[this.state.transcriptTurns.length - 1];
-    const activeMeetingTask = this.buildActiveMeetingTask();
+    const activeMeetingTask = this.buildActiveMeetingTask(taskRuntime);
     const promptTranscriptTurns = this.getPromptTranscriptTurns(
       activeMeetingTask?.parent.promptTranscriptStartTurnId
     );
@@ -408,14 +408,14 @@ export class MeetingContextManager {
       advisorPromptSourceTurnIds: promptTranscriptTurns.map(
         (turn) => turn.id
       ),
-      screenContext: this.formatScreenContext(),
+      screenContext: this.formatScreenContext(activeMeetingTask),
       interviewSessionBrief: cloneInterviewSessionBrief(
         this.state.interviewSessionBrief
       ),
       interviewSessionContext: cloneInterviewSessionContext(
         this.state.interviewSessionContext
       ),
-      taskRuntime: cloneMeetingTaskRuntimeState(this.taskRuntimeState),
+      taskRuntime,
       activeMeetingTask,
       rollingSummary: this.state.rollingSummary,
       userProfileContext: this.state.userProfileContext,
@@ -426,13 +426,13 @@ export class MeetingContextManager {
     };
   }
 
-  private buildActiveMeetingTask() {
+  private buildActiveMeetingTask(taskRuntime: MeetingTaskRuntimeState) {
     const screenObservationId =
-      this.taskRuntimeState.screenAttachment?.observationId ??
-      this.taskRuntimeState.parent?.child?.latestScreenObservationId ??
-      this.taskRuntimeState.parent?.latestScreenObservationId;
+      taskRuntime.screenAttachment?.observationId ??
+      taskRuntime.parent?.child?.latestScreenObservationId ??
+      taskRuntime.parent?.latestScreenObservationId;
     return projectActiveMeetingTask({
-      state: this.taskRuntimeState,
+      state: taskRuntime,
       latestObservation: screenObservationId
         ? this.state.screenObservations.find(
             (observation) => observation.id === screenObservationId
@@ -480,8 +480,7 @@ export class MeetingContextManager {
       .join("\n");
   }
 
-  private formatScreenContext() {
-    const activeMeetingTask = this.buildActiveMeetingTask();
+  private formatScreenContext(activeMeetingTask: ActiveMeetingTask | undefined) {
     const activeTaskContext = activeMeetingTask?.screen
       ? [
           "Active meeting screen context:",

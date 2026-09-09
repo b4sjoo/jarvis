@@ -10599,6 +10599,7 @@ export function useMeetingAssistant() {
       if (options.traceId) traceStoreRef.current.finishTrace(options.traceId, "cancelled");
       return;
     }
+    contextManagerRef.current.clearExpiredActiveMeetingTask();
     whiteboardSyntaxRepairRuntimeRef.current?.cancelAll("superseded");
     const advisorJob = options.advisorJob ?? buildAdvisorJob(options);
     if (!options.advisorJob) {
@@ -17111,6 +17112,7 @@ export function useMeetingAssistant() {
     }
     if (!runtimeActiveRef.current) return;
 
+    contextManagerRef.current.clearExpiredActiveMeetingTask();
     const advisorJob = buildAdvisorJob({
       mode,
       traceId,
@@ -19391,6 +19393,7 @@ export function useMeetingAssistant() {
       operationIdOverride?: string;
     }): QuestionTypeAdjudicationScheduleHandle | undefined => {
       if (!logicalQuestionUnit) return undefined;
+      contextManagerRef.current.clearExpiredActiveMeetingTask();
       const contextState = contextManagerRef.current.getState();
       const settings = taxonomyAdjudicationSettingsRef.current;
       const mode = settings.questionTypeMode;
@@ -20164,6 +20167,7 @@ export function useMeetingAssistant() {
         debugModeRef.current ||
         Boolean(sessionRecordingManagerRef.current?.getState().active);
       if (!evaluationActive && !runtimeReleaseRequested) return;
+      contextManagerRef.current.clearExpiredActiveMeetingTask();
       // Keep delayed observations with the recorder that owned their input.
       const splitRecordingManager =
         sessionRecordingManagerRef.current?.getState().active
@@ -20914,6 +20918,7 @@ export function useMeetingAssistant() {
       authorizeSourceOperation: ReadTaskRelationSourceOperationAuthorization;
     }): TaskRelationAdjudicationScheduleHandle | undefined => {
       if (!logicalQuestionUnit) return;
+      contextManagerRef.current.clearExpiredActiveMeetingTask();
       const contextState = contextManagerRef.current.getState();
       const activeMeetingTask = contextState.activeMeetingTask;
       const currentQuestion =
@@ -21774,6 +21779,7 @@ export function useMeetingAssistant() {
         waitDisposition: string,
         releaseSource: OrderedSettlementReleaseSource
       ) => {
+        contextManagerRef.current.clearExpiredActiveMeetingTask();
         questionTypeHandle?.restrictRetryDeadlineAt?.(Date.now());
         const operationAuthorization =
           taskRelationHandle?.authorizeOperation?.() ?? {
@@ -22561,6 +22567,7 @@ export function useMeetingAssistant() {
       scenarioRunId?: string;
       scenarioStepId?: string;
     }) => {
+      contextManagerRef.current.clearExpiredActiveMeetingTask();
       const traceId = segment.traceId;
       const ingressMetadata = {
         canonicalTurnIngressTransport: transport,
@@ -23872,6 +23879,7 @@ export function useMeetingAssistant() {
           });
         }
 
+        contextManagerRef.current.clearExpiredActiveMeetingTask();
         const speechBiasBaseContext =
           contextManagerRef.current.getState();
         const speechPreparation =
@@ -25916,6 +25924,7 @@ export function useMeetingAssistant() {
       options: CaptureScreenContextOptions = {}
     ) => {
       if (shutdownRequestedRef.current) return;
+      contextManagerRef.current.clearExpiredActiveMeetingTask();
       const screenOperationId = createMeetingId("screen_operation");
       const screenOperationRequestedAt = options.requestedAt ?? Date.now();
       const screenRequestContextState = contextManagerRef.current.getState();
@@ -31383,6 +31392,7 @@ export function useMeetingAssistant() {
     ) => {
       flushPendingSentenceCompletion("manual-question-type-correction");
 
+      contextManagerRef.current.clearExpiredActiveMeetingTask();
       const contextState = contextManagerRef.current.getState();
       const activeTask = contextState.activeMeetingTask;
       const clickedCorrectionTarget =
@@ -33138,6 +33148,7 @@ export function useMeetingAssistant() {
     invocation: ManualRuntimeActionInvocation = {}
   ) => {
     const actionId = invocation.actionId ?? createMeetingId("manual_action");
+    contextManagerRef.current.clearExpiredActiveMeetingTask();
     const currentRuntime = contextManagerRef.current.getState();
     const currentLogicalQuestionUnit = logicalQuestionUnitRef.current;
     recordManualRuntimeAction({
@@ -33553,6 +33564,7 @@ export function useMeetingAssistant() {
 
   const forceAdviseLatestTurn = useCallback(async () => {
     const manualActionId = createMeetingId("manual_action");
+    contextManagerRef.current.clearExpiredActiveMeetingTask();
     const requestedRuntime = contextManagerRef.current.getState();
     recordManualRuntimeAction({
       actionId: manualActionId,
@@ -33966,6 +33978,7 @@ export function useMeetingAssistant() {
       const manualActionId = manualAction
         ? invocation.actionId ?? createMeetingId("manual_action")
         : undefined;
+      contextManagerRef.current.clearExpiredActiveMeetingTask();
       const requestedRuntime = contextManagerRef.current.getState();
       const recordResponseAction = (input: {
         stage: ManualRuntimeActionEventStage;
@@ -34831,6 +34844,7 @@ export function useMeetingAssistant() {
 
       flushPendingSentenceCompletion("clarifying-answer");
 
+      contextManagerRef.current.clearExpiredActiveMeetingTask();
       const hasActiveScreenTask = Boolean(
         contextManagerRef.current.getState().activeMeetingTask?.screen
       );
@@ -34920,6 +34934,7 @@ export function useMeetingAssistant() {
         return;
       }
 
+      contextManagerRef.current.clearExpiredActiveMeetingTask();
       const contextState = contextManagerRef.current.getState();
       const latestSuggestionUsesScreen = Boolean(
         state.latestSuggestion?.basedOnObservationIds.length
@@ -36359,6 +36374,7 @@ export function useMeetingAssistant() {
       );
       if (!correction || correction.deactivatedAt) return;
 
+      contextManagerRef.current.clearExpiredActiveMeetingTask();
       const contextState = contextManagerRef.current.getState();
       const currentLogicalQuestionUnit = logicalQuestionUnitRef.current;
       const trace = traceStoreRef.current.startTrace(

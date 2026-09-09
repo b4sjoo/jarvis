@@ -15,6 +15,30 @@ import {
 
 const now = Date.now();
 
+test("J1: expired state and prompt reads are pure until the explicit execution boundary", (t) => {
+  let clock = now;
+  t.mock.method(Date, "now", () => clock);
+  const manager = new MeetingContextManager();
+  setTestTaskRuntime(manager, {
+    screenAttachment: makeScreenTask({ expiresAt: now + 100 }),
+    parent: makeInterviewTask({ source: "screen", expiresAt: now + 100 }),
+  });
+  const original = manager.getTaskRuntimeState();
+  clock = now + 101;
+  for (let count = 0; count < 5; count += 1) {
+    manager.getState();
+    manager.buildAdvisorPromptContext();
+    assert.deepEqual(manager.getTaskRuntimeState(), original);
+  }
+  assert.equal(manager.clearExpiredActiveMeetingTask(), true);
+  const executionSnapshot = manager.getState();
+  assert.equal(executionSnapshot.taskRuntime.revision, original.revision + 1);
+  assert.equal(executionSnapshot.activeMeetingTask, undefined);
+  assert.equal(executionSnapshot.taskRuntime.lastMutation?.kind, "expire");
+  assert.equal(manager.clearExpiredActiveMeetingTask(), false);
+  assert.equal(manager.getTaskRuntimeState().revision, original.revision + 1);
+});
+
 test("context manager exposes canonical active meeting task for screen state", () => {
   const manager = new MeetingContextManager();
 

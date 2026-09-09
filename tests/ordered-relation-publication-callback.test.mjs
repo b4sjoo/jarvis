@@ -447,7 +447,7 @@ function createHarness() {
     console,
     window: clock,
     VOICE_ORDERED_RELATION_FOREGROUND_BUDGET_MS: 4_000,
-    contextManagerRef: { current: { getState: () => state } },
+    contextManagerRef: { current: { getState: () => state, clearExpiredActiveMeetingTask: () => false } },
     runtimeEpochRef: { current: 1 },
     manualCorrectionRevisionRef: { current: 0 },
     manualCorrectionOperationCoordinatorRef: {
@@ -1174,6 +1174,7 @@ test("ends an owned Screen after post-model Preparation staleness", { concurrenc
     contextManagerRef: {
       current: {
         getState: () => contextState,
+        clearExpiredActiveMeetingTask: () => false,
       },
     },
     screenGenerationLease: generationLease,

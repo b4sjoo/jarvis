@@ -194,6 +194,16 @@ function actionHarness(f = screenFixture()) {
     runtimeEpochRef: { current: 3 }, effectiveQuestionSourceLedgerRef: { current: f.ledger },
     contextManagerRef: { current: {
       getState: () => context,
+      clearExpiredActiveMeetingTask: () => {
+        const result = reduceMeetingTaskRuntimeMutation({ state: context.taskRuntime, mutation: {
+          id: "fixture-expire", kind: "expire", reason: "active-task-expiration", now: Date.now(),
+        } });
+        if (result.mutationApplied) {
+          context.taskRuntime = result.state;
+          context.activeMeetingTask = buildActiveMeetingTask({ parent: result.state.parent, runtimeRevision: result.state.revision });
+        }
+        return result.mutationApplied;
+      },
       getTaskRuntimeState: () => context.taskRuntime,
       commitTaskRuntimeTransition: (input: any) => {
         const result = reduceMeetingTaskRuntimeMutation({ state: context.taskRuntime, mutation: { ...input, kind: "commit-transition" } });
@@ -778,7 +788,7 @@ test(`real Regenerate callback ${sourceKind === "voice" ? "accepts exact current
   const events: any[] = [];
   const environment: any = {
     ...responseTargets, ...manual, projectObservedAdvisorAttempt,
-    contextManagerRef: { current: { getState: () => f.context } },
+    contextManagerRef: { current: { getState: () => f.context, clearExpiredActiveMeetingTask: () => false } },
     logicalQuestionUnitRef: { current: f.unit },
     stableAnswerRevisionRef: { current: f.stable },
     effectiveQuestionSourceLedgerRef: { current: new EffectiveQuestionSourceLedger() },

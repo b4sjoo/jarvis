@@ -211,7 +211,7 @@ async function harness(options: { mode?: Mode; child?: boolean; source?: string;
     ...split, ...operation, ...response, ...admission, ...route, ...taxonomy, isRuntimeTaskRelation,
     Date, Promise, Error, DOMException, console,
     debugModeRef: { current: false },
-    contextManagerRef: { current: { getState: () => state } },
+    contextManagerRef: { current: { getState: () => state, clearExpiredActiveMeetingTask: () => false } },
     runtimeEpochRef: { current: 1 }, manualCorrectionRevisionRef: { current: 0 },
     meetingModelProviderSnapshotRef: { current: {} },
     sessionRecordingManagerRef: { current: disk.manager },
