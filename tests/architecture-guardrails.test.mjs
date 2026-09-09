@@ -104,6 +104,14 @@ test("rejects command registry drift and new dynamic IPC boundaries", () => {
 });
 
 test("resolves registered frontend-only events and wrapped command literals", () => {
+  for (const command of ["exit_app", "report_app_shutdown", "complete_app_shutdown", "get_app_shutdown"]) {
+    assert.equal(baselineAnalysis.ipc.wrappedFrontendInvokes.includes(command), true, command);
+  }
+  for (const event of ["jarvis-shutdown-requested", "jarvis-shutdown-status"]) {
+    assert.equal(baselineAnalysis.ipc.staticFrontendListenedEvents.includes(event), true, event);
+    assert.equal(baselineAnalysis.ipc.nativeEmittedEvents.includes(event), true, event);
+  }
+  assert.equal(baselineAnalysis.ipc.nativeEmittedEvents.includes("main"), false);
   assert.deepEqual(baselineAnalysis.ipc.staticFrontendEmittedEvents, [
     "meeting-focus-action",
     "meeting-focus-snapshot",

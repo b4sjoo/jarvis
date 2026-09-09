@@ -1,3 +1,4 @@
+mod app_shutdown;
 mod capture;
 mod db;
 mod preparation_material_extraction;
@@ -406,6 +407,7 @@ pub fn run() {
                 .build(),
         )
         .manage(AudioState::default())
+        .manage(app_shutdown::AppShutdownState::default())
         .manage(stt_evaluation::SttEvaluationCaptureState::default())
         .manage(CaptureState::default())
         .manage(shortcuts::WindowVisibility {
@@ -425,6 +427,11 @@ pub fn run() {
     }
     let mut builder = builder
         .invoke_handler(tauri::generate_handler![
+            app_shutdown::get_app_shutdown,
+            app_shutdown::retry_app_shutdown,
+            app_shutdown::report_app_shutdown,
+            app_shutdown::complete_app_shutdown,
+            app_shutdown::force_app_shutdown,
             get_app_version,
             write_meeting_trace_log,
             write_preparation_trace_log,
@@ -595,8 +602,9 @@ pub fn run() {
     }
 
     builder
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(app_shutdown::on_run_event);
 }
 
 #[cfg(target_os = "macos")]

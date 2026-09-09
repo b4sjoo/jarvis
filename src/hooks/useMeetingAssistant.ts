@@ -2,6 +2,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useMicVAD } from "@ricky0123/vad-react";
+import { useApplicationShutdown } from "./useApplicationShutdown";
+import type { NativeAudioLifecycleEvent } from "@/lib/meeting/native-audio-lifecycle";
+import {
+  assertShutdownQueueDrained,
+  createNativeStopTerminalWait,
+  stopShutdownEvaluationCapture,
+  createAcceptedTraceTerminalWait,
+  type NativeStopLease,
+} from "@/lib/meeting/shutdown-drain";
 import { STORAGE_KEYS } from "@/config";
 import { useApp } from "@/contexts";
 import { safeLocalStorage } from "@/lib";
@@ -3205,6 +3214,16 @@ export function useMeetingAssistant() {
   }
   const activeRef = useRef(false);
   const runtimeActiveRef = useRef(false);
+  const shutdownRequestedRef = useRef(false);
+  const nativeStopTerminalWaitRef = useRef<
+    ReturnType<typeof createNativeStopTerminalWait> | null
+  >(null);
+  const nativeTerminalEvidenceRef = useRef<
+    Partial<Record<"meeting" | "system", NativeAudioLifecycleEvent>>
+  >({});
+  const shutdownTraceWaitRef = useRef<
+    ReturnType<typeof createAcceptedTraceTerminalWait> | null
+  >(null);
   const runtimeRegressionRunRef = useRef<
     | {
         scenarioRunId: string;
@@ -8273,6 +8292,7 @@ export function useMeetingAssistant() {
       scenarioRunId: string;
     };
   }) => {
+    if (shutdownRequestedRef.current) return;
     try {
       const requestedEpoch = runtimeEpochRef.current;
       const requestedSessionId = contextManagerRef.current.getState().sessionId;
@@ -8316,6 +8336,7 @@ export function useMeetingAssistant() {
             preparationContext
           ).getSnapshot(),
           isCurrent: () =>
+            !shutdownRequestedRef.current &&
             runtimeEpochRef.current === requestedEpoch &&
             contextManagerRef.current.getState().sessionId === requestedSessionId &&
             preparationContextRevisionRef.current === preparationRevision &&
@@ -8510,6 +8531,7 @@ export function useMeetingAssistant() {
   }, []);
 
   const setSttEvaluationCaptureEnabled = useCallback((enabled: boolean) => {
+    if (shutdownRequestedRef.current) return;
     if (
       enabled &&
       !state.settings.debugMode &&
@@ -9252,6 +9274,7 @@ export function useMeetingAssistant() {
   );
 
   const scheduleTraceMetricsPersistence = useCallback(() => {
+    if (shutdownRequestedRef.current) return;
     if (!traceMetricsPersistenceReadyRef.current) return;
 
     if (traceMetricsPersistTimerRef.current !== null) {
@@ -9300,7 +9323,7 @@ export function useMeetingAssistant() {
                 () => {}
               );
 
-              if (attempt < 1) {
+              if (attempt < 1 && !shutdownRequestedRef.current) {
                 if (traceMetricsPersistRetryTimerRef.current !== null) {
                   window.clearTimeout(
                     traceMetricsPersistRetryTimerRef.current
@@ -9385,6 +9408,7 @@ export function useMeetingAssistant() {
 
   const maybeAutoExportTraces = useCallback(
     (traces: MeetingTrace[]) => {
+      if (shutdownRequestedRef.current) return;
       for (const trace of traces) {
         if (trace.status === "running") continue;
         if (autoExportProcessedTraceIdsRef.current.has(trace.id)) continue;
@@ -10190,21 +10214,15 @@ export function useMeetingAssistant() {
 
   const stop = useCallback(async () => {
     if (
+      !shutdownRequestedRef.current &&
       runtimeRegressionRunRef.current &&
       stopRuntimeRegressionRunRef.current
     ) {
       await stopRuntimeRegressionRunRef.current();
       return;
     }
-    const coordinator = captureLifecycleCoordinatorRef.current!;
-    const lifecycleOperation = coordinator.claim("stop");
-    const drainOperationId = `capture-stop:${lifecycleOperation.id}`;
-    const nativeLeaseToStop = readNativeCaptureLease();
-    openAudioDrainAuthorization(
-      "stop",
-      drainOperationId,
-      nativeLeaseToStop
-    );
+    const nativeLeaseAtInvocation = readNativeCaptureLease();
+    const shutdownAtInvocation = shutdownRequestedRef.current;
     const unresolvedManualRecovery = nativeAudioManualRecoveryRef.current;
     if (unresolvedManualRecovery) {
       const stoppedAt = Date.now();
@@ -10222,116 +10240,206 @@ export function useMeetingAssistant() {
     cancelActiveAdvisorJob("meeting-assistant-stopped");
     screenAnalysisAbortRef.current?.abort();
     screenAnalysisAbortRef.current = null;
-
-    await coordinator.run(lifecycleOperation, async () => {
-      let audioStatus: MeetingAudioStatus | null = null;
-
+    const coordinator = captureLifecycleCoordinatorRef.current!;
+    const completion = await coordinator.runCoalesced("stop", async (lifecycleOperation) => {
+      nativeStopTerminalWaitRef.current = null;
+      let terminalWait: ReturnType<typeof createNativeStopTerminalWait> | null = null;
+      let terminalAccepted = false;
+      const registerTerminalWait = (lease: NativeStopLease) => {
+        terminalWait = createNativeStopTerminalWait(lease);
+        const accepted = nativeTerminalEvidenceRef.current[lease.owner];
+        if (accepted) terminalWait.accept(accepted);
+        nativeStopTerminalWaitRef.current = terminalWait;
+      };
+      const waitForShutdownTerminal = async () => {
+        if (!terminalWait || terminalAccepted) return;
+        await terminalWait.promise;
+        if (!coordinator.authorize(lifecycleOperation, "shutdown-terminal-accepted")) {
+          throw new Error("Meeting Stop was superseded while awaiting its terminal event.");
+        }
+        terminalAccepted = true;
+      };
       try {
-        audioStatus = (await stopNativeMeetingCapture(nativeLeaseToStop)).status;
-        if (
-          !coordinator.recordNativeCompletion(
-            lifecycleOperation,
-            "stop_meeting_audio_session"
-          )
-        ) {
-          revokeAudioDrainAuthorization(
-            "stale-stop-operation",
+        const drainOperationId = (shutdownRequestedRef.current && audioDrainAuthorizationRef.current?.operationId)
+          || `capture-stop:${lifecycleOperation.id}`;
+        let audioStatus: MeetingAudioStatus | null = null;
+
+        try {
+          if (shutdownAtInvocation) {
+            const current = await invoke<MeetingAudioStatus>("get_meeting_audio_status");
+            if (!coordinator.authorize(lifecycleOperation, "shutdown-native-status-read")) return;
+            const owner = current.captureOwner === "system" ? "system" : "meeting";
+            if (current.captureOwner === owner && current.captureSessionId && current.captureGeneration != null) {
+              const lease = { owner, captureSessionId: current.captureSessionId, captureGeneration: current.captureGeneration } as const;
+              registerTerminalWait(lease);
+              if (!audioDrainAuthorizationRef.current) openAudioDrainAuthorization("stop", drainOperationId, lease);
+              const result = owner === "system"
+                ? await invoke<NativeAudioStopResult>("stop_system_audio_capture", {
+                  expectedCaptureSessionId: lease.captureSessionId,
+                  expectedCaptureGeneration: lease.captureGeneration,
+                })
+                : await stopNativeMeetingCapture(lease);
+              audioStatus = result.status;
+            } else {
+              audioStatus = current;
+            }
+          } else {
+            // Preserve the normal Stop target across the coordinator queue. Quit can join its waiter.
+            if (nativeLeaseAtInvocation.captureSessionId && nativeLeaseAtInvocation.captureGeneration != null) {
+              registerTerminalWait({
+                owner: "meeting", captureSessionId: nativeLeaseAtInvocation.captureSessionId,
+                captureGeneration: nativeLeaseAtInvocation.captureGeneration
+              });
+            }
+            openAudioDrainAuthorization("stop", drainOperationId, nativeLeaseAtInvocation);
+            audioStatus = (await stopNativeMeetingCapture(nativeLeaseAtInvocation)).status;
+          }
+          if (
+            !coordinator.recordNativeCompletion(
+              lifecycleOperation,
+              "stop_meeting_audio_session"
+            )
+          ) {
+            revokeAudioDrainAuthorization(
+              "stale-stop-operation",
+              drainOperationId
+            );
+            return;
+          }
+          if (shutdownRequestedRef.current && (audioStatus.active || audioStatus.systemCaptureActive)) {
+            throw new Error("Native capture is still active; shutdown has not settled its exact lease.");
+          }
+          if (shutdownRequestedRef.current) {
+            activeRef.current = false;
+            setState((previous) => ({ ...previous, status: "paused", audioStatus }));
+          }
+          // Only Quit waits for frontend acceptance, and only for this Stop's exact lease.
+          if (shutdownRequestedRef.current) await waitForShutdownTerminal();
+        } catch (error) {
+          console.warn("Failed to stop meeting audio capture", error);
+          if (shutdownRequestedRef.current) throw error;
+          if (!coordinator.authorize(lifecycleOperation, "native-stop-error")) {
+            return;
+          }
+        }
+
+        let queueDrained = false;
+        try {
+          const acceptedBeforeDrain = terminalAccepted;
+          let drain = await drainSystemAudioQueueForNativeStop(
+            "stop",
             drainOperationId
           );
+          if (shutdownRequestedRef.current) {
+            await waitForShutdownTerminal();
+            if (!acceptedBeforeDrain && terminalAccepted) {
+              // Quit joined while normal Stop was draining. Include work accepted by its late terminal.
+              drain = await drainSystemAudioQueueForNativeStop("stop", drainOperationId);
+            }
+            await microphoneAudioQueueTailRef.current;
+            assertShutdownQueueDrained({
+              ...drain,
+              activeRequestCountAtDrainEnd: activeSttRequestsRef.current.size,
+              queueDepthAtDrainEnd: systemAudioQueueTrackerRef.current.getDepth(),
+            }, microphoneAudioQueueTrackerRef.current.getDepth());
+          }
+          queueDrained = true;
+        } finally {
+          if (queueDrained || !shutdownRequestedRef.current) revokeAudioDrainAuthorization(
+            "native-tail-queue-drained",
+            drainOperationId
+          );
+        }
+        if (!coordinator.authorize(lifecycleOperation, "prepare-stop-reset")) {
           return;
         }
-      } catch (error) {
-        console.warn("Failed to stop meeting audio capture", error);
-        if (!coordinator.authorize(lifecycleOperation, "native-stop-error")) {
-          return;
-        }
-      }
-
-      try {
-        await drainSystemAudioQueueForNativeStop(
-          "stop",
-          drainOperationId
-        );
-      } finally {
-        revokeAudioDrainAuthorization(
-          "native-tail-queue-drained",
-          drainOperationId
-        );
-      }
-      if (!coordinator.authorize(lifecycleOperation, "prepare-stop-reset")) {
-        return;
-      }
-      advanceRuntimeEpoch("meeting-assistant-stopped");
-      semanticTaxonomyRuntimeRef.current?.releaseSession({
-        recoveryTokenActive: false,
-        reason: "meeting-assistant-stopped",
-      });
-      activeRef.current = false;
-      runtimeActiveRef.current = false;
-      invalidateAudioProcessingSession();
-      cancelActiveAdvisorJob("meeting-assistant-stopped");
-      nativeAudioManualRecoveryRef.current = null;
-      submitTaskRuntimeClear(contextManagerRef.current, {
-        scope: "all",
-        reason: "meeting-assistant-stopped",
-      });
-      contextManagerRef.current.clearInterviewSessionContext();
-      clearPendingAnswerCommitTimer();
-      pendingAnswerRevisionRef.current = null;
-      answerDeliveryProgressRef.current = null;
-      const contextState = contextManagerRef.current.getState();
-
-      const terminalMemoryUsageFlush = await flushMemoryContextUsage();
-      if (terminalMemoryUsageFlush) {
-        sessionRecordingManagerRef.current?.recordCaptureLifecycle({
-          stage: "memory-usage-terminal-flush",
-          memoryUsageBatchId: terminalMemoryUsageFlush.batchId,
-          memoryUsageFlushMs: terminalMemoryUsageFlush.durationMs,
-          memoryUsageFlushEntryCount: terminalMemoryUsageFlush.entryCount,
-          memoryUsageFlushSuccess: terminalMemoryUsageFlush.success,
-          memoryUsageFlushError: terminalMemoryUsageFlush.error,
+        advanceRuntimeEpoch("meeting-assistant-stopped");
+        semanticTaxonomyRuntimeRef.current?.releaseSession({
+          recoveryTokenActive: false,
+          reason: "meeting-assistant-stopped",
         });
-      }
-      await stopSessionRecording("meeting-assistant-stopped");
-      try {
-        await sttEvaluationCaptureManagerRef.current?.drain();
-        await sttEvaluationCaptureManagerRef.current?.stop(
-          "meeting-assistant-stopped"
-        );
-      } catch (error) {
-        console.warn("Failed to stop STT evaluation capture", error);
-      }
-      if (!coordinator.authorize(lifecycleOperation, "commit-stop-state")) {
-        return;
-      }
+        activeRef.current = false;
+        runtimeActiveRef.current = false;
+        invalidateAudioProcessingSession();
+        cancelActiveAdvisorJob("meeting-assistant-stopped");
+        nativeAudioManualRecoveryRef.current = null;
+        submitTaskRuntimeClear(contextManagerRef.current, {
+          scope: "all",
+          reason: "meeting-assistant-stopped",
+        });
+        contextManagerRef.current.clearInterviewSessionContext();
+        clearPendingAnswerCommitTimer();
+        pendingAnswerRevisionRef.current = null;
+        answerDeliveryProgressRef.current = null;
+        const contextState = contextManagerRef.current.getState();
 
-      setState((previous) => ({
-        ...previous,
-        taskRuntime: contextState.taskRuntime,
-        activeMeetingTask: contextState.activeMeetingTask,
-        presentationArtifactResetRevision:
-          previous.presentationArtifactResetRevision + 1,
-        status: "idle",
-        interviewSessionBrief: contextState.interviewSessionBrief,
-        interviewSessionContext: contextState.interviewSessionContext,
-        latestSuggestion:
-          isScreenAnchoredSuggestion(previous.latestSuggestion)
-            ? null
-            : previous.latestSuggestion,
-        latestReliableSuggestion: null,
-        manualQuestionTypeCorrection: undefined,
-        currentQuestionLineage: undefined,
-        latestInterviewerTurnCandidate: undefined,
-        partialSuggestion: "",
-        answerDelivery: toAnswerDeliveryPresentation({
-          visibleAnswerRevision: visibleAnswerRevisionRef.current,
-        }),
-        generationResult: { disposition: "none" },
-        error: null,
-        audioStatus,
-        nativeAudioManualRecovery: undefined,
-      }));
+        const terminalMemoryUsageFlush = await flushMemoryContextUsage();
+        if (terminalMemoryUsageFlush) {
+          sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+            stage: "memory-usage-terminal-flush",
+            memoryUsageBatchId: terminalMemoryUsageFlush.batchId,
+            memoryUsageFlushMs: terminalMemoryUsageFlush.durationMs,
+            memoryUsageFlushEntryCount: terminalMemoryUsageFlush.entryCount,
+            memoryUsageFlushSuccess: terminalMemoryUsageFlush.success,
+            memoryUsageFlushError: terminalMemoryUsageFlush.error,
+          });
+          if (shutdownRequestedRef.current && !terminalMemoryUsageFlush.success) {
+            throw new Error("Terminal memory usage persistence failed.");
+          }
+        }
+        try {
+          if (shutdownRequestedRef.current) {
+            await stopShutdownEvaluationCapture(sttEvaluationCaptureManagerRef.current);
+          } else {
+            await sttEvaluationCaptureManagerRef.current?.drain();
+            await sttEvaluationCaptureManagerRef.current?.stop("meeting-assistant-stopped");
+          }
+        } catch (error) {
+          console.warn("Failed to stop STT evaluation capture", error);
+          if (shutdownRequestedRef.current) throw error;
+        }
+        // Quit finalizes recording only after the strict runtime/trace barrier.
+        if (shutdownRequestedRef.current) await waitForShutdownTerminal();
+        if (!shutdownRequestedRef.current) await stopSessionRecording("meeting-assistant-stopped");
+        if (!coordinator.authorize(lifecycleOperation, "commit-stop-state")) {
+          return;
+        }
+
+        setState((previous) => ({
+          ...previous,
+          taskRuntime: contextState.taskRuntime,
+          activeMeetingTask: contextState.activeMeetingTask,
+          presentationArtifactResetRevision:
+            previous.presentationArtifactResetRevision + 1,
+          status: "idle",
+          interviewSessionBrief: contextState.interviewSessionBrief,
+          interviewSessionContext: contextState.interviewSessionContext,
+          latestSuggestion:
+            isScreenAnchoredSuggestion(previous.latestSuggestion)
+              ? null
+              : previous.latestSuggestion,
+          latestReliableSuggestion: null,
+          manualQuestionTypeCorrection: undefined,
+          currentQuestionLineage: undefined,
+          latestInterviewerTurnCandidate: undefined,
+          partialSuggestion: "",
+          answerDelivery: toAnswerDeliveryPresentation({
+            visibleAnswerRevision: visibleAnswerRevisionRef.current,
+          }),
+          generationResult: { disposition: "none" },
+          error: null,
+          audioStatus,
+          nativeAudioManualRecovery: undefined,
+        }));
+      } finally {
+        if (terminalWait && nativeStopTerminalWaitRef.current === terminalWait) {
+          nativeStopTerminalWaitRef.current = null;
+        }
+      }
     });
+    if (shutdownRequestedRef.current && (!completion.executed || !completion.authorized)) {
+      throw new Error("Meeting Stop was superseded before shutdown settlement.");
+    }
   }, [
     advanceRuntimeEpoch,
     cancelNativeAudioFaultTraces,
@@ -10487,6 +10595,10 @@ export function useMeetingAssistant() {
   }, []);
 
   const runAdvisor = useCallback(async (options: RunAdvisorOptions = {}) => {
+    if (shutdownRequestedRef.current) {
+      if (options.traceId) traceStoreRef.current.finishTrace(options.traceId, "cancelled");
+      return;
+    }
     whiteboardSyntaxRepairRuntimeRef.current?.cancelAll("superseded");
     const advisorJob = options.advisorJob ?? buildAdvisorJob(options);
     if (!options.advisorJob) {
@@ -16993,6 +17105,10 @@ export function useMeetingAssistant() {
     debounceMs = ADVISOR_DEBOUNCE_MS,
     runtimeTypeAdjudicationOutputAuthority?: RuntimeTypeAdjudicationOutputAuthority
   ) => {
+    if (shutdownRequestedRef.current) {
+      if (traceId) traceStoreRef.current.finishTrace(traceId, "cancelled");
+      return;
+    }
     if (!runtimeActiveRef.current) return;
 
     const advisorJob = buildAdvisorJob({
@@ -18022,6 +18138,7 @@ export function useMeetingAssistant() {
 
   const scheduleMeetingMetadataInference = useCallback(
     ({ turn, traceId }: { turn: TranscriptTurn; traceId: string }) => {
+      if (shutdownRequestedRef.current) return;
       if (turn.speaker !== "them") return;
 
       const contextState = contextManagerRef.current.getState();
@@ -22476,6 +22593,15 @@ export function useMeetingAssistant() {
         traceId,
         ...ingressMetadata,
       });
+      if (shutdownRequestedRef.current) {
+        if (transport === "accepted-stt") {
+          appendTranscriptTurnForTrace(turn, traceId, segment, {
+            transcriptAppendReason: "application-shutdown-accepted-stt",
+          });
+        }
+        traceStoreRef.current.finishTrace(traceId, transport === "accepted-stt" ? "success" : "cancelled");
+        return;
+      }
       const activeContextState = contextManagerRef.current.getState();
       const activeScreenTask = activeContextState.taskRuntime.screenAttachment;
       const activeInterviewTask = activeContextState.taskRuntime.parent;
@@ -24505,6 +24631,7 @@ export function useMeetingAssistant() {
   );
 
   const startRuntimeRegressionRun = useCallback(async () => {
+    if (shutdownRequestedRef.current) return false;
     if (!import.meta.env.DEV || !debugModeRef.current) {
       setState((previous) => ({
         ...previous,
@@ -24664,6 +24791,7 @@ export function useMeetingAssistant() {
 
   const submitRuntimeRegressionText = useCallback(
     async (value: string) => {
+      if (shutdownRequestedRef.current) return false;
       const text = value.replace(/\s+/g, " ").trim();
       const run = runtimeRegressionRunRef.current;
       if (!run || !runtimeActiveRef.current) {
@@ -25061,6 +25189,7 @@ export function useMeetingAssistant() {
 
   const enqueueMicrophoneSpeech = useCallback(
     (audioBlob: Blob, startedAt: number, endedAt: number) => {
+      if (shutdownRequestedRef.current) return;
       if (!activeRef.current || !microphoneContextEnabledRef.current) return;
 
       const sessionId = audioSessionIdRef.current;
@@ -25150,11 +25279,13 @@ export function useMeetingAssistant() {
     startOnLoad: false,
     additionalAudioConstraints: microphoneAudioConstraints,
     onSpeechStart: () => {
+      if (shutdownRequestedRef.current) return;
       microphoneSpeakingRef.current = true;
       clearPendingAnswerCommitTimer();
     },
     onSpeechEnd: (audio) => {
       microphoneSpeakingRef.current = false;
+      if (shutdownRequestedRef.current) return;
       if (pendingAnswerRevisionRef.current) {
         schedulePendingAnswerCommit();
       }
@@ -25181,6 +25312,7 @@ export function useMeetingAssistant() {
 
   useEffect(() => {
     const shouldListen =
+      !shutdownRequestedRef.current &&
       activeRef.current &&
       state.settings.microphoneContextEnabled &&
       (state.status === "listening" ||
@@ -25210,6 +25342,7 @@ export function useMeetingAssistant() {
       mode: NativeAudioCaptureStartMode,
       recoveryAttempt?: NativeAudioRecoveryAttemptContext
     ) => {
+      if (shutdownRequestedRef.current) return;
       if (runtimeRegressionRunRef.current) {
         setState((previous) => ({
           ...previous,
@@ -25430,6 +25563,7 @@ export function useMeetingAssistant() {
               : null;
 
           nativeStartAttempted = true;
+          if (shutdownRequestedRef.current) return;
           const audioStatus = await invoke<MeetingAudioStatus>(
             "start_meeting_audio_session",
             {
@@ -25693,6 +25827,7 @@ export function useMeetingAssistant() {
   }, [startCapture]);
 
   const pause = useCallback(async () => {
+    if (shutdownRequestedRef.current) return;
     const coordinator = captureLifecycleCoordinatorRef.current!;
     await coordinator.runCoalesced("pause", async (lifecycleOperation) => {
       const drainOperationId = `capture-pause:${lifecycleOperation.id}`;
@@ -25780,6 +25915,7 @@ export function useMeetingAssistant() {
       source: ScreenObservation["source"] = "full-screen",
       options: CaptureScreenContextOptions = {}
     ) => {
+      if (shutdownRequestedRef.current) return;
       const screenOperationId = createMeetingId("screen_operation");
       const screenOperationRequestedAt = options.requestedAt ?? Date.now();
       const screenRequestContextState = contextManagerRef.current.getState();
@@ -36478,6 +36614,7 @@ export function useMeetingAssistant() {
       }));
       scheduleTraceMetricsPersistence();
       recordCompletedTracesForSession(traces);
+      shutdownTraceWaitRef.current?.accept(traces);
       maybeAutoExportTraces(traces);
     });
   }, [
@@ -36861,11 +36998,12 @@ export function useMeetingAssistant() {
       const lifecycleUnlisten = await listen<unknown>(
         "native-audio-lifecycle",
         async (event) => {
+          const shutdownLease = shutdownRequestedRef.current ? nativeStopTerminalWaitRef.current?.lease : undefined;
           const authorization = authorizeNativeAudioLifecycleEvent({
             payload: event.payload,
-            expectedOwner: "meeting",
-            activeCaptureSessionId: nativeCaptureSessionIdRef.current,
-            activeCaptureGeneration: nativeCaptureGenerationRef.current,
+            expectedOwner: shutdownLease?.owner ?? "meeting",
+            activeCaptureSessionId: shutdownLease?.captureSessionId ?? nativeCaptureSessionIdRef.current,
+            activeCaptureGeneration: shutdownLease?.captureGeneration ?? nativeCaptureGenerationRef.current,
           });
           const metadata = {
             authorized: authorization.authorized,
@@ -36881,6 +37019,21 @@ export function useMeetingAssistant() {
             `[${new Date().toISOString()}] [native-audio-lifecycle]`,
             JSON.stringify(metadata)
           );
+          const recordedEvent = authorization.event;
+          if (recordedEvent && recordedEvent.eventType !== "started") {
+            nativeTerminalEvidenceRef.current[recordedEvent.owner] = recordedEvent;
+            const matchedStop = nativeStopTerminalWaitRef.current?.accept(recordedEvent);
+            if (shutdownRequestedRef.current && matchedStop) {
+              // The exact native owner terminated. Preserve accepted queue authority until drain.
+              if (nativeCaptureSessionIdRef.current === recordedEvent.captureSessionId
+                && nativeCaptureGenerationRef.current === recordedEvent.captureGeneration) {
+                nativeCaptureSessionIdRef.current = null;
+                nativeCaptureGenerationRef.current = null;
+              }
+              activeRef.current = false;
+              return;
+            }
+          }
           if (!authorization.authorized) return;
           if (authorization.event.eventType === "started") return;
 
@@ -37191,6 +37344,76 @@ export function useMeetingAssistant() {
 
   const stopOnUnmountRef = useRef(stop);
   stopOnUnmountRef.current = stop;
+
+  useApplicationShutdown({
+    freezeNewWork: async () => {
+      shutdownRequestedRef.current = true;
+      cancelActiveAdvisorJob("application-shutdown");
+      screenAnalysisAbortRef.current?.abort();
+      screenAnalysisAbortRef.current = null;
+      clearPendingAnswerCommitTimer();
+      responseOpportunityRuntimeRef.current?.cancelAll("disposed");
+      responseOpportunityGenerationGateRef.current.cancelAll("disposed");
+      meetingMetadataInferenceRuntimeRef.current?.cancelAll("disposed");
+      questionTypeAdjudicationRuntimeRef.current?.cancelAll("disposed");
+      taskRelationChildAffinityRuntimeRef.current?.cancelAll("disposed");
+      taskRelationParentAffinityRuntimeRef.current?.cancelAll("disposed");
+      taskRelationCanonicalShadowRuntimeRef.current?.cancelAll("disposed");
+      answerResolutionRuntimeRef.current?.cancelAll("disposed");
+      evidenceRequirementRuntimeRef.current?.cancelAll("disposed");
+      sourceLinkageAdjudicationRuntimeRef.current?.cancelAll("disposed");
+      whiteboardSyntaxRepairRuntimeRef.current?.cancelAll("disposed");
+      const regression = runtimeRegressionRunRef.current;
+      if (regression) {
+        sessionRecordingManagerRef.current?.recordRuntimeRegressionRun(createRuntimeRegressionRunRecord({
+          ...regression, status: "stopped", endedAt: Date.now(), reason: "application-shutdown",
+        }));
+        runtimeRegressionRunRef.current = undefined;
+        runtimeRegressionStepIdRef.current = undefined;
+      }
+      setState((previous) => ({ ...previous, error: null }));
+      if (microphoneVad.listening) await microphoneVad.pause();
+      return "settled";
+    },
+    drainRuntimeAndCapture: async () => {
+      await stop();
+      const terminal = createAcceptedTraceTerminalWait(traceStoreRef.current.getTraces());
+      shutdownTraceWaitRef.current = terminal;
+      await terminal.promise;
+      shutdownTraceWaitRef.current = null;
+      return "settled";
+    },
+    finalizeRecordingAndTraces: async () => {
+      // Drain timers/accepted persistence, then write the final payload through its existing native owner.
+      if (traceMetricsPersistTimerRef.current !== null) {
+        window.clearTimeout(traceMetricsPersistTimerRef.current);
+        traceMetricsPersistTimerRef.current = null;
+      }
+      if (traceMetricsPersistRetryTimerRef.current !== null) {
+        window.clearTimeout(traceMetricsPersistRetryTimerRef.current);
+        traceMetricsPersistRetryTimerRef.current = null;
+      }
+      await traceMetricsPersistQueueRef.current;
+      const payload = serializeMeetingTraceMetrics(traceStoreRef.current.getPersistableTraces());
+      if (payload !== lastTraceMetricsPayloadRef.current) {
+        await invoke("write_meeting_trace_metrics", { payload });
+        lastTraceMetricsPayloadRef.current = payload;
+      }
+      recordCompletedTracesForSession(traceStoreRef.current.getTraces());
+      sessionRecordingManagerRef.current?.recordTraceMetrics(payload);
+      // Catch evaluation writes accepted by terminal callbacks before allowing the 127 seal.
+      await stopShutdownEvaluationCapture(sttEvaluationCaptureManagerRef.current);
+      const recording = await stopSessionRecording("application-shutdown", { throwOnError: true });
+      if (recording?.active || recording?.lastError || recording?.lifecycle === "close-failed" || recording?.lifecycle === "closing") {
+        throw new Error("Session Recording has not sealed.");
+      }
+      return "settled";
+    },
+    unresolvedRecordingFolder: () => {
+      const recording = sessionRecordingManagerRef.current?.getState();
+      return recording && (recording.lifecycle !== "idle" || recording.lastError) ? recording.folderPath ?? recording.folderName ?? null : null;
+    },
+  });
 
   useEffect(() => {
     return () => {

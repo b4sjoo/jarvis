@@ -12,6 +12,7 @@ import {
   BriefcaseBusiness,
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
+import { requestApplicationShutdown } from "../lib/app-shutdown";
 
 export const useMenuItems = () => {
   const menu: {
@@ -81,7 +82,7 @@ export const useMenuItems = () => {
       icon: PowerIcon,
       label: "Quit Jarvis",
       action: async () => {
-        await invoke("exit_app");
+        await requestApplicationShutdown({ invoke });
       },
     },
   ];

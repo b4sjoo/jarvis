@@ -543,6 +543,6 @@ fn handle_move_window<R: Runtime>(app: &AppHandle<R>, direction: &str) {
 
 /// Tauri command to exit the application
 #[tauri::command]
-pub fn exit_app(app_handle: tauri::AppHandle) {
-    app_handle.exit(0);
+pub fn exit_app(app_handle: tauri::AppHandle) -> Result<(), String> {
+    crate::app_shutdown::request(&app_handle, "dashboard")
 }
