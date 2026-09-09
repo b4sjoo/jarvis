@@ -70,6 +70,26 @@ pub struct NativeCaptureControl {
     phase: NativeCapturePhase,
     generation: u64,
     lease: Option<NativeCaptureLease>,
+    metadata: Option<NativeCaptureMetadata>,
+    task: Option<tokio::task::JoinHandle<()>>,
+    signals: Option<NativeCaptureSignals>,
+    vad_config: VadConfig,
+    capture_vad_config: Option<VadConfig>,
+}
+
+#[derive(Debug)]
+struct NativeCaptureMetadata {
+    device_id: Option<String>,
+    sample_rate: u32,
+    started_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Default)]
+struct NativeCaptureSignals {
+    stop_requested: Arc<AtomicBool>,
+    termination_requested: Arc<AtomicBool>,
+    termination_request: Arc<Mutex<Option<NativeCaptureTerminationRequest>>>,
+    stopped: Arc<tokio::sync::Notify>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -120,7 +140,64 @@ fn claim_capture_lease(
     };
     control.phase = NativeCapturePhase::Starting;
     control.lease = Some(lease.clone());
+    control.signals = Some(NativeCaptureSignals::default());
+    control.capture_vad_config = Some(control.vad_config.clone());
     Ok(lease)
+}
+
+fn reserve_capture(
+    state: &crate::AudioState,
+    owner: NativeCaptureOwner,
+    session_id: String,
+    config: Option<VadConfig>,
+) -> Result<(NativeCaptureLease, NativeCaptureSignals, VadConfig), String> {
+    if let Some(config) = config.as_ref() {
+        validate_vad_config(config)?;
+    }
+    let mut control = state
+        .capture_control
+        .lock()
+        .map_err(|error| format!("Failed to acquire capture control: {}", error))?;
+    let lease = claim_capture_lease(&mut control, owner, session_id)?;
+    if let Some(config) = config {
+        control.vad_config = config.clone();
+        control.capture_vad_config = Some(config);
+    }
+    Ok((
+        lease,
+        control.signals.as_ref().unwrap().clone(),
+        control.capture_vad_config.as_ref().unwrap().clone(),
+    ))
+}
+
+fn activate_capture_if_owner(
+    state: &crate::AudioState,
+    lease: &NativeCaptureLease,
+    metadata: NativeCaptureMetadata,
+    spawn_task: impl FnOnce() -> tokio::task::JoinHandle<()>,
+) -> Result<(), String> {
+    let mut control = state
+        .capture_control
+        .lock()
+        .map_err(|error| format!("Failed to acquire capture control: {}", error))?;
+    if !control_owns(
+        &control,
+        NativeCapturePhase::Starting,
+        lease.owner,
+        &lease.session_id,
+        lease.generation,
+    ) {
+        warn!(
+            "Capture start superseded: expected {:?}, observed {:?}, phase {:?}",
+            lease, control.lease, control.phase
+        );
+        return Err("Capture start was superseded".to_string());
+    }
+    // Only task scheduling occurs here; initialization and stream destruction stay outside the lock.
+    control.task = Some(spawn_task());
+    control.metadata = Some(metadata);
+    control.phase = NativeCapturePhase::Active;
+    Ok(())
 }
 
 fn begin_capture_stop(
@@ -685,6 +762,33 @@ fn decide_debug_audio_fault(
 }
 
 #[cfg(debug_assertions)]
+fn request_debug_audio_fault(
+    control: &NativeCaptureControl,
+    owner: NativeCaptureOwner,
+    session_id: &str,
+    generation: u64,
+    outcome: CaptureRunOutcome,
+) -> Result<DebugAudioFaultDisposition, String> {
+    let disposition = decide_debug_audio_fault(control, owner, session_id, generation);
+    if disposition == DebugAudioFaultDisposition::Injected {
+        let signals = control
+            .signals
+            .as_ref()
+            .expect("active capture has signals");
+        *signals.termination_request.lock().map_err(|error| {
+            format!("Failed to acquire capture termination request: {}", error)
+        })? = Some(NativeCaptureTerminationRequest {
+            owner,
+            capture_session_id: session_id.to_string(),
+            capture_generation: generation,
+            outcome,
+        });
+        signals.termination_requested.store(true, Ordering::Release);
+    }
+    Ok(disposition)
+}
+
+#[cfg(debug_assertions)]
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DebugAudioFaultResult {
@@ -875,32 +979,13 @@ async fn start_audio_capture(
 ) -> Result<(), String> {
     let state = app.state::<crate::AudioState>();
     let capture_session_id = format!("capture_{}", Uuid::new_v4());
-    let capture_generation = {
-        let mut control = state
-            .capture_control
-            .lock()
-            .map_err(|e| format!("Failed to acquire capture control: {}", e))?;
-        let lease = claim_capture_lease(&mut control, capture_owner, capture_session_id.clone())?;
-        lease.generation
-    };
-    state.capture_stop_requested.store(false, Ordering::Release);
-    state
-        .capture_termination_requested
-        .store(false, Ordering::Release);
-    *state
-        .capture_termination_request
-        .lock()
-        .map_err(|e| format!("Failed to reset capture termination request: {}", e))? = None;
-
-    // Update VAD config if provided
-    if let Some(config) = vad_config {
-        validate_vad_config(&config)?;
-        let mut vad_cfg = state
-            .vad_config
-            .lock()
-            .map_err(|e| format!("Failed to acquire VAD config lock: {}", e))?;
-        *vad_cfg = config;
-    }
+    let (lease, signals, vad_config) = reserve_capture(
+        &state,
+        capture_owner,
+        capture_session_id.clone(),
+        vad_config,
+    )?;
+    let capture_generation = lease.generation;
 
     let requested_device_id = device_id.clone();
     let input = match std::panic::catch_unwind(AssertUnwindSafe(|| {
@@ -1010,102 +1095,66 @@ async fn start_audio_capture(
     }
 
     let app_clone = app.clone();
-    let vad_config = state
-        .vad_config
-        .lock()
-        .map_err(|e| format!("Failed to read VAD config: {}", e))?
-        .clone();
-
-    *state
-        .capture_device_id
-        .lock()
-        .map_err(|e| format!("Failed to set capture device: {}", e))? = requested_device_id;
-    *state
-        .sample_rate
-        .lock()
-        .map_err(|e| format!("Failed to set sample rate: {}", e))? = Some(sr);
-    *state
-        .started_at_ms
-        .lock()
-        .map_err(|e| format!("Failed to set capture start time: {}", e))? = Some(now_ms());
-    let state_clone = app.state::<crate::AudioState>();
-    let capture_stop_requested = state.capture_stop_requested.clone();
-    let capture_termination_requested = state.capture_termination_requested.clone();
-    let capture_termination_request = state.capture_termination_request.clone();
+    let capture_stop_requested = signals.stop_requested;
+    let capture_termination_requested = signals.termination_requested;
+    let capture_termination_request = signals.termination_request;
     let task_session_id = capture_session_id.clone();
-    {
-        let mut control = state_clone
-            .capture_control
-            .lock()
-            .map_err(|e| format!("Failed to acquire capture control: {}", e))?;
-        if !control_owns(
-            &control,
-            NativeCapturePhase::Starting,
-            capture_owner,
-            &capture_session_id,
-            capture_generation,
-        ) {
-            clear_capture_metadata(&state_clone);
-            return Err("Capture start was superseded".to_string());
-        }
-        let mut task_guard = state_clone
-            .stream_task
-            .lock()
-            .map_err(|e| format!("Failed to store task: {}", e))?;
-        if task_guard.is_some() {
-            control.phase = NativeCapturePhase::Idle;
-            control.lease = None;
-            clear_capture_metadata(&state_clone);
-            return Err("Capture task slot is already occupied".to_string());
-        }
-        let task = tokio::spawn(async move {
-            let capture_future = async {
-                if vad_config.enabled {
-                    run_vad_capture(
-                        app_clone.clone(),
-                        stream,
-                        sr,
-                        vad_config,
-                        task_session_id.clone(),
-                        capture_owner,
-                        capture_generation,
-                        capture_stop_requested.clone(),
-                        capture_termination_requested.clone(),
-                        capture_termination_request.clone(),
-                    )
+    activate_capture_if_owner(
+        &state,
+        &lease,
+        NativeCaptureMetadata {
+            device_id: requested_device_id,
+            sample_rate: sr,
+            started_at_ms: now_ms(),
+        },
+        move || {
+            tokio::spawn(async move {
+                let capture_future = async {
+                    if vad_config.enabled {
+                        run_vad_capture(
+                            app_clone.clone(),
+                            stream,
+                            sr,
+                            vad_config,
+                            task_session_id.clone(),
+                            capture_owner,
+                            capture_generation,
+                            capture_stop_requested.clone(),
+                            capture_termination_requested.clone(),
+                            capture_termination_request.clone(),
+                        )
+                        .await
+                    } else {
+                        run_continuous_capture(
+                            app_clone.clone(),
+                            stream,
+                            sr,
+                            vad_config,
+                            task_session_id.clone(),
+                            capture_owner,
+                            capture_generation,
+                            capture_stop_requested.clone(),
+                            capture_termination_requested.clone(),
+                            capture_termination_request.clone(),
+                        )
+                        .await
+                    }
+                };
+                let outcome = AssertUnwindSafe(capture_future)
+                    .catch_unwind()
                     .await
-                } else {
-                    run_continuous_capture(
-                        app_clone.clone(),
-                        stream,
-                        sr,
-                        vad_config,
-                        task_session_id.clone(),
-                        capture_owner,
-                        capture_generation,
-                        capture_stop_requested.clone(),
-                        capture_termination_requested.clone(),
-                        capture_termination_request.clone(),
-                    )
-                    .await
-                }
-            };
-            let outcome = AssertUnwindSafe(capture_future)
-                .catch_unwind()
-                .await
-                .unwrap_or_else(|_| CaptureRunOutcome::panic());
-            finish_capture_if_owner(
-                &app_clone,
-                capture_owner,
-                &task_session_id,
-                capture_generation,
-                sr,
-                outcome,
-            );
-        });
-        *task_guard = Some(task);
-        control.phase = NativeCapturePhase::Active;
-    }
+                    .unwrap_or_else(|_| CaptureRunOutcome::panic());
+                finish_capture_if_owner(
+                    &app_clone,
+                    capture_owner,
+                    &task_session_id,
+                    capture_generation,
+                    sr,
+                    outcome,
+                );
+            })
+        },
+    )?;
 
     let _ = app.emit("capture-started", sr);
     emit_capture_lifecycle(
@@ -2158,23 +2207,50 @@ fn release_starting_capture(
     generation: u64,
 ) {
     if let Ok(mut control) = state.capture_control.lock() {
-        if control_owns(
-            &control,
+        release_capture_if_owner(
+            &mut control,
             NativeCapturePhase::Starting,
             owner,
             session_id,
             generation,
-        ) {
-            control.phase = NativeCapturePhase::Idle;
-            control.lease = None;
-            clear_capture_metadata(state);
-        }
+        );
     }
 }
 
 struct ReleasedActiveCapture {
     #[cfg_attr(not(debug_assertions), allow(dead_code))]
     task: Option<tokio::task::JoinHandle<()>>,
+}
+
+fn release_capture_if_owner(
+    control: &mut NativeCaptureControl,
+    phase: NativeCapturePhase,
+    owner: NativeCaptureOwner,
+    session_id: &str,
+    generation: u64,
+) -> Option<ReleasedActiveCapture> {
+    if !control_owns(control, phase, owner, session_id, generation) {
+        warn!(
+            "Capture release rejected: expected {}/{}/{} {:?}, observed {:?} {:?}",
+            owner.as_str(),
+            session_id,
+            generation,
+            phase,
+            control.lease,
+            control.phase
+        );
+        return None;
+    }
+    let task = control.task.take();
+    if let Some(signals) = control.signals.take() {
+        signals.stop_requested.store(true, Ordering::Release);
+        signals.stopped.notify_waiters();
+    }
+    control.metadata = None;
+    control.capture_vad_config = None;
+    control.phase = NativeCapturePhase::Idle;
+    control.lease = None;
+    Some(ReleasedActiveCapture { task })
 }
 
 fn release_active_capture_if_owner(
@@ -2187,25 +2263,13 @@ fn release_active_capture_if_owner(
         .capture_control
         .lock()
         .map_err(|error| format!("Failed to acquire capture control: {}", error))?;
-    if !control_owns(
-        &control,
+    Ok(release_capture_if_owner(
+        &mut control,
         NativeCapturePhase::Active,
         owner,
         session_id,
         generation,
-    ) {
-        return Ok(None);
-    }
-
-    let task = state
-        .stream_task
-        .lock()
-        .map_err(|error| format!("Failed to acquire capture task: {}", error))?
-        .take();
-    control.phase = NativeCapturePhase::Idle;
-    control.lease = None;
-    clear_capture_metadata(state);
-    Ok(Some(ReleasedActiveCapture { task }))
+    ))
 }
 
 fn finish_capture_if_owner(
@@ -2251,25 +2315,60 @@ async fn stop_audio_capture_for_owner(
     expected_generation: Option<u64>,
 ) -> Result<NativeStopDisposition, String> {
     let state = app.state::<crate::AudioState>();
-    let (lease, task) = {
+    let (disposition, stopped_lease) = stop_capture_for_owner(
+        &state,
+        requested_owner,
+        expected_session_id.as_deref(),
+        expected_generation,
+    )
+    .await?;
+    if let Some(lease) = stopped_lease {
+        let _ = app.emit("capture-stopped", ());
+        emit_capture_lifecycle(
+            &app,
+            "stopped",
+            lease.owner,
+            &lease.session_id,
+            lease.generation,
+            Some("requested-stop"),
+            None,
+            None,
+            true,
+            CaptureRecoverability::NotApplicable,
+            CaptureTerminationDiagnostics::default(),
+        );
+    }
+    Ok(disposition)
+}
+
+async fn stop_capture_for_owner(
+    state: &crate::AudioState,
+    requested_owner: NativeCaptureOwner,
+    expected_session_id: Option<&str>,
+    expected_generation: Option<u64>,
+) -> Result<(NativeStopDisposition, Option<NativeCaptureLease>), String> {
+    let (lease, task, duplicate_stop) = {
         let mut control = state
             .capture_control
             .lock()
             .map_err(|e| format!("Failed to acquire capture control: {}", e))?;
+        let already_stopping = control.phase == NativeCapturePhase::Stopping;
         let lease = match begin_capture_stop(
             &mut control,
             requested_owner,
-            expected_session_id.as_deref(),
+            expected_session_id,
             expected_generation,
         ) {
-            NativeStopDecision::NotRunning => return Ok(NativeStopDisposition::AlreadyIdle),
+            NativeStopDecision::NotRunning => {
+                return Ok((NativeStopDisposition::AlreadyIdle, None))
+            }
             NativeStopDecision::WrongOwner(owner) => {
                 warn!(
                     "Ignoring {} stop request because capture is owned by {}",
                     requested_owner.as_str(),
                     owner.as_str()
                 );
-                return Ok(NativeStopDisposition::OwnerMismatch);
+                return Ok((NativeStopDisposition::OwnerMismatch, None));
             }
             NativeStopDecision::StaleLease(active_lease) => {
                 warn!(
@@ -2280,19 +2379,30 @@ async fn stop_audio_capture_for_owner(
                     active_lease.session_id,
                     active_lease.generation
                 );
-                return Ok(NativeStopDisposition::StaleRequest);
+                return Ok((NativeStopDisposition::StaleRequest, None));
             }
             NativeStopDecision::Acquired(lease) => lease,
         };
-        let task = state
-            .stream_task
-            .lock()
-            .map_err(|e| format!("Failed to acquire capture task: {}", e))?
-            .take();
-        (lease, task)
+        let signals = control.signals.as_ref().expect("owned capture has signals");
+        signals.stop_requested.store(true, Ordering::Release);
+        // Register before releasing the lock so a concurrent stop cannot miss completion.
+        let duplicate_stop = already_stopping.then(|| {
+            let mut notified = Box::pin(signals.stopped.clone().notified_owned());
+            notified.as_mut().enable();
+            notified
+        });
+        let task = if already_stopping {
+            None
+        } else {
+            control.task.take()
+        };
+        (lease, task, duplicate_stop)
     };
 
-    state.capture_stop_requested.store(true, Ordering::Release);
+    if let Some(completed) = duplicate_stop {
+        completed.await;
+        return Ok((NativeStopDisposition::AlreadyIdle, None));
+    }
     if let Some(mut task) = task {
         if tokio::time::timeout(
             tokio::time::Duration::from_millis(GRACEFUL_CAPTURE_STOP_TIMEOUT_MS),
@@ -2315,43 +2425,20 @@ async fn stop_audio_capture_for_owner(
             .capture_control
             .lock()
             .map_err(|e| format!("Failed to acquire capture control: {}", e))?;
-        if control_owns(
-            &control,
+        release_capture_if_owner(
+            &mut control,
             NativeCapturePhase::Stopping,
             lease.owner,
             &lease.session_id,
             lease.generation,
-        ) {
-            control.phase = NativeCapturePhase::Idle;
-            control.lease = None;
-            clear_capture_metadata(&state);
-            state.capture_stop_requested.store(false, Ordering::Release);
-            true
-        } else {
-            false
-        }
+        )
+        .is_some()
     };
 
-    if stopped {
-        let _ = app.emit("capture-stopped", ());
-        emit_capture_lifecycle(
-            &app,
-            "stopped",
-            lease.owner,
-            &lease.session_id,
-            lease.generation,
-            Some("requested-stop"),
-            None,
-            None,
-            true,
-            CaptureRecoverability::NotApplicable,
-            CaptureTerminationDiagnostics::default(),
-        );
-    }
     Ok(if stopped {
-        NativeStopDisposition::Stopped
+        (NativeStopDisposition::Stopped, Some(lease))
     } else {
-        NativeStopDisposition::StaleRequest
+        (NativeStopDisposition::StaleRequest, None)
     })
 }
 
@@ -2422,29 +2509,15 @@ pub async fn debug_inject_native_audio_fault(
             .capture_control
             .lock()
             .map_err(|error| format!("Failed to acquire capture control: {}", error))?;
-        let disposition = decide_debug_audio_fault(
+        request_debug_audio_fault(
             &control,
             owner,
             expected_session_id,
             expected_capture_generation,
-        );
-        if disposition == DebugAudioFaultDisposition::Injected {
-            let outcome = fault_kind
+            fault_kind
                 .outcome(injection_id)
-                .with_native_tail_flush_request(injection_id.to_string(), requested_at_ms);
-            *state.capture_termination_request.lock().map_err(|error| {
-                format!("Failed to acquire capture termination request: {}", error)
-            })? = Some(NativeCaptureTerminationRequest {
-                owner,
-                capture_session_id: expected_session_id.to_string(),
-                capture_generation: expected_capture_generation,
-                outcome,
-            });
-            state
-                .capture_termination_requested
-                .store(true, Ordering::Release);
-        }
-        disposition
+                .with_native_tail_flush_request(injection_id.to_string(), requested_at_ms),
+        )?
     };
 
     if disposition == DebugAudioFaultDisposition::Injected {
@@ -2472,12 +2545,6 @@ pub async fn debug_inject_native_audio_fault(
         }
 
         if !completed {
-            state
-                .capture_termination_requested
-                .store(false, Ordering::Release);
-            if let Ok(mut request) = state.capture_termination_request.lock() {
-                *request = None;
-            }
             let released = release_active_capture_if_owner(
                 &state,
                 owner,
@@ -2528,43 +2595,37 @@ pub async fn debug_inject_native_audio_fault(
 #[tauri::command]
 pub async fn get_meeting_audio_status(app: AppHandle) -> Result<MeetingAudioStatus, String> {
     let state = app.state::<crate::AudioState>();
+    capture_status_snapshot(&state)
+}
 
-    let (system_capture_active, capture_owner, capture_session_id, capture_generation) = {
-        let control = state
-            .capture_control
-            .lock()
-            .map_err(|e| format!("Failed to get capture control: {}", e))?;
-        let active = matches!(
-            control.phase,
-            NativeCapturePhase::Starting
-                | NativeCapturePhase::Active
-                | NativeCapturePhase::Stopping
-        );
-        let owner = control
-            .lease
-            .as_ref()
-            .map(|lease| lease.owner.as_str().to_string());
-        let session_id = control.lease.as_ref().map(|lease| lease.session_id.clone());
-        let generation = control.lease.as_ref().map(|lease| lease.generation);
-        (active, owner, session_id, generation)
-    };
-    let device_id = state
-        .capture_device_id
+fn capture_status_snapshot(state: &crate::AudioState) -> Result<MeetingAudioStatus, String> {
+    let control = state
+        .capture_control
         .lock()
-        .map_err(|e| format!("Failed to get capture device: {}", e))?
-        .clone();
-    let sample_rate = *state
-        .sample_rate
-        .lock()
-        .map_err(|e| format!("Failed to get sample rate: {}", e))?;
-    let started_at_ms = *state
-        .started_at_ms
-        .lock()
-        .map_err(|e| format!("Failed to get capture start time: {}", e))?;
-    let vad_enabled = state
-        .vad_config
-        .lock()
-        .map_err(|e| format!("Failed to get VAD config: {}", e))?
+        .map_err(|error| format!("Failed to get capture control: {}", error))?;
+    let system_capture_active = control.phase != NativeCapturePhase::Idle;
+    let capture_owner = control
+        .lease
+        .as_ref()
+        .map(|lease| lease.owner.as_str().to_string());
+    let capture_session_id = control.lease.as_ref().map(|lease| lease.session_id.clone());
+    let capture_generation = control.lease.as_ref().map(|lease| lease.generation);
+    let device_id = control
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.device_id.clone());
+    let sample_rate = control
+        .metadata
+        .as_ref()
+        .map(|metadata| metadata.sample_rate);
+    let started_at_ms = control
+        .metadata
+        .as_ref()
+        .map(|metadata| metadata.started_at_ms);
+    let vad_enabled = control
+        .capture_vad_config
+        .as_ref()
+        .unwrap_or(&control.vad_config)
         .enabled;
     let active = system_capture_active && capture_owner.as_deref() == Some("meeting");
 
@@ -2650,9 +2711,10 @@ pub async fn request_system_audio_access(app: AppHandle) -> Result<(), String> {
 pub async fn get_vad_config(app: AppHandle) -> Result<VadConfig, String> {
     let state = app.state::<crate::AudioState>();
     let config = state
-        .vad_config
+        .capture_control
         .lock()
         .map_err(|e| format!("Failed to get VAD config: {}", e))?
+        .vad_config
         .clone();
     Ok(config)
 }
@@ -2662,10 +2724,11 @@ pub async fn update_vad_config(app: AppHandle, config: VadConfig) -> Result<(), 
     validate_vad_config(&config)?;
 
     let state = app.state::<crate::AudioState>();
-    *state
-        .vad_config
+    state
+        .capture_control
         .lock()
-        .map_err(|e| format!("Failed to update VAD config: {}", e))? = config;
+        .map_err(|e| format!("Failed to update VAD config: {}", e))?
+        .vad_config = config;
 
     Ok(())
 }
@@ -2731,25 +2794,6 @@ pub fn get_output_devices() -> Result<Vec<AudioDevice>, String> {
     })
 }
 
-fn clear_capture_metadata(state: &crate::AudioState) {
-    state.capture_stop_requested.store(false, Ordering::Release);
-    state
-        .capture_termination_requested
-        .store(false, Ordering::Release);
-    if let Ok(mut request) = state.capture_termination_request.lock() {
-        *request = None;
-    }
-    if let Ok(mut device_id) = state.capture_device_id.lock() {
-        *device_id = None;
-    }
-    if let Ok(mut sample_rate) = state.sample_rate.lock() {
-        *sample_rate = None;
-    }
-    if let Ok(mut started_at_ms) = state.started_at_ms.lock() {
-        *started_at_ms = None;
-    }
-}
-
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -2806,6 +2850,10 @@ fn trim_trailing_silence(
     }
     samples.truncate(samples.len().saturating_sub(trim_amount));
 }
+
+#[cfg(test)]
+#[path = "native_capture_control_tests.rs"]
+mod native_capture_control_tests;
 
 #[cfg(test)]
 mod tests {
