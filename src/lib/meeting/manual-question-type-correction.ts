@@ -1060,12 +1060,14 @@ export function buildManualCorrectionParentTransition({
 
 export function buildBoundedParentContextHandoff({
   parent,
+  parentSourceQuestion,
   sourceQuestionId,
   latestQuestionText,
   transcriptTurns,
   boundaryTurnId,
 }: {
   parent: ActiveInterviewParent;
+  parentSourceQuestion?: string;
   sourceQuestionId: string;
   latestQuestionText: string;
   transcriptTurns: TranscriptTurn[];
@@ -1080,7 +1082,7 @@ export function buildBoundedParentContextHandoff({
   const safeStart = Math.max(0, parentStartIndex);
   const safeEnd = boundaryIndex >= 0 ? boundaryIndex : transcriptTurns.length;
   const sourceTurns = transcriptTurns.slice(safeStart, safeEnd);
-  const sourceText = [parent.topic, ...sourceTurns.map((turn) => turn.text)].join(
+  const sourceText = [parentSourceQuestion ?? "", ...sourceTurns.map((turn) => turn.text)].join(
     "\n"
   );
   const combinedText = `${sourceText}\n${latestQuestionText}`.toLowerCase();

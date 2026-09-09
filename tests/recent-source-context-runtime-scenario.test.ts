@@ -9,9 +9,11 @@ import { projectActiveMeetingTask } from "../src/lib/meeting/active-meeting-task
 import { decideAdvisorTurnIntent } from "../src/lib/meeting/advisor-turn-intent.js";
 import { compileSettledAdvisorPromptContext } from "../src/lib/meeting/settled-advisor-context.js";
 import { composeExpandedAdvisorPromptContext } from "../src/lib/meeting/context-scope-response-action.js";
-import { composeCanonicalTurnCandidate } from "../src/lib/meeting/logical-question-unit.js";
+import { composeCanonicalTurnCandidate, type LogicalQuestionUnit } from "../src/lib/meeting/logical-question-unit.js";
 import { selectInterviewPlaybook } from "../src/lib/meeting/interview-playbook.js";
-import { selectOwnerScopedRelationEvidence } from "../src/lib/meeting/effective-question-source-ledger.js";
+import { createEffectiveQuestionSourceRecord, EffectiveQuestionSourceLedger, selectOwnerScopedRelationEvidence } from "../src/lib/meeting/effective-question-source-ledger.js";
+import { createProvisionalCurrentQuestion, settleCurrentQuestion } from "../src/lib/meeting/current-question-settlement.js";
+import { buildEffectiveAdvisorSettlementView } from "../src/lib/meeting/settled-advisor-execution-plan.js";
 import { buildQuestionTypeAdjudicationRequest } from "../src/lib/meeting/question-type-adjudication.js";
 import {
   appendSourceOwnedSetupCandidate,
@@ -60,6 +62,10 @@ test("36-second AI/ML to Coding scenario keeps context but attaches a Coding chi
     state: { revision: 1, parent },
   });
   assert.ok(activeBefore);
+  const ledger = new EffectiveQuestionSourceLedger();
+  rememberProducedSource(ledger, composeCanonicalTurnCandidate({
+    currentTurn: parentTurn, sessionId: "session-context", runtimeEpoch: 3,
+  }), activeBefore);
 
   const setupCandidate = createSourceOwnedSetupCandidate({
     turn: setupTurn,
@@ -159,12 +165,17 @@ test("36-second AI/ML to Coding scenario keeps context but attaches a Coding chi
     state: { revision: 2, parent: transition.task },
   });
   assert.ok(activeAfter);
+  const childRecord = rememberProducedSource(ledger, current, activeAfter);
+  assert.deepEqual(childRecord.owner, {
+    kind: "active-child", parentId: parent.id, childId: activeAfter.child!.id,
+  });
   const compilation = compileSettledAdvisorPromptContext({
     baseContext: promptContext(activeAfter, [parentTurn, setupTurn, askTurn]),
     contextReadScope: "active-child-read",
     logicalQuestionUnit: current,
     transcriptTurns: [parentTurn, setupTurn, askTurn],
     recentSourceContext: contextSelection.context,
+    effectiveRecords: ledger.listHistory(),
   });
   assert.deepEqual(compilation.selectedSourceTurnIds, [
     parentTurn.id,
@@ -236,11 +247,16 @@ test("orphan context expires after 45 seconds while task-owned context persists"
   const parent = activeParent(setupTurn);
   const active = projectActiveMeetingTask({ state: { revision: 1, parent } });
   assert.ok(active);
+  const ledger = new EffectiveQuestionSourceLedger();
+  rememberProducedSource(ledger, composeCanonicalTurnCandidate({
+    currentTurn: setupTurn, sessionId: "session-expired", runtimeEpoch: 1,
+  }), active);
   const compiled = compileSettledAdvisorPromptContext({
     baseContext: promptContext(active, [setupTurn, askTurn]),
     contextReadScope: "active-parent-read",
     logicalQuestionUnit: ask,
     transcriptTurns: [setupTurn, askTurn],
+    effectiveRecords: ledger.listHistory(),
   });
   assert.match(compiled.context.transcript, /private customer documents/i);
 });
@@ -443,6 +459,31 @@ function activeParent(source: TranscriptTurn): ActiveInterviewParent {
     canonicalQuestionSourceTurnIds: [source.id],
     revisions: 1,
   };
+}
+
+function rememberProducedSource(
+  ledger: EffectiveQuestionSourceLedger,
+  logicalQuestionUnit: LogicalQuestionUnit,
+  activeMeetingTask: NonNullable<ReturnType<typeof projectActiveMeetingTask>>
+) {
+  const settlement = settleCurrentQuestion({
+    currentQuestion: createProvisionalCurrentQuestion({ logicalQuestionUnit, sourceKind: "voice" }),
+    activeParentId: activeMeetingTask.parent.id,
+    activeParentRevision: activeMeetingTask.parent.revisions,
+    manualCorrectionRevision: 0,
+    policy: { runtimeMutationAuthorized: false, questionComplete: true, commitParent: false },
+  });
+  const view = buildEffectiveAdvisorSettlementView({
+    settlement, activeMeetingTask, taskRuntimeRevision: activeMeetingTask.runtimeRevision,
+    fallback: { questionType: "unknown", relation: "unknown" },
+  });
+  assert.ok(view.effectiveSettlement);
+  const record = createEffectiveQuestionSourceRecord({
+    logicalQuestionUnit, settlement: view.effectiveSettlement, activeMeetingTask, settledAt: logicalQuestionUnit.updatedAt,
+  });
+  assert.ok(record);
+  ledger.upsert(record);
+  return record;
 }
 
 function promptContext(

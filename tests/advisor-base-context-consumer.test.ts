@@ -16,7 +16,7 @@ import { createEffectiveAdvisorBaseBuilder } from "./helpers/advisor-base-contex
 import { EffectiveQuestionSourceLedger } from "../src/lib/meeting/effective-question-source-ledger.js";
 import { composeLogicalQuestionUnit } from "../src/lib/meeting/logical-question-unit.js";
 import { applyActiveQuestionTermCorrection } from "../src/lib/meeting/active-question-term-correction.js";
-import { projectAdvisorTranscriptForLogicalQuestion } from "../src/lib/meeting/logical-question-effective-projection.js";
+import { resolveAuthorizedEffectiveSourceContext } from "../src/lib/meeting/authorized-effective-source-context.js";
 import { clearBoundedGeneratedContinuity, projectBoundedGeneratedContinuityForTask, type BoundedGeneratedContinuityState } from "../src/lib/meeting/bounded-recent-history.js";
 import type { ActiveInterviewParent, AdvisorPromptContext, TranscriptTurn } from "../src/lib/meeting/types.js";
 
@@ -229,8 +229,8 @@ test("C2/C5 LQU base formatter receives eligible parent turns without raw format
   const build = createEffectiveAdvisorBaseBuilder(manager, new EffectiveQuestionSourceLedger(), { current: 1 }, (input) => {
     calls += 1;
     assert.equal(input.sessionId, sessionId);
-    assert.deepEqual(input.turns.map((turn) => turn.id), before.advisorPromptSourceTurnIds);
-    return projectAdvisorTranscriptForLogicalQuestion(input);
+    assert.deepEqual(input.transcriptTurns.map((turn) => turn.id), before.advisorPromptSourceTurnIds);
+    return resolveAuthorizedEffectiveSourceContext(input);
   });
   const after = build(unit);
   assert.equal(calls, 1);
@@ -264,6 +264,7 @@ test("C5 all production base calls use the sole effective Hook builder", () => {
   visit(hook);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].arguments.length, 1);
+  assert.ok(calls[0].arguments.every(ts.isArrowFunction));
   const builder = declaration("buildEffectiveAdvisorBasePromptContext");
   assert.ok(calls[0].pos > builder.pos && calls[0].end < builder.end);
   for (const name of ["basePromptContext", "boundaryContext", "baseContext"]) {

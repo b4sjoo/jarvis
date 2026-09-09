@@ -356,7 +356,8 @@ test("keeps screen scaffold and generated continuity out of source prompt and sp
   });
 
   const context = manager.buildAdvisorPromptContext();
-  assert.match(context.screenContext, /Implement a queue/);
+  assert.equal(context.activeMeetingTask?.screen?.question, "Implement a queue");
+  assert.doesNotMatch(context.screenContext, /Topic:|Screen question:/);
   assert.doesNotMatch(context.screenContext, /FAKEGEN/);
 
   const state = manager.getState();

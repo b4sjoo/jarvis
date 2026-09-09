@@ -6,8 +6,9 @@ import ts from "typescript";
 import { MeetingContextManager } from "../src/lib/meeting/context-manager.js";
 import { composeLogicalQuestionUnit, type LogicalQuestionUnit } from "../src/lib/meeting/logical-question-unit.js";
 import { applyActiveQuestionTermCorrection } from "../src/lib/meeting/active-question-term-correction.js";
-import { createProvisionalCurrentQuestion } from "../src/lib/meeting/current-question-settlement.js";
-import { EffectiveQuestionSourceLedger, selectOwnerScopedRelationEvidence, type EffectiveQuestionSourceRecord } from "../src/lib/meeting/effective-question-source-ledger.js";
+import { createProvisionalCurrentQuestion, settleCurrentQuestion } from "../src/lib/meeting/current-question-settlement.js";
+import { createEffectiveQuestionSourceRecord, EffectiveQuestionSourceLedger, selectOwnerScopedRelationEvidence, type EffectiveQuestionSourceRecord } from "../src/lib/meeting/effective-question-source-ledger.js";
+import { buildEffectiveAdvisorSettlementView } from "../src/lib/meeting/settled-advisor-execution-plan.js";
 import { projectEffectiveLogicalQuestionSources, projectAdvisorTranscriptForLogicalQuestion } from "../src/lib/meeting/logical-question-effective-projection.js";
 import { compileSettledAdvisorPromptContext, formatSettledAdvisorContextCompilationForTrace, type SettledAdvisorContextCompilation } from "../src/lib/meeting/settled-advisor-context.js";
 import { buildAdvisorUserMessage } from "../src/lib/meeting/advisor-prompt.js";
@@ -72,6 +73,29 @@ function remember(ledger: EffectiveQuestionSourceLedger, unit: LogicalQuestionUn
   return record;
 }
 
+function rememberProducedSource(f: ReturnType<typeof fixture>, logicalQuestionUnit: LogicalQuestionUnit) {
+  const activeMeetingTask = f.manager.getState().activeMeetingTask;
+  assert.ok(activeMeetingTask);
+  const settlement = settleCurrentQuestion({
+    currentQuestion: createProvisionalCurrentQuestion({ logicalQuestionUnit, sourceKind: "voice" }),
+    activeParentId: activeMeetingTask.parent.id,
+    activeParentRevision: activeMeetingTask.parent.revisions,
+    manualCorrectionRevision: 0,
+    policy: { runtimeMutationAuthorized: false, questionComplete: true, commitParent: false },
+  });
+  const view = buildEffectiveAdvisorSettlementView({
+    settlement, activeMeetingTask, taskRuntimeRevision: activeMeetingTask.runtimeRevision,
+    fallback: { questionType: "unknown", relation: "unknown" },
+  });
+  assert.ok(view.effectiveSettlement);
+  const record = createEffectiveQuestionSourceRecord({
+    logicalQuestionUnit, settlement: view.effectiveSettlement, activeMeetingTask, settledAt: logicalQuestionUnit.updatedAt,
+  });
+  assert.ok(record);
+  f.ledger.upsert(record);
+  return record;
+}
+
 function consume(f: ReturnType<typeof fixture>, unit: LogicalQuestionUnit | undefined, input: {
   scope?: AdvisorContextReadScope;
   recent?: AdvisorSourceOwnedSemanticContext;
@@ -111,23 +135,25 @@ function consume(f: ReturnType<typeof fixture>, unit: LogicalQuestionUnit | unde
 }
 
 test("C1/C3 production construction consumes corrected ledger history once and preserves raw evidence/hash", () => {
-  const parent = turn("parent", "Design a car-sharing system.", 1_000);
+  const parentTurn = turn("parent", "Design a car-sharing system.", 1_000);
   const ask = turn("ask", "How would you index it?", 2_000);
-  const f = fixture([parent, ask]);
-  const original = f.unit(parent);
-  const first = remember(f.ledger, original);
+  const f = fixture([parentTurn, ask]);
+  setTestTaskRuntime(f.manager, { parent: parent(parentTurn.id) });
+  const original = f.unit(parentTurn);
+  const first = rememberProducedSource(f, original);
   const corrected = correct(original);
-  const latest = remember(f.ledger, corrected);
-  const result = consume(f, { ...f.unit(ask), contextSourceTurnIds: [parent.id] });
+  const latest = rememberProducedSource(f, corrected);
+  assert.deepEqual(latest.owner, { kind: "parent-mainline", parentId: "parent-a" });
+  const result = consume(f, { ...f.unit(ask), contextSourceTurnIds: [parentTurn.id] });
   assert.match(result.prompt, /Design a RAG system/);
   assert.doesNotMatch(result.prompt, /car-sharing/);
-  assert.deepEqual(result.compilation.selectedSourceTurnIds, [parent.id, ask.id]);
+  assert.deepEqual(result.compilation.selectedSourceTurnIds, [parentTurn.id, ask.id]);
   assert.equal(result.metadata.advisorModelTranscriptProjectionApplied, true);
   assert.deepEqual(result.metadata.advisorModelTranscriptCorrectionIds, ["correction-RAG"]);
   assert.notEqual(first.sourceHash, latest.sourceHash);
   assert.equal(f.ledger.list()[0].sourceHash, latest.sourceHash);
-  assert.equal(f.manager.getState().transcriptTurns[0].text, parent.text);
-  assert.equal(original.sources[0].text, parent.text);
+  assert.equal(f.manager.getState().transcriptTurns[0].text, parentTurn.text);
+  assert.equal(original.sources[0].text, parentTurn.text);
   assert.match(result.query, /How would you index it/);
   assert.doesNotMatch(result.query, /Design a RAG system/);
 });
@@ -150,6 +176,28 @@ test("C1/C4 correction cancellation rebuilds without reusing the previous operat
   assert.notEqual(before.context, after.context);
 });
 
+test("current LQU remains readable when the actual record producer has no parent", () => {
+  const raw = turn("current-without-parent", "Design a car-sharing system.", 1_000);
+  const f = fixture([raw]);
+  const unit = correct(f.unit(raw));
+  const settlement = settleCurrentQuestion({
+    currentQuestion: createProvisionalCurrentQuestion({ logicalQuestionUnit: unit, sourceKind: "voice" }),
+    manualCorrectionRevision: 0,
+    policy: { runtimeMutationAuthorized: false, questionComplete: true, commitParent: false },
+  });
+  const view = buildEffectiveAdvisorSettlementView({
+    settlement, taskRuntimeRevision: f.manager.getState().taskRuntime.revision,
+    fallback: { questionType: "unknown", relation: "unknown" },
+  });
+  assert.ok(view.effectiveSettlement);
+  assert.equal(createEffectiveQuestionSourceRecord({ logicalQuestionUnit: unit, settlement: view.effectiveSettlement }), undefined);
+  const result = consume(f, unit);
+  assert.match(result.prompt, /Design a RAG system/);
+  assert.doesNotMatch(result.prompt, /car-sharing/);
+  assert.equal(f.manager.getState().activeMeetingTask, undefined);
+  assert.equal(f.ledger.listHistory().length, 0);
+});
+
 for (const gap of [45_000, 45_001]) {
   test(`C2 source selector to Hook preserves orphan boundary at ${gap}ms`, () => {
     const setup = turn("setup", "The corpus contains PDFs and wiki pages.", 1_000);
@@ -163,6 +211,7 @@ for (const gap of [45_000, 45_001]) {
     assert.equal(result.prompt.includes(setup.text), gap === 45_000);
     assert.match(result.prompt, /How would you index them/);
     assert.equal(f.ledger.list().length, 0);
+    assert.equal(f.manager.getState().activeMeetingTask, undefined);
   });
 }
 
@@ -192,7 +241,8 @@ test("C2/C4 Narrow and Enhance receipts restrict corrected multi-turn source con
   const f = fixture([first, second, ask]);
   const grouped = { ...f.unit(first), sourceTurnIds: [first.id, second.id], currentTurnId: second.id,
     sources: [first, second].map((source) => ({ turnId: source.id, text: source.text, startedAt: source.startedAt, endedAt: source.endedAt })), normalizedText: `${first.text} ${second.text}` };
-  remember(f.ledger, correct(grouped));
+  setTestTaskRuntime(f.manager, { parent: { ...parent(first.id), canonicalQuestionSourceTurnIds: grouped.sourceTurnIds } });
+  rememberProducedSource(f, correct(grouped));
   const unit = { ...f.unit(ask), contextSourceTurnIds: [first.id, second.id] };
   const receipt = (action: "narrow-context" | "enhance-context"): AdvisorContextScopeSnapshot => ({
     operationId: action, action, mode: action === "narrow-context" ? "current-only" : "expanded",
@@ -282,8 +332,10 @@ test("C2 parent history is not a 45s TTL; active-child/resume keep their own sco
   const f = fixture([outside, root, child, ask]);
   const rootParent = parent(root.id);
   setTestTaskRuntime(f.manager, { parent: rootParent });
-  remember(f.ledger, correct(f.unit(root)));
+  rememberProducedSource(f, correct(f.unit(root)));
   setTestTaskRuntime(f.manager, { parent: { ...rootParent, revisions: 2, child: { id: "child-a", createdAt: Date.now(), updatedAt: Date.now(), questionType: "coding", relation: "child-probe", intent: "implementation-probe", question: child.text, basedOnTurnIds: [child.id], basedOnObservationIds: [] } } });
+  const childRecord = rememberProducedSource(f, f.unit(child));
+  assert.deepEqual(childRecord.owner, { kind: "active-child", parentId: rootParent.id, childId: "child-a" });
   const childRead = consume(f, f.unit(ask), { scope: "active-child-read" });
   assert.match(childRead.prompt, /Design a RAG system/);
   assert.match(childRead.context.transcript, /Implement the tenant ID filter/);

@@ -5,7 +5,8 @@ import ts from "typescript";
 import type { MeetingContextManager } from "../../src/lib/meeting/context-manager.js";
 import type { EffectiveQuestionSourceLedger } from "../../src/lib/meeting/effective-question-source-ledger.js";
 import type { LogicalQuestionUnit } from "../../src/lib/meeting/logical-question-unit.js";
-import { projectAdvisorTranscriptForLogicalQuestion } from "../../src/lib/meeting/logical-question-effective-projection.js";
+import { indexAuthorizedEffectiveSourceRecords, resolveAuthorizedEffectiveSourceContext } from "../../src/lib/meeting/authorized-effective-source-context.js";
+import { projectEffectiveTaskSourceView } from "../../src/lib/meeting/effective-task-source-view.js";
 import { projectBoundedGeneratedContinuityForTask, type BoundedGeneratedContinuityState } from "../../src/lib/meeting/bounded-recent-history.js";
 import type { AdvisorPromptContext } from "../../src/lib/meeting/types.js";
 
@@ -29,14 +30,16 @@ export function createEffectiveAdvisorBaseBuilder(
   manager: MeetingContextManager,
   ledger: EffectiveQuestionSourceLedger,
   runtimeEpochRef = { current: 1 },
-  projector = projectAdvisorTranscriptForLogicalQuestion,
+  projector = resolveAuthorizedEffectiveSourceContext,
   recentAdvisorContinuityRef: { current: BoundedGeneratedContinuityState } = { current: { recentCapsules: [] } }
 ): (unit?: LogicalQuestionUnit) => AdvisorPromptContext {
   const environment = vm.createContext({
     contextManagerRef: { current: manager },
     effectiveQuestionSourceLedgerRef: { current: ledger },
     runtimeEpochRef,
-    projectAdvisorTranscriptForLogicalQuestion: projector,
+    resolveAuthorizedEffectiveSourceContext: projector,
+    indexAuthorizedEffectiveSourceRecords,
+    projectEffectiveTaskSourceView,
     projectBoundedGeneratedContinuityForTask,
     recentAdvisorContinuityRef,
   });

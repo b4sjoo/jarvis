@@ -3,7 +3,7 @@ import test from "node:test";
 import type { ActiveMeetingTask } from "../src/lib/meeting/active-meeting-task.js";
 import type { LogicalQuestionUnit } from "../src/lib/meeting/logical-question-unit.js";
 import {
-  compileSettledAdvisorPromptContext,
+  compileSettledAdvisorPromptContext as compileProductionSettledAdvisorPromptContext,
   formatSettledAdvisorContextCompilationForTrace,
   resolveSettledResponseActionContextSelection,
 } from "../src/lib/meeting/settled-advisor-context.js";
@@ -11,6 +11,39 @@ import type {
   AdvisorPromptContext,
   TranscriptTurn,
 } from "../src/lib/meeting/types.js";
+import type { EffectiveQuestionSourceRecord } from "../src/lib/meeting/effective-question-source-ledger.js";
+
+function compileSettledAdvisorPromptContext(
+  input: Parameters<typeof compileProductionSettledAdvisorPromptContext>[0]
+) {
+  const effectiveRecords: EffectiveQuestionSourceRecord[] = turns()
+    .filter((source) => source.id === "turn-parent" || source.id === "turn-child")
+    .map((source) => ({
+      recordId: source.id,
+      sessionId: "session-a",
+      runtimeEpoch: 2,
+      logicalQuestionUnitId: `lqu-${source.id}`,
+      logicalQuestionRevision: 1,
+      sourceHash: `hash-${source.id}`,
+      sourceKind: "voice",
+      sourceTurnIds: [source.id],
+      currentTurnId: source.id,
+      text: source.text,
+      effectiveSourceTexts: [{ turnId: source.id, text: source.text }],
+      startedAt: source.startedAt,
+      updatedAt: source.endedAt,
+      settledAt: source.endedAt,
+      speechAct: "question",
+      disposition: "answer-primary-ask",
+      relation: source.id === "turn-child" ? "child-probe" : "new-parent",
+      owner: source.id === "turn-child"
+        ? { kind: "active-child", parentId: "parent-rag", childId: "child-code" }
+        : { kind: "parent-mainline", parentId: "parent-rag" },
+    }));
+  return compileProductionSettledAdvisorPromptContext({
+    effectiveRecords, sessionId: "session-a", runtimeEpoch: 2, ...input,
+  });
+}
 
 test("current-only removes raw transcript and task continuity bypasses", () => {
   const compilation = compileSettledAdvisorPromptContext({
@@ -107,6 +140,8 @@ test("active-child scope includes only current, recent, parent, and child source
         "turn-current",
       ],
       settledAdvisorContextSourceTurnCount: 4,
+      settledAdvisorContextMissingSourceTurnIds: [],
+      settledAdvisorContextRejectedSourceTurnIds: [],
       settledAdvisorRecentSourceContextIncluded: true,
       settledAdvisorRawTranscriptBypassRemoved: true,
       settledAdvisorScreenContextIncluded: false,
@@ -203,7 +238,7 @@ test("screen LQU preserves current screen context before task commit", () => {
   assert.equal(compilation.screenContextReason, "current-screen-source");
   assert.equal(
     compilation.context.transcript,
-    "Them: How would you index it?"
+    "Screen: Implement an LRU cache."
   );
 });
 

@@ -641,6 +641,7 @@ export function buildSettledAdvisorExecutionPlan(input: {
   contextReadScopeOverride?: AdvisorContextReadScope;
   transientPersonalStatusDecision?: TransientPersonalStatusDecision;
   sourceQuestion?: string;
+  parentSourceQuestion?: string;
   subtaskIntent?: InterviewSubtaskIntent;
   explicitTaskMutationCommand?: TaskLifecycleCommand;
   taskMutationCommittedBeforeAdvisor?: boolean;
@@ -749,7 +750,7 @@ export function buildSettledAdvisorExecutionPlan(input: {
     : undefined;
   const parentTrajectoryPlaybook =
     responseOwner.source === "authorized-child" && taskSnapshot
-      ? resolveParentTrajectoryPlaybook(taskSnapshot)
+      ? resolveParentTrajectoryPlaybook(taskSnapshot, input.parentSourceQuestion)
       : undefined;
   const playbookPhase = transientPersonalStatusDecision
     ? taskSnapshot?.parent.playbookPhase
@@ -1473,7 +1474,8 @@ function withInterviewPlaybookPhase(
 }
 
 function resolveParentTrajectoryPlaybook(
-  task: ActiveMeetingTask
+  task: ActiveMeetingTask,
+  parentSourceQuestion?: string
 ): SelectedInterviewPlaybook | undefined {
   const parentQuestionType = normalizeCanonicalQuestionType(
     task.parent.questionType
@@ -1483,7 +1485,7 @@ function resolveParentTrajectoryPlaybook(
   }
   const selection = selectCommittedInterviewPlaybookFromCatalog({
     questionType: parentQuestionType,
-    query: task.parent.topic,
+    query: parentSourceQuestion ?? "",
     projectAnchor:
       task.parent.projectBinding?.projectName ??
       task.parent.projectBinding?.projectId,

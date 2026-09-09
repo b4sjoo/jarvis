@@ -124,7 +124,7 @@ test("C6 opt-in paired effective-context CPU, sampled allocations and final Prom
       : manager.buildAdvisorPromptContext();
     return buildAdvisorUserMessage(compileSettledAdvisorPromptContext({
       baseContext, contextReadScope: "current-only", logicalQuestionUnit, transcriptTurns: manager.getState().transcriptTurns,
-      effectiveRecords, sessionId, runtimeEpoch: 1,
+      effectiveRecords: ledger.list(), sessionId, runtimeEpoch: 1,
     }).context);
   };
   const before = () => compile(false);

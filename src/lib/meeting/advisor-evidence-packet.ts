@@ -376,7 +376,7 @@ function normalizeCurrentQuestion(
   };
 }
 
-function buildContinuityEvidence(
+export function buildContinuityEvidence(
   task: ActiveMeetingTask | undefined
 ) {
   if (!task) return undefined;

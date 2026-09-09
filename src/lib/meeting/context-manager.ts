@@ -513,7 +513,7 @@ export class MeetingContextManager {
   }
 
   buildAdvisorPromptContext(
-    projectTranscript?: (turns: TranscriptTurn[], sessionId: string) => string
+    projectTranscript?: (turns: TranscriptTurn[], sessionId: string, task?: ActiveMeetingTask) => string
   ): AdvisorPromptContext {
     const taskRuntime = this.getTaskRuntimeState();
     const latestTurn =
@@ -525,7 +525,7 @@ export class MeetingContextManager {
 
     return {
       transcript: projectTranscript
-        ? projectTranscript(promptTranscriptTurns, this.state.sessionId)
+        ? projectTranscript(promptTranscriptTurns, this.state.sessionId, activeMeetingTask)
         : this.formatTranscriptTurns(promptTranscriptTurns),
       advisorPromptSourceTurnIds: promptTranscriptTurns.map(
         (turn) => turn.id
@@ -614,12 +614,6 @@ export class MeetingContextManager {
           `Task id: ${activeMeetingTask.id}`,
           `Source: ${activeMeetingTask.source}`,
           `Question type: ${activeMeetingTask.parent.questionType}`,
-          activeMeetingTask.parent.topic
-            ? `Topic: ${activeMeetingTask.parent.topic}`
-            : undefined,
-          activeMeetingTask.screen.question
-            ? `Screen question: ${activeMeetingTask.screen.question}`
-            : undefined,
           activeMeetingTask.screen.language
             ? `Language: ${activeMeetingTask.screen.language}`
             : undefined,

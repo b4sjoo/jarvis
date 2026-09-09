@@ -1,10 +1,12 @@
 import type { AdvisorContextReadScope } from "./advisor-context-read-scope.js";
 import type { LogicalQuestionUnit } from "./logical-question-unit.js";
+import type { AdvisorTranscriptProjection } from "./logical-question-effective-projection.js";
+import type { EffectiveQuestionSourceRecord } from "./effective-question-source-ledger.js";
 import {
-  projectAdvisorTranscriptForLogicalQuestion,
-  type AdvisorTranscriptProjection,
-  type EffectiveLogicalQuestionModelRecord,
-} from "./logical-question-effective-projection.js";
+  indexAuthorizedEffectiveSourceRecords,
+  resolveAuthorizedEffectiveSourceContext,
+} from "./authorized-effective-source-context.js";
+import { projectEffectiveAdvisorTaskContext, projectEffectiveTaskSourceView } from "./effective-task-source-view.js";
 import type { ScreenScopeDecision } from "./screen-task-scope.js";
 import type {
   AdvisorContextScopeSnapshot,
@@ -42,6 +44,8 @@ export interface SettledAdvisorContextCompilation {
   scope: AdvisorContextReadScope;
   selectedSourceTurnIds: string[];
   recentSourceContextIncluded: boolean;
+  missingSourceTurnIds: string[];
+  rejectedSourceTurnIds: string[];
   rawTranscriptBypassRemoved: boolean;
   screenContextIncluded: boolean;
   screenContextReason:
@@ -135,7 +139,7 @@ export function compileSettledAdvisorPromptContext(input: {
   contextReadScope: AdvisorContextReadScope;
   logicalQuestionUnit?: LogicalQuestionUnit;
   transcriptTurns: TranscriptTurn[];
-  effectiveRecords?: EffectiveLogicalQuestionModelRecord[];
+  effectiveRecords?: EffectiveQuestionSourceRecord[];
   sessionId?: string;
   runtimeEpoch?: number;
   recentSourceContext?: AdvisorSourceOwnedSemanticContext;
@@ -186,27 +190,45 @@ export function compileSettledAdvisorPromptContext(input: {
     }
   }
 
-  const selectedTurns = input.transcriptTurns.filter(
-    (turn) => selectedIds.has(turn.id) && turn.contextPromptEligible !== false
-  );
+  if (input.logicalQuestionUnit?.currentTurnId.startsWith("screen:")) {
+    selectedIds.add(input.logicalQuestionUnit.currentTurnId);
+  }
   const currentQuestionText =
     input.baseContext.currentQuestionProjection?.answerFocusText?.trim() ||
     input.logicalQuestionUnit?.normalizedText.trim() ||
     "";
-  const transcriptProjection = projectAdvisorTranscriptForLogicalQuestion({
-    turns: selectedTurns,
+  const sourceIdentity = {
+    sessionId: input.sessionId ?? input.logicalQuestionUnit?.sessionId ?? "",
+    runtimeEpoch: input.runtimeEpoch ?? input.logicalQuestionUnit?.runtimeEpoch ?? -1,
+  };
+  const recordIndex = indexAuthorizedEffectiveSourceRecords({
+    ...sourceIdentity, effectiveRecords: input.effectiveRecords, activeMeetingTask: task,
+    logicalQuestionUnit: input.logicalQuestionUnit,
+  });
+  if (task && !responseActionContextSelection.authorized && scope !== "current-only") {
+    const origins = projectEffectiveTaskSourceView({
+      ...sourceIdentity, task, recordIndex, records: input.effectiveRecords ?? [],
+      logicalQuestionUnit: input.logicalQuestionUnit,
+    });
+    origins.parentSourceTurnIds.forEach((id) => selectedIds.add(id));
+    if (scope === "active-child-read") origins.childSourceTurnIds.forEach((id) => selectedIds.add(id));
+  }
+  const sourceContext = resolveAuthorizedEffectiveSourceContext({
+    ...sourceIdentity,
+    recordIndex,
+    selectedSourceTurnIds: [...selectedIds],
+    transcriptTurns: input.transcriptTurns,
     logicalQuestionUnit: input.logicalQuestionUnit,
     effectiveRecords: input.effectiveRecords,
-    sessionId: input.sessionId,
-    runtimeEpoch: input.runtimeEpoch,
+    activeMeetingTask: task,
     meTurnLabel: "Me (clarification)",
   });
-  const transcript = selectedTurns.length
-    ? transcriptProjection.transcript
-    : currentQuestionText
+  const transcriptProjection = sourceContext.transcriptProjection;
+  const transcript = transcriptProjection.transcript ||
+    (currentQuestionText && selectedIds.size === 0
       ? `Them: ${currentQuestionText}`
-      : "";
-  const selectedSourceTurnIds = selectedTurns.map((turn) => turn.id);
+      : "");
+  const selectedSourceTurnIds = sourceContext.selectedSourceTurnIds;
   const scopedTask = projectTaskForScope(
     input.baseContext.activeMeetingTask,
     scope
@@ -228,7 +250,7 @@ export function compileSettledAdvisorPromptContext(input: {
         ownedContextIds.has(turnId)
       )
   );
-  const authorizedRecentSourceContext =
+  const requestedRecentSourceContext =
     responseActionContextSelection.authorized
       ? input.recentSourceContext?.sourceTurnIds.every((turnId) =>
           selectedIds.has(turnId)
@@ -238,6 +260,14 @@ export function compileSettledAdvisorPromptContext(input: {
       : scope !== "current-only" || recentSourceContextOwnedByCurrentQuestion
         ? input.recentSourceContext
         : undefined;
+  const effectiveTextBySourceId = new Map(
+    sourceContext.effectiveSourceTexts.map((source) => [source.turnId, source.text])
+  );
+  const authorizedRecentSourceContext = requestedRecentSourceContext &&
+    requestedRecentSourceContext.sourceTurnIds.every((id) => effectiveTextBySourceId.has(id))
+    ? { ...requestedRecentSourceContext, text: requestedRecentSourceContext.sourceTurnIds
+        .map((id) => effectiveTextBySourceId.get(id)!).join(" ") }
+    : undefined;
   const contextCandidateIds = new Set([
     ...ownedContextIds,
     ...recentLogicalQuestionSourceTurnIds,
@@ -253,6 +283,8 @@ export function compileSettledAdvisorPromptContext(input: {
     scope,
     transcriptProjection,
     selectedSourceTurnIds,
+    missingSourceTurnIds: sourceContext.missingSourceTurnIds,
+    rejectedSourceTurnIds: sourceContext.rejectedSourceTurnIds,
     recentSourceContextIncluded: Boolean(
       selectedSourceTurnIds.some((turnId) => contextCandidateIds.has(turnId))
     ),
@@ -264,7 +296,7 @@ export function compileSettledAdvisorPromptContext(input: {
       responseActionContextSelection.authorized,
     responseActionContextSelectionReason:
       responseActionContextSelection.reason,
-    context: {
+    context: projectEffectiveAdvisorTaskContext({
       ...input.baseContext,
       transcript,
       advisorPromptSourceTurnIds: selectedSourceTurnIds,
@@ -286,7 +318,11 @@ export function compileSettledAdvisorPromptContext(input: {
           ? undefined
           : input.baseContext.responseOnlyParentReadContext,
       advisorEvidencePacket,
-    },
+    }, {
+      ...sourceIdentity, recordIndex, records: input.effectiveRecords ?? [],
+      selectedSourceTurnIds: sourceContext.selectedSourceTurnIds,
+      logicalQuestionUnit: input.logicalQuestionUnit,
+    }),
   };
 }
 
@@ -299,6 +335,8 @@ export function formatSettledAdvisorContextCompilationForTrace(
       compilation.selectedSourceTurnIds,
     settledAdvisorContextSourceTurnCount:
       compilation.selectedSourceTurnIds.length,
+    settledAdvisorContextMissingSourceTurnIds: compilation.missingSourceTurnIds,
+    settledAdvisorContextRejectedSourceTurnIds: compilation.rejectedSourceTurnIds,
     settledAdvisorRecentSourceContextIncluded:
       compilation.recentSourceContextIncluded,
     settledAdvisorRawTranscriptBypassRemoved:

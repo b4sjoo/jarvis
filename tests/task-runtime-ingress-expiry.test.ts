@@ -10,7 +10,8 @@ import { resolveResponseOpportunityRefreshAuthority } from "../src/lib/meeting/r
 import { authorizeRuntimeCommit, buildRuntimeCommitSnapshot } from "../src/lib/meeting/runtime-commit-authorization.js";
 import { MeetingTraceStore } from "../src/lib/meeting/trace.js";
 import { EffectiveQuestionSourceLedger } from "../src/lib/meeting/effective-question-source-ledger.js";
-import { projectAdvisorTranscriptForLogicalQuestion } from "../src/lib/meeting/logical-question-effective-projection.js";
+import { indexAuthorizedEffectiveSourceRecords, resolveAuthorizedEffectiveSourceContext } from "../src/lib/meeting/authorized-effective-source-context.js";
+import { projectEffectiveTaskSourceView } from "../src/lib/meeting/effective-task-source-view.js";
 import {
   clearBoundedGeneratedContinuity,
   projectBoundedGeneratedContinuityForTask,
@@ -65,7 +66,8 @@ function harness() {
   const context = vm.createContext({
     Date, Promise, createMeetingId, createAdvisorTriggerJob, decideRefreshAuthority,
     resolveResponseOpportunityRefreshAuthority, buildRuntimeCommitSnapshot,
-    projectAdvisorTranscriptForLogicalQuestion, projectBoundedGeneratedContinuityForTask,
+    indexAuthorizedEffectiveSourceRecords, resolveAuthorizedEffectiveSourceContext,
+    projectEffectiveTaskSourceView, projectBoundedGeneratedContinuityForTask,
     clearBoundedGeneratedContinuity,
     effectiveQuestionSourceLedgerRef: { current: new EffectiveQuestionSourceLedger() },
     contextManagerRef: { current: manager }, runtimeEpochRef: { current: 7 },

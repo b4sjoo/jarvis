@@ -187,10 +187,11 @@ import {
   type EffectiveQuestionSourceOwner,
 } from "@/lib/meeting/effective-question-source-ledger";
 import {
-  projectAdvisorTranscriptForLogicalQuestion,
   projectEffectiveSourceTurnGroup,
   projectEffectiveLogicalQuestionSources,
 } from "@/lib/meeting/logical-question-effective-projection";
+import { indexAuthorizedEffectiveSourceRecords, resolveAuthorizedEffectiveSourceContext, type AuthorizedEffectiveSourceContext, type AuthorizedEffectiveSourceRecordIndex } from "@/lib/meeting/authorized-effective-source-context";
+import { projectEffectiveAdvisorTaskContext, projectEffectiveTaskSourceView } from "@/lib/meeting/effective-task-source-view";
 import {
   coordinateOrderedSettlement,
   createOrderedSettlementDeadline,
@@ -3534,6 +3535,15 @@ export function useMeetingAssistant() {
     useRef<SourceOwnedSetupCandidate | undefined>(undefined);
   const effectiveQuestionSourceLedgerRef = useRef(
     new EffectiveQuestionSourceLedger()
+  );
+  const readEffectiveSemanticTask = useCallback(
+    (task: ActiveMeetingTask | undefined, logicalQuestionUnit?: LogicalQuestionUnit) =>
+      projectEffectiveTaskSourceView({
+        task, records: effectiveQuestionSourceLedgerRef.current.list(),
+        logicalQuestionUnit, sessionId: contextManagerRef.current.getState().sessionId,
+        runtimeEpoch: runtimeEpochRef.current,
+      }).task,
+    []
   );
   const answerDeliveryProgressRef =
     useRef<AnswerDeliveryProgress | null>(null);
@@ -10502,19 +10512,40 @@ export function useMeetingAssistant() {
     (logicalQuestionUnit?: LogicalQuestionUnit) => {
       const effectiveRecords = effectiveQuestionSourceLedgerRef.current.list();
       const runtimeEpoch = runtimeEpochRef.current;
+      let sourceContext: AuthorizedEffectiveSourceContext | undefined;
+      let recordIndex: AuthorizedEffectiveSourceRecordIndex | undefined;
       const context = contextManagerRef.current.buildAdvisorPromptContext(
-        (turns, sessionId) =>
-          projectAdvisorTranscriptForLogicalQuestion({
-            turns,
+        (turns, sessionId, task) => {
+          recordIndex = indexAuthorizedEffectiveSourceRecords({
+            effectiveRecords, sessionId, runtimeEpoch, activeMeetingTask: task, logicalQuestionUnit,
+          });
+          const origins = projectEffectiveTaskSourceView({
+            task, records: effectiveRecords, logicalQuestionUnit, sessionId, runtimeEpoch, recordIndex,
+          });
+          sourceContext = resolveAuthorizedEffectiveSourceContext({
+            recordIndex,
+            transcriptTurns: turns,
+            selectedSourceTurnIds: [
+              ...turns.map((turn) => turn.id),
+              ...(task?.parent.canonicalQuestionSourceTurnIds ?? []),
+              ...(task?.child?.basedOnTurnIds ?? []),
+              ...origins.parentSourceTurnIds,
+              ...origins.childSourceTurnIds,
+              ...(logicalQuestionUnit?.sourceTurnIds ?? []),
+            ],
             effectiveRecords,
             logicalQuestionUnit,
             sessionId,
             runtimeEpoch,
+            activeMeetingTask: task,
             meTurnLabel: "Me (clarification)",
-          }).transcript
+          });
+          return sourceContext.transcriptProjection.transcript;
+        }
       );
       return {
         ...context,
+        advisorPromptSourceTurnIds: sourceContext?.selectedSourceTurnIds ?? context.advisorPromptSourceTurnIds,
         activeMeetingTask: projectBoundedGeneratedContinuityForTask({
           state: recentAdvisorContinuityRef.current,
           task: context.activeMeetingTask,
@@ -11457,9 +11488,18 @@ export function useMeetingAssistant() {
       (promptContext.latestTurn?.speaker === "them"
         ? promptContext.latestTurn.text.trim()
         : "") ||
-      formatAdvisorActiveTaskForQuery(promptContext);
+      formatAdvisorActiveTaskForQuery({
+        ...promptContext,
+        activeMeetingTask: readEffectiveSemanticTask(promptContext.activeMeetingTask, advisorJob.logicalQuestionUnit),
+      });
+    const semanticPromptContext = projectEffectiveAdvisorTaskContext(promptContext, {
+      records: effectiveQuestionSourceLedgerRef.current.list(),
+      logicalQuestionUnit: advisorJob.logicalQuestionUnit,
+      sessionId: advisorJob.expectedSessionId,
+      runtimeEpoch: advisorJob.runtimeCommitToken.runtimeEpoch,
+    });
     const resolvedAdvisorTaskSignals = resolveAdvisorTaskSignals(
-      promptContext,
+      semanticPromptContext,
       advisorTaskFallbackQuery,
       advisorJob.logicalQuestionUnit
     );
@@ -11561,7 +11601,7 @@ export function useMeetingAssistant() {
               getAdvisorActiveProjectAnchor(promptContext) ??
               semanticAdvisorTaskSignals.projectAnchor,
             query: buildFocusedAdvisorTaskQuery(
-              promptContext,
+              semanticPromptContext,
               advisorQuestionSemanticEvidenceText
             ),
             taskRelation: "followup-parent" as const,
@@ -11740,7 +11780,7 @@ export function useMeetingAssistant() {
             query: outputOnlyCurrentBranch
               ? routedAdvisorTaskSignals.query
               : buildExplicitActionAdvisorTaskQuery(
-                  promptContext,
+                  semanticPromptContext,
                   options.currentSuggestion,
                   options.clarifyingFeedback
                 ),
@@ -11898,7 +11938,7 @@ export function useMeetingAssistant() {
           advisorSourceOwnedSemanticContext,
         activeMeetingTask: transientPersonalStatusDecision
           ? undefined
-          : promptContext.activeMeetingTask,
+          : readEffectiveSemanticTask(promptContext.activeMeetingTask, advisorJob.logicalQuestionUnit),
         interviewSessionBrief:
           promptContext.interviewSessionBrief,
         interviewSessionContext:
@@ -12944,24 +12984,43 @@ export function useMeetingAssistant() {
           contextStateBeforeBoundary.activeMeetingTask?.parent.questionType;
         const previousInterviewParent =
           contextStateBeforeBoundary.taskRuntime.parent;
+        const previousParentSourceText = readEffectiveSemanticTask(
+          contextStateBeforeBoundary.activeMeetingTask, advisorJob.logicalQuestionUnit
+        )?.parent.topic ?? "";
         const crossDomainTransitionDecision =
           decideCrossDomainParentTransition({
-            previousParent: previousInterviewParent,
+            previousParent: previousInterviewParent ? { ...previousInterviewParent, topic: previousParentSourceText } : undefined,
             nextQuestionType: taskBoundaryCandidate.proposedQuestionType,
             nextQuestionText:
               advisorQuestionSemanticEvidenceText,
           });
+        const handoffSources = previousInterviewParent &&
+          crossDomainTransitionDecision.kind === "linked-parent-extension"
+          ? resolveAuthorizedEffectiveSourceContext({
+              selectedSourceTurnIds: contextStateBeforeBoundary.transcriptTurns.map((turn) => turn.id),
+              transcriptTurns: contextStateBeforeBoundary.transcriptTurns,
+              effectiveRecords: effectiveQuestionSourceLedgerRef.current.list(),
+              activeMeetingTask: contextStateBeforeBoundary.activeMeetingTask,
+              logicalQuestionUnit: advisorJob.logicalQuestionUnit,
+              sessionId: contextStateBeforeBoundary.sessionId,
+              runtimeEpoch: runtimeEpochRef.current,
+            }) : undefined;
+        const handoffSourceTexts = new Map(handoffSources?.effectiveSourceTexts.map((source) => [source.turnId, source.text]));
         const parentContextHandoff =
           previousInterviewParent &&
           crossDomainTransitionDecision.kind === "linked-parent-extension"
             ? buildBoundedParentContextHandoff({
                 parent: previousInterviewParent,
+                parentSourceQuestion: previousParentSourceText,
                 sourceQuestionId:
                   questionLineage?.questionInstanceId ??
                   advisorJob.logicalQuestionUnit.id,
                 latestQuestionText:
                   advisorQuestionSemanticEvidenceText,
-                transcriptTurns: contextStateBeforeBoundary.transcriptTurns,
+                transcriptTurns: contextStateBeforeBoundary.transcriptTurns.flatMap((turn) => {
+                  const text = handoffSourceTexts.get(turn.id);
+                  return text === undefined ? [] : [{ ...turn, text }];
+                }),
                 boundaryTurnId:
                   advisorJob.logicalQuestionUnit.sourceTurnIds[0],
               })
@@ -13509,6 +13568,7 @@ export function useMeetingAssistant() {
           transientPersonalStatusDecision,
           sourceQuestion:
             advisorQuestionSemanticEvidenceText,
+          parentSourceQuestion: readEffectiveSemanticTask(postMutationActiveMeetingTask, advisorJob.logicalQuestionUnit)?.parent.topic,
           subtaskIntent: advisorTaskSignals.subtaskIntent,
           explicitTaskMutationCommand:
             manualPhaseAdvanceCommitted && committedPhaseTransition
@@ -14232,7 +14292,7 @@ export function useMeetingAssistant() {
       parentTopic:
         transientPersonalStatusDecision
           ? undefined
-          : effectiveAdvisorSettlementView.parent?.topic,
+          : readEffectiveSemanticTask(effectiveAdvisorActiveMeetingTask ?? settledExecutionPlan?.taskSnapshot, advisorJob.logicalQuestionUnit)?.parent.topic,
       relation:
         advisorContinuityRelation,
     });
@@ -15812,6 +15872,7 @@ export function useMeetingAssistant() {
       const continuity = continuityMutationAuthorized
         ? updateInterviewTaskContinuityForAnswer({
             existingTask: existingInterviewTask,
+            parentTopic: readEffectiveSemanticTask(contextManagerRef.current.getState().activeMeetingTask, advisorJob.logicalQuestionUnit)?.parent.topic,
             source: advisorEvidenceSource,
             questionType:
               options.artifactRegenerationTarget && existingInterviewTask
@@ -16984,6 +17045,7 @@ export function useMeetingAssistant() {
     aiProvider,
     buildAdvisorJob,
     buildEffectiveAdvisorBasePromptContext,
+    readEffectiveSemanticTask,
     finishRunningAdvisorJobTrace,
     finalizeStableAnswerPublication,
     finalizeAnswerRecoveryAdjudication,
@@ -21009,7 +21071,7 @@ export function useMeetingAssistant() {
       );
       const request = buildTaskRelationAdjudicationRequest({
         logicalQuestionUnit,
-        activeMeetingTask,
+        activeMeetingTask: readEffectiveSemanticTask(activeMeetingTask, logicalQuestionUnit)!,
         currentQuestion,
         recentTurns: contextState.transcriptTurns,
         ownerEvidenceSelection,
@@ -21060,7 +21122,7 @@ export function useMeetingAssistant() {
       );
       return handle;
     },
-    [scheduleTaskRelationSplitRuntime]
+    [scheduleTaskRelationSplitRuntime, readEffectiveSemanticTask]
   );
 
   const resolveOrderedTaskRelationWithinWindow = useCallback(
@@ -21332,7 +21394,7 @@ export function useMeetingAssistant() {
       );
       const relationText = buildSemanticInterviewerIntentRelationText({
         currentText: classifierText,
-        parent: activeParent,
+        parent: readEffectiveSemanticTask(contextState.activeMeetingTask, logicalQuestionUnit)?.parent,
       });
       const lexical = inferQuestionTypeDecisionFromText(classifierText, {
         interviewSessionBrief: contextState.interviewSessionBrief,
@@ -21627,6 +21689,7 @@ export function useMeetingAssistant() {
       recordSemanticEmbeddingRuntimeEvent,
       scheduleQuestionTypeAdjudication,
       scheduleTaskRelationAdjudication,
+      readEffectiveSemanticTask,
     ]
   );
 
@@ -23885,6 +23948,7 @@ export function useMeetingAssistant() {
         const speechBias = buildSpeechBiasContext(
           {
             ...speechBiasBaseContext,
+            activeMeetingTask: readEffectiveSemanticTask(speechBiasBaseContext.activeMeetingTask, logicalQuestionUnitRef.current),
             interviewSessionBrief:
               speechPreparation.effectiveInterviewBrief ??
               speechBiasBaseContext.interviewSessionBrief,
@@ -24584,6 +24648,7 @@ export function useMeetingAssistant() {
       processCanonicalTurnIngress,
       publishDisplayTranscriptRevision,
       readAudioSegmentCommitAuthorization,
+      readEffectiveSemanticTask,
       recordPreparationArtifactUse,
       selectedSttProvider,
       settleNativeAudioSegment,
@@ -27373,7 +27438,7 @@ export function useMeetingAssistant() {
                 .filter(Boolean)
                 .join("\n"),
               activeParentObjective:
-                preflightContextState.activeMeetingTask?.parent.topic,
+                readEffectiveSemanticTask(preflightContextState.activeMeetingTask, logicalQuestionUnitRef.current)?.parent.topic,
                 })
               : undefined;
           if (sourceLinkageRequest) {
@@ -27790,7 +27855,7 @@ export function useMeetingAssistant() {
           return buildAdvisorEvidencePacket({
             currentQuestion: screenSourcePacket.primaryAsk,
             activeMeetingTask: includeParentContinuity
-              ? contextState.activeMeetingTask
+              ? readEffectiveSemanticTask(contextState.activeMeetingTask, screenRelationLogicalQuestionUnit)
               : undefined,
             interviewSessionBrief:
               screenPreparationRuntime.effectiveInterviewBrief ??
@@ -27918,7 +27983,12 @@ export function useMeetingAssistant() {
                 preflightContextState.taskRuntime.screenAttachment
               )
             : undefined);
+        const screenRelationSourceTask = readEffectiveSemanticTask(
+          preflightContextState.activeMeetingTask, screenRelationLogicalQuestionUnit
+        );
         const screenTaskRelationDecision = decideScreenTaskRelation({
+          parentSourceText: screenRelationSourceTask?.parent.topic,
+          childSourceText: screenRelationSourceTask?.child?.question,
           existingTask:
             preflightContextState.taskRuntime.parent ??
             (preflightContextState.activeMeetingTask?.screen &&
@@ -28991,9 +29061,7 @@ export function useMeetingAssistant() {
             parentTopic:
               screenCurrentOnly
                 ? undefined
-                : screenExecutionContextState.activeMeetingTask?.parent
-                    .topic ??
-                  screenExecutionContextState.taskRuntime.parent?.topic,
+                : readEffectiveSemanticTask(screenExecutionContextState.activeMeetingTask, screenRelationLogicalQuestionUnit)?.parent.topic,
             relation: provisionalScreenTaskRelation,
             captureTitleFallback: observation.captureTarget?.title,
           });
@@ -29284,6 +29352,7 @@ export function useMeetingAssistant() {
           contextReadScopeOverride:
             effectiveScreenSettlementView.contextReadScope,
           sourceQuestion: screenPrimaryAskEvidenceText,
+          parentSourceQuestion: readEffectiveSemanticTask(screenExecutionContextState.activeMeetingTask, screenRelationLogicalQuestionUnit)?.parent.topic,
           subtaskIntent: screenSubtaskIntent,
           explicitTaskMutationCommand: screenPlanMutationCommand,
           taskMutationCommittedBeforeAdvisor: Boolean(
@@ -29616,7 +29685,7 @@ export function useMeetingAssistant() {
             activeMeetingTask:
               screenCurrentOnly
                 ? undefined
-                : screenExecutionContextState.activeMeetingTask,
+                : readEffectiveSemanticTask(screenExecutionContextState.activeMeetingTask, screenRelationLogicalQuestionUnit),
             responseOnlyParentReadContext:
               undefined,
             factAnchorDecision: screenFactAnchorDecision,
@@ -30393,6 +30462,7 @@ export function useMeetingAssistant() {
               }
             : updateInterviewTaskContinuityForAnswer({
             existingTask: existingInterviewTask,
+            parentTopic: readEffectiveSemanticTask(contextManagerRef.current.getState().activeMeetingTask, screenRelationLogicalQuestionUnit)?.parent.topic,
             source: "screen",
             questionType: settledScreenTaskKind,
             relation: screenContinuityRelation,
@@ -31361,6 +31431,7 @@ export function useMeetingAssistant() {
       recordPreparationPromptGuidanceUses,
       refreshRecordedCompletedTrace,
       readRuntimeCommitSnapshot,
+      readEffectiveSemanticTask,
       resolveOrderedTaskRelationWithinWindow,
       resolveMeetingModelRoute,
       scheduleSourceLinkageAdjudication,
@@ -31538,26 +31609,16 @@ export function useMeetingAssistant() {
             (turn) => turn.id === correctionLineage.triggerTurnId
           )
         : undefined;
-      const parentOriginTurn = activeTask?.parent.startTurnId
-        ? contextState.transcriptTurns.find(
-            (turn) => turn.id === activeTask.parent.startTurnId
-          )
-        : undefined;
+      const effectiveCorrectionTask = readEffectiveSemanticTask(activeTask, correctionLogicalQuestionUnit);
       const correctionQuestionText =
-        correctionLogicalQuestionUnit?.normalizedText ??
-        correctionOriginTurn?.text ??
-        state.latestSuggestion?.meetingAnswer?.sections.question ??
-        activeTask?.child?.question ??
-        activeTask?.screen?.question ??
-        activeTask?.parent.topic ??
-        "";
+        getLogicalQuestionSemanticEvidenceText(correctionLogicalQuestionUnit);
       let correctionScopeDecision = decideManualCorrectionScope({
         task: activeTask,
         decision,
         lineage: correctionLineage,
         latestQuestionText: correctionQuestionText,
         parentQuestionText:
-          parentOriginTurn?.text ?? activeTask?.parent.topic,
+          effectiveCorrectionTask?.parent.topic,
         classifierConfidence: activeTask?.screen?.classifierConfidence,
         currentQuestionMatchesParentOrigin: Boolean(
           correctionLineage?.sourceSuggestionId &&
@@ -32244,7 +32305,7 @@ export function useMeetingAssistant() {
           lineage: correctionLineage,
           latestQuestionText: correctionQuestionText,
           parentQuestionText:
-            parentOriginTurn?.text ?? activeTask?.parent.topic,
+            effectiveCorrectionTask?.parent.topic,
           classifierConfidence:
             activeTask?.screen?.classifierConfidence,
           currentQuestionMatchesParentOrigin:
@@ -32332,21 +32393,26 @@ export function useMeetingAssistant() {
             ? undefined
             : activeScreenTask?.classifier?.topicDomain
         );
-        const provisionalOriginTurn = correctionOriginTurn;
+        const correctionRecentSourceContext = resolveAuthorizedEffectiveSourceContext({
+          selectedSourceTurnIds: contextState.transcriptTurns.slice(-4).map((turn) => turn.id),
+          transcriptTurns: contextState.transcriptTurns,
+          effectiveRecords: effectiveQuestionSourceLedgerRef.current.list(),
+          activeMeetingTask: activeTask,
+          logicalQuestionUnit: correctionLogicalQuestionUnit,
+          sessionId: contextState.sessionId,
+          runtimeEpoch: runtimeEpochRef.current,
+        });
         const correctionQuery =
           startsNewParentBoundary || currentOnlyCorrection
           ? correctionQuestionText
           : [
-              activeTask?.child?.question,
-              activeTask?.screen?.question,
-              activeTask?.parent.topic,
-              provisionalOriginTurn?.text,
+              effectiveCorrectionTask?.child?.question,
+              effectiveCorrectionTask?.screen?.question,
+              effectiveCorrectionTask?.parent.topic,
+              correctionQuestionText,
               questionOnlyLineage
-                ? state.latestSuggestion?.meetingAnswer?.sections.question
-                : contextState.transcriptTurns
-                    .slice(-4)
-                    .map((turn) => turn.text)
-                    .join("\n"),
+                ? undefined
+                : correctionRecentSourceContext.transcriptProjection.transcript,
             ]
               .filter(Boolean)
               .join("\n");
@@ -32538,6 +32604,7 @@ export function useMeetingAssistant() {
             topicDomain: topicDomain ?? "unknown",
             projectAnchor: screenAfter?.classifier?.projectAnchor,
             sourceQuestion: correctionQuestionText,
+            parentSourceQuestion: effectiveCorrectionTask?.parent.topic,
             promptCurrentQuestionSourceHash:
               correctionCurrentQuestionSettlement.sourceHash,
             contextReadScopeOverride: "active-parent-read",
@@ -33126,6 +33193,7 @@ export function useMeetingAssistant() {
       flushPendingSentenceCompletion,
       readRuntimeCommitSnapshot,
       recordHumanGroundTruthV2,
+      readEffectiveSemanticTask,
       resolveOrderedTaskRelationWithinWindow,
       resolveMeetingModelRoute,
       runAdvisor,
@@ -35170,7 +35238,10 @@ export function useMeetingAssistant() {
         };
         const nextCorrections = installCorrection(correction);
         const speechBias = buildSpeechBiasContext(
-          contextState,
+          {
+            ...contextState,
+            activeMeetingTask: readEffectiveSemanticTask(contextState.activeMeetingTask, logicalQuestionUnitRef.current),
+          },
           nextCorrections
         );
         traceStoreRef.current.recordInput(
@@ -35273,7 +35344,7 @@ export function useMeetingAssistant() {
           activeParentType:
             activeParentBeforeCorrection?.questionType,
           normalizedTerm: application.transaction.normalizedTerm,
-          activeParentTopic: activeParentBeforeCorrection?.topic,
+          activeParentTopic: readEffectiveSemanticTask(contextState.activeMeetingTask, targetLogicalQuestionUnit)?.parent.topic,
         });
       const correctionOwnedOperationId =
         correctionOwnedTrigger.shouldAdjudicate
@@ -35362,7 +35433,10 @@ export function useMeetingAssistant() {
         activeQuestion: activeCorrection,
       };
       const nextCorrections = installCorrection(correction);
-      const speechBias = buildSpeechBiasContext(contextState, nextCorrections);
+      const speechBias = buildSpeechBiasContext({
+        ...contextState,
+        activeMeetingTask: readEffectiveSemanticTask(contextState.activeMeetingTask, application.logicalQuestionUnit),
+      }, nextCorrections);
       traceStoreRef.current.recordInput(
         trace.id,
         "speech bias context",
@@ -35846,7 +35920,7 @@ export function useMeetingAssistant() {
               decision: typeCorrectionDecision,
               lineage: correctedLineage,
               latestQuestionText: correctedSemanticEvidenceText,
-              parentQuestionText: latestParent.topic,
+              parentQuestionText: readEffectiveSemanticTask(latestTask, application.logicalQuestionUnit)?.parent.topic,
               classifierConfidence: 1,
               currentQuestionMatchesParentOrigin:
                 correctionTargetOwnsParentOrigin({
@@ -35983,6 +36057,7 @@ export function useMeetingAssistant() {
                     resettledScreenTask?.classifier
                       ?.projectAnchor,
                   sourceQuestion: correctedSemanticEvidenceText,
+                  parentSourceQuestion: readEffectiveSemanticTask(projectedActiveMeetingTask, application.logicalQuestionUnit)?.parent.topic,
                   promptCurrentQuestionSourceHash:
                     settledCorrection.sourceHash,
                   contextReadScopeOverride: "active-parent-read",
@@ -36369,6 +36444,7 @@ export function useMeetingAssistant() {
       runAdvisor,
       settleAwaitingVisualEvidenceRecovery,
       state.latestSuggestion,
+      readEffectiveSemanticTask,
     ]
   );
 
@@ -37906,7 +37982,6 @@ function formatAdvisorActiveTaskForQuery(
 
   if (context.taskRuntime.parent) {
     return [
-      `${label}: ${context.taskRuntime.parent.topic}`,
       `${label} type: ${context.taskRuntime.parent.stableKind}`,
       `${label} phase: ${context.taskRuntime.parent.playbookPhase}`,
       context.taskRuntime.parent.supportedFactAnchors.length
@@ -38423,12 +38498,13 @@ function buildStateUpdatedInterviewTask(
 }
 
 function updateInterviewTaskContinuityForAnswer({
-  existingTask, source, questionType, relation, finalContent, parsedAnswer,
+  existingTask, parentTopic, source, questionType, relation, finalContent, parsedAnswer,
   whiteboardRenderValidation, playbook, phaseDecision, observationId, traceId,
   whiteboardUpdateSource, selectedOverlayIds, expiresAt, supportedFactAnchors,
   projectBinding, artifactAuthorization, artifactIntent, deadlineCalculatedAt,
 }: {
   existingTask?: ActiveInterviewParent;
+  parentTopic?: string;
   source: "screen" | "voice";
   questionType: MemoryQuestionType | ScreenTaskKind;
   relation: InterviewTaskRelation;
@@ -38503,7 +38579,7 @@ function updateInterviewTaskContinuityForAnswer({
             parentTaskId: existingTask.id,
             questionInstanceId: existingTask.originQuestionId,
             parentQuestionType: existingTask.stableKind,
-            parentTopic: existingTask.topic,
+            parentTopic: parentTopic ?? "",
             finalContent: finalContent.trim(),
             parsedAnswer: parsed,
             phase: phaseDecision?.phase ?? nextPhase,
@@ -38692,6 +38768,8 @@ function buildCorrectionParentFromProvisionalQuestion({
 
 function decideScreenTaskRelation({
   existingTask,
+  parentSourceText,
+  childSourceText,
   taskKind,
   question,
   screenEvidenceText,
@@ -38701,6 +38779,8 @@ function decideScreenTaskRelation({
   exactVisualEvidenceRelation,
 }: {
   existingTask?: ActiveInterviewParent;
+  parentSourceText?: string;
+  childSourceText?: string;
   taskKind: ScreenTaskKind;
   question?: string;
   screenEvidenceText: string;
@@ -38785,10 +38865,10 @@ function decideScreenTaskRelation({
     .filter(Boolean)
     .join("\n");
   const parentText = [
-    existingTask.topic,
+    parentSourceText,
     existingTask.projectBinding?.projectName,
     existingTask.supportedFactAnchors.join(" "),
-    existingTask.child?.question,
+    childSourceText,
   ]
     .filter(Boolean)
     .join("\n");
