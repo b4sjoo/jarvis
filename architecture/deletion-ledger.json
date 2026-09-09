@@ -108,23 +108,31 @@
       ],
       "deletionGate": "Every user-visible quit entry freezes new work and settles native capture, recording, trace, and Focus-window participants before terminal exit.",
       "rollbackBoundary": "Task 162 coordinator wiring can roll back without changing participant state machines.",
-      "status": "candidate"
+      "status": "deleted",
+      "forbiddenPatterns": [
+        "pub fn exit_app(app_handle: tauri::AppHandle) {"
+      ]
     },
     {
       "id": "native-audio-split-control-state",
       "symbolOrSurface": "AudioState lifecycle represented by independently mutable locks and flags",
       "verdict": "migrate-then-delete",
       "ownerTaskId": 163,
-      "replacement": "transactional native audio control state with generation-owned cancellation tokens",
+      "replacement": "Existing NativeCaptureControl owns metadata, task slot and per-generation signals",
       "persistedDataImpact": "none",
       "proofCommands": [
         "npm run verify:architecture",
-        "cargo test",
-        "cargo check"
+        "cargo test --offline --manifest-path src-tauri/Cargo.toml speaker::",
+        "cargo check --offline --manifest-path src-tauri/Cargo.toml"
       ],
       "deletionGate": "All shared audio metadata transitions validate owner, session, and generation; stale completion cannot mutate current state.",
       "rollbackBoundary": "Task 163 control-state migration remains independent from VAD, STT, and recovery-policy changes.",
-      "status": "candidate"
+      "status": "deleted",
+      "forbiddenPatterns": [
+        "fn clear_capture_metadata",
+        "state.capture_stop_requested",
+        "state.stream_task"
+      ]
     },
     {
       "id": "recording-nontransactional-startup-publication",
@@ -140,7 +148,10 @@
       ],
       "deletionGate": "Failed startup leaves no visible partial session owner and preserves enough evidence for retry or cleanup.",
       "rollbackBoundary": "Task 126 staging and publication changes remain one independently revertible slice.",
-      "status": "candidate"
+      "status": "deleted",
+      "forbiddenPatterns": [
+        "const resetBoundary = await resetMeetingRuntimeForNewSession(\n        \"session-recording-started\""
+      ]
     },
     {
       "id": "recording-one-shot-terminal-manifest-close",
@@ -156,7 +167,10 @@
       ],
       "deletionGate": "Close failure preserves unresolved ownership and can retry without marking an incomplete recording complete.",
       "rollbackBoundary": "Task 127 close-state migration stays separate from Task 162 application shutdown orchestration.",
-      "status": "candidate"
+      "status": "deleted",
+      "forbiddenPatterns": [
+        "if (this.activeSession === session) {\n          this.activeSession = undefined;\n        }\n        this.lifecycle = \"idle\";"
+      ]
     },
     {
       "id": "mutable-preparation-extraction-output",
@@ -173,11 +187,15 @@
       ],
       "deletionGate": "Statements and snapshots pin an immutable extraction run; referenced runs cannot be overwritten or deleted.",
       "rollbackBoundary": "Task 164 schema, backfill, writer cutover, and old-output cleanup remain separate commits.",
-      "status": "candidate"
+      "status": "deleted",
+      "forbiddenPatterns": [
+        "discardPreviousOutput(",
+        "DELETE FROM preparation_material_chunks\n       WHERE material_revision_id = ? AND extraction_request_id <> ?"
+      ]
     },
     {
       "id": "destructive-curated-kmb-rebuild",
-      "symbolOrSurface": "Curated KMB rebuild deletes and recreates content behind stable logical identities",
+      "symbolOrSurface": "Curated KMB upsert replaces content and user policy behind stable logical identities",
       "verdict": "migrate-then-delete",
       "ownerTaskId": 165,
       "replacement": "staged immutable KMB content revisions with separate mutable policy",
@@ -187,8 +205,8 @@
         "npm run verify:architecture",
         "npm test"
       ],
-      "deletionGate": "Rebuild stages and validates a complete generation before activation, while snapshots pin exact revisions and hashes.",
-      "rollbackBoundary": "Task 165 revision schema, staged rebuild, activation, and destructive-path deletion remain separate commits.",
+      "deletionGate": "Publish complete immutable content revisions atomically, preserve existing user policy, and pin exact source revisions and hashes.",
+      "rollbackBoundary": "Task 165 immutable-content publication is separate from ranking, curation and Snapshot product policy.",
       "status": "candidate"
     },
     {
@@ -210,7 +228,7 @@
     },
     {
       "id": "best-effort-legacy-chat-startup-migration",
-      "symbolOrSurface": "Legacy localStorage chat migration deletes source after partial or parse failure",
+      "symbolOrSurface": "Automatic localStorage Chat History migration on application startup",
       "verdict": "delete",
       "ownerTaskId": 166,
       "replacement": "Existing SQLite Chat APIs without legacy automatic import",
