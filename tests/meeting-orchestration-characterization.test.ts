@@ -26,12 +26,7 @@ import {
   type RuntimeCommitSnapshot,
 } from "../src/lib/meeting/runtime-commit-authorization.js";
 import { createAuthorizedQuestionLineage } from "../src/lib/meeting/question-lineage.js";
-import type {
-  ActiveInterviewParent,
-  ActiveScreenTask,
-  AdvisorPromptContext,
-  TranscriptTurn,
-} from "../src/lib/meeting/types.js";
+import type { ActiveInterviewParent, ActiveScreenTask, TranscriptTurn } from "../src/lib/meeting/types.js";
 import {
   setTestActiveParent,
   setTestScreenAttachment,

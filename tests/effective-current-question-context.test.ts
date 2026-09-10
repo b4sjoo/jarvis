@@ -1,9 +1,12 @@
+import type { AdvisorPromptContext } from "../src/lib/meeting/meeting-context-contracts.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { applyActiveQuestionTermCorrection } from "../src/lib/meeting/active-question-term-correction.js";
-import { applyEffectiveCurrentQuestionContext } from "../src/lib/meeting/effective-current-question-context.js";
+import {
+  applyEffectiveCurrentQuestionContext,
+} from "../src/lib/meeting/effective-current-question-context.js";
 import type { LogicalQuestionUnit } from "../src/lib/meeting/logical-question-unit.js";
-import type { AdvisorPromptContext } from "../src/lib/meeting/types.js";
+
 
 test("isolates a current-only prompt without creating another task scope", () => {
   const projection = applyEffectiveCurrentQuestionContext({

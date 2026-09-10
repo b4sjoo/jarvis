@@ -1,4 +1,6 @@
-import type { ActiveMeetingTask } from "./active-meeting-task.js";
+import type { ActiveMeetingTask } from "./meeting-task-contracts.js";
+import type { AdvisorPromptContext } from "./meeting-context-contracts.js";
+
 import type {
   EffectiveQuestionSourceOwner,
   EffectiveQuestionSourceRecord,
@@ -10,7 +12,7 @@ import {
   type AuthorizedEffectiveSourceRecordIndex,
 } from "./authorized-effective-source-context.js";
 import { buildContinuityEvidence } from "./advisor-evidence-packet.js";
-import type { AdvisorPromptContext } from "./types.js";
+
 
 export interface EffectiveTaskSourceViewInput {
   task?: ActiveMeetingTask;

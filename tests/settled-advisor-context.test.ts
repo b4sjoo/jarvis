@@ -1,16 +1,15 @@
+import type { ActiveMeetingTask } from "../src/lib/meeting/meeting-task-contracts.js";
+import type { AdvisorPromptContext } from "../src/lib/meeting/meeting-context-contracts.js";
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { ActiveMeetingTask } from "../src/lib/meeting/active-meeting-task.js";
+
 import type { LogicalQuestionUnit } from "../src/lib/meeting/logical-question-unit.js";
 import {
   compileSettledAdvisorPromptContext as compileProductionSettledAdvisorPromptContext,
   formatSettledAdvisorContextCompilationForTrace,
   resolveSettledResponseActionContextSelection,
 } from "../src/lib/meeting/settled-advisor-context.js";
-import type {
-  AdvisorPromptContext,
-  TranscriptTurn,
-} from "../src/lib/meeting/types.js";
+import type { TranscriptTurn } from "../src/lib/meeting/types.js";
 import type { EffectiveQuestionSourceRecord } from "../src/lib/meeting/effective-question-source-ledger.js";
 
 function compileSettledAdvisorPromptContext(

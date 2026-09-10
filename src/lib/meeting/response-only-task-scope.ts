@@ -1,7 +1,8 @@
-import type { ActiveMeetingTask } from "./active-meeting-task.js";
+import type { ActiveMeetingTask } from "./meeting-task-contracts.js";
+import type { AdvisorPromptContext } from "./meeting-context-contracts.js";
+
 import type {
   AdvisorBoundedParentReadContext,
-  AdvisorPromptContext,
   InterviewPlaybookPhase,
   InterviewTaskRelation,
 } from "./types.js";

@@ -1,14 +1,12 @@
-import type { AnswerArtifactSection } from "./answer-generation-lease.js";
-import { normalizeCanonicalQuestionType } from "./task-taxonomy.js";
 import type {
+  ScreenPresentationArtifactAuthoritySource,
   InterviewSubtaskIntent,
   ParsedMeetingAnswer,
   ScreenQuestionType,
 } from "./types.js";
+import type { AnswerArtifactSection } from "./answer-generation-lease.js";
+import { normalizeCanonicalQuestionType } from "./task-taxonomy.js";
 
-export type ScreenPresentationArtifactAuthoritySource =
-  | "playbook-phase"
-  | "manual-screen";
 
 export interface ScreenPresentationArtifactAuthorityDecision {
   source: ScreenPresentationArtifactAuthoritySource;

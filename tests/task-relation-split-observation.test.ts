@@ -1,7 +1,15 @@
+import type { ActiveMeetingTask } from "../src/lib/meeting/meeting-task-contracts.js";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  appendFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import test from "node:test";
@@ -14,13 +22,23 @@ import * as admission from "../src/lib/meeting/runtime-inference-provider-admiss
 import * as route from "../src/lib/meeting/meeting-model-route.js";
 import * as taxonomy from "../src/lib/meeting/task-taxonomy.js";
 import { RuntimeInferenceOperationRuntime } from "../src/lib/meeting/runtime-inference-runtime.js";
-import { buildTaskRelationAdjudicationRequest, isRuntimeTaskRelation } from "../src/lib/meeting/task-relation-adjudication.js";
-import { buildTaskRelationAdjudicationReflectionReport } from "../src/lib/meeting/task-relation-adjudication-reflection.js";
-import { SessionRecordingManager, type SessionRecordingInvoke } from "../src/lib/meeting/session-recording.js";
+import {
+  buildTaskRelationAdjudicationRequest,
+  isRuntimeTaskRelation,
+} from "../src/lib/meeting/task-relation-adjudication.js";
+import {
+  buildTaskRelationAdjudicationReflectionReport,
+} from "../src/lib/meeting/task-relation-adjudication-reflection.js";
+import {
+  SessionRecordingManager,
+  type SessionRecordingInvoke,
+} from "../src/lib/meeting/session-recording.js";
 import { AIResponseEventBuilder } from "../src/lib/functions/ai-response-events.js";
-import { buildHumanEvaluationAttemptEvidenceIndexV2 } from "../src/lib/meeting/human-evaluation-attempt-projection.js";
+import {
+  buildHumanEvaluationAttemptEvidenceIndexV2,
+} from "../src/lib/meeting/human-evaluation-attempt-projection.js";
 import { MeetingTraceStore } from "../src/lib/meeting/trace.js";
-import type { ActiveMeetingTask } from "../src/lib/meeting/active-meeting-task.js";
+
 import type { LogicalQuestionUnit } from "../src/lib/meeting/logical-question-unit.js";
 import type { MeetingAssistantSettings } from "../src/lib/meeting/types.js";
 

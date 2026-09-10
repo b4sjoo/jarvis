@@ -1,3 +1,4 @@
+import { createMeetingId } from "./meeting-id.js";
 import {
   MeetingTrace,
   MeetingTraceExportTrigger,
@@ -6,7 +7,7 @@ import {
   MeetingTraceStatus,
   MeetingTraceStep,
 } from "./types.js";
-import { createMeetingId } from "./context-manager.js";
+
 import { invoke } from "@tauri-apps/api/core";
 
 const MAX_TRACE_ITEMS = 500;

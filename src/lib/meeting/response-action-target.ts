@@ -1,3 +1,4 @@
+import type { MeetingContextState } from "./meeting-context-contracts.js";
 import type { LogicalQuestionUnit } from "./logical-question-unit.js";
 import {
   selectLatestEffectiveQuestionSourceRecords,
@@ -5,7 +6,7 @@ import {
 } from "./effective-question-source-ledger.js";
 import type { MeetingPhaseOwner } from "./meeting-task-runtime-transition.js";
 import type { StableAnswerRevision } from "./stable-answer.js";
-import type { MeetingContextState } from "./types.js";
+
 import {
   createProvisionalCurrentQuestion,
   type CurrentQuestionSettlementDecision,

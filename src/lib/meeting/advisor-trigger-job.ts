@@ -1,14 +1,22 @@
+import { createMeetingId } from "./meeting-id.js";
+import type { PlaybookPhaseDecision } from "./playbook-phase-contracts.js";
+import type { AdvisorPromptContext } from "./meeting-context-contracts.js";
+import type {
+  AdvisorJobSource,
+  AdvisorGeneratedContinuityCapsule,
+  AdvisorRequestMode,
+  InterviewPlaybookPhase,
+  InterviewTaskRelation,
+  QuestionInstanceLineage,
+} from "./types.js";
 import type { AdvisorTurnIntentDecision } from "./advisor-turn-intent.js";
 import type {
   RefreshAuthorityDecision,
   RuntimeTypeAdjudicationOutputAuthority,
 } from "./answer-generation-lease.js";
-import { createMeetingId } from "./context-manager.js";
-import {
-  formatLogicalQuestionUnitForTrace,
-  type LogicalQuestionUnit,
-} from "./logical-question-unit.js";
-import type { PlaybookPhaseDecision } from "./playbook-phase.js";
+
+import { formatLogicalQuestionUnitForTrace, type LogicalQuestionUnit } from "./logical-question-unit.js";
+
 import {
   authorizeRuntimeCommit,
   createRuntimeCommitToken,
@@ -16,23 +24,7 @@ import {
   type RuntimeCommitSnapshot,
   type RuntimeCommitToken,
 } from "./runtime-commit-authorization.js";
-import type {
-  AdvisorGeneratedContinuityCapsule,
-  AdvisorPromptContext,
-  AdvisorRequestMode,
-  InterviewPlaybookPhase,
-  InterviewTaskRelation,
-  QuestionInstanceLineage,
-} from "./types.js";
 
-export type AdvisorJobSource =
-  | "live-turn"
-  | "regenerate"
-  | "response-action"
-  | "artifact-regeneration"
-  | "clarifying-answer"
-  | "manual-correction"
-  | "force-advise";
 
 export type AdvisorTaskMutationAuthority =
   | "input-evidence"

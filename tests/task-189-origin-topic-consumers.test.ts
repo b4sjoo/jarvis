@@ -1,24 +1,48 @@
+import type { AdvisorPromptContext } from "../src/lib/meeting/meeting-context-contracts.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { MeetingContextManager } from "../src/lib/meeting/context-manager.js";
-import { composeLogicalQuestionUnit, type LogicalQuestionUnit } from "../src/lib/meeting/logical-question-unit.js";
+import {
+  composeLogicalQuestionUnit,
+  type LogicalQuestionUnit,
+} from "../src/lib/meeting/logical-question-unit.js";
 import { applyActiveQuestionTermCorrection } from "../src/lib/meeting/active-question-term-correction.js";
 import { createProvisionalCurrentQuestion } from "../src/lib/meeting/current-question-settlement.js";
-import { EffectiveQuestionSourceLedger, type EffectiveQuestionSourceRecord } from "../src/lib/meeting/effective-question-source-ledger.js";
-import { projectEffectiveLogicalQuestionSources } from "../src/lib/meeting/logical-question-effective-projection.js";
-import { buildQuestionTypeAdjudicationRequest, buildQuestionTypeAdjudicationPrompts } from "../src/lib/meeting/question-type-adjudication.js";
-import { buildTaskRelationAffinityRequests, buildTaskRelationCanonicalShadowRequest } from "../src/lib/meeting/task-relation-split-shadow.js";
+import {
+  EffectiveQuestionSourceLedger,
+  type EffectiveQuestionSourceRecord,
+} from "../src/lib/meeting/effective-question-source-ledger.js";
+import {
+  projectEffectiveLogicalQuestionSources,
+} from "../src/lib/meeting/logical-question-effective-projection.js";
+import {
+  buildQuestionTypeAdjudicationRequest,
+  buildQuestionTypeAdjudicationPrompts,
+} from "../src/lib/meeting/question-type-adjudication.js";
+import {
+  buildTaskRelationAffinityRequests,
+  buildTaskRelationCanonicalShadowRequest,
+} from "../src/lib/meeting/task-relation-split-shadow.js";
 import { buildAdvisorEvidencePacket } from "../src/lib/meeting/advisor-evidence-packet.js";
 import { compileSettledAdvisorPromptContext } from "../src/lib/meeting/settled-advisor-context.js";
 import { buildAdvisorUserMessage } from "../src/lib/meeting/advisor-prompt.js";
 import { composePhaseNavigationPromptContext } from "../src/lib/meeting/phase-navigation-prompt-context.js";
 import { decideAdvisorScreenScope } from "../src/lib/meeting/screen-task-scope.js";
-import { createResponseOnlyTaskScope, formatBoundedParentReadContextForPrompt } from "../src/lib/meeting/response-only-task-scope.js";
+import {
+  createResponseOnlyTaskScope,
+  formatBoundedParentReadContextForPrompt,
+} from "../src/lib/meeting/response-only-task-scope.js";
 import { selectInterviewPlaybookForCommittedType } from "../src/lib/meeting/interview-playbook.js";
 import { projectEffectiveTaskSourceView } from "../src/lib/meeting/effective-task-source-view.js";
 import { setTestTaskRuntime } from "./helpers/meeting-task-runtime.js";
-import { buildTopicIntentInput, buildTopicRelationRequest, buildTopicSemanticContext, createTopicBaseBuilder, topicHookFunction } from "./helpers/task-189-topic-hook.js";
-import type { ActiveInterviewParent, AdvisorPromptContext, TranscriptTurn } from "../src/lib/meeting/types.js";
+import {
+  buildTopicIntentInput,
+  buildTopicRelationRequest,
+  buildTopicSemanticContext,
+  createTopicBaseBuilder,
+  topicHookFunction,
+} from "./helpers/task-189-topic-hook.js";
+import type { ActiveInterviewParent, TranscriptTurn } from "../src/lib/meeting/types.js";
 
 function turn(id: string, text: string, at: number): TranscriptTurn {
   return { id, text, speaker: "them", source: "system-audio", startedAt: at, endedAt: at + 100, isFinal: true };

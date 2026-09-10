@@ -1,3 +1,4 @@
+import type { ActiveMeetingTask } from "./meeting-task-contracts.js";
 import type {
   AdvisorCurrentQuestionEvidence,
   AdvisorEvidencePacket,
@@ -10,7 +11,7 @@ import type {
   InterviewSessionBrief,
   InterviewSessionContext,
 } from "./types.js";
-import type { ActiveMeetingTask } from "./active-meeting-task.js";
+
 import type { PreparationRuntimeBrief } from "../preparation/index.js";
 
 const MAX_CURRENT_QUESTION_CHARS = 4_000;

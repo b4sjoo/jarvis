@@ -64,24 +64,6 @@
         "src/lib/memory/retrieval.ts"
       ],
       [
-        "src/lib/meeting/active-meeting-task.ts",
-        "src/lib/meeting/adjacent-question-constraint.ts",
-        "src/lib/meeting/advisor-trigger-job.ts",
-        "src/lib/meeting/advisor-turn-intent.ts",
-        "src/lib/meeting/answer-generation-lease.ts",
-        "src/lib/meeting/context-manager.ts",
-        "src/lib/meeting/current-question-settlement.ts",
-        "src/lib/meeting/interview-section-transition.ts",
-        "src/lib/meeting/interview-session-context.ts",
-        "src/lib/meeting/interviewer-intent.ts",
-        "src/lib/meeting/logical-question-unit.ts",
-        "src/lib/meeting/playbook-phase.ts",
-        "src/lib/meeting/primary-ask-projection.ts",
-        "src/lib/meeting/runtime-commit-authorization.ts",
-        "src/lib/meeting/transcript-fusion.ts",
-        "src/lib/meeting/types.ts"
-      ],
-      [
         "src/pages/chats/components/View.tsx",
         "src/pages/chats/components/index.ts"
       ]
@@ -108,48 +90,6 @@
       "src/hooks/useCompletion.ts -> src/hooks/index.ts",
       "src/hooks/useSystemAudio.ts -> src/hooks/index.ts",
       "src/lib/database/memory.action.ts -> src/lib/memory/index.ts",
-      "src/lib/meeting/active-meeting-task.ts -> src/lib/meeting/types.ts",
-      "src/lib/meeting/adjacent-question-constraint.ts -> src/lib/meeting/transcript-fusion.ts",
-      "src/lib/meeting/adjacent-question-constraint.ts -> src/lib/meeting/types.ts",
-      "src/lib/meeting/advisor-trigger-job.ts -> src/lib/meeting/advisor-turn-intent.ts",
-      "src/lib/meeting/advisor-trigger-job.ts -> src/lib/meeting/answer-generation-lease.ts",
-      "src/lib/meeting/advisor-trigger-job.ts -> src/lib/meeting/context-manager.ts",
-      "src/lib/meeting/advisor-trigger-job.ts -> src/lib/meeting/logical-question-unit.ts",
-      "src/lib/meeting/advisor-trigger-job.ts -> src/lib/meeting/playbook-phase.ts",
-      "src/lib/meeting/advisor-trigger-job.ts -> src/lib/meeting/runtime-commit-authorization.ts",
-      "src/lib/meeting/advisor-trigger-job.ts -> src/lib/meeting/types.ts",
-      "src/lib/meeting/advisor-turn-intent.ts -> src/lib/meeting/adjacent-question-constraint.ts",
-      "src/lib/meeting/advisor-turn-intent.ts -> src/lib/meeting/playbook-phase.ts",
-      "src/lib/meeting/advisor-turn-intent.ts -> src/lib/meeting/transcript-fusion.ts",
-      "src/lib/meeting/answer-generation-lease.ts -> src/lib/meeting/advisor-trigger-job.ts",
-      "src/lib/meeting/answer-generation-lease.ts -> src/lib/meeting/advisor-turn-intent.ts",
-      "src/lib/meeting/answer-generation-lease.ts -> src/lib/meeting/context-manager.ts",
-      "src/lib/meeting/answer-generation-lease.ts -> src/lib/meeting/current-question-settlement.ts",
-      "src/lib/meeting/context-manager.ts -> src/lib/meeting/active-meeting-task.ts",
-      "src/lib/meeting/context-manager.ts -> src/lib/meeting/interview-session-context.ts",
-      "src/lib/meeting/context-manager.ts -> src/lib/meeting/transcript-fusion.ts",
-      "src/lib/meeting/context-manager.ts -> src/lib/meeting/types.ts",
-      "src/lib/meeting/current-question-settlement.ts -> src/lib/meeting/interviewer-intent.ts",
-      "src/lib/meeting/current-question-settlement.ts -> src/lib/meeting/logical-question-unit.ts",
-      "src/lib/meeting/current-question-settlement.ts -> src/lib/meeting/types.ts",
-      "src/lib/meeting/interview-section-transition.ts -> src/lib/meeting/context-manager.ts",
-      "src/lib/meeting/interview-session-context.ts -> src/lib/meeting/types.ts",
-      "src/lib/meeting/interviewer-intent.ts -> src/lib/meeting/advisor-turn-intent.ts",
-      "src/lib/meeting/interviewer-intent.ts -> src/lib/meeting/types.ts",
-      "src/lib/meeting/logical-question-unit.ts -> src/lib/meeting/advisor-turn-intent.ts",
-      "src/lib/meeting/logical-question-unit.ts -> src/lib/meeting/context-manager.ts",
-      "src/lib/meeting/logical-question-unit.ts -> src/lib/meeting/interview-section-transition.ts",
-      "src/lib/meeting/logical-question-unit.ts -> src/lib/meeting/primary-ask-projection.ts",
-      "src/lib/meeting/logical-question-unit.ts -> src/lib/meeting/types.ts",
-      "src/lib/meeting/playbook-phase.ts -> src/lib/meeting/active-meeting-task.ts",
-      "src/lib/meeting/playbook-phase.ts -> src/lib/meeting/answer-generation-lease.ts",
-      "src/lib/meeting/playbook-phase.ts -> src/lib/meeting/types.ts",
-      "src/lib/meeting/primary-ask-projection.ts -> src/lib/meeting/advisor-turn-intent.ts",
-      "src/lib/meeting/runtime-commit-authorization.ts -> src/lib/meeting/active-meeting-task.ts",
-      "src/lib/meeting/runtime-commit-authorization.ts -> src/lib/meeting/types.ts",
-      "src/lib/meeting/transcript-fusion.ts -> src/lib/meeting/types.ts",
-      "src/lib/meeting/types.ts -> src/lib/meeting/active-meeting-task.ts",
-      "src/lib/meeting/types.ts -> src/lib/meeting/playbook-phase.ts",
       "src/lib/memory/index.ts -> src/lib/memory/retrieval.ts",
       "src/lib/memory/retrieval.ts -> src/lib/database/memory.action.ts",
       "src/lib/storage/ai-providers.ts -> src/config/index.ts",
@@ -180,7 +120,66 @@
       "src/pages/app/components/meeting/whiteboard-mermaid-error.tsx",
       "src/pages/app/components/meeting/whiteboard-viewer.tsx"
     ],
-    "broadMeetingBarrelMaxConsumers": 7
+    "broadMeetingBarrelMaxConsumers": 7,
+    "acyclicModules": [
+      "src/lib/meeting/active-meeting-task.ts",
+      "src/lib/meeting/adjacent-question-constraint.ts",
+      "src/lib/meeting/advisor-trigger-job.ts",
+      "src/lib/meeting/advisor-turn-intent.ts",
+      "src/lib/meeting/answer-generation-lease.ts",
+      "src/lib/meeting/context-manager.ts",
+      "src/lib/meeting/current-question-settlement.ts",
+      "src/lib/meeting/interview-section-transition.ts",
+      "src/lib/meeting/interview-session-context.ts",
+      "src/lib/meeting/interviewer-intent.ts",
+      "src/lib/meeting/logical-question-unit.ts",
+      "src/lib/meeting/meeting-context-contracts.ts",
+      "src/lib/meeting/meeting-id.ts",
+      "src/lib/meeting/meeting-presentation-contracts.ts",
+      "src/lib/meeting/meeting-task-contracts.ts",
+      "src/lib/meeting/playbook-phase-contracts.ts",
+      "src/lib/meeting/playbook-phase.ts",
+      "src/lib/meeting/preparation-runtime-contracts.ts",
+      "src/lib/meeting/primary-ask-projection.ts",
+      "src/lib/meeting/runtime-commit-authorization.ts",
+      "src/lib/meeting/transcript-fusion.ts",
+      "src/lib/meeting/types.ts"
+    ],
+    "contractDependencies": {
+      "src/lib/meeting/types.ts": [
+        "src/lib/functions/ai-response-events.ts",
+        "src/lib/meeting/task-taxonomy.ts",
+        "src/lib/memory/types.ts",
+        "src/lib/preparation/snapshot-types.ts",
+        "src/lib/preparation/statement-types.ts",
+        "src/types/provider.type.ts"
+      ],
+      "src/lib/meeting/meeting-id.ts": [],
+      "src/lib/meeting/meeting-task-contracts.ts": [
+        "src/lib/meeting/meeting-task-runtime-transition.ts",
+        "src/lib/meeting/types.ts"
+      ],
+      "src/lib/meeting/playbook-phase-contracts.ts": [
+        "src/lib/meeting/meeting-task-runtime-transition.ts",
+        "src/lib/meeting/task-taxonomy.ts",
+        "src/lib/meeting/types.ts"
+      ],
+      "src/lib/meeting/meeting-context-contracts.ts": [
+        "src/lib/functions/ai-response-events.ts",
+        "src/lib/meeting/meeting-presentation-contracts.ts",
+        "src/lib/meeting/meeting-task-contracts.ts",
+        "src/lib/meeting/playbook-phase-contracts.ts",
+        "src/lib/meeting/preparation-runtime-contracts.ts",
+        "src/lib/meeting/types.ts",
+        "src/lib/memory/types.ts",
+        "src/types/completion.ts",
+        "src/types/provider.type.ts"
+      ],
+      "src/lib/meeting/meeting-presentation-contracts.ts": [],
+      "src/lib/meeting/preparation-runtime-contracts.ts": [
+        "src/lib/preparation/snapshot-types.ts"
+      ]
+    }
   },
   "ipc": {
     "registeredCommands": [

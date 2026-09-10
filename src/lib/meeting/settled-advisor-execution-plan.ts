@@ -1,14 +1,26 @@
+import type { ActiveMeetingTask } from "./meeting-task-contracts.js";
+import type {
+  WhiteboardFormatPreference,
+  EffectiveInterviewTaskRelation,
+  InterviewPlaybookPhase,
+  InterviewSubtaskIntent,
+  InterviewTaskRelation,
+  MeetingAnswerProfile,
+  PersonalEvidenceRequirement,
+  SelectedInterviewPlaybook,
+  TaskAskFrame,
+  TaskTopicDomain,
+  TransientPersonalStatusDecision,
+} from "./types.js";
 import type { MemoryUseCase } from "@/lib/memory/types";
 import type { AnswerArtifactSection } from "./answer-generation-lease.js";
-import type { ActiveMeetingTask } from "./active-meeting-task.js";
+
 import type {
   CurrentQuestionRelation,
   CurrentQuestionSettlementDecision,
   EffectiveCurrentQuestionSettlement,
 } from "./current-question-settlement.js";
-import {
-  resolveMeetingAnswerProfile,
-} from "./meeting-answer.js";
+import { resolveMeetingAnswerProfile } from "./meeting-answer.js";
 import {
   isCatalogInterviewPlaybookCompatible,
   selectCommittedInterviewPlaybookFromCatalog,
@@ -43,22 +55,8 @@ import {
   type CanonicalQuestionType,
 } from "./task-taxonomy.js";
 import { resolvePlaybookRequiredArtifacts } from "./playbook-phase.js";
-import {
-  resolveWhiteboardFormatPreference,
-  type WhiteboardFormatPreference,
-} from "./whiteboard-format-policy.js";
-import type {
-  EffectiveInterviewTaskRelation,
-  InterviewPlaybookPhase,
-  InterviewSubtaskIntent,
-  InterviewTaskRelation,
-  MeetingAnswerProfile,
-  PersonalEvidenceRequirement,
-  SelectedInterviewPlaybook,
-  TaskAskFrame,
-  TaskTopicDomain,
-  TransientPersonalStatusDecision,
-} from "./types.js";
+import { resolveWhiteboardFormatPreference } from "./whiteboard-format-policy.js";
+
 import type { MeetingPhaseOwner } from "./meeting-task-runtime-transition.js";
 
 export interface SettledAdvisorMemoryPolicy {

@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import {
   collectRustEmittedEvents,
   discoverArchitecture,
@@ -45,9 +48,59 @@ test("accepts the tracked architecture baseline", () => {
   assert.equal(result.metrics.taskWriterCallsites, 2);
   assert.equal(result.metrics.taskWriterModules, 1);
   assert.equal(result.metrics.liveLegacyImports, 0);
-  assert.equal(result.metrics.importCycles, 6);
-  assert.equal(result.metrics.importCycleEdges, 83);
+  assert.equal(result.metrics.importCycles, 5);
+  assert.equal(result.metrics.importCycleEdges, 41);
   assert.equal(result.metrics.frontendCommandsWithoutNativeRegistration, 1);
+});
+
+test("all retired Meeting cycles and moved contracts remain acyclic", () => {
+  const protectedModules = new Set(baselineContract.imports.acyclicModules);
+  assert.equal(protectedModules.has("src/lib/meeting/logical-question-unit.ts"), true);
+  assert.equal(protectedModules.has("src/lib/meeting/meeting-context-contracts.ts"), true);
+  assert.equal(baselineAnalysis.importCycles.some(group => group.some(file => protectedModules.has(file))), false);
+});
+
+for (const [name, source] of [
+  ["static type", 'import type { Runtime } from "./runtime"; export type State = Runtime;'],
+  ["inline type", 'export type State = import("./runtime").Runtime;'],
+  ["re-export", 'export type { Runtime as State } from "./runtime";'],
+  ["barrel", 'export * from "./index";'],
+  ["dynamic", 'export const load = () => import("./runtime");'],
+  ["require", 'export const load = () => require("./runtime");'],
+  ["computed module", 'export const load = (name: string) => import(name);'],
+  ["self import", 'export type State = import("./meeting-task-contracts").State;'],
+]) {
+  test(`contract boundaries reject ${name} dependency through actual source analysis`, () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "jarvis-contract-"));
+    try {
+      const directory = path.join(root, "src/lib/meeting");
+      fs.mkdirSync(directory, { recursive: true });
+      fs.mkdirSync(path.join(root, "src-tauri/src"), { recursive: true });
+      fs.writeFileSync(path.join(root, "src-tauri/src/lib.rs"), "");
+      fs.writeFileSync(path.join(directory, "meeting-task-contracts.ts"), source);
+      fs.writeFileSync(path.join(directory, "runtime.ts"), 'import type { State } from "./meeting-task-contracts"; export interface Runtime { state: State }');
+      fs.writeFileSync(path.join(directory, "index.ts"), 'export * from "./runtime";');
+      const analysis = discoverArchitecture(root);
+      const contract = structuredClone(baselineContract);
+      contract.repositoryRoot = root;
+      const result = evaluate({ analysis, contract });
+      expectFailure(result, "contract-dependency:");
+      if (name !== "computed module") {
+        assert.ok(analysis.importCycles.some(group => group.includes("src/lib/meeting/meeting-task-contracts.ts")));
+        expectFailure(result, "protected-module-cycle:");
+      }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
+test("the ID leaf cannot reacquire a Context Manager or Hook dependency", () => {
+  for (const target of ["src/lib/meeting/context-manager.ts", "src/hooks/useMeetingAssistant.ts"]) {
+    const analysis = structuredClone(baselineAnalysis);
+    analysis.importDependencies.push({ file: "src/lib/meeting/meeting-id.ts", target });
+    expectFailure(evaluate({ analysis }), "contract-dependency:");
+  }
 });
 
 test("rejects a task mutation from a new module", () => {

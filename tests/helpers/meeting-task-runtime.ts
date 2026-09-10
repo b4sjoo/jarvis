@@ -1,12 +1,7 @@
+import type { MeetingTaskDeadlineDelta } from "../../src/lib/meeting/meeting-task-contracts.js";
 import type { MeetingContextManager } from "../../src/lib/meeting/context-manager.js";
-import type {
-  ActiveInterviewParent,
-  ActiveScreenTask,
-} from "../../src/lib/meeting/types.js";
-import type {
-  MeetingTaskDeadlineDelta,
-  MeetingTaskRuntimeTransitionKind,
-} from "../../src/lib/meeting/active-meeting-task.js";
+import type { ActiveInterviewParent, ActiveScreenTask } from "../../src/lib/meeting/types.js";
+import type { MeetingTaskRuntimeTransitionKind } from "../../src/lib/meeting/active-meeting-task.js";
 
 let testMutationSequence = 0;
 

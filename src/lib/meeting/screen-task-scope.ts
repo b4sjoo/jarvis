@@ -1,7 +1,8 @@
-import type { AdvisorJobSource } from "./advisor-trigger-job";
+import type { AdvisorJobSource } from "./types.js";
+import type { AdvisorPromptContext } from "./meeting-context-contracts.js";
+
 import type {
   AdvisorCurrentQuestionEvidence,
-  AdvisorPromptContext,
   AdvisorRequestMode,
   InterviewTaskRelation,
   ScreenObservation,

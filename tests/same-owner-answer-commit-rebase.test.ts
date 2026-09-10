@@ -1,11 +1,18 @@
+import type { ActiveMeetingTask } from "../src/lib/meeting/meeting-task-contracts.js";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import test from "node:test";
 import ts from "typescript";
 import { authorizeAnswerGenerationLease } from "../src/lib/meeting/answer-generation-lease.js";
-import { authorizeRuntimeCommit, createRuntimeCommitToken } from "../src/lib/meeting/runtime-commit-authorization.js";
-import { authorizeSettledAdvisorExecutionPlan, buildSettledAdvisorExecutionPlan } from "../src/lib/meeting/settled-advisor-execution-plan.js";
-import type { ActiveMeetingTask } from "../src/lib/meeting/active-meeting-task.js";
+import {
+  authorizeRuntimeCommit,
+  createRuntimeCommitToken,
+} from "../src/lib/meeting/runtime-commit-authorization.js";
+import {
+  authorizeSettledAdvisorExecutionPlan,
+  buildSettledAdvisorExecutionPlan,
+} from "../src/lib/meeting/settled-advisor-execution-plan.js";
+
 import type { CurrentQuestionSettlementDecision } from "../src/lib/meeting/current-question-settlement.js";
 
 // Keep the former compensation test path, but exercise replacement behavior.

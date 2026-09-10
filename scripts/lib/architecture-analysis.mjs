@@ -79,7 +79,36 @@ export function discoverArchitecture(repositoryRoot = process.cwd()) {
     }
 
     visit(sourceFile, (node) => {
+      if (
+        ts.isImportTypeNode(node) &&
+        ts.isLiteralTypeNode(node.argument) &&
+        ts.isStringLiteral(node.argument.literal)
+      ) {
+        imports.push({
+          file: relativeFile,
+          specifier: node.argument.literal.text,
+          resolved: resolveSourceImport(
+            repositoryRoot,
+            absoluteFile,
+            node.argument.literal.text,
+            sourceFileSet
+          ),
+        });
+      }
       if (!ts.isCallExpression(node)) return;
+      if (
+        node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+        (ts.isIdentifier(node.expression) && node.expression.text === "require")
+      ) {
+        const specifier = node.arguments[0] && ts.isStringLiteral(node.arguments[0])
+          ? node.arguments[0].text
+          : "<computed-module>";
+        imports.push({
+          file: relativeFile,
+          specifier,
+          resolved: resolveSourceImport(repositoryRoot, absoluteFile, specifier, sourceFileSet),
+        });
+      }
       const location = sourceFile.getLineAndCharacterOfPosition(node.getStart());
       const callsite = {
         file: relativeFile,
@@ -155,7 +184,7 @@ export function discoverArchitecture(repositoryRoot = process.cwd()) {
 
   const importGraph = buildImportGraph(sourceFiles, imports, repositoryRoot);
   const cycles = findStronglyConnectedComponents(importGraph)
-    .filter((component) => component.length > 1)
+    .filter((component) => component.length > 1 || importGraph.get(component[0])?.has(component[0]))
     .map((component) => component.sort())
     .sort(compareStringArrays);
   const importCycleEdges = collectCycleEdges(importGraph, cycles);
@@ -167,6 +196,8 @@ export function discoverArchitecture(repositoryRoot = process.cwd()) {
   const rustAnalysis = analyzeRust(repositoryRoot, rustFiles);
 
   return {
+    importDependencies: imports
+      .map((entry) => ({ file: entry.file, target: entry.resolved ?? entry.specifier })),
     sourceFileCount: sourceFiles.length,
     rustFileCount: rustFiles.length,
     taskMutationCalls: sortCallsites(taskMutationCalls),
@@ -221,6 +252,7 @@ export function evaluateArchitectureAnalysis({ analysis, contract, ledger }) {
   validateTaskMutation(analysis, contract, errors);
   validateLegacyReaderImports(analysis, contract, errors);
   validateCycles(analysis, contract, errors);
+  validateDependencyBoundaries(analysis, contract, errors);
   validateBroadBarrel(analysis, contract, errors);
   validateIpc(analysis, contract, errors);
   validateDeletedPatterns(contract.repositoryRoot, ledger, errors);
@@ -660,6 +692,28 @@ function validateCycles(analysis, contract, errors) {
   const allowedEdges = new Set(contract.imports.allowedCycleEdges ?? []);
   for (const edge of analysis.importCycleEdges ?? []) {
     if (!allowedEdges.has(edge)) errors.push(`import-cycle-edge: ${edge}`);
+  }
+}
+
+function validateDependencyBoundaries(analysis, contract, errors) {
+  const protectedModules = new Set(contract.imports.acyclicModules ?? []);
+  for (const dependency of analysis.importDependencies ?? []) {
+    if (protectedModules.has(dependency.file) && dependency.target === "<computed-module>") {
+      errors.push(`protected-module-dynamic-import: ${dependency.file}`);
+    }
+  }
+  for (const cycle of analysis.importCycles) {
+    if (cycle.some((file) => protectedModules.has(file))) {
+      errors.push(`protected-module-cycle: ${cycle.join(" -> ")}`);
+    }
+  }
+  for (const [file, allowed] of Object.entries(contract.imports.contractDependencies ?? {})) {
+    const permitted = new Set(allowed);
+    for (const dependency of analysis.importDependencies ?? []) {
+      if (dependency.file === file && !permitted.has(dependency.target)) {
+        errors.push(`contract-dependency: ${file} cannot import ${dependency.target}`);
+      }
+    }
   }
 }
 

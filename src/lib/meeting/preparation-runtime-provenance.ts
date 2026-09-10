@@ -1,9 +1,8 @@
-import { createMeetingId } from "./context-manager.js";
-import type {
-  PreparationRuntimeArtifactRef,
-  PreparationRuntimeContext,
-  PreparationRuntimeProjection,
-} from "./preparation-runtime-context.js";
+import type { PreparationRuntimeArtifactRef, PreparationRuntimeContext, PreparationRuntimeProjection } from "./preparation-runtime-contracts.js";
+
+import { createMeetingId } from "./meeting-id.js";
+
+
 
 export const PREPARATION_RUNTIME_PROVENANCE_VERSION =
   "meeting-preparation-provenance-v1";

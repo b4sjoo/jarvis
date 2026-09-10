@@ -1,3 +1,5 @@
+import type { ActiveMeetingTask } from "./meeting-task-contracts.js";
+import { createMeetingId } from "./meeting-id.js";
 import { invoke } from "@tauri-apps/api/core";
 import { TYPE_PROVIDER } from "@/types";
 import type { MemoryRejectSummary, MemoryRetrievalResult } from "@/lib/memory";
@@ -16,7 +18,7 @@ import {
   TraceHumanEvaluation,
   TranscriptTurn,
 } from "./types";
-import type { ActiveMeetingTask } from "./active-meeting-task";
+
 import type { AnswerSufficiencyDecision } from "./answer-sufficiency.js";
 import {
   formatAdvisorHypothesisChallengeForTrace,
@@ -32,17 +34,9 @@ import {
   type CurrentQuestionSettlementDisposition,
   type ProvisionalCurrentQuestion,
 } from "./current-question-settlement.js";
-import {
-  normalizeRuntimeAdjudicationAuthorityLabel,
-} from "./runtime-adjudication-authority.js";
-import type {
-  CriticalMomentCandidate,
-  CriticalMomentEvaluation,
-} from "./critical-moment-evaluation.js";
-import type {
-  HumanEvaluationProjectionV2,
-  HumanGroundTruthEventV2,
-} from "./human-ground-truth-v2.js";
+import { normalizeRuntimeAdjudicationAuthorityLabel } from "./runtime-adjudication-authority.js";
+import type { CriticalMomentCandidate, CriticalMomentEvaluation } from "./critical-moment-evaluation.js";
+import type { HumanEvaluationProjectionV2, HumanGroundTruthEventV2 } from "./human-ground-truth-v2.js";
 import {
   buildHumanEvaluationProjectionMaterializationRevisionV2,
   HUMAN_EVALUATION_PROJECTION_MATERIALIZATION_SCHEMA_VERSION,
@@ -57,7 +51,7 @@ import {
   collectActiveMeetingTaskIdentityIds,
   formatActiveMeetingTaskForRecording,
 } from "./active-meeting-task.js";
-import { createMeetingId } from "./context-manager.js";
+
 import { readMeetingEvalTraceMetadata } from "./eval-trace-metadata.js";
 import {
   buildSessionTaskReviewIndex,

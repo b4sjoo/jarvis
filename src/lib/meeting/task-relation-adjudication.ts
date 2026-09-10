@@ -1,4 +1,5 @@
-import type { ActiveMeetingTask } from "./active-meeting-task.js";
+import type { ActiveMeetingTask } from "./meeting-task-contracts.js";
+
 import { isExplicitMeetingLogisticsTranscript } from "./meeting-logistics.js";
 import {
   createCurrentQuestionSourceSettlementId,
@@ -16,10 +17,7 @@ import {
   type TaxonomyAdjudicationProjection,
 } from "./taxonomy-adjudication.js";
 import { hasConstraintOrCorrectionSignal } from "./transcript-fusion.js";
-import type {
-  AdvisorSourceOwnedSemanticContext,
-  TranscriptTurn,
-} from "./types.js";
+import type { AdvisorSourceOwnedSemanticContext, TranscriptTurn } from "./types.js";
 
 export const TASK_RELATION_ADJUDICATION_SCHEMA_VERSION = 3;
 export const LEGACY_TASK_RELATION_ADJUDICATION_SCHEMA_VERSION = 2;

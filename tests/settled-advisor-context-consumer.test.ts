@@ -1,28 +1,66 @@
+import type { AdvisorPromptContext } from "../src/lib/meeting/meeting-context-contracts.js";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import test from "node:test";
 import ts from "typescript";
 import { MeetingContextManager } from "../src/lib/meeting/context-manager.js";
-import { composeLogicalQuestionUnit, type LogicalQuestionUnit } from "../src/lib/meeting/logical-question-unit.js";
+import {
+  composeLogicalQuestionUnit,
+  type LogicalQuestionUnit,
+} from "../src/lib/meeting/logical-question-unit.js";
 import { applyActiveQuestionTermCorrection } from "../src/lib/meeting/active-question-term-correction.js";
-import { createProvisionalCurrentQuestion, settleCurrentQuestion } from "../src/lib/meeting/current-question-settlement.js";
-import { createEffectiveQuestionSourceRecord, EffectiveQuestionSourceLedger, selectOwnerScopedRelationEvidence, type EffectiveQuestionSourceRecord } from "../src/lib/meeting/effective-question-source-ledger.js";
+import {
+  createProvisionalCurrentQuestion,
+  settleCurrentQuestion,
+} from "../src/lib/meeting/current-question-settlement.js";
+import {
+  createEffectiveQuestionSourceRecord,
+  EffectiveQuestionSourceLedger,
+  selectOwnerScopedRelationEvidence,
+  type EffectiveQuestionSourceRecord,
+} from "../src/lib/meeting/effective-question-source-ledger.js";
 import { buildEffectiveAdvisorSettlementView } from "../src/lib/meeting/settled-advisor-execution-plan.js";
-import { projectEffectiveLogicalQuestionSources, projectAdvisorTranscriptForLogicalQuestion } from "../src/lib/meeting/logical-question-effective-projection.js";
-import { compileSettledAdvisorPromptContext, formatSettledAdvisorContextCompilationForTrace, type SettledAdvisorContextCompilation } from "../src/lib/meeting/settled-advisor-context.js";
+import {
+  projectEffectiveLogicalQuestionSources,
+  projectAdvisorTranscriptForLogicalQuestion,
+} from "../src/lib/meeting/logical-question-effective-projection.js";
+import {
+  compileSettledAdvisorPromptContext,
+  formatSettledAdvisorContextCompilationForTrace,
+  type SettledAdvisorContextCompilation,
+} from "../src/lib/meeting/settled-advisor-context.js";
 import { buildAdvisorUserMessage } from "../src/lib/meeting/advisor-prompt.js";
-import { buildAdvisorEvidencePacket, buildAdvisorEvidenceRetrievalQuery } from "../src/lib/meeting/advisor-evidence-packet.js";
-import { appendSourceOwnedSetupCandidate, createSourceOwnedSetupCandidate, selectSourceOwnedSemanticContext } from "../src/lib/meeting/source-owned-semantic-context.js";
-import { composePhaseNavigationPromptContext, formatPhaseNavigationPromptMetricsForTrace, isPhaseNavigationAction } from "../src/lib/meeting/phase-navigation-prompt-context.js";
+import {
+  buildAdvisorEvidencePacket,
+  buildAdvisorEvidenceRetrievalQuery,
+} from "../src/lib/meeting/advisor-evidence-packet.js";
+import {
+  appendSourceOwnedSetupCandidate,
+  createSourceOwnedSetupCandidate,
+  selectSourceOwnedSemanticContext,
+} from "../src/lib/meeting/source-owned-semantic-context.js";
+import {
+  composePhaseNavigationPromptContext,
+  formatPhaseNavigationPromptMetricsForTrace,
+  isPhaseNavigationAction,
+} from "../src/lib/meeting/phase-navigation-prompt-context.js";
 import { resolveAdvisorScreenSourceRead } from "../src/lib/meeting/screen-task-scope.js";
 import { resolveResponseActionLogicalQuestionUnit } from "../src/lib/meeting/response-action-target.js";
 import { setTestTaskRuntime } from "./helpers/meeting-task-runtime.js";
 import { createEffectiveAdvisorBaseBuilder } from "./helpers/advisor-base-context-hook.js";
-import { projectBoundedGeneratedContinuityForTask, type BoundedGeneratedContinuityState } from "../src/lib/meeting/bounded-recent-history.js";
+import {
+  projectBoundedGeneratedContinuityForTask,
+  type BoundedGeneratedContinuityState,
+} from "../src/lib/meeting/bounded-recent-history.js";
 import { buildQuestionTypeAdjudicationRequest } from "../src/lib/meeting/question-type-adjudication.js";
 import { buildTaskRelationAdjudicationRequest } from "../src/lib/meeting/task-relation-adjudication.js";
-import type { ActiveInterviewParent, AdvisorPromptContext, AdvisorContextScopeSnapshot, AdvisorSourceOwnedSemanticContext, TranscriptTurn } from "../src/lib/meeting/types.js";
+import type {
+  ActiveInterviewParent,
+  AdvisorContextScopeSnapshot,
+  AdvisorSourceOwnedSemanticContext,
+  TranscriptTurn,
+} from "../src/lib/meeting/types.js";
 import type { AdvisorContextReadScope } from "../src/lib/meeting/advisor-context-read-scope.js";
 
 // Execute the production construction block, then its actual prompt/query consumers.

@@ -1,7 +1,7 @@
 {
   "$schema": "./deletion-ledger.schema.json",
   "version": 1,
-  "updatedAt": "2026-09-09",
+  "updatedAt": "2026-09-10",
   "entries": [
     {
       "id": "authorized-source-raw-window-intersection",
@@ -10,11 +10,16 @@
       "ownerTaskId": 189,
       "replacement": "Shared bounded effective-source resolution with latest-before-owner selection and explicit scope",
       "persistedDataImpact": "none",
-      "proofCommands": ["npm test", "npm run verify:architecture"],
+      "proofCommands": [
+        "npm test",
+        "npm run verify:architecture"
+      ],
       "deletionGate": "Actual Manager pruning, ledger, final consumer, partial-scope and Screen-origin tests pass; missing and rejected records cannot restore stale text.",
       "rollbackBoundary": "Source reader, origin read view and consumers form one contract; raw evidence and ledger retention are unchanged.",
       "status": "deleted",
-      "forbiddenPatterns": ["(turn) => selectedIds.has(turn.id) && turn.contextPromptEligible !== false"]
+      "forbiddenPatterns": [
+        "(turn) => selectedIds.has(turn.id) && turn.contextPromptEligible !== false"
+      ]
     },
     {
       "id": "live-canonical-topic-semantic-fallbacks",
@@ -23,11 +28,18 @@
       "ownerTaskId": 189,
       "replacement": "Read-only origin-source topic projection; original snapshots remain structural or historical",
       "persistedDataImpact": "none",
-      "proofCommands": ["npm test", "npm run verify:next-major"],
+      "proofCommands": [
+        "npm test",
+        "npm run verify:next-major"
+      ],
       "deletionGate": "Consumer inventory and real Type, Relation, Advisor, phase and Screen serialization tests prove effective text and unchanged canonical task state.",
       "rollbackBoundary": "Do not restore a topic mutation or output writer as a fallback; migrate the semantic read contract together.",
       "status": "deleted",
-      "forbiddenPatterns": ["query: task.parent.topic,", "parentQuestionText: latestParent.topic,", "parentTopic: existingTask.topic,"]
+      "forbiddenPatterns": [
+        "query: task.parent.topic,",
+        "parentQuestionText: latestParent.topic,",
+        "parentTopic: existingTask.topic,"
+      ]
     },
     {
       "id": "per-turn-effective-group-reselection",
@@ -36,11 +48,16 @@
       "ownerTaskId": 189,
       "replacement": "One construction-local source index; independent consumers retain their authorized scopes",
       "persistedDataImpact": "none",
-      "proofCommands": ["npm test", "npm run verify:architecture"],
+      "proofCommands": [
+        "npm test",
+        "npm run verify:architecture"
+      ],
       "deletionGate": "Group and Response Opportunity composition tests prove one selection and synchronous projection reuse without a global cache.",
       "rollbackBoundary": "Source-group computation is independent of output ownership and does not change source authority.",
       "status": "deleted",
-      "forbiddenPatterns": ["projection: projectEffectiveTextForSourceTurn("]
+      "forbiddenPatterns": [
+        "projection: projectEffectiveTextForSourceTurn("
+      ]
     },
     {
       "id": "generated-answer-task-writeback",
@@ -50,11 +67,18 @@
       "replacement": "Bounded output-owned continuity and single Context Manager deadline control through shared publication",
       "persistedDataImpact": "recording",
       "historicalReader": "Existing recording readers retain historical metadata; live producers use the current output contract",
-      "proofCommands": ["npm test", "npm run verify:next-major"],
+      "proofCommands": [
+        "npm test",
+        "npm run verify:next-major"
+      ],
       "deletionGate": "Real Voice, Screen and pending publication preserve pure-answer task revisions; stale output, deadline rollback and branch context tests pass.",
       "rollbackBoundary": "Task payload, deadline control, output writer and generated-context consumers migrate as one coherent contract; no live dual write.",
       "status": "deleted",
-      "forbiddenPatterns": ["commitVisibleUsefulAnswerToParent", "trySameOwnerAnswerCommitRebase", "function buildActiveInterviewChild("]
+      "forbiddenPatterns": [
+        "commitVisibleUsefulAnswerToParent",
+        "trySameOwnerAnswerCommitRebase",
+        "function buildActiveInterviewChild("
+      ]
     },
     {
       "id": "task-runtime-legacy-active-screen-root",
@@ -261,7 +285,11 @@
       "deletionGate": "Publish complete immutable content revisions atomically, preserve existing user policy, and pin exact source revisions and hashes.",
       "rollbackBoundary": "Task 165 immutable-content publication is separate from ranking, curation and Snapshot product policy.",
       "status": "deleted",
-      "forbiddenPatterns": ["buildUpsertMemoryEntryStatement", "buildUpsertMemorySourceStatement", "buildCuratedMemoryRebuildRetentionPlan"]
+      "forbiddenPatterns": [
+        "buildUpsertMemoryEntryStatement",
+        "buildUpsertMemorySourceStatement",
+        "buildCuratedMemoryRebuildRetentionPlan"
+      ]
     },
     {
       "id": "unversioned-preparation-snapshot-envelope",
@@ -279,7 +307,9 @@
       "deletionGate": "Snapshot activation revalidates every pinned revision and hash inside the final database transaction.",
       "rollbackBoundary": "Task 165 envelope migration and activation cutover remain independently revertible.",
       "status": "deleted",
-      "forbiddenPatterns": ["stablePreparationHash(entry.content)"]
+      "forbiddenPatterns": [
+        "stablePreparationHash(entry.content)"
+      ]
     },
     {
       "id": "best-effort-legacy-chat-startup-migration",
@@ -394,6 +424,27 @@
         "requestTaskRelationAdjudication({",
         "initialNarrowScreenRelease",
         "taskRelationHandle.outcome"
+      ]
+    },
+    {
+      "id": "meeting-dependency-contract-ownership",
+      "symbolOrSurface": "Meeting state and phase declarations exported by implementation modules, and identity generation imported from Context Manager",
+      "verdict": "migrate-then-delete",
+      "ownerTaskId": 190,
+      "replacement": "Single data contract owners, dependency-free meeting ID leaf and guarded acyclic Meeting boundary",
+      "persistedDataImpact": "none",
+      "proofCommands": [
+        "npm test",
+        "npm run verify:architecture",
+        "npm run verify:next-major"
+      ],
+      "deletionGate": "Actual source analysis rejects static, inline-type, barrel, dynamic and self cycles; moved declarations and executable statements preserve baseline semantics and real consumers pass.",
+      "rollbackBoundary": "Declaration/import movement and its guard ratchet form one behavior-neutral migration; no user data changes.",
+      "status": "deleted",
+      "forbiddenPatterns": [
+        "import { createMeetingId } from \"./context-manager",
+        "import type { PlaybookPhaseDecision } from \"./playbook-phase.js\"",
+        "import type { ActiveMeetingTask } from \"./active-meeting-task.js\""
       ]
     }
   ]

@@ -1,4 +1,6 @@
-import { createMeetingId } from "./context-manager.js";
+import { createMeetingId } from "./meeting-id.js";
+import type { PlaybookPhaseDecision } from "./playbook-phase-contracts.js";
+
 import {
   createProvisionalCurrentQuestion,
   decideCurrentQuestionMutationAuthority,
@@ -14,15 +16,10 @@ import {
   getLogicalQuestionSemanticEvidenceText,
   type LogicalQuestionUnit,
 } from "./logical-question-unit.js";
-import type {
-  ResponseOpportunityGenerationGateSnapshot,
-} from "./response-opportunity-generation-gate.js";
+import type { ResponseOpportunityGenerationGateSnapshot } from "./response-opportunity-generation-gate.js";
 import { resolveResponseOpportunityEffectiveCommand } from "./response-opportunity-generation-gate.js";
 import { buildResponseOpportunityRequest } from "./response-opportunity-contract.js";
-import {
-  applyPlaybookPhaseDecisionToProgress,
-  type PlaybookPhaseDecision,
-} from "./playbook-phase.js";
+import { applyPlaybookPhaseDecisionToProgress } from "./playbook-phase.js";
 import {
   isParentCanonicalQuestionType,
   normalizeCanonicalQuestionType,

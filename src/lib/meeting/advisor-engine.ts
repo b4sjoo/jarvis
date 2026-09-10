@@ -1,12 +1,8 @@
+import type { MeetingAdvisorRequest } from "./meeting-context-contracts.js";
 import { fetchAIResponseEvents } from "@/lib/functions";
 import type { AIResponseTerminalOutcome } from "@/lib/functions/ai-response-events";
 import { Message } from "@/types";
-import {
-  AdvisorSuggestion,
-  MeetingAdvisorRequest,
-  ParsedMeetingAnswer,
-  TranscriptTurn,
-} from "./types";
+import { AdvisorSuggestion, ParsedMeetingAnswer, TranscriptTurn } from "./types";
 import { buildAdvisorSystemPrompt, buildAdvisorUserMessage } from "./advisor-prompt";
 import { parseMeetingAnswer } from "./meeting-answer.js";
 import {

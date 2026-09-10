@@ -1,3 +1,5 @@
+import type { AdvisorPromptContext, MeetingContextState } from "../src/lib/meeting/meeting-context-contracts.js";
+
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
@@ -9,10 +11,20 @@ import { projectActiveMeetingTask } from "../src/lib/meeting/active-meeting-task
 import { decideAdvisorTurnIntent } from "../src/lib/meeting/advisor-turn-intent.js";
 import { compileSettledAdvisorPromptContext } from "../src/lib/meeting/settled-advisor-context.js";
 import { composeExpandedAdvisorPromptContext } from "../src/lib/meeting/context-scope-response-action.js";
-import { composeCanonicalTurnCandidate, type LogicalQuestionUnit } from "../src/lib/meeting/logical-question-unit.js";
+import {
+  composeCanonicalTurnCandidate,
+  type LogicalQuestionUnit,
+} from "../src/lib/meeting/logical-question-unit.js";
 import { selectInterviewPlaybook } from "../src/lib/meeting/interview-playbook.js";
-import { createEffectiveQuestionSourceRecord, EffectiveQuestionSourceLedger, selectOwnerScopedRelationEvidence } from "../src/lib/meeting/effective-question-source-ledger.js";
-import { createProvisionalCurrentQuestion, settleCurrentQuestion } from "../src/lib/meeting/current-question-settlement.js";
+import {
+  createEffectiveQuestionSourceRecord,
+  EffectiveQuestionSourceLedger,
+  selectOwnerScopedRelationEvidence,
+} from "../src/lib/meeting/effective-question-source-ledger.js";
+import {
+  createProvisionalCurrentQuestion,
+  settleCurrentQuestion,
+} from "../src/lib/meeting/current-question-settlement.js";
 import { buildEffectiveAdvisorSettlementView } from "../src/lib/meeting/settled-advisor-execution-plan.js";
 import { buildQuestionTypeAdjudicationRequest } from "../src/lib/meeting/question-type-adjudication.js";
 import {
@@ -27,13 +39,10 @@ import {
 } from "../src/lib/meeting/source-owned-transition-transaction.js";
 import { buildTaskRelationAdjudicationRequest } from "../src/lib/meeting/task-relation-adjudication.js";
 import { decideOrderedTaskRelationResolution } from "../src/lib/meeting/task-relation-split-shadow.js";
-import type {
-  ActiveInterviewParent,
-  AdvisorPromptContext,
-  MeetingContextState,
-  TranscriptTurn,
-} from "../src/lib/meeting/types.js";
-import { recentSourceContextRuntimeScenarios as scenarios } from "./fixtures/recent-source-context-runtime-scenarios.js";
+import type { ActiveInterviewParent, TranscriptTurn } from "../src/lib/meeting/types.js";
+import {
+  recentSourceContextRuntimeScenarios as scenarios,
+} from "./fixtures/recent-source-context-runtime-scenarios.js";
 
 test("same-type substantive turns keep independent LQU identity inside 45 seconds", () => {
   const first = composeCanonicalTurnCandidate({

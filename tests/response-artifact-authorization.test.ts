@@ -1,3 +1,4 @@
+import type { ActiveMeetingTask } from "../src/lib/meeting/meeting-task-contracts.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
@@ -9,7 +10,7 @@ import {
   projectResponseArtifactAuthorizationForGeneration,
   resolveAdvisorGenerationRequestedArtifacts,
 } from "../src/lib/meeting/response-artifact-authorization.js";
-import type { ActiveMeetingTask } from "../src/lib/meeting/active-meeting-task.js";
+
 import { decideManualNextPhaseTransition } from "../src/lib/meeting/playbook-phase.js";
 
 test("requires settled Coding type and explicit complexity language", () => {

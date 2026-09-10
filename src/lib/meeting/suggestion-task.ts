@@ -1,5 +1,7 @@
-import type { ActiveMeetingTask } from "./active-meeting-task";
-import type { AdvisorSuggestion, MeetingAssistantState } from "./types";
+import type { ActiveMeetingTask } from "./meeting-task-contracts.js";
+import type { MeetingAssistantState } from "./meeting-context-contracts.js";
+
+import type { AdvisorSuggestion } from "./types";
 import { normalizeCanonicalQuestionType } from "./task-taxonomy.js";
 
 export type AdvisorSuggestionTaskMetadata = Pick<

@@ -1,10 +1,7 @@
+import type { AdvisorPromptContext } from "./meeting-context-contracts.js";
 import { formatActiveMeetingTaskForPrompt } from "./active-meeting-task.js";
 import { parseMeetingAnswer } from "./meeting-answer.js";
-import type {
-  AdvisorEvidencePacket,
-  AdvisorPromptContext,
-  MeetingResponseActionMode,
-} from "./types.js";
+import type { AdvisorEvidencePacket, MeetingResponseActionMode } from "./types.js";
 
 const MAX_CURRENT_QUESTION_CHARS = 2_400;
 const MAX_SCREEN_QUESTION_CHARS = 2_400;

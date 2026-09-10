@@ -1,4 +1,11 @@
 import type {
+  PreparationKmbEvidenceHint,
+  PreparationQuestionTypePrior,
+  PreparationRuntimeContext,
+  PreparationRuntimeProjection,
+} from "./preparation-runtime-contracts.js";
+
+import type {
   PreparationEvidenceItem,
   PreparationNarrativePackGraph,
   PreparationNarrativePackNode,
@@ -23,12 +30,7 @@ import {
   type QuestionTypePriorObservation,
 } from "./question-type-consumer-observation.js";
 import { readInterviewBriefType } from "./task-taxonomy.js";
-import type {
-  PreparationKmbEvidenceHint,
-  PreparationQuestionTypePrior,
-  PreparationRuntimeContext,
-  PreparationRuntimeProjection,
-} from "./preparation-runtime-context.js";
+
 
 export interface PreparationRuntimeReinforcement {
   enabled: boolean;

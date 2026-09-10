@@ -1,3 +1,4 @@
+import type { AnswerDeliveryPresentation } from "./meeting-presentation-contracts.js";
 import type {
   ClarifyingQuestionAnswer,
   ClarifyingQuestionOption,
@@ -11,7 +12,7 @@ import type {
 import type { getActiveMeetingTaskFocusSummary } from "./active-meeting-task";
 import type { CanonicalQuestionType } from "./task-taxonomy";
 import type { NativeAudioPauseResumeControlPresentation } from "./native-audio-lifecycle";
-import type { AnswerDeliveryPresentation } from "./stable-answer";
+
 
 export const MEETING_FOCUS_SNAPSHOT_EVENT = "meeting-focus-snapshot";
 export const MEETING_FOCUS_ACTION_EVENT = "meeting-focus-action";

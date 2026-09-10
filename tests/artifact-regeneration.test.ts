@@ -1,3 +1,4 @@
+import type { ActiveMeetingTask } from "../src/lib/meeting/meeting-task-contracts.js";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
@@ -7,7 +8,7 @@ import {
   prepareCanonicalWhiteboardRegeneration,
   resolveArtifactRegenerationTarget,
 } from "../src/lib/meeting/artifact-regeneration.js";
-import type { ActiveMeetingTask } from "../src/lib/meeting/active-meeting-task.js";
+
 import type { StableAnswerRevision } from "../src/lib/meeting/stable-answer.js";
 import type { CurrentQuestionSettlementDecision } from "../src/lib/meeting/current-question-settlement.js";
 import type { ActiveInterviewParent } from "../src/lib/meeting/types.js";

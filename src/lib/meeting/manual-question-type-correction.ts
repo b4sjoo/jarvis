@@ -1,4 +1,5 @@
-import type { ActiveMeetingTask } from "./active-meeting-task";
+import type { ActiveMeetingTask } from "./meeting-task-contracts.js";
+
 import { preserveOrCreateCodingChildPhaseState } from "./coding-child-phase.js";
 import type {
   CurrentQuestionRelation,

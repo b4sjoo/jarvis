@@ -1,3 +1,7 @@
+import { createMeetingId } from "./meeting-id.js";
+import type { PlaybookPhaseDecision } from "./playbook-phase-contracts.js";
+import type { ActiveMeetingTask } from "./meeting-task-contracts.js";
+import type { WhiteboardFormatPreference } from "./types.js";
 import { invoke } from "@tauri-apps/api/core";
 import { fetchAIResponseEvents } from "@/lib/functions";
 import type { AIResponseExecutionIdentityInput } from "../functions/ai-response-events.js";
@@ -22,22 +26,16 @@ import {
   TaskTopicDomain,
 } from "./types";
 import { formatAdvisorEvidencePacketForPrompt } from "./advisor-evidence-packet";
-import { createMeetingId } from "./context-manager";
+
 import {
   formatInterviewSessionBriefForPrompt,
   formatInterviewSessionContextForPrompt,
 } from "./interview-session-context";
-import {
-  formatInterviewPlaybookForPrompt,
-  withInterviewPlaybookPhase,
-} from "./interview-playbook";
+import { formatInterviewPlaybookForPrompt, withInterviewPlaybookPhase } from "./interview-playbook";
 import { formatFactAnchorDecisionForPrompt } from "./fact-anchor-guardrail";
 import { formatProjectBindingDecisionForPrompt } from "./project-binding";
-import {
-  formatPlaybookPhaseDecisionForPrompt,
-  type PlaybookPhaseDecision,
-} from "./playbook-phase";
-import type { ActiveMeetingTask } from "./active-meeting-task";
+import { formatPlaybookPhaseDecisionForPrompt } from "./playbook-phase";
+
 import { parseMeetingAnswer } from "./meeting-answer";
 import {
   resolveScreenPreflightQuestionTypeAuthority,
@@ -48,7 +46,7 @@ import {
   normalizeProgrammingLanguageName,
 } from "./programming-language";
 import { formatBoundedParentReadContextForPrompt } from "./response-only-task-scope";
-import type { WhiteboardFormatPreference } from "./whiteboard-format-policy";
+
 import {
   formatCapacityEstimationGuardrailForPrompt,
   resolveCapacityEstimationGuardrail,

@@ -1,3 +1,4 @@
+import type { AdvisorPromptContext } from "./meeting-context-contracts.js";
 import type { AdvisorContextReadScope } from "./advisor-context-read-scope.js";
 import type { LogicalQuestionUnit } from "./logical-question-unit.js";
 import type { AdvisorTranscriptProjection } from "./logical-question-effective-projection.js";
@@ -6,12 +7,14 @@ import {
   indexAuthorizedEffectiveSourceRecords,
   resolveAuthorizedEffectiveSourceContext,
 } from "./authorized-effective-source-context.js";
-import { projectEffectiveAdvisorTaskContext, projectEffectiveTaskSourceView } from "./effective-task-source-view.js";
+import {
+  projectEffectiveAdvisorTaskContext,
+  projectEffectiveTaskSourceView,
+} from "./effective-task-source-view.js";
 import type { ScreenScopeDecision } from "./screen-task-scope.js";
 import type {
   AdvisorContextScopeSnapshot,
   AdvisorEvidencePacket,
-  AdvisorPromptContext,
   AdvisorSourceOwnedSemanticContext,
   TranscriptTurn,
 } from "./types.js";

@@ -1,6 +1,7 @@
+import type { AdvisorPromptContext } from "./meeting-context-contracts.js";
 import type { LogicalQuestionUnit } from "./logical-question-unit.js";
 import { projectEffectiveLogicalQuestionSources } from "./logical-question-effective-projection.js";
-import type { AdvisorPromptContext } from "./types.js";
+
 
 export function applyEffectiveCurrentQuestionContext(input: {
   context: AdvisorPromptContext;

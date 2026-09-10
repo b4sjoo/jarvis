@@ -1,9 +1,10 @@
+import type { ActiveMeetingTask } from "./meeting-task-contracts.js";
 import type {
   MemoryOverlaySelectionSummary,
   MemoryRejectReason,
   MemoryRejectSummary,
 } from "@/lib/memory";
-import type { ActiveMeetingTask } from "./active-meeting-task";
+
 
 export const MEETING_EVAL_TRACE_KEYS = {
   whiteboardArtifactId: "whiteboardArtifactId",

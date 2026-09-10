@@ -1,17 +1,8 @@
-import {
-  buildActiveMeetingTask,
-  validateTaskTransitionFieldChanges,
-  type ActiveMeetingTask,
-} from "./active-meeting-task.js";
+import type { ActiveMeetingTask } from "./meeting-task-contracts.js";
+import { buildActiveMeetingTask, validateTaskTransitionFieldChanges } from "./active-meeting-task.js";
 import type { SettledAdvisorExecutionPlan } from "./settled-advisor-execution-plan.js";
-import {
-  areCompatibleParentContinuityTypes,
-  normalizeCanonicalQuestionType,
-} from "./task-taxonomy.js";
-import type {
-  ActiveInterviewParent,
-  ActiveScreenTask,
-} from "./types.js";
+import { areCompatibleParentContinuityTypes, normalizeCanonicalQuestionType } from "./task-taxonomy.js";
+import type { ActiveInterviewParent, ActiveScreenTask } from "./types.js";
 
 export interface TaskLifecycleTransaction {
   id: string;

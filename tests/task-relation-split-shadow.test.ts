@@ -1,11 +1,10 @@
+import type { ActiveMeetingTask } from "../src/lib/meeting/meeting-task-contracts.js";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
-import type { ActiveMeetingTask } from "../src/lib/meeting/active-meeting-task.js";
-import {
-  buildTaskRelationAdjudicationRequest,
-} from "../src/lib/meeting/task-relation-adjudication.js";
+
+import { buildTaskRelationAdjudicationRequest } from "../src/lib/meeting/task-relation-adjudication.js";
 import {
   authorizeTaskRelationSplitLease,
   authorizeTaskRelationSplitIdentity,

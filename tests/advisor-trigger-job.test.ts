@@ -1,3 +1,4 @@
+import type { AdvisorPromptContext } from "../src/lib/meeting/meeting-context-contracts.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
@@ -11,7 +12,7 @@ import {
   resolveAdvisorLogicalQuestionAuthorizationTarget,
 } from "../src/lib/meeting/advisor-trigger-job.js";
 import { decideAdvisorTurnIntent } from "../src/lib/meeting/advisor-turn-intent.js";
-import type { AdvisorPromptContext } from "../src/lib/meeting/types.js";
+
 
 function buildPromptContext(): AdvisorPromptContext {
   return {

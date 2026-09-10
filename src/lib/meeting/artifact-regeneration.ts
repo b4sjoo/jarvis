@@ -1,18 +1,10 @@
-import type { ActiveMeetingTask } from "./active-meeting-task.js";
-import type {
-  ArtifactOnlyAnswerSection,
-  StableAnswerRevision,
-} from "./stable-answer.js";
+import type { ActiveMeetingTask } from "./meeting-task-contracts.js";
+
+import type { ArtifactOnlyAnswerSection, StableAnswerRevision } from "./stable-answer.js";
 import type { EffectiveQuestionSourceOwner } from "./effective-question-source-ledger.js";
 import type { VisibleAnswerResponseActionTargetDecision } from "./response-action-target.js";
-import {
-  normalizeCanonicalQuestionType,
-  type CanonicalQuestionType,
-} from "./task-taxonomy.js";
-import type {
-  ActiveInterviewParent,
-  InterviewPlaybookPhase,
-} from "./types.js";
+import { normalizeCanonicalQuestionType, type CanonicalQuestionType } from "./task-taxonomy.js";
+import type { ActiveInterviewParent, InterviewPlaybookPhase } from "./types.js";
 
 export type ArtifactRegenerationTargetReason =
   | "authorized"

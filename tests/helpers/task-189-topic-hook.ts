@@ -1,3 +1,4 @@
+import type { AdvisorPromptContext } from "../../src/lib/meeting/meeting-context-contracts.js";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
@@ -9,12 +10,17 @@ import * as effectiveTask from "../../src/lib/meeting/effective-task-source-view
 import { createProvisionalCurrentQuestion } from "../../src/lib/meeting/current-question-settlement.js";
 import { selectOwnerScopedRelationEvidence } from "../../src/lib/meeting/effective-question-source-ledger.js";
 import { selectSourceOwnedSemanticContext } from "../../src/lib/meeting/source-owned-semantic-context.js";
-import { buildTaskRelationAdjudicationRequest, type TaskRelationAdjudicationRequest } from "../../src/lib/meeting/task-relation-adjudication.js";
+import {
+  buildTaskRelationAdjudicationRequest,
+  type TaskRelationAdjudicationRequest,
+} from "../../src/lib/meeting/task-relation-adjudication.js";
 import type { MeetingContextManager } from "../../src/lib/meeting/context-manager.js";
-import type { EffectiveQuestionSourceLedger } from "../../src/lib/meeting/effective-question-source-ledger.js";
+import type {
+  EffectiveQuestionSourceLedger,
+} from "../../src/lib/meeting/effective-question-source-ledger.js";
 import type { LogicalQuestionUnit } from "../../src/lib/meeting/logical-question-unit.js";
 import { getLogicalQuestionSemanticEvidenceText } from "../../src/lib/meeting/logical-question-unit.js";
-import type { AdvisorPromptContext } from "../../src/lib/meeting/types.js";
+
 
 const hook = ts.createSourceFile("hook.ts", readFileSync("src/hooks/useMeetingAssistant.ts", "utf8"), ts.ScriptTarget.Latest, true);
 

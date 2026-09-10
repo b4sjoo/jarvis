@@ -1,3 +1,6 @@
+import type { ActiveMeetingTask } from "../src/lib/meeting/meeting-task-contracts.js";
+import type { AdvisorPromptContext, MeetingContextState } from "../src/lib/meeting/meeting-context-contracts.js";
+
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
@@ -12,13 +15,9 @@ import {
   compileSettledAdvisorPromptContext,
   resolveSettledResponseActionContextSelection,
 } from "../src/lib/meeting/settled-advisor-context.js";
-import type { ActiveMeetingTask } from "../src/lib/meeting/active-meeting-task.js";
+
 import type { LogicalQuestionUnit } from "../src/lib/meeting/logical-question-unit.js";
-import type {
-  AdvisorPromptContext,
-  MeetingContextState,
-  TranscriptTurn,
-} from "../src/lib/meeting/types.js";
+import type { TranscriptTurn } from "../src/lib/meeting/types.js";
 
 test("Narrow keeps the exact current LQU and excludes inherited generated context", () => {
   const current = turn("turn_current", "Explain consistent hashing.", 8_000);

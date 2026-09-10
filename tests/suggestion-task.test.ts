@@ -1,3 +1,5 @@
+import type { MeetingAssistantState } from "../src/lib/meeting/meeting-context-contracts.js";
+import type { ActiveMeetingTask } from "../src/lib/meeting/meeting-task-contracts.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
@@ -6,11 +8,8 @@ import {
   restoreSuggestionProjectionAfterFailedManualCorrection,
   stageSuggestionProjectionForManualCorrection,
 } from "../src/lib/meeting/suggestion-task.js";
-import type {
-  AdvisorSuggestion,
-  MeetingAssistantState,
-} from "../src/lib/meeting/types.js";
-import type { ActiveMeetingTask } from "../src/lib/meeting/active-meeting-task.js";
+import type { AdvisorSuggestion } from "../src/lib/meeting/types.js";
+
 
 test("builds suggestion metadata from an active meeting task", () => {
   const task = makeActiveMeetingTask();

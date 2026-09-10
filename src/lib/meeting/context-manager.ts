@@ -1,12 +1,21 @@
+import type { AdvisorPromptContext, MeetingContextState } from "./meeting-context-contracts.js";
+
+import type {
+  ActiveMeetingTask,
+  MeetingTaskRuntimeMutation,
+  MeetingTaskRuntimeState,
+  MeetingTaskDeadlineControl,
+  MeetingTaskDeadlineDelta,
+} from "./meeting-task-contracts.js";
+
+import { createMeetingId } from "./meeting-id.js";
 import {
   ActiveInterviewParent,
   ActiveScreenTask,
-  AdvisorPromptContext,
   GlossaryEntry,
   InterviewSessionBrief,
   InterviewSessionContext,
   InterviewTargetCompany,
-  MeetingContextState,
   ScreenObservation,
   TranscriptTurn,
 } from "./types";
@@ -14,22 +23,14 @@ import {
   createInterviewSessionContextFromBrief,
   updateInterviewSessionContextFromBrief,
 } from "./interview-session-context.js";
-import {
-  collectConfirmedMeFacts,
-  shouldIncludeTurnInAdvisorPrompt,
-} from "./transcript-fusion.js";
+import { collectConfirmedMeFacts, shouldIncludeTurnInAdvisorPrompt } from "./transcript-fusion.js";
 import {
   cloneMeetingTaskRuntimeState,
   createMeetingTaskRuntimeState,
   projectActiveMeetingTask,
   reduceMeetingTaskRuntimeMutation,
-  type ActiveMeetingTask,
   type AnswerArtifactSection,
-  type MeetingTaskRuntimeMutation,
-  type MeetingTaskRuntimeState,
   type MeetingTaskRuntimeTransitionKind,
-  type MeetingTaskDeadlineControl,
-  type MeetingTaskDeadlineDelta,
 } from "./active-meeting-task.js";
 
 const DEFAULT_TRANSCRIPT_WINDOW_MS = 2 * 60 * 1000;
@@ -649,10 +650,6 @@ export class MeetingContextManager {
       .map((entry) => `${entry.term}: ${entry.definition}`)
       .join("\n");
   }
-}
-
-export function createMeetingId(prefix: string) {
-  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
 function cloneTaskDeadlineDelta(delta: MeetingTaskDeadlineDelta): MeetingTaskDeadlineDelta {

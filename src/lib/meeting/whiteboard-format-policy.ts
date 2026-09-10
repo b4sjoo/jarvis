@@ -1,9 +1,5 @@
+import type { WhiteboardFormatPreference } from "./types.js";
 import { normalizeCanonicalQuestionType } from "./task-taxonomy.js";
-
-export type WhiteboardFormatPreference =
-  | "none"
-  | "mermaid"
-  | "plain-text";
 
 export type WhiteboardFormatConversionDisposition =
   | "not-needed"

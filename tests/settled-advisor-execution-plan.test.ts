@@ -1,7 +1,8 @@
+import type { ActiveMeetingTask } from "../src/lib/meeting/meeting-task-contracts.js";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import type { ActiveMeetingTask } from "../src/lib/meeting/active-meeting-task.js";
+
 import type { CurrentQuestionSettlementDecision } from "../src/lib/meeting/current-question-settlement.js";
 import type { MeetingModelProviderSnapshot } from "../src/lib/meeting/meeting-model-route.js";
 import { adaptQuestionTypePrior } from "../src/lib/meeting/question-type-consumer-observation.js";
@@ -21,8 +22,8 @@ import {
   projectPrimaryAsk,
 } from "../src/lib/meeting/primary-ask-projection.js";
 import { projectCrossTypeTaskRelationHint } from "../src/lib/meeting/task-relation-authority.js";
-import type { SelectedInterviewPlaybook } from "../src/lib/meeting/types.js";
-import type { TransientPersonalStatusDecision } from "../src/lib/meeting/types.js";
+import type { SelectedInterviewPlaybook, TransientPersonalStatusDecision } from "../src/lib/meeting/types.js";
+
 
 const providers: MeetingModelProviderSnapshot = {
   providers: [

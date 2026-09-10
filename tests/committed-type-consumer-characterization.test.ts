@@ -1,6 +1,7 @@
+import type { ActiveMeetingTask } from "../src/lib/meeting/meeting-task-contracts.js";
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { ActiveMeetingTask } from "../src/lib/meeting/active-meeting-task.js";
+
 import type { CurrentQuestionSettlementDecision } from "../src/lib/meeting/current-question-settlement.js";
 import { selectInterviewPlaybook } from "../src/lib/meeting/interview-playbook.js";
 import type { MeetingModelProviderSnapshot } from "../src/lib/meeting/meeting-model-route.js";

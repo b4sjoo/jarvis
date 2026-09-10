@@ -1,3 +1,5 @@
+import type { PreparationRuntimeArtifactRef, PreparationRuntimeContext, PreparationRuntimeProjection } from "../src/lib/meeting/preparation-runtime-contracts.js";
+
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
@@ -6,11 +8,7 @@ import {
   toAdvisorPersonalizedPreparationEvidence,
   toPreparedSpeechBiasTerms,
 } from "../src/lib/meeting/preparation-runtime-consumers.js";
-import type {
-  PreparationRuntimeArtifactRef,
-  PreparationRuntimeContext,
-  PreparationRuntimeProjection,
-} from "../src/lib/meeting/preparation-runtime-context.js";
+
 import type { PreparationRuntimeBrief } from "../src/lib/preparation/snapshot-types.js";
 
 test("prepared company and round types outrank legacy brief defaults", () => {

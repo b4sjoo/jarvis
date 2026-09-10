@@ -1,5 +1,6 @@
-import type { ActiveMeetingTask } from "./active-meeting-task.js";
-import type { MeetingContextState } from "./types.js";
+import type { ActiveMeetingTask } from "./meeting-task-contracts.js";
+import type { MeetingContextState } from "./meeting-context-contracts.js";
+
 
 export type RuntimeCommitPipeline =
   | "advisor"

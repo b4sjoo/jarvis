@@ -1,3 +1,5 @@
+import type { PreparationRuntimeArtifactRef, PreparationRuntimeContext, PreparationRuntimeProjection } from "../src/lib/meeting/preparation-runtime-contracts.js";
+
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
@@ -6,11 +8,7 @@ import {
   buildPreparationAnswerAttributionIndex,
   selectPreparationArtifactUseReceiptsForEvaluation,
 } from "../src/lib/meeting/preparation-runtime-provenance.js";
-import type {
-  PreparationRuntimeArtifactRef,
-  PreparationRuntimeContext,
-  PreparationRuntimeProjection,
-} from "../src/lib/meeting/preparation-runtime-context.js";
+
 import { updatePreparationRuntimeCapabilities } from "../src/lib/meeting/preparation-runtime-context.js";
 
 test("a pinned context records no influence until a consumer emits a receipt", () => {

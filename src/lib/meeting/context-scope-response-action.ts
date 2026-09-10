@@ -1,10 +1,8 @@
-import type { ActiveMeetingTask } from "./active-meeting-task";
+import type { ActiveMeetingTask } from "./meeting-task-contracts.js";
+import type { AdvisorPromptContext, MeetingContextState } from "./meeting-context-contracts.js";
+
 import type { LogicalQuestionUnit } from "./logical-question-unit";
-import type {
-  AdvisorPromptContext,
-  MeetingContextState,
-  TranscriptTurn,
-} from "./types";
+import type { TranscriptTurn } from "./types";
 
 export const CONTEXT_SCOPE_MAX_RECENT_THEM_TURNS = 5;
 export const CONTEXT_SCOPE_MAX_EXPANSION_CHARS = 1_600;

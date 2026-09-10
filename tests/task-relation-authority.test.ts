@@ -1,3 +1,5 @@
+import type { ActiveMeetingTask } from "../src/lib/meeting/meeting-task-contracts.js";
+import type { AdvisorPromptContext } from "../src/lib/meeting/meeting-context-contracts.js";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -13,8 +15,7 @@ import {
   projectCrossTypeTaskRelationHint,
   isExplicitResumeParentTranscript,
 } from "../src/lib/meeting/task-relation-authority.js";
-import type { ActiveMeetingTask } from "../src/lib/meeting/active-meeting-task.js";
-import type { AdvisorPromptContext } from "../src/lib/meeting/types.js";
+
 
 const meetingHookSource = await readFile(
   path.join(process.cwd(), "src/hooks/useMeetingAssistant.ts"),

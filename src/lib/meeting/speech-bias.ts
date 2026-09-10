@@ -1,5 +1,6 @@
+import type { MeetingContextState } from "./meeting-context-contracts.js";
+import { createMeetingId } from "./meeting-id.js";
 import type {
-  MeetingContextState,
   SpeechBiasContext,
   SpeechBiasTerm,
   SpeechCorrection,
@@ -7,7 +8,7 @@ import type {
   SpeechNormalizationResult,
 } from "./types";
 import type { PreparationSpeechBiasTerm } from "../preparation/index.js";
-import { createMeetingId } from "./context-manager.js";
+
 
 const MAX_BIAS_TERMS = 24;
 const MAX_PROMPT_CHARS = 900;

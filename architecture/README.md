@@ -142,8 +142,15 @@ components with 83 internal edges, a largest component of 16 modules, and 7
 broad barrel consumers. The extra component is the result of splitting the
 former 135-module component, not a new feedback edge. The task-writer metric is
 scanner-specific and does not count expiration mutation. The checked baseline
-now rejects any new cycle component or 84th internal edge; later
-maintainability tasks should continue reducing both counts.
+was then ratcheted to those actual components and edges.
+
+The September 10 target-boundary migration leaves 5 components and 41 internal
+edges, all outside the selected Meeting boundary. The graph includes static,
+inline-type and literal dynamic imports, re-exports and self cycles. Protected
+Meeting modules and their moved contracts must remain acyclic. Contract modules
+have explicit allowed data/foundation dependencies; the ID leaf has none. These
+guards prevent moving a dependency behind a barrel or type query to hide it.
+The existing task-writer and unrelated IPC/barrel boundaries are unchanged.
 
 ## Verification
 

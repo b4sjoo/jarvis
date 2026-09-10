@@ -1,8 +1,9 @@
+import type { AdvisorPromptContext } from "../src/lib/meeting/meeting-context-contracts.js";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { composePhaseNavigationPromptContext } from "../src/lib/meeting/phase-navigation-prompt-context.js";
-import type { AdvisorPromptContext } from "../src/lib/meeting/types.js";
+
 
 test("phase navigation keeps procedural authority while bounding broad history", () => {
   const repeatedHistory = "OLD_HISTORY ".repeat(1_500);

@@ -1,9 +1,10 @@
+import type { PlaybookPhaseControlEvidence } from "./playbook-phase-contracts.js";
 import { calculateWordEquivalent } from "./transcript-fusion.js";
 import { decideSentenceCompletion } from "./sentence-completion-buffer.js";
 import { inferExplicitProgrammingLanguageFromText } from "./programming-language.js";
 import { classifyAdjacentConstraintKinds } from "./adjacent-question-constraint.js";
 import { isExplicitMeetingLogisticsTranscript } from "./meeting-logistics.js";
-import type { PlaybookPhaseControlEvidence } from "./playbook-phase.js";
+
 
 export type AdvisorTurnIntent =
   | "direct-question"

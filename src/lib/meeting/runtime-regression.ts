@@ -1,3 +1,4 @@
+import type { RuntimeRegressionInputKind } from "./meeting-presentation-contracts.js";
 export const RUNTIME_REGRESSION_RUN_SCHEMA_VERSION = 1 as const;
 export const RUNTIME_REGRESSION_STEP_SCHEMA_VERSION = 1 as const;
 
@@ -18,8 +19,6 @@ export interface RuntimeRegressionRunRecordV1 {
   endedAt?: number;
   reason?: string;
 }
-
-export type RuntimeRegressionInputKind = "them-text" | "screen";
 
 export type RuntimeRegressionStepTerminalDisposition =
   | "visible"
@@ -47,32 +46,6 @@ export interface RuntimeRegressionStepEventV1 {
   terminalDisposition?: RuntimeRegressionStepTerminalDisposition;
   reason?: string;
   occurredAt: number;
-}
-
-export type RuntimeRegressionRunnerStatus =
-  | "idle"
-  | "starting"
-  | "ready"
-  | "running-step"
-  | "stopping"
-  | "error";
-
-export interface RuntimeRegressionRunnerStepPresentation {
-  scenarioStepId: string;
-  ordinal: number;
-  inputKind: RuntimeRegressionInputKind;
-  status: "pending" | "visible" | "suppressed" | "error" | "cancelled";
-  traceId?: string;
-  reason?: string;
-}
-
-export interface RuntimeRegressionRunnerPresentation {
-  active: boolean;
-  status: RuntimeRegressionRunnerStatus;
-  scenarioRunId?: string;
-  stepOrdinal: number;
-  currentStep?: RuntimeRegressionRunnerStepPresentation;
-  error?: string;
 }
 
 export function createRuntimeRegressionRunRecord(input: {

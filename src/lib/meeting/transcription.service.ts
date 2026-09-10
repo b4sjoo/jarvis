@@ -1,11 +1,9 @@
+import { createMeetingId } from "./meeting-id.js";
 import { fetchSTT } from "@/lib/functions";
 import { TYPE_PROVIDER } from "@/types";
 import { SelectedProviderState, TranscriptTurn } from "./types";
-import { createMeetingId } from "./context-manager";
-import {
-  TranscriptValidationDecision,
-  validateTranscriptCandidate,
-} from "./transcript-validation";
+
+import { TranscriptValidationDecision, validateTranscriptCandidate } from "./transcript-validation";
 
 export interface TranscribeMeetingAudioParams {
   audio: Blob;

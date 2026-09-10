@@ -1,6 +1,7 @@
+import type { ActiveMeetingTask } from "../src/lib/meeting/meeting-task-contracts.js";
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { ActiveMeetingTask } from "../src/lib/meeting/active-meeting-task.js";
+
 import { detectPersonalEvidenceRequirement } from "../src/lib/meeting/personal-evidence-guardrail.js";
 import {
   formatTransientPersonalStatusForTrace,

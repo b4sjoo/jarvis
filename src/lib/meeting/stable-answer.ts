@@ -1,3 +1,4 @@
+import type { AnswerDeliveryPresentation } from "./meeting-presentation-contracts.js";
 import {
   toAnswerArtifactFamily,
   type AnswerArtifactSection,
@@ -6,16 +7,9 @@ import {
   type RuntimeTypeAdjudicationOutputAuthority,
 } from "./answer-generation-lease.js";
 import type { EffectiveQuestionSourceOwner } from "./effective-question-source-ledger.js";
-import {
-  parseMeetingAnswer,
-  serializeMeetingAnswer,
-} from "./meeting-answer.js";
+import { parseMeetingAnswer, serializeMeetingAnswer } from "./meeting-answer.js";
 import { calculateWordEquivalent } from "./transcript-fusion.js";
-import type {
-  AdvisorSuggestion,
-  ParsedMeetingAnswer,
-  TranscriptTurn,
-} from "./types.js";
+import type { AdvisorSuggestion, ParsedMeetingAnswer, TranscriptTurn } from "./types.js";
 
 export interface StableAnswerSectionRevision {
   revision: number;
@@ -87,14 +81,6 @@ export interface PendingAnswerRevision {
   advisorJobId?: string;
   advisorJobSource?: string;
   runtimeTypeAdjudicationOutputAuthority?: RuntimeTypeAdjudicationOutputAuthority;
-}
-
-export interface AnswerDeliveryPresentation {
-  state: "idle" | "delivery-active" | "update-ready";
-  visibleAnswerRevision: number;
-  meSpokenWordEquivalent: number;
-  meAnswerTokenOverlap: number;
-  pendingOperationId?: string;
 }
 
 export interface StableAnswerCommitDecision {

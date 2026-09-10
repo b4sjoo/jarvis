@@ -1,12 +1,10 @@
-import type { ActiveMeetingTask } from "./active-meeting-task.js";
+import type { ActiveMeetingTask } from "./meeting-task-contracts.js";
+
 import type { EffectiveQuestionSourceRecord } from "./effective-question-source-ledger.js";
 import type { LogicalQuestionUnit } from "./logical-question-unit.js";
 import { isExplicitMeetingLogisticsTranscript } from "./meeting-logistics.js";
 import { projectPrimaryAsk } from "./primary-ask-projection.js";
-import type {
-  AdvisorSourceOwnedSemanticContext,
-  TranscriptTurn,
-} from "./types.js";
+import type { AdvisorSourceOwnedSemanticContext, TranscriptTurn } from "./types.js";
 
 export const SOURCE_OWNED_SETUP_MAX_AGE_MS = 45_000;
 export const SOURCE_OWNED_SETUP_MAX_CHARS = 600;

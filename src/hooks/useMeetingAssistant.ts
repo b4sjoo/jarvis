@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { MeetingTaskDeadlineDelta } from "../lib/meeting/meeting-task-contracts.js";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useMicVAD } from "@ricky0123/vad-react";
@@ -9,7 +16,7 @@ import {
   projectBoundedGeneratedContinuityForTask,
   type BoundedGeneratedContinuityState,
 } from "@/lib/meeting/bounded-recent-history";
-import { equalTaskRuntimeValues, type MeetingTaskDeadlineDelta } from "@/lib/meeting/active-meeting-task";
+import { equalTaskRuntimeValues } from "@/lib/meeting/active-meeting-task";
 import type { PreparedMeetingTaskDeadlineUpdate } from "@/lib/meeting/context-manager";
 import { useApplicationShutdown } from "./useApplicationShutdown";
 import type { NativeAudioLifecycleEvent } from "@/lib/meeting/native-audio-lifecycle";
@@ -190,8 +197,16 @@ import {
   projectEffectiveSourceTurnGroup,
   projectEffectiveLogicalQuestionSources,
 } from "@/lib/meeting/logical-question-effective-projection";
-import { indexAuthorizedEffectiveSourceRecords, resolveAuthorizedEffectiveSourceContext, type AuthorizedEffectiveSourceContext, type AuthorizedEffectiveSourceRecordIndex } from "@/lib/meeting/authorized-effective-source-context";
-import { projectEffectiveAdvisorTaskContext, projectEffectiveTaskSourceView } from "@/lib/meeting/effective-task-source-view";
+import {
+  indexAuthorizedEffectiveSourceRecords,
+  resolveAuthorizedEffectiveSourceContext,
+  type AuthorizedEffectiveSourceContext,
+  type AuthorizedEffectiveSourceRecordIndex,
+} from "@/lib/meeting/authorized-effective-source-context";
+import {
+  projectEffectiveAdvisorTaskContext,
+  projectEffectiveTaskSourceView,
+} from "@/lib/meeting/effective-task-source-view";
 import {
   coordinateOrderedSettlement,
   createOrderedSettlementDeadline,
@@ -39318,7 +39333,6 @@ function inferMemoryTopicDomainFromQuery(query: string): MemoryTopicDomain {
   }
   return "unknown";
 }
-
 
 
 function evaluateThemTurnForAdvisor(

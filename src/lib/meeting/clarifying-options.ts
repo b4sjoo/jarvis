@@ -1,14 +1,8 @@
+import type { ClarifyingOptionSource } from "./types.js";
 import type { ClarifyingQuestionOption } from "./types";
 
 const MAX_CLARIFYING_OPTIONS = 4;
 const MAX_PROJECT_CLARIFYING_OPTIONS = 3;
-
-export type ClarifyingOptionSource =
-  | "structured-answer"
-  | "project-binding"
-  | "question-literal"
-  | "boolean-fallback"
-  | "none";
 
 export interface ClarifyingOptionDisplayModel {
   options: ClarifyingQuestionOption[];

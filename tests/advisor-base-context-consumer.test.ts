@@ -1,3 +1,4 @@
+import type { AdvisorPromptContext } from "../src/lib/meeting/meeting-context-contracts.js";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
@@ -7,7 +8,10 @@ import { MeetingContextManager } from "../src/lib/meeting/context-manager.js";
 import { createAdvisorTriggerJob, type AdvisorTriggerJob } from "../src/lib/meeting/advisor-trigger-job.js";
 import { decideRefreshAuthority } from "../src/lib/meeting/answer-generation-lease.js";
 import { buildRuntimeCommitSnapshot } from "../src/lib/meeting/runtime-commit-authorization.js";
-import { ResponseOpportunityGenerationGateCoordinator, resolveResponseOpportunityRefreshAuthority } from "../src/lib/meeting/response-opportunity-generation-gate.js";
+import {
+  ResponseOpportunityGenerationGateCoordinator,
+  resolveResponseOpportunityRefreshAuthority,
+} from "../src/lib/meeting/response-opportunity-generation-gate.js";
 import { MeetingTraceStore } from "../src/lib/meeting/trace.js";
 import { composePhaseNavigationPromptContext } from "../src/lib/meeting/phase-navigation-prompt-context.js";
 import { selectInterviewPlaybookForCommittedType } from "../src/lib/meeting/interview-playbook.js";
@@ -16,9 +20,15 @@ import { createEffectiveAdvisorBaseBuilder } from "./helpers/advisor-base-contex
 import { EffectiveQuestionSourceLedger } from "../src/lib/meeting/effective-question-source-ledger.js";
 import { composeLogicalQuestionUnit } from "../src/lib/meeting/logical-question-unit.js";
 import { applyActiveQuestionTermCorrection } from "../src/lib/meeting/active-question-term-correction.js";
-import { resolveAuthorizedEffectiveSourceContext } from "../src/lib/meeting/authorized-effective-source-context.js";
-import { clearBoundedGeneratedContinuity, projectBoundedGeneratedContinuityForTask, type BoundedGeneratedContinuityState } from "../src/lib/meeting/bounded-recent-history.js";
-import type { ActiveInterviewParent, AdvisorPromptContext, TranscriptTurn } from "../src/lib/meeting/types.js";
+import {
+  resolveAuthorizedEffectiveSourceContext,
+} from "../src/lib/meeting/authorized-effective-source-context.js";
+import {
+  clearBoundedGeneratedContinuity,
+  projectBoundedGeneratedContinuityForTask,
+  type BoundedGeneratedContinuityState,
+} from "../src/lib/meeting/bounded-recent-history.js";
+import type { ActiveInterviewParent, TranscriptTurn } from "../src/lib/meeting/types.js";
 
 const hook = ts.createSourceFile("hook.ts", readFileSync("src/hooks/useMeetingAssistant.ts", "utf8"), ts.ScriptTarget.Latest, true);
 function declaration(name: string) {

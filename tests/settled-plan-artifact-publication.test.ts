@@ -1,6 +1,7 @@
+import type { ActiveMeetingTask } from "../src/lib/meeting/meeting-task-contracts.js";
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { ActiveMeetingTask } from "../src/lib/meeting/active-meeting-task.js";
+
 import type { CurrentQuestionSettlementDecision } from "../src/lib/meeting/current-question-settlement.js";
 import { selectInterviewPlaybook } from "../src/lib/meeting/interview-playbook.js";
 import { parseMeetingAnswer } from "../src/lib/meeting/meeting-answer.js";
@@ -10,10 +11,7 @@ import { authorizeManualScreenPresentationArtifacts } from "../src/lib/meeting/s
 import { resolveAdvisorScreenSourceRead } from "../src/lib/meeting/screen-task-scope.js";
 import { buildSettledAdvisorExecutionPlan } from "../src/lib/meeting/settled-advisor-execution-plan.js";
 import { commitStableAnswerRevision } from "../src/lib/meeting/stable-answer.js";
-import type {
-  AdvisorSuggestion,
-  SelectedInterviewPlaybook,
-} from "../src/lib/meeting/types.js";
+import type { AdvisorSuggestion, SelectedInterviewPlaybook } from "../src/lib/meeting/types.js";
 
 const providers: MeetingModelProviderSnapshot = {
   providers: [{ id: "main", curl: "https://main.test/{{IMAGE}}" }],

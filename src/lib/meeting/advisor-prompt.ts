@@ -1,5 +1,5 @@
+import type { AdvisorPromptContext } from "./meeting-context-contracts.js";
 import {
-  AdvisorPromptContext,
   AdvisorRequestMode,
   ClarifyingQuestionFeedback,
   MeetingAnswerProfile,
@@ -12,10 +12,7 @@ import {
   formatInterviewSessionContextForPrompt,
 } from "./interview-session-context.js";
 import { formatAdvisorEvidencePacketForPrompt } from "./advisor-evidence-packet.js";
-import {
-  formatInterviewPlaybookForPrompt,
-  withInterviewPlaybookPhase,
-} from "./interview-playbook.js";
+import { formatInterviewPlaybookForPrompt, withInterviewPlaybookPhase } from "./interview-playbook.js";
 import { formatActiveMeetingTaskForPrompt } from "./active-meeting-task.js";
 import { formatFactAnchorDecisionForPrompt } from "./fact-anchor-guardrail.js";
 import { formatPlaybookPhaseDecisionForPrompt } from "./playbook-phase.js";

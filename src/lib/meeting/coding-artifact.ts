@@ -1,14 +1,12 @@
-import type {
-  ArtifactProjectionDecision,
-  MeetingAnswerDisplayModel,
-} from "./meeting-answer-display.js";
+import type { ScreenPresentationArtifactAuthoritySource } from "./types.js";
+import type { ArtifactProjectionDecision, MeetingAnswerDisplayModel } from "./meeting-answer-display.js";
 import { stripOuterCodeFence } from "./screen-task-answer.js";
 import {
   areCompatibleParentContinuityTypes,
   normalizeCanonicalQuestionType,
   type CanonicalQuestionType,
 } from "./task-taxonomy.js";
-import type { ScreenPresentationArtifactAuthoritySource } from "./screen-artifact-authority.js";
+
 
 export type CodingArtifactCacheScope =
   | "parent"

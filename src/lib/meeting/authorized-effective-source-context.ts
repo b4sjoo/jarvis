@@ -1,4 +1,5 @@
-import type { ActiveMeetingTask } from "./active-meeting-task.js";
+import type { ActiveMeetingTask } from "./meeting-task-contracts.js";
+
 import type {
   EffectiveQuestionSourceOwner,
   EffectiveQuestionSourceRecord,

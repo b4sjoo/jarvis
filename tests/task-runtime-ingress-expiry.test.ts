@@ -1,16 +1,25 @@
+import { createMeetingId } from "../src/lib/meeting/meeting-id.js";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
 import ts from "typescript";
-import { MeetingContextManager, createMeetingId } from "../src/lib/meeting/context-manager.js";
+import { MeetingContextManager } from "../src/lib/meeting/context-manager.js";
 import { createAdvisorTriggerJob } from "../src/lib/meeting/advisor-trigger-job.js";
 import { decideRefreshAuthority } from "../src/lib/meeting/answer-generation-lease.js";
-import { resolveResponseOpportunityRefreshAuthority } from "../src/lib/meeting/response-opportunity-generation-gate.js";
-import { authorizeRuntimeCommit, buildRuntimeCommitSnapshot } from "../src/lib/meeting/runtime-commit-authorization.js";
+import {
+  resolveResponseOpportunityRefreshAuthority,
+} from "../src/lib/meeting/response-opportunity-generation-gate.js";
+import {
+  authorizeRuntimeCommit,
+  buildRuntimeCommitSnapshot,
+} from "../src/lib/meeting/runtime-commit-authorization.js";
 import { MeetingTraceStore } from "../src/lib/meeting/trace.js";
 import { EffectiveQuestionSourceLedger } from "../src/lib/meeting/effective-question-source-ledger.js";
-import { indexAuthorizedEffectiveSourceRecords, resolveAuthorizedEffectiveSourceContext } from "../src/lib/meeting/authorized-effective-source-context.js";
+import {
+  indexAuthorizedEffectiveSourceRecords,
+  resolveAuthorizedEffectiveSourceContext,
+} from "../src/lib/meeting/authorized-effective-source-context.js";
 import { projectEffectiveTaskSourceView } from "../src/lib/meeting/effective-task-source-view.js";
 import {
   clearBoundedGeneratedContinuity,

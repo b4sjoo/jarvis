@@ -1,5 +1,6 @@
+import type { ActiveMeetingTask } from "./meeting-task-contracts.js";
 import { buildMeetingAnswerSummary } from "./meeting-answer.js";
-import type { ActiveMeetingTask } from "./active-meeting-task.js";
+
 import type { StableAnswerRevision } from "./stable-answer.js";
 import type {
   AdvisorGeneratedContinuityCapsule,

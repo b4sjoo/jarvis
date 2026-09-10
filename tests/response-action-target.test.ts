@@ -1,15 +1,14 @@
+import type { MeetingContextState } from "../src/lib/meeting/meeting-context-contracts.js";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { resolveVisibleAnswerResponseActionTarget } from "../src/lib/meeting/response-action-target.js";
+import { getLogicalQuestionAnswerFocusText } from "../src/lib/meeting/logical-question-unit.js";
 import {
-  resolveVisibleAnswerResponseActionTarget,
-} from "../src/lib/meeting/response-action-target.js";
-import {
-  getLogicalQuestionAnswerFocusText,
-} from "../src/lib/meeting/logical-question-unit.js";
-import { projectAdvisorTranscriptForLogicalQuestion } from "../src/lib/meeting/logical-question-effective-projection.js";
+  projectAdvisorTranscriptForLogicalQuestion,
+} from "../src/lib/meeting/logical-question-effective-projection.js";
 import type { StableAnswerRevision } from "../src/lib/meeting/stable-answer.js";
-import type { MeetingContextState } from "../src/lib/meeting/types.js";
+
 import {
   createProvisionalCurrentQuestion,
   type CurrentQuestionSettlementDecision,

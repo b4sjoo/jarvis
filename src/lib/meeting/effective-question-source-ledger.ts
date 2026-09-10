@@ -1,4 +1,5 @@
-import type { ActiveMeetingTask } from "./active-meeting-task.js";
+import type { ActiveMeetingTask } from "./meeting-task-contracts.js";
+
 import { isExplicitMeetingLogisticsTranscript } from "./meeting-logistics.js";
 import type {
   CurrentQuestionSettlementDecision,
@@ -9,13 +10,9 @@ import {
   getLogicalQuestionSemanticEvidenceText,
   type LogicalQuestionUnit,
 } from "./logical-question-unit.js";
-import {
-  projectEffectiveLogicalQuestionSources,
-} from "./logical-question-effective-projection.js";
+import { projectEffectiveLogicalQuestionSources } from "./logical-question-effective-projection.js";
 import { projectPrimaryAsk } from "./primary-ask-projection.js";
-import {
-  hasConstraintOrCorrectionSignal,
-} from "./transcript-fusion.js";
+import { hasConstraintOrCorrectionSignal } from "./transcript-fusion.js";
 import { classifyInterviewTransitionTurn } from "./interview-section-transition.js";
 import type { TranscriptTurn } from "./types.js";
 

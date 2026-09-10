@@ -1,3 +1,10 @@
+import type {
+  GenerationResultProjection,
+  GenerationResultLedgerKey,
+  GenerationResultProjectionDisposition,
+  GenerationCommitDisposition,
+} from "./meeting-presentation-contracts.js";
+
 import type { AIResponseTerminalOutcome } from "../functions/ai-response-events.js";
 
 export interface GenerationResultLease {
@@ -22,17 +29,6 @@ export type GenerationCandidateValidationDisposition =
   | "accepted"
   | "rejected";
 
-export type GenerationCommitDisposition =
-  | "started"
-  | "pending"
-  | "committed"
-  | "rejected"
-  | "failed"
-  | "timed-out"
-  | "aborted"
-  | "cancelled"
-  | "superseded";
-
 export type GenerationTerminalDisposition = Exclude<
   GenerationCommitDisposition,
   "started" | "pending"
@@ -46,19 +42,6 @@ export interface GenerationResultTerminalization {
   targetLogicalQuestionRevision?: number;
   candidateFormed: boolean;
   terminalizedAt: number;
-}
-
-export type GenerationResultProjectionDisposition =
-  | "none"
-  | "current-visible"
-  | "pending"
-  | "historical";
-
-export interface GenerationResultLedgerKey {
-  sessionId: string;
-  runtimeEpoch: number;
-  logicalQuestionUnitId: string;
-  logicalQuestionRevision: number;
 }
 
 export interface GenerationResultProviderAttempt {
@@ -134,16 +117,6 @@ export interface GenerationDerivedPreparedTransition<T> {
   authorized: boolean;
   reason: string;
   value: T;
-}
-
-export interface GenerationResultProjection {
-  disposition: GenerationResultProjectionDisposition;
-  key?: GenerationResultLedgerKey;
-  generationLeaseId?: string;
-  taskId?: string | null;
-  commitDisposition?: GenerationCommitDisposition;
-  visibleAnswerRevision?: number;
-  updatedAt?: number;
 }
 
 export function authorizePostModelTaskRuntimeTransition(

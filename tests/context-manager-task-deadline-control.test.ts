@@ -1,15 +1,12 @@
+import type { MeetingTaskDeadlineDelta } from "../src/lib/meeting/meeting-task-contracts.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { MeetingContextManager } from "../src/lib/meeting/context-manager.js";
 import {
   reduceMeetingTaskRuntimeMutation,
   validateTaskTransitionFieldChanges,
-  type MeetingTaskDeadlineDelta,
 } from "../src/lib/meeting/active-meeting-task.js";
-import type {
-  ActiveInterviewParent,
-  ActiveScreenTask,
-} from "../src/lib/meeting/types.js";
+import type { ActiveInterviewParent, ActiveScreenTask } from "../src/lib/meeting/types.js";
 
 function parent(overrides: Partial<ActiveInterviewParent> = {}): ActiveInterviewParent {
   return {

@@ -1,8 +1,5 @@
-import { Message, TYPE_PROVIDER } from "@/types";
-import type {
-  MemoryRetrievalPolicy,
-  MemoryRetrievalResult,
-} from "@/lib/memory/types";
+import type { TYPE_PROVIDER } from "../../types/provider.type.js";
+import type { MemoryRetrievalPolicy } from "@/lib/memory/types";
 import type {
   CanonicalQuestionType,
   LegacyQuestionTypeAlias,
@@ -10,21 +7,10 @@ import type {
   TaxonomyInterviewBriefType,
   TransitionalQuestionType,
 } from "./task-taxonomy";
-import type {
-  ActiveMeetingTask,
-  MeetingTaskRuntimeState,
-} from "./active-meeting-task";
-import type { PlaybookPhaseDecision } from "./playbook-phase";
-import type { AudioInputLivenessPresentation } from "./audio-input-liveness";
-import type {
-  PreparationNarrativeNodeKind,
-  PreparationRuntimeBrief,
-  PreparationStrategy,
-} from "../preparation/index.js";
-import type {
-  AIResponseExecutionIdentityInput,
-  AIResponseTerminalOutcome,
-} from "../functions/ai-response-events.js";
+
+import type { PreparationNarrativeNodeKind } from "../preparation/statement-types.js";
+import type { PreparationRuntimeBrief, PreparationStrategy } from "../preparation/snapshot-types.js";
+import type { AIResponseTerminalOutcome } from "../functions/ai-response-events.js";
 
 export type TranscriptSpeaker = "them" | "me" | "unknown";
 
@@ -316,21 +302,6 @@ export interface ScreenCaptureCandidate {
 export interface GlossaryEntry {
   term: string;
   definition: string;
-}
-
-export interface MeetingContextState {
-  sessionId: string;
-  startedAt: number;
-  transcriptTurns: TranscriptTurn[];
-  screenObservations: ScreenObservation[];
-  interviewSessionBrief?: InterviewSessionBrief;
-  interviewSessionContext?: InterviewSessionContext;
-  taskRuntime: MeetingTaskRuntimeState;
-  activeMeetingTask?: ActiveMeetingTask;
-  rollingSummary: string;
-  userProfileContext: string;
-  glossary: GlossaryEntry[];
-  lastAdvisorRequestId?: string;
 }
 
 export type ScreenQuestionType =
@@ -1108,7 +1079,7 @@ export interface ClarifyingQuestionFeedback {
   answerValue?: string;
   requestId?: string;
   questionKey?: string;
-  optionSource?: import("./clarifying-options.js").ClarifyingOptionSource;
+  optionSource?: ClarifyingOptionSource;
   optionCount?: number;
   booleanFallbackUsed?: boolean;
 }
@@ -1121,7 +1092,7 @@ export type ClarifyingSelectionLifecycleState =
 
 export interface ClarifyingQuestionInteractionContext {
   questionKey: string;
-  optionSource: import("./clarifying-options.js").ClarifyingOptionSource;
+  optionSource: ClarifyingOptionSource;
   optionCount: number;
   booleanFallbackUsed: boolean;
 }
@@ -1159,7 +1130,7 @@ export interface AdvisorSuggestion {
   codeArtifactRevision?: number;
   complexityArtifactRevision?: number;
   presentationArtifactAuthority?:
-    import("./screen-artifact-authority.js").ScreenPresentationArtifactAuthoritySource;
+    ScreenPresentationArtifactAuthoritySource;
   factGuardrailNotice?: FactGuardrailVisibleNotice;
   basedOnTurnIds: string[];
   basedOnObservationIds: string[];
@@ -1209,37 +1180,6 @@ export interface AdvisorCurrentQuestionProjection {
   answerFocusText: string;
   semanticEvidenceText: string;
   sourceTurnIds: string[];
-}
-
-export interface AdvisorPromptContext {
-  transcript: string;
-  advisorPromptSourceTurnIds?: string[];
-  screenContext: string;
-  currentQuestionProjection?: AdvisorCurrentQuestionProjection;
-  responseOnlyParentReadContext?: AdvisorBoundedParentReadContext;
-  interviewSessionBrief?: InterviewSessionBrief;
-  interviewSessionContext?: InterviewSessionContext;
-  taskRuntime: MeetingTaskRuntimeState;
-  activeMeetingTask?: ActiveMeetingTask;
-  rollingSummary: string;
-  userProfileContext: string;
-  glossaryText: string;
-  memoryContext?: string;
-  interviewPlaybook?: SelectedInterviewPlaybook;
-  playbookPhaseDecision?: PlaybookPhaseDecision;
-  factAnchorDecision?: FactAnchorDecision;
-  transientPersonalStatusDecision?: TransientPersonalStatusDecision;
-  projectBindingDecision?: ProjectBindingDecision;
-  openingRoute?: OpeningRouteContext;
-  confirmedMeFacts?: Array<{
-    id: string;
-    text: string;
-  }>;
-  latestTurn?: TranscriptTurn;
-  responseActionContextScope?: AdvisorContextScopeSnapshot;
-  advisorEvidencePacket?: AdvisorEvidencePacket;
-  whiteboardFormatPreference?: import("./whiteboard-format-policy.js").WhiteboardFormatPreference;
-  codingSolutionManifestContext?: string;
 }
 
 export type AdvisorCurrentQuestionEvidenceSource =
@@ -1413,28 +1353,6 @@ export interface MeetingProviderConfig {
   selectedAIProvider: SelectedProviderState;
   sttProvider: TYPE_PROVIDER | undefined;
   selectedSttProvider: SelectedProviderState;
-}
-
-export interface MeetingAdvisorRequest {
-  requestId: string;
-  mode?: AdvisorRequestMode;
-  responseAction?: MeetingResponseActionMode;
-  responseConfig?: MeetingResponseConfig;
-  answerProfile?: MeetingAnswerProfile;
-  promptContext: AdvisorPromptContext;
-  provider: TYPE_PROVIDER | undefined;
-  selectedProvider: SelectedProviderState;
-  currentSuggestion?: string;
-  clarifyingFeedback?: ClarifyingQuestionFeedback;
-  history?: Message[];
-  sourceImages?: Array<{
-    base64: string;
-    mediaType: string;
-  }>;
-  signal?: AbortSignal;
-  requestOptions?: MeetingModelRequestOptions;
-  executionIdentity?: AIResponseExecutionIdentityInput;
-  trace?: MeetingModelTraceCallbacks;
 }
 
 export interface MeetingModelRequestOptions {
@@ -2037,38 +1955,28 @@ export interface QuestionHumanEvaluation {
   updatedAt: number;
 }
 
-export interface MeetingAssistantState {
-  status: MeetingAssistantStatus;
-  transcriptTurns: TranscriptTurn[];
-  latestDisplayTranscript?: DisplayTranscriptArtifact;
-  displayTranscriptWindow?: DisplayTranscriptWindow;
-  screenObservations: ScreenObservation[];
-  interviewSessionBrief?: InterviewSessionBrief;
-  interviewSessionContext?: InterviewSessionContext;
-  preparationRuntime: import("./preparation-runtime-context").PreparationRuntimePresentation;
-  taskRuntime: MeetingTaskRuntimeState;
-  activeMeetingTask?: ActiveMeetingTask;
-  manualQuestionTypeCorrection?: ManualQuestionTypeCorrection;
-  currentQuestionLineage?: QuestionInstanceLineage;
-  latestInterviewerTurnCandidate?: ForceAdviseTargetPresentation;
-  traces: MeetingTrace[];
-  latestSuggestion: AdvisorSuggestion | null;
-  latestReliableSuggestion: AdvisorSuggestion | null;
-  partialSuggestion: string;
-  answerDelivery: import("./stable-answer").AnswerDeliveryPresentation;
-  generationResult: import("./generation-result-ledger").GenerationResultProjection;
-  error: string | null;
-  audioStatus: MeetingAudioStatus | null;
-  audioInputLiveness: AudioInputLivenessPresentation | null;
-  nativeAudioManualRecovery?: NativeAudioManualRecoveryState;
-  settings: MeetingAssistantSettings;
-  lastMemoryContext?: MemoryRetrievalResult;
-  lastTraceExport?: MeetingTraceExportRecord;
-  sessionRecording: MeetingSessionRecordingState;
-  runtimeRegression: import("./runtime-regression").RuntimeRegressionRunnerPresentation;
-  sttEvaluationCapture: SttEvaluationCaptureState;
-  humanEvaluations: TraceHumanEvaluation[];
-  questionEvaluations: QuestionHumanEvaluation[];
-  speechCorrections: SpeechCorrection[];
-  presentationArtifactResetRevision: number;
-}
+
+export type AdvisorJobSource =
+  | "live-turn"
+  | "regenerate"
+  | "response-action"
+  | "artifact-regeneration"
+  | "clarifying-answer"
+  | "manual-correction"
+  | "force-advise";
+
+export type ClarifyingOptionSource =
+  | "structured-answer"
+  | "project-binding"
+  | "question-literal"
+  | "boolean-fallback"
+  | "none";
+
+export type ScreenPresentationArtifactAuthoritySource =
+  | "playbook-phase"
+  | "manual-screen";
+
+export type WhiteboardFormatPreference =
+  | "none"
+  | "mermaid"
+  | "plain-text";

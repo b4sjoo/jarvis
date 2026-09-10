@@ -1,3 +1,5 @@
+import type { MeetingContextState } from "../src/lib/meeting/meeting-context-contracts.js";
+import type { MeetingTaskRuntimeState } from "../src/lib/meeting/meeting-task-contracts.js";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
@@ -5,18 +7,43 @@ import vm from "node:vm";
 import ts from "typescript";
 import { buildManualScreenLogicalQuestionUnit } from "../src/lib/meeting/manual-screen-question-source.js";
 import { resolveManualScreenSourcePacket } from "../src/lib/meeting/screen-task-scope.js";
-import { createSourceOwnedTransitionCandidate, prepareSourceOwnedTransition } from "../src/lib/meeting/source-owned-transition-transaction.js";
-import { buildActiveMeetingTask, reduceMeetingTaskRuntimeMutation } from "../src/lib/meeting/active-meeting-task.js";
-import { createProvisionalCurrentQuestion, settleCurrentQuestion } from "../src/lib/meeting/current-question-settlement.js";
-import { createEffectiveQuestionSourceRecord, EffectiveQuestionSourceLedger, resolveRevisionStableTopologyBinding, consumeRevisionStableTopologyBinding } from "../src/lib/meeting/effective-question-source-ledger.js";
-import { buildEffectiveAdvisorSettlementView, buildSettledAdvisorExecutionPlan, formatSettledAdvisorExecutionPlanForTrace, authorizeSettledAdvisorExecutionPlan } from "../src/lib/meeting/settled-advisor-execution-plan.js";
+import {
+  createSourceOwnedTransitionCandidate,
+  prepareSourceOwnedTransition,
+} from "../src/lib/meeting/source-owned-transition-transaction.js";
+import {
+  buildActiveMeetingTask,
+  reduceMeetingTaskRuntimeMutation,
+} from "../src/lib/meeting/active-meeting-task.js";
+import {
+  createProvisionalCurrentQuestion,
+  settleCurrentQuestion,
+} from "../src/lib/meeting/current-question-settlement.js";
+import {
+  createEffectiveQuestionSourceRecord,
+  EffectiveQuestionSourceLedger,
+  resolveRevisionStableTopologyBinding,
+  consumeRevisionStableTopologyBinding,
+} from "../src/lib/meeting/effective-question-source-ledger.js";
+import {
+  buildEffectiveAdvisorSettlementView,
+  buildSettledAdvisorExecutionPlan,
+  formatSettledAdvisorExecutionPlanForTrace,
+  authorizeSettledAdvisorExecutionPlan,
+} from "../src/lib/meeting/settled-advisor-execution-plan.js";
 import * as responseTargets from "../src/lib/meeting/response-action-target.js";
 import { selectInterviewPlaybook } from "../src/lib/meeting/interview-playbook.js";
-import type { MeetingContextState, TranscriptTurn } from "../src/lib/meeting/types.js";
+import type { TranscriptTurn } from "../src/lib/meeting/types.js";
 import type { StableAnswerRevision } from "../src/lib/meeting/stable-answer.js";
-import { commitStableAnswerRevision, commitStableArtifactOnlyRevision } from "../src/lib/meeting/stable-answer.js";
+import {
+  commitStableAnswerRevision,
+  commitStableArtifactOnlyRevision,
+} from "../src/lib/meeting/stable-answer.js";
 import { parseMeetingAnswer, buildMeetingAnswerSummary } from "../src/lib/meeting/meeting-answer.js";
-import { prepareBoundedGeneratedContinuity, type BoundedGeneratedContinuityState } from "../src/lib/meeting/bounded-recent-history.js";
+import {
+  prepareBoundedGeneratedContinuity,
+  type BoundedGeneratedContinuityState,
+} from "../src/lib/meeting/bounded-recent-history.js";
 import { createEffectiveAdvisorBaseBuilder } from "./helpers/advisor-base-context-hook.js";
 import * as phase from "../src/lib/meeting/active-branch-phase.js";
 import * as history from "../src/lib/meeting/playbook-phase-history.js";
@@ -25,14 +52,19 @@ import * as phaseDecisions from "../src/lib/meeting/playbook-phase.js";
 import * as artifacts from "../src/lib/meeting/artifact-regeneration.js";
 import { projectObservedAdvisorAttempt } from "../src/lib/meeting/observed-advisor-outcome.js";
 import { buildHumanEvaluationObservedSnapshotV2 } from "../src/lib/meeting/human-ground-truth-v2.js";
-import { commitSourceOwnedTransitionToRuntime, resolveSourceOwnedRuntimeTransition } from "../src/lib/meeting/source-owned-transition-runtime.js";
-import type { MeetingTaskRuntimeState } from "../src/lib/meeting/active-meeting-task.js";
+import {
+  commitSourceOwnedTransitionToRuntime,
+  resolveSourceOwnedRuntimeTransition,
+} from "../src/lib/meeting/source-owned-transition-runtime.js";
+
 import * as advisorJobs from "../src/lib/meeting/advisor-trigger-job.js";
 import * as advisorIntent from "../src/lib/meeting/advisor-turn-intent.js";
 import * as runtimeCommit from "../src/lib/meeting/runtime-commit-authorization.js";
 import * as logicalOwnership from "../src/lib/meeting/logical-question-ownership.js";
 import { decideRefreshAuthority } from "../src/lib/meeting/answer-generation-lease.js";
-import { resolveResponseOpportunityRefreshAuthority } from "../src/lib/meeting/response-opportunity-generation-gate.js";
+import {
+  resolveResponseOpportunityRefreshAuthority,
+} from "../src/lib/meeting/response-opportunity-generation-gate.js";
 
 const hook = ts.createSourceFile("hook.ts", readFileSync("src/hooks/useMeetingAssistant.ts", "utf8"), ts.ScriptTarget.Latest, true);
 function declaration(name: string): ts.FunctionDeclaration | ts.VariableDeclaration {

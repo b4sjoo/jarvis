@@ -1,3 +1,4 @@
+import type { AdvisorPromptContext } from "../src/lib/meeting/meeting-context-contracts.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
@@ -5,7 +6,7 @@ import {
   decideManualScreenAdvisorSupersession,
 } from "../src/lib/meeting/advisor-generation-supersession.js";
 import { createAdvisorTriggerJob } from "../src/lib/meeting/advisor-trigger-job.js";
-import type { AdvisorPromptContext } from "../src/lib/meeting/types.js";
+
 
 function promptContext(): AdvisorPromptContext {
   return {

@@ -1,21 +1,34 @@
+import { createMeetingId } from "../src/lib/meeting/meeting-id.js";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
 import ts from "typescript";
-import { MeetingContextManager, createMeetingId } from "../src/lib/meeting/context-manager.js";
-import { SessionRecordingManager, buildSessionRecordingProviderSummary } from "../src/lib/meeting/session-recording.js";
+import { MeetingContextManager } from "../src/lib/meeting/context-manager.js";
+import {
+  SessionRecordingManager,
+  buildSessionRecordingProviderSummary,
+} from "../src/lib/meeting/session-recording.js";
 import { createInterviewSessionContextFromBrief } from "../src/lib/meeting/interview-session-context.js";
-import { createNeutralPreparationRuntimeContext, loadPreparationRuntimeContext, toPreparationRuntimePresentation } from "../src/lib/meeting/preparation-runtime-context.js";
+import {
+  createNeutralPreparationRuntimeContext,
+  loadPreparationRuntimeContext,
+  toPreparationRuntimePresentation,
+} from "../src/lib/meeting/preparation-runtime-context.js";
 import { PreparationRuntimeProvenanceLedger } from "../src/lib/meeting/preparation-runtime-provenance.js";
 import { createPlaybookPhaseHistoryState } from "../src/lib/meeting/playbook-phase-history.js";
 import { toAnswerDeliveryPresentation } from "../src/lib/meeting/stable-answer.js";
 import { MeetingTraceStore } from "../src/lib/meeting/trace.js";
-import { buildCommittedTaskBoundaryParent, createTaskBoundaryCandidate } from "../src/lib/meeting/task-boundary-transaction.js";
+import {
+  buildCommittedTaskBoundaryParent,
+  createTaskBoundaryCandidate,
+} from "../src/lib/meeting/task-boundary-transaction.js";
 import { setTestActiveParent } from "./helpers/meeting-task-runtime.js";
 import type { LogicalQuestionUnit } from "../src/lib/meeting/logical-question-unit.js";
-import { buildPreparationSnapshotArtifactManifest } from "../src/lib/preparation/snapshot-artifact-manifest.js";
+import {
+  buildPreparationSnapshotArtifactManifest,
+} from "../src/lib/preparation/snapshot-artifact-manifest.js";
 import type { InterviewPreparationSnapshot } from "../src/lib/preparation/snapshot-types.js";
 
 // Execute the production callbacks, as in the existing publication callback
