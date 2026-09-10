@@ -23,7 +23,6 @@ import {
   interviewPreparationConversationService,
   type InterviewProcessDetail,
   type PreparationConversation,
-  type PreparationConversationDetail,
   type PreparationConversationScope,
   type PreparationMaterial,
   type PreparationMessage,
@@ -43,16 +42,18 @@ import {
 } from "lucide-react";
 import {
   type KeyboardEvent,
-  useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
+import type { PreparationData } from "../usePreparationData";
+import { usePageOperation } from "../page-resource";
 
 const PROCESS_SCOPE = "process";
 
 export const PreparationConversationPanel = ({
+  data,
   detail,
   materials,
   onError,
@@ -60,6 +61,7 @@ export const PreparationConversationPanel = ({
   onMaterialsChanged,
   onDetailViewChange,
 }: {
+  data: PreparationData;
   detail: InterviewProcessDetail;
   materials: PreparationMaterial[];
   onError: (message: string) => void;
@@ -68,11 +70,21 @@ export const PreparationConversationPanel = ({
   onDetailViewChange: (open: boolean) => void;
 }) => {
   const { allAiProviders, selectedPreparationAIProvider } = useApp();
-  const [sessions, setSessions] = useState<PreparationConversation[]>([]);
-  const [selectedSessionId, setSelectedSessionId] = useState<string>();
-  const [conversation, setConversation] =
-    useState<PreparationConversationDetail>();
-  const [isLoading, setIsLoading] = useState(true);
+  const sessions = data.sessions.data ?? [];
+  const { selectedSessionId, selectConversation: setSelectedSessionId } = data;
+  const isLoading = data.sessions.loading;
+  const streamOperation = usePageOperation(JSON.stringify([detail.process.id, selectedSessionId]));
+  const [pendingTurn, setPendingTurn] = useState<{ message: PreparationMessage; editing?: PreparationMessage }>();
+  const conversation = useMemo(() => {
+    const current = data.conversation.data;
+    if (!current || !pendingTurn || pendingTurn.message.conversationId !== selectedSessionId) return current;
+    const targetIndex = pendingTurn.editing
+      ? current.messages.findIndex((message) => message.id === pendingTurn.editing?.id) : -1;
+    return { ...current, messages: [
+      ...(pendingTurn.editing ? current.messages.slice(0, Math.max(0, targetIndex)) : current.messages),
+      pendingTurn.message,
+    ] };
+  }, [data.conversation.data, pendingTurn, selectedSessionId]);
   const [isSending, setIsSending] = useState(false);
   const [draft, setDraft] = useState("");
   const [streamingResponse, setStreamingResponse] = useState("");
@@ -88,6 +100,8 @@ export const PreparationConversationPanel = ({
   const [isSavingSession, setIsSavingSession] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<PreparationConversation>();
   const [isDeletingSession, setIsDeletingSession] = useState(false);
+  const sessionOperation = usePageOperation(JSON.stringify([detail.process.id, selectedSessionId, sessionDialogMode]));
+  const deleteOperation = usePageOperation(JSON.stringify([detail.process.id, deleteTarget?.id]));
   const abortRef = useRef<AbortController | undefined>(undefined);
   const endRef = useRef<HTMLDivElement>(null);
   const readOnly = detail.process.status !== "active";
@@ -141,54 +155,21 @@ export const PreparationConversationPanel = ({
       ? "Upload a material to this conversation's scope first"
       : undefined;
 
-  const refreshSessions = useCallback(async () => {
-    setIsLoading(true);
-    try {
-      setSessions(
-        await interviewPreparationConversationService.list(detail.process.id)
-      );
-    } catch (reason) {
-      onError(errorMessage(reason));
-    } finally {
-      setIsLoading(false);
-    }
-  }, [detail.process.id, onError]);
-
-  const loadConversation = useCallback(async () => {
-    if (!selectedSessionId) {
-      setConversation(undefined);
-      return;
-    }
-    try {
-      setConversation(
-        await interviewPreparationConversationService.load(
-          detail.process.id,
-          selectedSessionId
-        )
-      );
-    } catch (reason) {
-      onError(errorMessage(reason));
-      setSelectedSessionId(undefined);
-      setConversation(undefined);
-    }
-  }, [detail.process.id, onError, selectedSessionId]);
-
   useEffect(() => {
     abortRef.current?.abort();
-    setSelectedSessionId(undefined);
-    setConversation(undefined);
+    abortRef.current = undefined;
+    setIsSending(false);
+    setPendingTurn(undefined);
     setPendingRecoveryMaterialIds([]);
     setFileDialogSelection([]);
     setFileDialogOpen(false);
     setEditingMessage(undefined);
     setStreamingResponse("");
     setDraft("");
-    void refreshSessions();
-  }, [detail.process.id, refreshSessions]);
+  }, [detail.process.id, selectedSessionId]);
 
-  useEffect(() => {
-    void loadConversation();
-  }, [loadConversation]);
+  useEffect(() => { setIsSavingSession(false); }, [selectedSessionId, sessionDialogMode]);
+  useEffect(() => { setIsDeletingSession(false); }, [deleteTarget?.id]);
 
   useEffect(() => {
     onDetailViewChange(Boolean(selectedSessionId));
@@ -223,6 +204,7 @@ export const PreparationConversationPanel = ({
 
   const saveSession = async () => {
     if (!sessionDialogMode) return;
+    const owns = sessionOperation.begin();
     setIsSavingSession(true);
     try {
       const scope = parseScope(sessionScopeValue);
@@ -238,7 +220,6 @@ export const PreparationConversationPanel = ({
           title: sessionTitle,
         });
         targetSessionId = created.id;
-        setSelectedSessionId(created.id);
       } else if (selectedSession) {
         await interviewPreparationConversationService.updateMetadata({
           processId: detail.process.id,
@@ -247,19 +228,13 @@ export const PreparationConversationPanel = ({
           scope,
         });
       }
+      await data.refreshConversation(targetSessionId);
+      if (!owns()) return;
       setSessionDialogMode(undefined);
-      await refreshSessions();
       if (remainsVisible && targetSessionId) {
         setSelectedSessionId(targetSessionId);
-        setConversation(
-          await interviewPreparationConversationService.load(
-            detail.process.id,
-            targetSessionId
-          )
-        );
       } else {
         setSelectedSessionId(undefined);
-        setConversation(undefined);
         const targetRound =
           scope.kind === "round"
             ? detail.rounds.find((round) => round.id === scope.roundId)
@@ -269,31 +244,32 @@ export const PreparationConversationPanel = ({
         );
       }
     } catch (reason) {
-      onError(errorMessage(reason));
+      if (owns()) onError(errorMessage(reason));
     } finally {
-      setIsSavingSession(false);
+      if (owns()) setIsSavingSession(false);
     }
   };
 
   const deleteSession = async () => {
     if (!deleteTarget) return;
+    const owns = deleteOperation.begin();
     setIsDeletingSession(true);
     try {
       await interviewPreparationConversationService.delete(
         detail.process.id,
         deleteTarget.id
       );
+      await data.refreshConversation(deleteTarget.id);
+      if (!owns()) return;
       if (selectedSessionId === deleteTarget.id) {
         setSelectedSessionId(undefined);
-        setConversation(undefined);
       }
       setDeleteTarget(undefined);
-      await refreshSessions();
       onNotice("Preparation conversation deleted");
     } catch (reason) {
-      onError(errorMessage(reason));
+      if (owns()) onError(errorMessage(reason));
     } finally {
-      setIsDeletingSession(false);
+      if (owns()) setIsDeletingSession(false);
     }
   };
 
@@ -354,6 +330,7 @@ export const PreparationConversationPanel = ({
     }
 
     const controller = new AbortController();
+    const owns = streamOperation.begin();
     abortRef.current = controller;
     setIsSending(true);
     setStreamingResponse("");
@@ -369,22 +346,7 @@ export const PreparationConversationPanel = ({
       sourceRefs: [],
       createdAt: Date.now(),
     };
-    setConversation((current) => {
-      if (!current) return current;
-      if (!editing) {
-        return { ...current, messages: [...current.messages, optimistic] };
-      }
-      const targetIndex = current.messages.findIndex(
-        (message) => message.id === editing.id
-      );
-      return {
-        ...current,
-        messages: [
-          ...current.messages.slice(0, Math.max(0, targetIndex)),
-          optimistic,
-        ],
-      };
-    });
+    setPendingTurn({ message: optimistic, editing });
     setDraft("");
     setEditingMessage(undefined);
 
@@ -400,8 +362,12 @@ export const PreparationConversationPanel = ({
             : undefined,
           editMessageId: editing?.id,
           signal: controller.signal,
-          onDelta: setStreamingResponse,
+          onDelta: (response) => {
+            if (owns() && !controller.signal.aborted) setStreamingResponse(response);
+          },
         });
+      if (result.status === "committed") await onMaterialsChanged();
+      if (!owns()) return;
       if (result.status === "stale") {
         onNotice("A newer preparation request replaced this response.");
       } else if (result.status === "committed" && result.postCommitWarning) {
@@ -411,20 +377,21 @@ export const PreparationConversationPanel = ({
       }
       if (result.status === "committed") {
         setPendingRecoveryMaterialIds([]);
-        await onMaterialsChanged();
       }
     } catch (reason) {
-      if (!controller.signal.aborted) {
+      if (owns() && !controller.signal.aborted) {
         onError(errorMessage(reason));
         setDraft(content);
         setEditingMessage(editing);
       }
     } finally {
-      setStreamingResponse("");
-      setIsSending(false);
-      if (abortRef.current === controller) abortRef.current = undefined;
-      await loadConversation();
-      await refreshSessions();
+      await data.refreshConversation(selectedSessionId);
+      if (owns()) {
+        setStreamingResponse("");
+        setIsSending(false);
+        setPendingTurn(undefined);
+        if (abortRef.current === controller) abortRef.current = undefined;
+      }
     }
   };
 

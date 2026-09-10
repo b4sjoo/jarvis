@@ -21,7 +21,6 @@ import {
   formatRoundStageLabel,
   INTERVIEW_ROUND_STAGES,
   PREPARATION_EXPECTED_INTERVIEW_TYPES,
-  interviewPreparationMaterialExtractionService,
   interviewPreparationSnapshotService,
   interviewPreparationService,
   type InterviewProcess,
@@ -30,7 +29,6 @@ import {
   type InterviewRoundStage,
   type PreparationExpectedInterviewType,
   type PreparationCurrentContext,
-  interviewPreparationMaterialService,
   localRoundScheduleToTimestamp,
   type PreparationMaterial,
   timestampToLocalRoundSchedule,
@@ -59,6 +57,8 @@ import { useNavigate, useParams } from "react-router-dom";
 import { MaterialPanel } from "./components/MaterialPanel";
 import { PreparationConversationPanel } from "./components/PreparationConversationPanel";
 import { ReviewedPreparationPanel } from "./components/ReviewedPreparationPanel";
+import { usePreparationData, type PreparationData } from "./usePreparationData";
+import { usePageOperation } from "./page-resource";
 
 type MobilePanel = "processes" | "conversation" | "review";
 type ExpandedWorkspaceSurface = "conversation" | "review";
@@ -66,13 +66,14 @@ type ExpandedWorkspaceSurface = "conversation" | "review";
 const InterviewPreparation = () => {
   const { processId } = useParams();
   const navigate = useNavigate();
-  const [processes, setProcesses] = useState<InterviewProcess[]>([]);
-  const [detail, setDetail] = useState<InterviewProcessDetail>();
-  const [materials, setMaterials] = useState<PreparationMaterial[]>([]);
+  const data = usePreparationData(processId);
+  const processes = data.processes.data ?? [];
+  const detail = data.detail.data;
+  const materials = data.materials.data ?? [];
+  const currentContext = data.currentContext.data ?? { revision: 0, updatedAt: 0 };
+  const isLoading = data.processes.loading;
+  const { error, notice, onError: setError, onNotice: setNotice } = data;
   const [showArchived, setShowArchived] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string>();
-  const [notice, setNotice] = useState<string>();
   const [createOpen, setCreateOpen] = useState(false);
   const [processEditOpen, setProcessEditOpen] = useState(false);
   const [roundOpen, setRoundOpen] = useState(false);
@@ -83,134 +84,27 @@ const InterviewPreparation = () => {
   const [mobilePanel, setMobilePanel] = useState<MobilePanel>("processes");
   const [expandedWorkspaceSurface, setExpandedWorkspaceSurface] =
     useState<ExpandedWorkspaceSurface>();
-  const [currentContext, setCurrentContext] = useState<PreparationCurrentContext>({
-    revision: 0,
-    updatedAt: 0,
-  });
   const [currentRoundTarget, setCurrentRoundTarget] = useState<InterviewRound>();
+  const processOperation = usePageOperation(JSON.stringify([processId]));
+  const roundDeletionOperation = usePageOperation(JSON.stringify([processId, roundDeleteTarget?.id]));
+  const activeRoundOperation = usePageOperation(JSON.stringify([processId]));
+  const currentContextOperation = usePageOperation(JSON.stringify([processId, currentRoundTarget?.id]));
 
-  const loadProcesses = useCallback(async () => {
-    const loaded = await interviewPreparationService.list(true);
-    setProcesses(loaded);
-  }, []);
-
-  const loadDetail = useCallback(async (id: string | undefined) => {
-    if (!id) {
-      setDetail(undefined);
-      return;
-    }
-    const loaded = await interviewPreparationService.get(id);
-    setDetail(loaded);
-  }, []);
-
-  const loadMaterials = useCallback(async (id: string | undefined) => {
-    if (!id) {
-      setMaterials([]);
-      return;
-    }
-    setMaterials(await interviewPreparationMaterialService.list(id));
-  }, []);
-
-  const loadCurrentContext = useCallback(async () => {
-    setCurrentContext(await interviewPreparationSnapshotService.getCurrentContext());
-  }, []);
-
-  const handleWorkspaceMaterialsChanged = useCallback(
-    () => loadMaterials(processId),
-    [loadMaterials, processId]
-  );
-
-  const handleWorkspaceError = useCallback((message: string) => {
-    setNotice(undefined);
-    setError(message || undefined);
-  }, []);
-
-  const handleWorkspaceNotice = useCallback((message: string) => {
-    setError(undefined);
-    setNotice(message || undefined);
-  }, []);
+  const handleWorkspaceMaterialsChanged = data.refreshMaterials;
+  const handleWorkspaceError = data.onError;
+  const handleWorkspaceNotice = data.onNotice;
 
   useEffect(() => {
-    let cancelled = false;
     setProcessEditOpen(false);
     setRoundEditTarget(undefined);
     setRoundDeleteTarget(undefined);
+    setIsDeletingRound(false);
+    setRoundOpen(false);
+    setDeleteOpen(false);
     setCurrentRoundTarget(undefined);
-    setError(undefined);
-    setNotice(undefined);
     setExpandedWorkspaceSurface(undefined);
-    setIsLoading(true);
-    Promise.all([
-      loadProcesses(),
-      loadDetail(processId),
-      loadMaterials(processId),
-      loadCurrentContext(),
-    ])
-      .catch((reason) => {
-        if (!cancelled) setError(errorMessage(reason));
-      })
-      .finally(() => {
-        if (!cancelled) setIsLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [loadCurrentContext, loadDetail, loadMaterials, loadProcesses, processId]);
-
-  useEffect(() => {
-    if (!processId) return;
-    void interviewPreparationMaterialExtractionService
-      .resumeWorkspace(processId)
-      .catch((reason) => setError(errorMessage(reason)));
   }, [processId]);
-
-  useEffect(() => {
-    if (
-      !processId ||
-      !materials.some((material) =>
-        ["received", "extracting"].includes(material.status)
-      )
-    ) {
-      return;
-    }
-    const timer = window.setInterval(() => {
-      void loadMaterials(processId).catch((reason) =>
-        setError(errorMessage(reason))
-      );
-    }, 750);
-    return () => window.clearInterval(timer);
-  }, [loadMaterials, materials, processId]);
-
-  useEffect(() => {
-    if (
-      !processId ||
-      !materials.some((material) =>
-        ["received", "extracting"].includes(material.status)
-      )
-    ) {
-      return;
-    }
-    const timer = window.setInterval(() => {
-      void interviewPreparationMaterialExtractionService
-        .resumeWorkspace(processId)
-        .catch((reason) => setError(errorMessage(reason)));
-    }, 5_000);
-    return () => window.clearInterval(timer);
-  }, [materials, processId]);
-
-  const refresh = async (selectedId = processId) => {
-    setError(undefined);
-    try {
-      await Promise.all([
-        loadProcesses(),
-        loadDetail(selectedId),
-        loadMaterials(selectedId),
-        loadCurrentContext(),
-      ]);
-    } catch (reason) {
-      setError(errorMessage(reason));
-    }
-  };
+  const refresh = data.refreshProcess;
 
   const selectProcess = (id: string) => {
     navigate(`/interview-preparation/${id}`);
@@ -231,55 +125,61 @@ const InterviewPreparation = () => {
 
   const handleArchive = async () => {
     if (!detail) return;
+    const owns = processOperation.begin();
     try {
       await interviewPreparationService.archive(detail.process.id);
       await refresh(detail.process.id);
     } catch (reason) {
-      setError(errorMessage(reason));
+      if (owns()) setError(errorMessage(reason));
     }
   };
 
   const handleReopen = async () => {
     if (!detail) return;
+    const owns = processOperation.begin();
     try {
       await interviewPreparationService.reopen(detail.process.id);
       await refresh(detail.process.id);
     } catch (reason) {
-      setError(errorMessage(reason));
+      if (owns()) setError(errorMessage(reason));
     }
   };
 
   const handleDelete = async () => {
     if (!detail) return;
+    const owns = processOperation.begin();
     try {
       await interviewPreparationService.delete(detail.process.id);
+      await refresh(detail.process.id, false);
+      if (!owns()) return;
       setDeleteOpen(false);
       navigate("/interview-preparation");
-      await refresh(undefined);
       setMobilePanel("processes");
     } catch (reason) {
-      setError(errorMessage(reason));
+      if (owns()) setError(errorMessage(reason));
     }
   };
 
   const handleDeleteRound = async () => {
     if (!detail || !roundDeleteTarget) return;
+    const owns = roundDeletionOperation.begin();
     setIsDeletingRound(true);
-    setError(undefined);
+    setError("");
     try {
       const result = await interviewPreparationService.deleteRound(
         detail.process.id,
         roundDeleteTarget.id
       );
-      setRoundDeleteTarget(undefined);
       await refresh(detail.process.id);
+      if (!owns()) return;
+      setRoundDeleteTarget(undefined);
       setNotice(
         `${roundDeleteTarget.title} deleted · ${result.deletedMaterialCount} materials removed`
       );
     } catch (reason) {
-      setError(errorMessage(reason));
+      if (owns()) setError(errorMessage(reason));
     } finally {
-      setIsDeletingRound(false);
+      if (owns()) setIsDeletingRound(false);
     }
   };
 
@@ -385,6 +285,7 @@ const InterviewPreparation = () => {
         >
           {detail ? (
             <ProcessWorkspace
+              data={data}
               detail={detail}
               currentContext={currentContext}
               materials={materials}
@@ -400,6 +301,7 @@ const InterviewPreparation = () => {
               onEditRound={setRoundEditTarget}
               onDeleteRound={setRoundDeleteTarget}
               onSetActiveRound={async (roundId) => {
+                const owns = activeRoundOperation.begin();
                 try {
                   await interviewPreparationService.setActiveRound(
                     detail.process.id,
@@ -407,7 +309,7 @@ const InterviewPreparation = () => {
                   );
                   await refresh(detail.process.id);
                 } catch (reason) {
-                  setError(errorMessage(reason));
+                  if (owns()) setError(errorMessage(reason));
                 }
               }}
               onSetCurrentRound={(round) => {
@@ -419,13 +321,14 @@ const InterviewPreparation = () => {
                   setCurrentRoundTarget(round);
                   return;
                 }
+                const owns = currentContextOperation.begin();
                 void interviewPreparationSnapshotService
                   .setCurrentContext({
                     processId: detail.process.id,
                     roundId: round.id,
                   })
-                  .then(() => refresh(detail.process.id))
-                  .catch((reason) => setError(errorMessage(reason)));
+                  .then(() => data.refreshSelection())
+                  .catch((reason) => { if (owns()) setError(errorMessage(reason)); });
               }}
               onArchive={handleArchive}
               onReopen={handleReopen}
@@ -448,21 +351,16 @@ const InterviewPreparation = () => {
           }
         >
           <ReviewedStatePanel
+            data={data}
             detail={detail}
             currentContext={currentContext}
             materials={materials}
             expanded={expandedWorkspaceSurface === "review"}
             onExpandedChange={handleReviewedStateExpandedChange}
-            onMaterialsChanged={() => loadMaterials(detail?.process.id)}
-            onMaterialError={(message) => {
-              setNotice(undefined);
-              setError(message);
-            }}
-            onMaterialNotice={(message) => {
-              setError(undefined);
-              setNotice(message);
-            }}
-            onCurrentContextChanged={() => refresh(detail?.process.id)}
+            onMaterialsChanged={data.refreshMaterials}
+            onMaterialError={data.onError}
+            onMaterialNotice={data.onNotice}
+            onCurrentContextChanged={data.refreshSelection}
           />
         </section>
       </div>
@@ -470,41 +368,44 @@ const InterviewPreparation = () => {
       <CreateProcessDialog
         open={createOpen}
         onOpenChange={setCreateOpen}
-        onCreated={(created) => {
+        onCreated={(created, owns) => {
+          void data.refreshProcess(created.process.id);
+          if (!data.isCurrent() || !owns()) return;
           setCreateOpen(false);
-          setProcesses((current) => [created.process, ...current]);
-          setMaterials([]);
           navigate(`/interview-preparation/${created.process.id}`);
           setMobilePanel("conversation");
         }}
       />
       <CreateRoundDialog
+        key={processId}
         processId={detail?.process.id}
         open={roundOpen}
         onOpenChange={setRoundOpen}
-        onCreated={async () => {
-          setRoundOpen(false);
+        onCreated={async (owns) => {
           await refresh(detail?.process.id);
+          if (data.isCurrent() && owns()) setRoundOpen(false);
         }}
       />
       <EditProcessDialog
+        key={processId}
         process={detail?.process}
         open={processEditOpen}
         onOpenChange={setProcessEditOpen}
-        onUpdated={async () => {
-          setProcessEditOpen(false);
+        onUpdated={async (owns) => {
           await refresh(detail?.process.id);
+          if (data.isCurrent() && owns()) setProcessEditOpen(false);
         }}
       />
       <EditRoundDialog
+        key={processId}
         processId={detail?.process.id}
         round={roundEditTarget}
         onOpenChange={(open) => {
           if (!open) setRoundEditTarget(undefined);
         }}
-        onUpdated={async () => {
-          setRoundEditTarget(undefined);
+        onUpdated={async (owns) => {
           await refresh(detail?.process.id);
+          if (data.isCurrent() && owns()) setRoundEditTarget(undefined);
         }}
       />
       <Dialog
@@ -572,6 +473,7 @@ const InterviewPreparation = () => {
             <Button
               onClick={() => {
                 if (!detail || !currentRoundTarget) return;
+                const owns = currentContextOperation.begin();
                 void interviewPreparationSnapshotService
                   .setCurrentContext({
                     processId: detail.process.id,
@@ -579,10 +481,10 @@ const InterviewPreparation = () => {
                     allowContextSwitch: true,
                   })
                   .then(async () => {
-                    setCurrentRoundTarget(undefined);
-                    await refresh(detail.process.id);
+                    await data.refreshSelection();
+                    if (owns()) setCurrentRoundTarget(undefined);
                   })
-                  .catch((reason) => setError(errorMessage(reason)));
+                  .catch((reason) => { if (owns()) setError(errorMessage(reason)); });
               }}
             >
               <Crosshair className="size-4" /> Set current
@@ -613,6 +515,7 @@ const InterviewPreparation = () => {
 };
 
 const ProcessWorkspace = ({
+  data,
   detail,
   currentContext,
   materials,
@@ -631,6 +534,7 @@ const ProcessWorkspace = ({
   onReopen,
   onDelete,
 }: {
+  data: PreparationData;
   detail: InterviewProcessDetail;
   currentContext: PreparationCurrentContext;
   materials: PreparationMaterial[];
@@ -797,6 +701,7 @@ const ProcessWorkspace = ({
     </div>
 
     <PreparationConversationPanel
+      data={data}
       key={detail.process.id}
       detail={detail}
       materials={materials}
@@ -809,6 +714,7 @@ const ProcessWorkspace = ({
 );
 
 const ReviewedStatePanel = ({
+  data,
   detail,
   currentContext,
   materials,
@@ -819,10 +725,11 @@ const ReviewedStatePanel = ({
   onExpandedChange,
   onCurrentContextChanged,
 }: {
+  data: PreparationData;
   detail?: InterviewProcessDetail;
   currentContext: PreparationCurrentContext;
   materials: PreparationMaterial[];
-  onMaterialsChanged: () => Promise<void>;
+  onMaterialsChanged: (materialId?: string) => Promise<void>;
   onMaterialError: (message: string) => void;
   onMaterialNotice: (message: string) => void;
   expanded: boolean;
@@ -833,6 +740,8 @@ const ReviewedStatePanel = ({
     {detail && (
       <div className={expanded ? "hidden" : "block"}>
         <MaterialPanel
+          key={detail.process.id}
+          data={data}
           processId={detail.process.id}
           processStatus={detail.process.status}
           activeRoundId={detail.process.activeRoundId}
@@ -846,6 +755,8 @@ const ReviewedStatePanel = ({
     )}
     {detail ? (
       <ReviewedPreparationPanel
+        key={detail.process.id}
+        data={data}
         detail={detail}
         currentContext={currentContext}
         expanded={expanded}
@@ -869,8 +780,9 @@ const CreateProcessDialog = ({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onCreated: (detail: InterviewProcessDetail) => void;
+  onCreated: (detail: InterviewProcessDetail, owns: () => boolean) => void;
 }) => {
+  const operation = usePageOperation(String(open));
   const [title, setTitle] = useState("");
   const [company, setCompany] = useState("");
   const [role, setRole] = useState("");
@@ -882,8 +794,10 @@ const CreateProcessDialog = ({
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string>();
 
+  useEffect(() => { setIsSaving(false); }, [open]);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    const owns = operation.begin();
     setIsSaving(true);
     setError(undefined);
     try {
@@ -897,17 +811,19 @@ const CreateProcessDialog = ({
           expectedInterviewTypes: stage === "mixed" ? expectedTypes : undefined,
         },
       });
-      setTitle("");
-      setCompany("");
-      setRole("");
-      setStage("recruiter-screen");
-      setCustomStageLabel("");
-      setExpectedTypes([...PREPARATION_EXPECTED_INTERVIEW_TYPES]);
-      onCreated(created);
+      if (owns()) {
+        setTitle("");
+        setCompany("");
+        setRole("");
+        setStage("recruiter-screen");
+        setCustomStageLabel("");
+        setExpectedTypes([...PREPARATION_EXPECTED_INTERVIEW_TYPES]);
+      }
+      onCreated(created, owns);
     } catch (reason) {
-      setError(errorMessage(reason));
+      if (owns()) setError(errorMessage(reason));
     } finally {
-      setIsSaving(false);
+      if (owns()) setIsSaving(false);
     }
   };
 
@@ -984,8 +900,9 @@ const CreateRoundDialog = ({
   processId?: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onCreated: () => Promise<void>;
+  onCreated: (owns: () => boolean) => Promise<void>;
 }) => {
+  const operation = usePageOperation(JSON.stringify([processId, open]));
   const [title, setTitle] = useState("");
   const [stage, setStage] = useState<InterviewRoundStage>("coding");
   const [customStageLabel, setCustomStageLabel] = useState("");
@@ -997,9 +914,11 @@ const CreateRoundDialog = ({
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string>();
 
+  useEffect(() => { setIsSaving(false); }, [processId, open]);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (!processId) return;
+    const owns = operation.begin();
     setIsSaving(true);
     setError(undefined);
     try {
@@ -1013,16 +932,18 @@ const CreateRoundDialog = ({
           time: scheduledTime,
         }),
       });
-      setTitle("");
-      setCustomStageLabel("");
-      setExpectedTypes([...PREPARATION_EXPECTED_INTERVIEW_TYPES]);
-      setScheduledDate("");
-      setScheduledTime("");
-      await onCreated();
+      if (owns()) {
+        setTitle("");
+        setCustomStageLabel("");
+        setExpectedTypes([...PREPARATION_EXPECTED_INTERVIEW_TYPES]);
+        setScheduledDate("");
+        setScheduledTime("");
+      }
+      await onCreated(owns);
     } catch (reason) {
-      setError(errorMessage(reason));
+      if (owns()) setError(errorMessage(reason));
     } finally {
-      setIsSaving(false);
+      if (owns()) setIsSaving(false);
     }
   };
 
@@ -1094,8 +1015,9 @@ const EditProcessDialog = ({
   process?: InterviewProcess;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onUpdated: () => Promise<void>;
+  onUpdated: (owns: () => boolean) => Promise<void>;
 }) => {
+  const operation = usePageOperation(JSON.stringify([process?.id, open]));
   const [title, setTitle] = useState("");
   const [company, setCompany] = useState("");
   const [role, setRole] = useState("");
@@ -1103,16 +1025,18 @@ const EditProcessDialog = ({
   const [error, setError] = useState<string>();
 
   useEffect(() => {
+    setIsSaving(false);
     if (!open || !process) return;
     setTitle(process.title);
     setCompany(process.company ?? "");
     setRole(process.role ?? "");
     setError(undefined);
-  }, [open, process]);
+  }, [open, process?.id]);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (!process) return;
+    const owns = operation.begin();
     setIsSaving(true);
     setError(undefined);
     try {
@@ -1121,11 +1045,11 @@ const EditProcessDialog = ({
         company,
         role,
       });
-      await onUpdated();
+      await onUpdated(owns);
     } catch (reason) {
-      setError(errorMessage(reason));
+      if (owns()) setError(errorMessage(reason));
     } finally {
-      setIsSaving(false);
+      if (owns()) setIsSaving(false);
     }
   };
 
@@ -1175,8 +1099,9 @@ const EditRoundDialog = ({
   processId?: string;
   round?: InterviewRound;
   onOpenChange: (open: boolean) => void;
-  onUpdated: () => Promise<void>;
+  onUpdated: (owns: () => boolean) => Promise<void>;
 }) => {
+  const operation = usePageOperation(JSON.stringify([processId, round?.id]));
   const [title, setTitle] = useState("");
   const [stage, setStage] = useState<InterviewRoundStage>("coding");
   const [customStageLabel, setCustomStageLabel] = useState("");
@@ -1189,6 +1114,7 @@ const EditRoundDialog = ({
   const [error, setError] = useState<string>();
 
   useEffect(() => {
+    setIsSaving(false);
     if (!round) return;
     setTitle(round.title);
     setStage(round.stage);
@@ -1202,11 +1128,12 @@ const EditRoundDialog = ({
     setScheduledDate(schedule.date);
     setScheduledTime(schedule.time);
     setError(undefined);
-  }, [round]);
+  }, [round?.id]);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (!processId || !round) return;
+    const owns = operation.begin();
     setIsSaving(true);
     setError(undefined);
     try {
@@ -1220,11 +1147,11 @@ const EditRoundDialog = ({
           time: scheduledTime,
         }),
       });
-      await onUpdated();
+      await onUpdated(owns);
     } catch (reason) {
-      setError(errorMessage(reason));
+      if (owns()) setError(errorMessage(reason));
     } finally {
-      setIsSaving(false);
+      if (owns()) setIsSaving(false);
     }
   };
 

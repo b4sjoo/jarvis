@@ -25,7 +25,6 @@ import {
   createPreparationProfileSourceFingerprint,
   diffPreparationSnapshots,
   interviewPreparationCompositionService,
-  interviewPreparationConversationService,
   interviewPreparationSnapshotService,
   interviewPreparationStatementProposalService,
   interviewPreparationStatementService,
@@ -36,7 +35,6 @@ import {
   type InterviewProcessDetail,
   type PreparationCurrentContext,
   type PreparationSnapshotDiffSection,
-  type PreparationConversation,
   type PreparationConversationScope,
   type PreparationNarrativeGraph,
   type PreparationNarrativeNode,
@@ -66,18 +64,22 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { PreparationData } from "../usePreparationData";
+import { usePageOperation } from "../page-resource";
 
 const PROCESS_SCOPE = "process";
 
 export const ReviewedPreparationPanel = ({
+  data,
   detail,
   currentContext,
   expanded,
   onExpandedChange,
-  onError,
-  onNotice,
+  onError: reportError,
+  onNotice: reportNotice,
   onCurrentContextChanged,
 }: {
+  data: PreparationData;
   detail: InterviewProcessDetail;
   currentContext: PreparationCurrentContext;
   expanded: boolean;
@@ -87,23 +89,29 @@ export const ReviewedPreparationPanel = ({
   onCurrentContextChanged: () => Promise<void>;
 }) => {
   const { allAiProviders, selectedPreparationAIProvider } = useApp();
-  const [scopeValue, setScopeValue] = useState(
-    detail.process.activeRoundId
-      ? `round:${detail.process.activeRoundId}`
-      : PROCESS_SCOPE
-  );
-  const [statements, setStatements] = useState<PreparationStatementWithSources[]>([]);
-  const [conversations, setConversations] = useState<PreparationConversation[]>([]);
-  const [profile, setProfile] = useState<InterviewPreparationProfileRevision>();
-  const [narratives, setNarratives] = useState<PreparationNarrativeGraph[]>([]);
-  const [snapshots, setSnapshots] = useState<InterviewPreparationSnapshot[]>([]);
-  const [selectedSnapshot, setSelectedSnapshot] =
-    useState<InterviewPreparationSnapshot>();
-  const [selectedConversationId, setSelectedConversationId] = useState("");
+  const { scopeValue, selectReviewScope: setScopeValue, scope } = data;
+  const statements = data.statements.data ?? [];
+  const conversations = data.sessions.data ?? [];
+  const profile = data.profile.data;
+  const narratives = data.narratives.data ?? [];
+  const snapshots = data.snapshots.data ?? [];
+  const selectedSnapshot = data.selectedSnapshot.data;
+  const viewKey = JSON.stringify([detail.process.id, scopeValue]);
+  const view = usePageOperation(viewKey);
+  const proposalOperation = usePageOperation(viewKey);
+  const profileOperation = usePageOperation(viewKey);
+  const snapshotOperation = usePageOperation(viewKey);
+  const onError = useCallback((message: string) => {
+    if (view.isCurrent()) reportError(message);
+  }, [view.isCurrent, reportError]);
+  const onNotice = useCallback((message: string) => {
+    if (view.isCurrent()) reportNotice(message);
+  }, [view.isCurrent, reportNotice]);
+  const [preferredConversationId, setSelectedConversationId] = useState("");
   const [statusFilter, setStatusFilter] = useState<PreparationStatementStatus | "all">(
     "all"
   );
-  const [isLoading, setIsLoading] = useState(true);
+  const isLoading = data.statements.loading;
   const [isGeneratingProposals, setIsGeneratingProposals] = useState(false);
   const [isComposingProfile, setIsComposingProfile] = useState(false);
   const [isCompilingSnapshot, setIsCompilingSnapshot] = useState(false);
@@ -111,16 +119,19 @@ export const ReviewedPreparationPanel = ({
     useState<InterviewPreparationSnapshot>();
   const [reviewTarget, setReviewTarget] = useState<PreparationStatementWithSources>();
   const [sourceTarget, setSourceTarget] = useState<PreparationStatementWithSources>();
-  const [reviewEvents, setReviewEvents] = useState<PreparationStatementReviewEvent[]>([]);
+  const reviewEvents = data.reviewEvents.data ?? [];
   const [narrativeDialogOpen, setNarrativeDialogOpen] = useState(false);
   const [narrativeReview, setNarrativeReview] = useState<{
     graph: PreparationNarrativeGraph;
     node: PreparationNarrativeNode;
   }>();
+  const statementReviewOperation = usePageOperation(JSON.stringify([viewKey, reviewTarget?.id]));
+  const narrativeReviewOperation = usePageOperation(JSON.stringify([viewKey, narrativeReview?.node.id]));
+  const narrativeDialogOperation = usePageOperation(JSON.stringify([viewKey, narrativeDialogOpen]));
+  const selectionOperation = usePageOperation(JSON.stringify([viewKey, snapshotReview?.id]));
   const proposalAbortRef = useRef<AbortController | undefined>(undefined);
   const narrativeAbortRef = useRef<AbortController | undefined>(undefined);
   const readOnly = detail.process.status !== "active";
-  const scope = useMemo(() => parseScope(scopeValue), [scopeValue]);
   const visibleConversations = useMemo(
     () =>
       conversations.filter(
@@ -132,6 +143,10 @@ export const ReviewedPreparationPanel = ({
       ),
     [conversations, scope]
   );
+  const selectedConversationId = visibleConversations.find((conversation) => conversation.id === preferredConversationId)?.id
+    ?? visibleConversations.find((conversation) => sameScope(conversation.scope, scope))?.id
+    ?? visibleConversations.find((conversation) => conversation.scope.kind === "process")?.id
+    ?? "";
   const filteredStatements = useMemo(
     () =>
       statusFilter === "all"
@@ -151,90 +166,22 @@ export const ReviewedPreparationPanel = ({
     selectedProvider: selectedPreparationAIProvider,
   });
 
-  const refresh = useCallback(async () => {
-    setIsLoading(true);
-    try {
-      const [
-        nextStatements,
-        nextConversations,
-        nextProfile,
-        nextNarratives,
-        nextSnapshots,
-        nextSelectedSnapshot,
-      ] =
-        await Promise.all([
-          interviewPreparationStatementService.list({
-            processId: detail.process.id,
-            roundId: scope.kind === "round" ? scope.roundId : undefined,
-          }),
-          interviewPreparationConversationService.list(detail.process.id),
-          interviewPreparationCompositionService.getLatestProfile({
-            processId: detail.process.id,
-            scope,
-          }),
-          interviewPreparationCompositionService.listNarratives({
-            processId: detail.process.id,
-            roundId: scope.kind === "round" ? scope.roundId : undefined,
-          }),
-          scope.kind === "round"
-            ? interviewPreparationSnapshotService.list({
-                processId: detail.process.id,
-                roundId: scope.roundId,
-              })
-            : Promise.resolve([]),
-          interviewPreparationSnapshotService.getCurrentSnapshot(),
-        ]);
-      setStatements(nextStatements);
-      setConversations(nextConversations);
-      setProfile(nextProfile);
-      setNarratives(
-        nextNarratives.filter((graph) => sameScope(graph.scope, scope))
-      );
-      setSnapshots(nextSnapshots);
-      setSelectedSnapshot(nextSelectedSnapshot);
-      setSelectedConversationId((current) => {
-        const currentConversation = nextConversations.find(
-          (conversation) => conversation.id === current
-        );
-        if (
-          currentConversation &&
-          isConversationVisibleToScope(currentConversation.scope, scope)
-        ) {
-          return current;
-        }
-        const exact = nextConversations.find((conversation) =>
-          sameScope(conversation.scope, scope)
-        );
-        const processConversation = nextConversations.find(
-          (conversation) => conversation.scope.kind === "process"
-        );
-        return exact?.id ?? processConversation?.id ?? "";
-      });
-    } catch (reason) {
-      onError(errorMessage(reason));
-    } finally {
-      setIsLoading(false);
-    }
-  }, [detail.process.id, onError, scope]);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
+  const refresh = data.refreshReviewed;
 
   useEffect(
     () => () => {
       proposalAbortRef.current?.abort();
       narrativeAbortRef.current?.abort();
     },
-    []
+    [viewKey]
   );
 
   useEffect(() => {
-    const next = detail.process.activeRoundId
-      ? `round:${detail.process.activeRoundId}`
-      : PROCESS_SCOPE;
-    setScopeValue(next);
-  }, [detail.process.activeRoundId, detail.process.id]);
+    setIsGeneratingProposals(false);
+    setIsComposingProfile(false);
+    setIsCompilingSnapshot(false);
+    setSourceTarget(undefined);
+  }, [viewKey]);
 
   const generateProposals = async () => {
     if (!selectedConversationId || readOnly || isGeneratingProposals) return;
@@ -243,6 +190,8 @@ export const ReviewedPreparationPanel = ({
       return;
     }
     const controller = new AbortController();
+    const owns = proposalOperation.begin();
+    const proposalScope = conversations.find((conversation) => conversation.id === selectedConversationId)?.scope ?? scope;
     proposalAbortRef.current = controller;
     setIsGeneratingProposals(true);
     try {
@@ -252,6 +201,8 @@ export const ReviewedPreparationPanel = ({
         route,
         signal: controller.signal,
       });
+      await data.refreshStatements(proposalScope);
+      if (!owns()) return;
       if (result.status === "committed") {
         onNotice(
           result.acceptedCount
@@ -261,35 +212,36 @@ export const ReviewedPreparationPanel = ({
       } else if (result.status === "stale") {
         onNotice("Proposal result was discarded because its evidence changed");
       }
-      await refresh();
     } catch (reason) {
-      if (!controller.signal.aborted) onError(errorMessage(reason));
+      if (owns() && !controller.signal.aborted) onError(errorMessage(reason));
     } finally {
       if (proposalAbortRef.current === controller) {
         proposalAbortRef.current = undefined;
       }
-      setIsGeneratingProposals(false);
+      if (owns()) setIsGeneratingProposals(false);
     }
   };
 
   const composeProfile = async () => {
     if (readOnly || isComposingProfile) return;
+    const owns = profileOperation.begin();
     setIsComposingProfile(true);
     try {
       const result = await interviewPreparationCompositionService.composeProfile({
         processId: detail.process.id,
         scope,
       });
+      await refresh();
+      if (!owns()) return;
       onNotice(
         result.created
           ? `Profile revision ${result.profile.revision} composed`
           : `Profile revision ${result.profile.revision} is already current`
       );
-      await refresh();
     } catch (reason) {
-      onError(errorMessage(reason));
+      if (owns()) onError(errorMessage(reason));
     } finally {
-      setIsComposingProfile(false);
+      if (owns()) setIsComposingProfile(false);
     }
   };
 
@@ -303,6 +255,7 @@ export const ReviewedPreparationPanel = ({
     ) {
       return;
     }
+    const owns = snapshotOperation.begin();
     setIsCompilingSnapshot(true);
     try {
       const result = await interviewPreparationSnapshotService.compile({
@@ -310,33 +263,24 @@ export const ReviewedPreparationPanel = ({
         roundId: scope.roundId,
         profileRevisionId: profile.id,
       });
+      await refresh();
+      if (!owns()) return;
       onNotice(
         result.created
           ? `Snapshot version ${result.snapshot.version} compiled for review`
           : `Snapshot version ${result.snapshot.version} already matches the current preparation state`
       );
-      await refresh();
       setSnapshotReview(result.snapshot);
     } catch (reason) {
-      onError(errorMessage(reason));
+      if (owns()) onError(errorMessage(reason));
     } finally {
-      setIsCompilingSnapshot(false);
+      if (owns()) setIsCompilingSnapshot(false);
     }
   };
 
-  const openSources = async (statement: PreparationStatementWithSources) => {
+  const openSources = (statement: PreparationStatementWithSources) => {
     setSourceTarget(statement);
-    setReviewEvents([]);
-    try {
-      setReviewEvents(
-        await interviewPreparationStatementService.listEvents(
-          detail.process.id,
-          statement.id
-        )
-      );
-    } catch (reason) {
-      onError(errorMessage(reason));
-    }
+    data.selectStatement(statement.id);
   };
 
   return (
@@ -611,21 +555,28 @@ export const ReviewedPreparationPanel = ({
         onOpenChange={(open) => !open && setReviewTarget(undefined)}
         onSave={async (input) => {
           if (!reviewTarget) return;
+          const owns = statementReviewOperation.begin();
           await interviewPreparationStatementService.review({
             processId: detail.process.id,
             statementId: reviewTarget.id,
             expectedRevision: reviewTarget.revision,
             ...input,
           });
+          await data.refreshStatements(reviewTarget.scope);
+          if (!owns()) return;
           setReviewTarget(undefined);
-          await refresh();
           onNotice(`Statement marked ${input.status}`);
         }}
       />
       <SourceDialog
         statement={sourceTarget}
         events={reviewEvents}
-        onOpenChange={(open) => !open && setSourceTarget(undefined)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setSourceTarget(undefined);
+            data.selectStatement(undefined);
+          }
+        }}
       />
       <NarrativeCreateDialog
         open={narrativeDialogOpen}
@@ -636,8 +587,9 @@ export const ReviewedPreparationPanel = ({
         processId={detail.process.id}
         onOpenChange={setNarrativeDialogOpen}
         onCreated={async () => {
-          setNarrativeDialogOpen(false);
           await refresh();
+          if (!narrativeDialogOperation.isCurrent()) return;
+          setNarrativeDialogOpen(false);
           onNotice("Narrative draft generated for review");
         }}
         onError={onError}
@@ -649,6 +601,7 @@ export const ReviewedPreparationPanel = ({
         onOpenChange={(open) => !open && setNarrativeReview(undefined)}
         onSave={async (contentDraft, reviewStatus) => {
           if (!narrativeReview) return;
+          const owns = narrativeReviewOperation.begin();
           await interviewPreparationCompositionService.reviewNarrativeNode({
             processId: detail.process.id,
             graphId: narrativeReview.graph.id,
@@ -657,8 +610,9 @@ export const ReviewedPreparationPanel = ({
             contentDraft,
             reviewStatus,
           });
-          setNarrativeReview(undefined);
           await refresh();
+          if (!owns()) return;
+          setNarrativeReview(undefined);
           onNotice(`Narrative node marked ${reviewStatus}`);
         }}
         onError={onError}
@@ -680,26 +634,30 @@ export const ReviewedPreparationPanel = ({
         onOpenChange={(open) => !open && setSnapshotReview(undefined)}
         onActivate={async (allowContextSwitch) => {
           if (!snapshotReview) return;
+          const owns = selectionOperation.begin();
           const active = await interviewPreparationSnapshotService.activate({
             processId: detail.process.id,
             roundId: snapshotReview.roundId,
             snapshotId: snapshotReview.id,
             allowContextSwitch,
           });
-          setSnapshotReview(active);
           await Promise.all([refresh(), onCurrentContextChanged()]);
+          if (!owns()) return;
+          setSnapshotReview(active);
           onNotice(`Snapshot version ${active.version} activated`);
         }}
         onDeactivate={async () => {
           if (!snapshotReview) return;
+          const owns = selectionOperation.begin();
           const deactivated =
             await interviewPreparationSnapshotService.deactivate({
               processId: detail.process.id,
               roundId: snapshotReview.roundId,
               snapshotId: snapshotReview.id,
             });
-          setSnapshotReview(deactivated);
           await Promise.all([refresh(), onCurrentContextChanged()]);
+          if (!owns()) return;
+          setSnapshotReview(deactivated);
           onNotice(`Snapshot version ${deactivated.version} deactivated`);
         }}
       />
@@ -771,6 +729,7 @@ const SnapshotReviewDialog = ({
   const [isChangingSelection, setIsChangingSelection] = useState(false);
   const [localError, setLocalError] = useState("");
   const [confirmContextSwitch, setConfirmContextSwitch] = useState(false);
+  const operation = usePageOperation(JSON.stringify([snapshot?.processId, snapshot?.id]));
   const diff = useMemo(
     () =>
       snapshot
@@ -785,6 +744,7 @@ const SnapshotReviewDialog = ({
   useEffect(() => {
     setLocalError("");
     setConfirmContextSwitch(false);
+    setIsChangingSelection(false);
   }, [snapshot?.id]);
 
   const activate = async (allowContextSwitch = false) => {
@@ -798,27 +758,29 @@ const SnapshotReviewDialog = ({
       setConfirmContextSwitch(true);
       return;
     }
+    const owns = operation.begin();
     setIsChangingSelection(true);
     setLocalError("");
     try {
       await onActivate(allowContextSwitch);
-      setConfirmContextSwitch(false);
+      if (owns()) setConfirmContextSwitch(false);
     } catch (reason) {
-      setLocalError(errorMessage(reason));
+      if (owns()) setLocalError(errorMessage(reason));
     } finally {
-      setIsChangingSelection(false);
+      if (owns()) setIsChangingSelection(false);
     }
   };
 
   const deactivate = async () => {
+    const owns = operation.begin();
     setIsChangingSelection(true);
     setLocalError("");
     try {
       await onDeactivate();
     } catch (reason) {
-      setLocalError(errorMessage(reason));
+      if (owns()) setLocalError(errorMessage(reason));
     } finally {
-      setIsChangingSelection(false);
+      if (owns()) setIsChangingSelection(false);
     }
   };
 
@@ -1321,8 +1283,10 @@ const StatementReviewDialog = ({
   const [families, setFamilies] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [localError, setLocalError] = useState("");
+  const operation = usePageOperation(JSON.stringify([statement?.processId, statement?.id]));
 
   useEffect(() => {
+    setIsSaving(false);
     if (!statement) return;
     setContent(statement.content);
     setDomain(statement.domain);
@@ -1346,6 +1310,7 @@ const StatementReviewDialog = ({
       );
       return;
     }
+    const owns = operation.begin();
     setLocalError("");
     setIsSaving(true);
     try {
@@ -1359,9 +1324,9 @@ const StatementReviewDialog = ({
         allowedInterviewFamilies: splitLines(families),
       });
     } catch (reason) {
-      setLocalError(errorMessage(reason));
+      if (owns()) setLocalError(errorMessage(reason));
     } finally {
-      setIsSaving(false);
+      if (owns()) setIsSaving(false);
     }
   };
 
@@ -1545,25 +1510,31 @@ const NarrativeCreateDialog = ({
   const [title, setTitle] = useState("");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [baseProfile, setBaseProfile] = useState(profile);
+  const operationKey = JSON.stringify([processId, scope, open]);
+  const operation = usePageOperation(operationKey);
 
   useEffect(() => {
     if (!open) return;
     setSelectedIds(statements.map((statement) => statement.id));
-  }, [open, statements]);
+    setBaseProfile(profile);
+    setIsGenerating(false);
+  }, [operationKey]);
 
   const generate = async () => {
-    if (!profile || route.status !== "ready") {
+    if (!baseProfile || route.status !== "ready") {
       onError(formatPreparationModelRouteError(route));
       return;
     }
     const controller = new AbortController();
+    const owns = operation.begin();
     abortRef.current = controller;
     setIsGenerating(true);
     try {
       const result = await interviewPreparationCompositionService.generateNarrative({
         processId,
         scope,
-        profileRevisionId: profile.id,
+        profileRevisionId: baseProfile.id,
         statementIds: selectedIds,
         subjectKind,
         subjectId,
@@ -1572,14 +1543,14 @@ const NarrativeCreateDialog = ({
         signal: controller.signal,
       });
       if (result.status === "committed") await onCreated();
-      if (result.status === "stale") {
+      if (owns() && result.status === "stale") {
         onError("Narrative evidence changed before the model completed. Try again.");
       }
     } catch (reason) {
-      if (!controller.signal.aborted) onError(errorMessage(reason));
+      if (owns() && !controller.signal.aborted) onError(errorMessage(reason));
     } finally {
       if (abortRef.current === controller) abortRef.current = undefined;
-      setIsGenerating(false);
+      if (owns()) setIsGenerating(false);
     }
   };
 
@@ -1662,15 +1633,20 @@ const NarrativeReviewDialog = ({
 }) => {
   const [content, setContent] = useState("");
   const [isSaving, setIsSaving] = useState(false);
-  useEffect(() => setContent(target?.node.contentDraft ?? ""), [target]);
+  const operation = usePageOperation(JSON.stringify([target?.graph.id, target?.node.id]));
+  useEffect(() => {
+    setContent(target?.node.contentDraft ?? "");
+    setIsSaving(false);
+  }, [target]);
   const save = async (status: PreparationNarrativeReviewStatus) => {
+    const owns = operation.begin();
     setIsSaving(true);
     try {
       await onSave(content, status);
     } catch (reason) {
-      onError(errorMessage(reason));
+      if (owns()) onError(errorMessage(reason));
     } finally {
-      setIsSaving(false);
+      if (owns()) setIsSaving(false);
     }
   };
   return (
@@ -1710,12 +1686,6 @@ const EmptyState = ({ text }: { text: string }) => (
   <div className="px-4 py-10 text-center text-sm text-muted-foreground">{text}</div>
 );
 
-function parseScope(value: string): PreparationConversationScope {
-  return value.startsWith("round:")
-    ? { kind: "round", roundId: value.slice("round:".length) }
-    : { kind: "process" };
-}
-
 function sameScope(left: PreparationConversationScope, right: PreparationConversationScope) {
   return left.kind === right.kind && (left.kind === "process" || (right.kind === "round" && left.roundId === right.roundId));
 }
@@ -1732,13 +1702,6 @@ function resolveSnapshotComparison(input: {
   return [...input.snapshots]
     .filter((candidate) => candidate.version < input.snapshot!.version)
     .sort((left, right) => right.version - left.version)[0];
-}
-
-function isConversationVisibleToScope(
-  conversation: PreparationConversationScope,
-  scope: PreparationConversationScope
-) {
-  return conversation.kind === "process" || sameScope(conversation, scope);
 }
 
 function splitLines(value: string) {

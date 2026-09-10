@@ -39,10 +39,13 @@ import {
   Trash2,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import type { PreparationData } from "../usePreparationData";
+import { usePageOperation } from "../page-resource";
 
 const PROCESS_SCOPE = "workspace";
 
 export const MaterialPanel = ({
+  data,
   processId,
   processStatus,
   activeRoundId,
@@ -52,12 +55,13 @@ export const MaterialPanel = ({
   onError,
   onNotice,
 }: {
+  data: PreparationData;
   processId: string;
   processStatus: PreparationWorkspaceStatus;
   activeRoundId?: string;
   rounds: InterviewRound[];
   materials: PreparationMaterial[];
-  onChanged: () => Promise<void>;
+  onChanged: (materialId?: string) => Promise<void>;
   onError: (message: string) => void;
   onNotice: (message: string) => void;
 }) => {
@@ -70,9 +74,12 @@ export const MaterialPanel = ({
     failures: string[];
   }>();
   const [deleteTarget, setDeleteTarget] = useState<PreparationMaterial>();
-  const [inspectTarget, setInspectTarget] = useState<PreparationMaterial>();
-  const [inspection, setInspection] = useState<PreparationExtractionInspection>();
-  const [isInspecting, setIsInspecting] = useState(false);
+  const inspectTarget = data.inspectTarget;
+  const setInspectTarget = (material?: PreparationMaterial) => data.selectMaterial(material?.id);
+  const inspection = data.inspection.data;
+  const isInspecting = data.inspection.loading;
+  const inspectionOperation = usePageOperation(JSON.stringify([processId, inspectTarget?.id]));
+  const retryOperation = usePageOperation(JSON.stringify([processId, inspectTarget?.id]));
   const [isRetryingExtraction, setIsRetryingExtraction] = useState(false);
   const [scopeEditTarget, setScopeEditTarget] = useState<PreparationMaterial>();
   const [scopeEditValue, setScopeEditValue] = useState(PROCESS_SCOPE);
@@ -82,6 +89,9 @@ export const MaterialPanel = ({
   const [manualText, setManualText] = useState("");
   const [manualBaseRevisionId, setManualBaseRevisionId] = useState<string>();
   const [isSavingReview, setIsSavingReview] = useState(false);
+  const importOperation = usePageOperation(JSON.stringify([processId, addOpen]));
+  const deleteOperation = usePageOperation(JSON.stringify([processId, deleteTarget?.id]));
+  const scopeOperation = usePageOperation(JSON.stringify([processId, scopeEditTarget?.id]));
 
   const roundTitles = useMemo(
     () => new Map(rounds.map((round) => [round.id, round.title])),
@@ -98,49 +108,22 @@ export const MaterialPanel = ({
     setAddOpen(false);
     setImportFeedback(undefined);
     setDeleteTarget(undefined);
-    setInspectTarget(undefined);
-    setInspection(undefined);
     setScopeEditTarget(undefined);
     setManualTextOpen(false);
     setManualText("");
   }, [processId]);
 
   useEffect(() => {
-    if (!inspectTarget) {
-      setInspection(undefined);
-      return;
-    }
-    let cancelled = false;
-    setIsInspecting(true);
-    void interviewPreparationMaterialExtractionService
-      .inspect(processId, inspectTarget.id)
-      .then((result) => {
-        if (!cancelled) setInspection(result);
-      })
-      .catch((reason) => {
-        if (!cancelled) onError(errorMessage(reason));
-      })
-      .finally(() => {
-        if (!cancelled) setIsInspecting(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [inspectTarget, onError, processId]);
-
-  useEffect(() => {
-    if (!inspectTarget) return;
-    const current = materials.find((material) => material.id === inspectTarget.id);
-    if (
-      current &&
-      (current.status !== inspectTarget.status ||
-        current.updatedAt !== inspectTarget.updatedAt)
-    ) {
-      setInspectTarget(current);
-    }
-  }, [inspectTarget, materials]);
+    setIsRetryingExtraction(false);
+    setIsSavingReview(false);
+    setManualTextOpen(false);
+  }, [inspectTarget?.id]);
+  useEffect(() => { setIsImporting(false); }, [addOpen]);
+  useEffect(() => { setIsDeleting(false); }, [deleteTarget?.id]);
+  useEffect(() => { setIsUpdatingScope(false); }, [scopeEditTarget?.id]);
 
   const chooseFiles = async () => {
+    const owns = importOperation.begin();
     setIsImporting(true);
     setImportFeedback(undefined);
     onNotice("");
@@ -167,7 +150,7 @@ export const MaterialPanel = ({
           },
         ],
       });
-      if (!selection) return;
+      if (!selection || !owns()) return;
       const sourcePaths = Array.isArray(selection) ? selection : [selection];
       const outcomes = await interviewPreparationMaterialService.importPaths({
         workspaceId: processId,
@@ -186,6 +169,7 @@ export const MaterialPanel = ({
       }).catch(() => {});
 
       await onChanged();
+      if (!owns()) return;
       if (duplicates.length || failures.length) {
         setImportFeedback({
           added: imported.map((outcome) =>
@@ -203,32 +187,35 @@ export const MaterialPanel = ({
         onNotice(`${imported.length} added`);
       }
     } catch (reason) {
-      onError(errorMessage(reason));
+      if (owns()) onError(errorMessage(reason));
     } finally {
-      setIsImporting(false);
+      if (owns()) setIsImporting(false);
     }
   };
 
   const deleteMaterial = async () => {
     if (!deleteTarget) return;
+    const owns = deleteOperation.begin();
     setIsDeleting(true);
     try {
       await interviewPreparationMaterialService.delete(
         processId,
         deleteTarget.id
       );
+      await onChanged(deleteTarget.id);
+      if (!owns()) return;
       setDeleteTarget(undefined);
-      await onChanged();
       onNotice("Material deleted");
     } catch (reason) {
-      onError(errorMessage(reason));
+      if (owns()) onError(errorMessage(reason));
     } finally {
-      setIsDeleting(false);
+      if (owns()) setIsDeleting(false);
     }
   };
 
   const updateMaterialScope = async () => {
     if (!scopeEditTarget) return;
+    const owns = scopeOperation.begin();
     setIsUpdatingScope(true);
     try {
       const scope = parseScope(scopeEditValue);
@@ -237,55 +224,42 @@ export const MaterialPanel = ({
         scopeEditTarget.id,
         scope
       );
+      await onChanged(scopeEditTarget.id);
+      if (!owns()) return;
       setScopeEditTarget(undefined);
-      await onChanged();
       onNotice(
         `Material moved to ${formatPreparationMaterialScope(scope, roundTitles)}`
       );
     } catch (reason) {
-      onError(errorMessage(reason));
+      if (owns()) onError(errorMessage(reason));
     } finally {
-      setIsUpdatingScope(false);
+      if (owns()) setIsUpdatingScope(false);
     }
   };
 
   const retryExtraction = async () => {
     if (!inspectTarget) return;
+    const owns = retryOperation.begin();
     setIsRetryingExtraction(true);
     try {
-      const result = await interviewPreparationMaterialExtractionService.schedule(
+      await interviewPreparationMaterialExtractionService.schedule(
         processId,
         inspectTarget.id,
         { force: true }
       );
-      setInspection(result);
-      await onChanged();
-      onNotice("Material extraction completed");
+      await onChanged(inspectTarget.id);
+      if (owns()) onNotice("Material extraction completed");
     } catch (reason) {
-      onError(errorMessage(reason));
-      const result = await interviewPreparationMaterialExtractionService
-        .inspect(processId, inspectTarget.id)
-        .catch(() => undefined);
-      setInspection(result);
-      await onChanged();
+      if (owns()) onError(errorMessage(reason));
+      await onChanged(inspectTarget.id);
     } finally {
-      setIsRetryingExtraction(false);
+      if (owns()) setIsRetryingExtraction(false);
     }
-  };
-
-  const refreshInspection = async () => {
-    if (!inspectTarget) return undefined;
-    const result = await interviewPreparationMaterialExtractionService.inspect(
-      processId,
-      inspectTarget.id
-    );
-    setInspection(result);
-    await onChanged();
-    return result;
   };
 
   const approveMaterial = async () => {
     if (!inspectTarget || !inspection) return;
+    const owns = inspectionOperation.begin();
     setIsSavingReview(true);
     try {
       const approved = await interviewPreparationMaterialExtractionService.approve(
@@ -296,12 +270,12 @@ export const MaterialPanel = ({
       if (!approved) {
         throw new Error("Material changed; reopen the details and retry.");
       }
-      await refreshInspection();
-      onNotice("Material marked ready");
+      await onChanged(inspectTarget.id);
+      if (owns()) onNotice("Material marked ready");
     } catch (reason) {
-      onError(errorMessage(reason));
+      if (owns()) onError(errorMessage(reason));
     } finally {
-      setIsSavingReview(false);
+      if (owns()) setIsSavingReview(false);
     }
   };
 
@@ -315,6 +289,7 @@ export const MaterialPanel = ({
 
   const saveManualText = async (markReady: boolean) => {
     if (!inspectTarget || !manualText.trim() || !manualBaseRevisionId) return;
+    const owns = inspectionOperation.begin();
     setIsSavingReview(true);
     try {
       await interviewPreparationMaterialExtractionService.commitManualText({
@@ -324,17 +299,18 @@ export const MaterialPanel = ({
         text: manualText,
         markReady,
       });
+      await onChanged(inspectTarget.id);
+      if (!owns()) return;
       setManualTextOpen(false);
-      await refreshInspection();
       onNotice(
         markReady
           ? "Manual material text saved and marked ready"
           : "Manual material text saved for review"
       );
     } catch (reason) {
-      onError(errorMessage(reason));
+      if (owns()) onError(errorMessage(reason));
     } finally {
-      setIsSavingReview(false);
+      if (owns()) setIsSavingReview(false);
     }
   };
 

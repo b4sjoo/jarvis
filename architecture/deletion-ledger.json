@@ -427,6 +427,19 @@
       ]
     },
     {
+      "id": "preparation-panel-read-publication-duplication",
+      "symbolOrSurface": "Preparation page and panels' duplicate session loaders and independent read publication",
+      "verdict": "migrate-then-delete",
+      "ownerTaskId": 169,
+      "replacement": "Page-scoped resource owner with real query keys, request identity and directed invalidation",
+      "persistedDataImpact": "none",
+      "proofCommands": ["npm test", "npm run build", "npm run verify:architecture"],
+      "deletionGate": "Actual page and panel consumers pass stale/same-key/stream/invalidation tests; shared session lists have one owner and old loaders are absent.",
+      "rollbackBoundary": "Page and panels migrate as one UI data boundary; existing Preparation services, DB and Snapshot authority remain unchanged.",
+      "status": "deleted",
+      "forbiddenPatterns": ["interviewPreparationConversationService.list(detail.process.id)"]
+    },
+    {
       "id": "human-evaluation-local-storage-writers",
       "symbolOrSurface": "V1/V2 localStorage human evaluation writers and duplicate V1 UI mutation controls",
       "verdict": "migrate-then-delete",
