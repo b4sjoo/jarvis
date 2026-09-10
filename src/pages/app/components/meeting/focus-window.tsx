@@ -2,14 +2,14 @@ import {
   Badge,
   Button,
   Input,
-  Markdown,
   ScrollArea,
 } from "@/components";
 import type {
   CanonicalQuestionType,
   ClarifyingQuestionAnswer,
   InterviewBriefType,
-  MeetingFocusAction,
+  MeetingFocusUserAction,
+  MeetingFocusSnapshotEnvelope,
   MeetingFocusSnapshot,
   MeetingFocusWindowKind,
 } from "@/lib/meeting";
@@ -19,7 +19,6 @@ import {
   FOCUS_CONTROLS_TRANSCRIPT_MEASURE_WIDTH,
   MEETING_FOCUS_ACTION_EVENT,
   MEETING_FOCUS_SNAPSHOT_EVENT,
-  guardAsyncUnlisten,
   resolveFocusControlsGeometry,
   stripOuterCodeFence,
 } from "@/lib/meeting";
@@ -49,13 +48,15 @@ import {
   useState,
 } from "react";
 import { WhiteboardViewer } from "./whiteboard-viewer";
+import { createMeetingFocusConsumer } from "@/lib/meeting/focus-window-protocol";
+import { FactGuardrailNotice } from "./fact-guardrail-notice";
+import { formatChineseThinkingText } from "@/lib/meeting/meeting-display-text";
+import { MeetingMarkdownText } from "./meeting-markdown-text";
 
 const WRAP_TEXT_CLASS =
   "min-w-0 whitespace-pre-wrap break-words [overflow-wrap:anywhere]";
 const CHINESE_THINKING_TEXT_CLASS =
   "min-w-0 break-words text-sm font-semibold leading-5 [overflow-wrap:anywhere] [&_*]:leading-5 [&_li]:my-0 [&_ol]:my-0 [&_p]:my-0 [&_p+p]:mt-1 [&_ul]:my-0";
-const MEETING_MARKDOWN_CLASS =
-  "text-xs leading-5 [&_code]:text-[10px] [&_li]:my-0.5 [&_ol]:my-1 [&_p]:my-0 [&_pre]:my-2 [&_pre]:max-h-72 [&_pre]:overflow-auto [&_strong]:font-semibold [&_ul]:my-1";
 
 const interviewBriefTypeOptions: Array<{
   id: InterviewBriefType;
@@ -74,40 +75,50 @@ const concreteInterviewBriefTypes = interviewBriefTypeOptions
   .filter((type): type is Exclude<InterviewBriefType, "mixed"> => type !== "mixed");
 
 export function MeetingFocusWindow({ kind }: { kind: MeetingFocusWindowKind }) {
-  const [snapshot, setSnapshot] = useState<MeetingFocusSnapshot>(
-    EMPTY_MEETING_FOCUS_SNAPSHOT
-  );
+  const [envelope, setEnvelope] = useState<MeetingFocusSnapshotEnvelope>();
+  const [protocolError, setProtocolError] = useState<string>();
+  const consumerRef = useRef<ReturnType<typeof createMeetingFocusConsumer> | null>(null);
 
   useEffect(() => {
-    const dispose = guardAsyncUnlisten(
-      listen<MeetingFocusSnapshot>(
-        MEETING_FOCUS_SNAPSHOT_EVENT,
-        (event) => {
-          setSnapshot(event.payload);
-        }
-      ),
-      (error) => {
-        console.error("Failed to listen for meeting focus snapshots", error);
-      }
-    );
-    sendFocusAction({ type: "request-snapshot" });
-
+    const consumer = createMeetingFocusConsumer({
+      windowKind: kind,
+      transport: {
+        subscribe: (receive) => listen(MEETING_FOCUS_SNAPSHOT_EVENT, (message) => receive(message.payload)),
+        send: (action) => emit(MEETING_FOCUS_ACTION_EVENT, action),
+      },
+      onSnapshot: (next) => { setEnvelope(next); setProtocolError(undefined); },
+      onError: (error) => setProtocolError(error.message),
+    });
+    consumerRef.current = consumer;
+    void consumer.start().catch(() => undefined);
     return () => {
-      dispose();
+      consumer.dispose();
+      consumerRef.current = null;
     };
-  }, []);
+  }, [kind]);
 
-  if (kind === "controls") {
-    return <MeetingFocusControlsWindow snapshot={snapshot} />;
-  }
+  useEffect(() => {
+    // Confirms this React commit, not deferred Markdown/Mermaid rendering or pixels.
+    if (envelope) consumerRef.current?.applied(envelope);
+  }, [envelope]);
 
-  return <MeetingFocusAnswerWindow snapshot={snapshot} />;
+  const snapshot = envelope?.payload ?? EMPTY_MEETING_FOCUS_SNAPSHOT;
+  const sendFocusAction = (action: MeetingFocusUserAction) => { void consumerRef.current?.dispatch(action); };
+  return <div className="contents" data-focus-window={kind}
+    data-focus-publisher={envelope?.publisherInstanceId} data-focus-sequence={envelope?.sequence}>
+    {protocolError ? <div role="alert" className="fixed inset-x-2 top-2 z-50 rounded-sm border border-destructive bg-background p-2 text-xs text-destructive">{protocolError}</div> : null}
+    {kind === "controls"
+      ? <MeetingFocusControlsWindow snapshot={snapshot} sendFocusAction={sendFocusAction} />
+      : <MeetingFocusAnswerWindow snapshot={snapshot} sendFocusAction={sendFocusAction} />}
+  </div>;
 }
 
 function MeetingFocusAnswerWindow({
   snapshot,
+  sendFocusAction,
 }: {
   snapshot: MeetingFocusSnapshot;
+  sendFocusAction: (action: MeetingFocusUserAction) => void;
 }) {
   const sections = snapshot.sections;
   const focusAnswer = sections.primaryAnswer;
@@ -117,7 +128,7 @@ function MeetingFocusAnswerWindow({
   return (
     <div className="h-screen w-screen overflow-hidden bg-transparent p-2">
       <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-border/70 bg-background/95 shadow-lg backdrop-blur">
-        <ScrollArea className="min-h-0 flex-1 overflow-hidden">
+        <ScrollArea className="meeting-assistant-main-scroll min-h-0 min-w-0 max-w-full flex-1 overflow-hidden">
           <div className="min-w-0 space-y-2 overflow-x-hidden p-3">
             <section className="min-w-0 overflow-hidden rounded-md border border-primary/30 bg-primary/5 p-2.5">
               <div className="mb-1 flex items-center gap-2 text-xs font-semibold">
@@ -143,6 +154,7 @@ function MeetingFocusAnswerWindow({
                   </Badge>
                 ) : null}
               </div>
+              <FactGuardrailNotice notice={snapshot.factGuardrailNotice} />
               <MeetingMarkdownText
                 className={cn(WRAP_TEXT_CLASS, "min-h-20 text-sm leading-6")}
                 value={focusAnswer || "Waiting for answer."}
@@ -210,7 +222,7 @@ function MeetingFocusAnswerWindow({
                   className={cn(WRAP_TEXT_CLASS, "text-xs leading-5")}
                   value={snapshot.clarifyingQuestion}
                 />
-                <FocusClarifyingActionButtons snapshot={snapshot} />
+                <FocusClarifyingActionButtons snapshot={snapshot} sendFocusAction={sendFocusAction} />
               </section>
             ) : null}
 
@@ -238,8 +250,10 @@ function MeetingFocusAnswerWindow({
 
 function MeetingFocusControlsWindow({
   snapshot,
+  sendFocusAction,
 }: {
   snapshot: MeetingFocusSnapshot;
+  sendFocusAction: (action: MeetingFocusUserAction) => void;
 }) {
   const [correction, setCorrection] = useState("");
   const transcriptMeasureRef = useRef<HTMLParagraphElement>(null);
@@ -644,9 +658,13 @@ function formatFocusTermCorrectionStatus(
 
 function FocusClarifyingActionButtons({
   snapshot,
+  sendFocusAction,
 }: {
   snapshot: MeetingFocusSnapshot;
+  sendFocusAction: (action: MeetingFocusUserAction) => void;
 }) {
+  const sendClarifyingAnswer = (answer: ClarifyingQuestionAnswer, option?: { label?: string; value?: string }) =>
+    sendFocusAction({ type: "clarifying-answer", answer, option });
   const options = snapshot.sections.clarifyingOptions;
   const selectedAnswerLabel = snapshot.selectedClarifyingAnswerLabel;
   const selectionPending = snapshot.clarifyingSelectionState === "pending";
@@ -765,33 +783,9 @@ function FocusClarifyingButton({
   );
 }
 
-function MeetingMarkdownText({
-  value,
-  className,
-}: {
-  value: string;
-  className?: string;
-}) {
-  return (
-    <div className={cn(MEETING_MARKDOWN_CLASS, className)}>
-      <Markdown>{normalizeMeetingMarkdown(value)}</Markdown>
-    </div>
-  );
-}
-
-function sendClarifyingAnswer(
-  answer: ClarifyingQuestionAnswer,
-  option?: { label?: string; value?: string }
-) {
-  sendFocusAction({ type: "clarifying-answer", answer, option });
-}
-
-function sendFocusAction(action: MeetingFocusAction) {
-  void emit(MEETING_FOCUS_ACTION_EVENT, action);
-}
 
 function toggleInterviewBriefType(
-  currentTypes: InterviewBriefType[],
+  currentTypes: readonly InterviewBriefType[],
   type: InterviewBriefType,
   forceSingleConcrete = false
 ): InterviewBriefType[] {
@@ -832,54 +826,4 @@ function formatFocusQuestionType(type: string | undefined) {
 
 function formatFocusBoolean(value: boolean | undefined) {
   return value === true ? "yes" : value === false ? "no" : "unknown";
-}
-
-function formatChineseThinkingText(value: string) {
-  return value
-    .trim()
-    .replace(/\r\n/g, "\n")
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n[ \t]+/g, "\n")
-    .replace(/\n{2,}/g, "\n");
-}
-
-function normalizeMeetingMarkdown(value: string) {
-  return value
-    .split(/(```[\s\S]*?```)/g)
-    .map((segment) =>
-      segment.startsWith("```") ? segment : normalizeMeetingMathText(segment)
-    )
-    .join("");
-}
-
-function normalizeMeetingMathText(value: string) {
-  return value
-    .replace(/\\\$\\\$([\s\S]*?)\\\$\\\$/g, (_, expression: string) =>
-      normalizeMathExpression(expression)
-    )
-    .replace(/\$\$([\s\S]*?)\$\$/g, (_, expression: string) =>
-      normalizeMathExpression(expression)
-    )
-    .replace(/\\\(([\s\S]*?)\\\)/g, (_, expression: string) =>
-      normalizeMathExpression(expression)
-    )
-    .replace(/\\\[([\s\S]*?)\\\]/g, (_, expression: string) =>
-      normalizeMathExpression(expression)
-    )
-    .replace(/\\\$([^$\n]+?)\\\$/g, (_, expression: string) =>
-      normalizeMathExpression(expression)
-    )
-    .replace(/(^|[^\\$])\$([^$\n]+?)\$/g, (_, prefix: string, expression: string) =>
-      `${prefix}${normalizeMathExpression(expression)}`
-    );
-}
-
-function normalizeMathExpression(expression: string) {
-  return expression
-    .trim()
-    .replace(/\\times/g, "x")
-    .replace(/\\cdot/g, "*")
-    .replace(/\\log/g, "log")
-    .replace(/\\text\{([^}]+)\}/g, "$1")
-    .replace(/\s+/g, " ");
 }

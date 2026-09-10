@@ -427,6 +427,19 @@
       ]
     },
     {
+      "id": "focus-unversioned-display-publication",
+      "symbolOrSurface": "Unversioned blind Focus publication, duplicate display formatters and listener cleanup wrapper",
+      "verdict": "migrate-then-delete",
+      "ownerTaskId": 170,
+      "replacement": "Readonly shared display projection and correlated publisher/sequence protocol with per-window React-applied ACK",
+      "persistedDataImpact": "none",
+      "proofCommands": ["npm test", "node --test tests/focus-window-ui.test.mjs", "npm run verify:architecture"],
+      "deletionGate": "Real publisher/consumer and React surface fixtures reject stale messages and preserve all original actions; blind250ms resend is removed with no runtime ACK gate or IPC exception.",
+      "rollbackBoundary": "Display/transport boundary only; TaskRuntime, Stable Answer, SQLite and Provider policies are unchanged.",
+      "status": "deleted",
+      "forbiddenPatterns": ["guardAsyncUnlisten"]
+    },
+    {
       "id": "preparation-panel-read-publication-duplication",
       "symbolOrSurface": "Preparation page and panels' duplicate session loaders and independent read publication",
       "verdict": "migrate-then-delete",

@@ -3,7 +3,6 @@ import {
   Button,
   Input,
   Label,
-  Markdown,
   Popover,
   PopoverContent,
   PopoverTrigger,
@@ -38,7 +37,6 @@ import type {
   NativeAudioPauseResumeControlPresentation,
   MeetingCodingModelSettings,
   MeetingTaxonomyAdjudicationSettings,
-  MeetingAnswerDisplayModel,
   CodingArtifactCache,
   CriticalMomentCandidate,
   CriticalMomentExpectedFacts,
@@ -54,8 +52,7 @@ import type {
   MeetingResponseLength,
   MeetingSessionRecordingState,
   SttEvaluationCaptureState,
-  ManualQuestionTypeCorrection,
-  MeetingFocusAction,
+  MeetingFocusUserAction,
   MeetingFocusSnapshot,
   ParsedMeetingAnswer,
   MeetingTrace,
@@ -92,7 +89,6 @@ import {
   evaluateTaskSettlementTupleCompatibilityV2,
   findQuestionHumanEvaluationForTrace,
   freezeObservedTaskOwnerIdentityV2,
-  guardAsyncUnlisten,
   normalizeCanonicalQuestionType,
   overlayMeetingAnswerArtifacts,
   projectQuestionTypeObservation,
@@ -153,6 +149,11 @@ import {
   useState,
 } from "react";
 import { WhiteboardViewer } from "./whiteboard-viewer";
+import { createMeetingFocusPublisher } from "@/lib/meeting/focus-window-protocol";
+import { FactGuardrailNotice } from "./fact-guardrail-notice";
+import { createMeetingFocusDisplayModel } from "@/lib/meeting/focus-display";
+import { formatChineseThinkingText } from "@/lib/meeting/meeting-display-text";
+import { MeetingMarkdownText } from "./meeting-markdown-text";
 import {
   Dialog,
   DialogClose,
@@ -779,7 +780,6 @@ export const MeetingAssistant = ({
     : [];
   const clarifyingQuestion = suggestionSections.clarifyingQuestion.trim();
   const rawClarifyingOptions = suggestionSections.clarifyingOptions ?? [];
-  const hasTechnicalDetails = suggestionSections.hasTechnicalDetails;
   const clarifyingSourceTrace = meeting.latestSuggestion?.sourceTraceId
     ? meeting.traces.find(
         (trace) => trace.id === meeting.latestSuggestion?.sourceTraceId
@@ -938,7 +938,7 @@ export const MeetingAssistant = ({
       ? meeting.manualQuestionTypeCorrection
       : undefined;
   const focusSnapshot = useMemo<MeetingFocusSnapshot>(
-    () => ({
+    () => createMeetingFocusDisplayModel({
       active: focusModeActive,
       sections: {
         chineseThinking: displaySuggestionSections.chineseThinking,
@@ -962,6 +962,7 @@ export const MeetingAssistant = ({
       answerDelivery: meeting.answerDelivery,
       statusLabel: meetingStatusLabel,
       error: meeting.error,
+      factGuardrailNotice,
       isBusy,
       audioControl: audioPauseResumeControl,
       showClarifyingQuestion,
@@ -1021,6 +1022,7 @@ export const MeetingAssistant = ({
       activeClarifyingSelection?.reason,
       editableBriefForFocus.interviewTypes,
       focusModeActive,
+      factGuardrailNotice,
       isBusy,
       isTaskSwitchClarifyingQuestion,
       latestReliableAnswerPreview,
@@ -1061,7 +1063,31 @@ export const MeetingAssistant = ({
       whiteboardArtifactDisplay.viewKey,
     ]
   );
-  const focusSnapshotRef = useRef(focusSnapshot);
+  const focusPublisherRef = useRef<ReturnType<typeof createMeetingFocusPublisher> | null>(null);
+  const focusPublisherReadyRef = useRef<Promise<void> | null>(null);
+  const [focusProtocolError, setFocusProtocolError] = useState<string>();
+  useEffect(() => {
+    const publisher = createMeetingFocusPublisher({
+      transport: {
+        subscribe: (receive) => listen(MEETING_FOCUS_ACTION_EVENT, (message) => receive(message.payload)),
+        send: (snapshot) => emit(MEETING_FOCUS_SNAPSHOT_EVENT, snapshot),
+      },
+      onAction: (action) => focusActionHandlerRef.current(action),
+      onError: (error) => setFocusProtocolError(error.message),
+    });
+    focusPublisherRef.current = publisher;
+    focusPublisherReadyRef.current = publisher.start();
+    void focusPublisherReadyRef.current.catch(() => undefined);
+    return () => {
+      publisher.dispose();
+      focusPublisherRef.current = null;
+      focusPublisherReadyRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (focusModeActive) void focusPublisherRef.current?.publish(focusSnapshot);
+  }, [focusModeActive, focusSnapshot]);
 
   const title = useMemo(() => {
     if (manualAudioRecoveryRequired) {
@@ -1167,6 +1193,8 @@ export const MeetingAssistant = ({
       }
 
       try {
+        await focusPublisherReadyRef.current;
+        if (cancelled) return;
         await invoke("show_meeting_focus_windows");
         if (!cancelled) {
           setFocusWindowsVisible(true);
@@ -1185,23 +1213,6 @@ export const MeetingAssistant = ({
       cancelled = true;
     };
   }, [focusModeActive]);
-
-  useEffect(() => {
-    focusSnapshotRef.current = focusSnapshot;
-  }, [focusSnapshot]);
-
-  useEffect(() => {
-    if (!focusModeActive || !focusWindowsVisible) return;
-
-    void emit(MEETING_FOCUS_SNAPSHOT_EVENT, focusSnapshot);
-    const retry = window.setTimeout(() => {
-      void emit(MEETING_FOCUS_SNAPSHOT_EVENT, focusSnapshot);
-    }, 250);
-
-    return () => {
-      window.clearTimeout(retry);
-    };
-  }, [focusModeActive, focusSnapshot, focusWindowsVisible]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -1553,14 +1564,11 @@ export const MeetingAssistant = ({
     [editableBriefForFocus, meeting.setInterviewSessionBrief]
   );
 
-  const focusActionHandlerRef = useRef<(action: MeetingFocusAction) => void>(
+  const focusActionHandlerRef = useRef<(action: MeetingFocusUserAction) => void>(
     () => undefined
   );
   focusActionHandlerRef.current = (action) => {
     switch (action.type) {
-      case "request-snapshot":
-        void emit(MEETING_FOCUS_SNAPSHOT_EVENT, focusSnapshotRef.current);
-        break;
       case "toggle-listening":
         void handlePauseResume();
         break;
@@ -1602,24 +1610,6 @@ export const MeetingAssistant = ({
         break;
     }
   };
-
-  useEffect(() => {
-    const dispose = guardAsyncUnlisten(
-      listen<MeetingFocusAction>(
-        MEETING_FOCUS_ACTION_EVENT,
-        (event) => {
-          focusActionHandlerRef.current(event.payload);
-        }
-      ),
-      (error) => {
-        console.error("Failed to listen for meeting focus actions", error);
-      }
-    );
-
-    return () => {
-      dispose();
-    };
-  }, []);
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -1752,21 +1742,24 @@ export const MeetingAssistant = ({
             </div>
           ) : null}
 
+          {focusProtocolError ? (
+            <div role="alert" className="px-3 py-1 text-xs text-destructive">{focusProtocolError}</div>
+          ) : null}
           {isFocusMode ? (
               <FocusModePanel
-              suggestionSections={displaySuggestionSections}
+              suggestionSections={focusSnapshot.sections}
               codingArtifactCached={codingArtifactDisplay.isCached}
               whiteboardArtifactCached={whiteboardArtifactDisplay.isCached}
-              whiteboardViewKey={whiteboardArtifactDisplay.viewKey}
-              hasCorrectableQuestion={hasCorrectableQuestion}
-              effectiveQuestionType={effectiveQuestionType}
-              factGuardrailNotice={factGuardrailNotice}
+              whiteboardViewKey={focusSnapshot.sections.whiteboardViewKey}
+              hasCorrectableQuestion={focusSnapshot.hasCorrectableQuestion}
+              effectiveQuestionType={focusSnapshot.effectiveQuestionType}
+              factGuardrailNotice={focusSnapshot.factGuardrailNotice}
               transientPersonalStatusLabel={
-                transientPersonalStatusLabel
+                focusSnapshot.transientPersonalStatusLabel
               }
-              answerDeliveryState={meeting.answerDelivery.state}
+              answerDeliveryState={focusSnapshot.answerDelivery.state}
               manualQuestionTypeCorrection={
-                activeManualQuestionTypeCorrection
+                focusSnapshot.manualQuestionTypeCorrection
               }
               onCorrectQuestionType={(correctedType) => {
                 void meeting.correctActiveQuestionType(
@@ -1774,10 +1767,10 @@ export const MeetingAssistant = ({
                   "focus-mode"
                 );
               }}
-                latestTurnText={latestInterviewerTurnText}
-              forceAdviseAvailable={forceAdviseAvailable}
-              forceAdvisePending={forceAdvisePending}
-              forceAdviseCompleted={forceAdviseCompleted}
+                latestTurnText={focusSnapshot.latestTurnText}
+              forceAdviseAvailable={focusSnapshot.forceAdviseAvailable}
+              forceAdvisePending={focusSnapshot.forceAdvisePending}
+              forceAdviseCompleted={focusSnapshot.forceAdviseCompleted}
               onForceAdvise={() => {
                 void meeting.forceAdviseLatestTurn();
               }}
@@ -1791,23 +1784,21 @@ export const MeetingAssistant = ({
               status={meeting.status}
               error={meeting.error}
               audioInputLiveness={meeting.audioInputLiveness}
-              isBusy={isBusy}
-              audioControl={audioPauseResumeControl}
+              isBusy={focusSnapshot.isBusy}
+              audioControl={focusSnapshot.audioControl}
               onToggleAudio={() => {
                 void handlePauseResume();
               }}
-              showClarifyingQuestion={showClarifyingQuestion}
-              clarifyingQuestion={clarifyingQuestion}
-              clarifyingOptions={clarifyingOptions}
+              showClarifyingQuestion={focusSnapshot.showClarifyingQuestion}
+              clarifyingQuestion={focusSnapshot.clarifyingQuestion}
+              clarifyingOptions={focusSnapshot.sections.clarifyingOptions}
               showClarifyingBooleanFallback={
-                clarifyingOptionDisplay.showBooleanFallback
+                focusSnapshot.showClarifyingBooleanFallback
               }
-              selectedClarifyingAnswerLabel={activeClarifyingSelection?.label}
-              clarifyingSelectionState={activeClarifyingSelection?.status}
-              clarifyingSelectionMessage={formatClarifyingSelectionMessage(
-                activeClarifyingSelection
-              )}
-              isTaskSwitchClarifyingQuestion={isTaskSwitchClarifyingQuestion}
+              selectedClarifyingAnswerLabel={focusSnapshot.selectedClarifyingAnswerLabel}
+              clarifyingSelectionState={focusSnapshot.clarifyingSelectionState}
+              clarifyingSelectionMessage={focusSnapshot.clarifyingSelectionMessage}
+              isTaskSwitchClarifyingQuestion={focusSnapshot.isTaskSwitchClarifyingQuestion}
               onClarifyingAnswer={handleClarifyingAnswer}
               onNewTaskConfirmation={handleNewTaskConfirmation}
               onSameTaskConfirmation={handleSameTaskConfirmation}
@@ -2107,7 +2098,7 @@ export const MeetingAssistant = ({
                 ) : null}
               </section>
 
-              {hasTechnicalDetails ? (
+              {focusSnapshot.sections.hasTechnicalDetails ? (
                 <>
                   <section className="min-w-0 overflow-hidden rounded-md border border-primary/30 bg-primary/5 p-2.5">
                     <div className="mb-1 flex items-center gap-2 text-xs font-semibold">
@@ -2118,7 +2109,7 @@ export const MeetingAssistant = ({
                       className={CHINESE_THINKING_TEXT_CLASS}
                       value={
                         formatChineseThinkingText(
-                          suggestionSections.chineseThinking
+                          focusSnapshot.sections.chineseThinking
                         ) ||
                         "等待 Jarvis 总结中文思路。"
                       }
@@ -2138,26 +2129,22 @@ export const MeetingAssistant = ({
                         </Badge>
                       ) : null}
                       <AnswerDeliveryBadge
-                        state={meeting.answerDelivery.state}
+                        state={focusSnapshot.answerDelivery.state}
                       />
                     </div>
-                    {factGuardrailNotice ? (
-                      <div className="mb-2 rounded-sm border border-amber-500/50 bg-amber-500/10 px-2 py-1.5 text-[11px] font-semibold leading-4 text-amber-900 dark:text-amber-200">
-                        {factGuardrailNotice.message}
-                      </div>
-                    ) : null}
+                    <FactGuardrailNotice notice={focusSnapshot.factGuardrailNotice} />
                     <MeetingMarkdownText
                       className={cn(
                         WRAP_TEXT_CLASS,
                         "min-h-14 text-sm font-medium leading-6"
                       )}
                       value={
-                        suggestionSections.primaryAnswer || "Waiting for answer."
+                        focusSnapshot.sections.primaryAnswer || "Waiting for answer."
                       }
                     />
                   </section>
 
-                  {displaySuggestionSections.whiteboard ? (
+                  {focusSnapshot.sections.whiteboard ? (
                     <section className="min-w-0 overflow-hidden rounded-md border border-border/70 bg-muted/20 p-3">
                       <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
                         <FileTextIcon className="h-3.5 w-3.5" />
@@ -2172,8 +2159,8 @@ export const MeetingAssistant = ({
                         ) : null}
                       </div>
                       <WhiteboardViewer
-                        value={displaySuggestionSections.whiteboard}
-                        viewKey={whiteboardArtifactDisplay.viewKey}
+                        value={focusSnapshot.sections.whiteboard}
+                        viewKey={focusSnapshot.sections.whiteboardViewKey}
                       />
                     </section>
                   ) : null}
@@ -2187,20 +2174,20 @@ export const MeetingAssistant = ({
                       <SuggestionBlock
                         label="Question"
                         value={
-                          suggestionSections.focusedQuestion ||
+                          focusSnapshot.sections.focusedQuestion ||
                           "Waiting for focused question."
                         }
                       />
                       <SuggestionBlock
                         label="Approach"
-                        value={suggestionSections.approach || "Not needed yet."}
+                        value={focusSnapshot.sections.approach || "Not needed yet."}
                       />
                     </div>
                   </section>
 
                   <CodingArtifactSection
-                    code={displaySuggestionSections.code}
-                    complexity={displaySuggestionSections.complexity}
+                    code={focusSnapshot.sections.code}
+                    complexity={focusSnapshot.sections.complexity}
                     isCached={codingArtifactDisplay.isCached}
                     showEmptyState
                   />
@@ -2216,7 +2203,7 @@ export const MeetingAssistant = ({
                       className={CHINESE_THINKING_TEXT_CLASS}
                       value={
                         formatChineseThinkingText(
-                          suggestionSections.chineseThinking
+                          focusSnapshot.sections.chineseThinking
                         ) ||
                         "等待 Jarvis 给出中文思路。"
                       }
@@ -2236,33 +2223,34 @@ export const MeetingAssistant = ({
                         </Badge>
                       ) : null}
                       <AnswerDeliveryBadge
-                        state={meeting.answerDelivery.state}
+                        state={focusSnapshot.answerDelivery.state}
                       />
                     </div>
+                    <FactGuardrailNotice notice={focusSnapshot.factGuardrailNotice} />
                     <MeetingMarkdownText
                       className={cn(
                         WRAP_TEXT_CLASS,
                         "min-h-20 text-xs leading-5"
                       )}
                       value={
-                        suggestionSections.primaryAnswer ||
+                        focusSnapshot.sections.primaryAnswer ||
                         "Waiting for suggestion."
                       }
                     />
                   </section>
 
-                  {displaySuggestionSections.code ||
-                  displaySuggestionSections.complexity ? (
+                  {focusSnapshot.sections.code ||
+                  focusSnapshot.sections.complexity ? (
                     <CodingArtifactSection
-                      code={displaySuggestionSections.code}
-                      complexity={displaySuggestionSections.complexity}
+                      code={focusSnapshot.sections.code}
+                      complexity={focusSnapshot.sections.complexity}
                       isCached={codingArtifactDisplay.isCached}
                     />
                   ) : null}
                 </>
               )}
 
-              {latestReliableAnswerPreview ? (
+              {focusSnapshot.latestReliableAnswer ? (
                 <section className="min-w-0 overflow-hidden rounded-md border border-border/60 bg-muted/30 p-2.5">
                   <div className="mb-1 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                     <ClockIcon className="h-3 w-3" />
@@ -2270,7 +2258,7 @@ export const MeetingAssistant = ({
                   </div>
                   <MeetingMarkdownText
                     className={cn(WRAP_TEXT_CLASS, "text-[11px] leading-5 text-muted-foreground")}
-                    value={latestReliableAnswerPreview}
+                    value={focusSnapshot.latestReliableAnswer}
                   />
                 </section>
               ) : null}
@@ -2388,7 +2376,7 @@ export const MeetingAssistant = ({
                 />
                 {showClarifyingQuestion ? (
                   <ClarifyingActionButtons
-                    isBusy={isBusy}
+                    isBusy={focusSnapshot.isBusy}
                     selectedAnswerLabel={activeClarifyingSelection?.label}
                     selectionState={activeClarifyingSelection?.status}
                     selectionMessage={formatClarifyingSelectionMessage(
@@ -2397,7 +2385,7 @@ export const MeetingAssistant = ({
                     isTaskSwitchClarifyingQuestion={
                       isTaskSwitchClarifyingQuestion
                     }
-                    clarifyingOptions={clarifyingOptions}
+                    clarifyingOptions={focusSnapshot.sections.clarifyingOptions}
                     showBooleanFallback={
                       clarifyingOptionDisplay.showBooleanFallback
                     }
@@ -3061,7 +3049,7 @@ const FocusModePanel = ({
   brief,
   onBriefChange,
 }: {
-  suggestionSections: MeetingAnswerDisplayModel;
+  suggestionSections: MeetingFocusSnapshot["sections"];
   codingArtifactCached: boolean;
   whiteboardArtifactCached: boolean;
   whiteboardViewKey?: string;
@@ -3070,7 +3058,7 @@ const FocusModePanel = ({
   factGuardrailNotice?: AdvisorSuggestion["factGuardrailNotice"];
   transientPersonalStatusLabel?: string;
   answerDeliveryState: AnswerDeliveryPresentation["state"];
-  manualQuestionTypeCorrection?: ManualQuestionTypeCorrection;
+  manualQuestionTypeCorrection?: MeetingFocusSnapshot["manualQuestionTypeCorrection"];
   onCorrectQuestionType: (type: CanonicalQuestionType) => void;
   latestTurnText: string;
   forceAdviseAvailable: boolean;
@@ -3090,7 +3078,7 @@ const FocusModePanel = ({
   onToggleAudio: () => void;
   showClarifyingQuestion: boolean;
   clarifyingQuestion: string;
-  clarifyingOptions: ClarifyingQuestionOption[];
+  clarifyingOptions: readonly ClarifyingQuestionOption[];
   showClarifyingBooleanFallback: boolean;
   selectedClarifyingAnswerLabel?: string;
   clarifyingSelectionState?: ClarifyingSelectionLifecycleState;
@@ -3125,7 +3113,7 @@ const FocusModePanel = ({
   return (
     <div className="relative min-h-0 flex-1 overflow-hidden bg-background">
       <div className="flex h-full min-h-0 flex-col overflow-hidden">
-        <ScrollArea className="min-h-0 flex-1 overflow-hidden">
+        <ScrollArea className="meeting-assistant-main-scroll min-h-0 min-w-0 max-w-full flex-1 overflow-hidden">
           <div className="min-w-0 max-w-full space-y-3 overflow-x-hidden p-3 pb-44">
             <section className="min-w-0 overflow-hidden rounded-md border border-primary/30 bg-primary/5 p-2.5">
               <div className="mb-1 flex items-center gap-2 text-xs font-semibold">
@@ -3152,11 +3140,7 @@ const FocusModePanel = ({
                 ) : null}
                 <AnswerDeliveryBadge state={answerDeliveryState} />
               </div>
-              {factGuardrailNotice ? (
-                <div className="mb-2 rounded-sm border border-amber-500/50 bg-amber-500/10 px-2 py-1.5 text-[10px] font-semibold leading-4 text-amber-900 dark:text-amber-200">
-                  {factGuardrailNotice.message}
-                </div>
-              ) : null}
+              <FactGuardrailNotice notice={factGuardrailNotice} />
               <MeetingMarkdownText
                 className={cn(
                   WRAP_TEXT_CLASS,
@@ -3480,7 +3464,7 @@ const CurrentQuestionTypeControl = ({
   compact = false,
 }: {
   effectiveType?: CanonicalQuestionType;
-  correction?: ManualQuestionTypeCorrection;
+  correction?: MeetingFocusSnapshot["manualQuestionTypeCorrection"];
   onCorrect: (type: CanonicalQuestionType) => void;
   compact?: boolean;
 }) => {
@@ -3667,7 +3651,7 @@ const ClarifyingActionButtons = ({
   selectionState?: ClarifyingSelectionLifecycleState;
   selectionMessage?: string;
   isTaskSwitchClarifyingQuestion: boolean;
-  clarifyingOptions: ClarifyingQuestionOption[];
+  clarifyingOptions: readonly ClarifyingQuestionOption[];
   showBooleanFallback: boolean;
   onClarifyingAnswer: (
     answer: ClarifyingQuestionAnswer,
@@ -7159,22 +7143,7 @@ const TraceClassifierMetadata = ({
   );
 };
 
-const MEETING_MARKDOWN_CLASS =
-  "meeting-assistant-markdown min-w-0 w-full max-w-full overflow-x-hidden text-xs leading-5 [&_code]:text-[10px] [&_li]:my-0.5 [&_ol]:my-1 [&_p]:my-0 [&_pre]:my-2 [&_pre]:max-h-72 [&_pre]:overflow-auto [&_strong]:font-semibold [&_ul]:my-1";
 
-const MeetingMarkdownText = ({
-  value,
-  className,
-}: {
-  value: string;
-  className?: string;
-}) => {
-  return (
-    <div className={cn(MEETING_MARKDOWN_CLASS, className)}>
-      <Markdown>{normalizeMeetingMarkdown(value)}</Markdown>
-    </div>
-  );
-};
 
 const AnswerDeliveryBadge = ({
   state,
@@ -7519,61 +7488,6 @@ function truncateInlineText(value: string, maxChars: number) {
   return `${normalized.slice(0, maxChars).trimEnd()}...`;
 }
 
-function formatChineseThinkingText(value: string) {
-  return value
-    .trim()
-    .replace(/\r\n/g, "\n")
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n[ \t]+/g, "\n")
-    .replace(/\n{2,}/g, "\n");
-}
-
-function normalizeMeetingMarkdown(value: string) {
-  return value
-    .split(/(```[\s\S]*?```)/g)
-    .map((segment) =>
-      segment.startsWith("```") ? segment : normalizeMeetingMathText(segment)
-    )
-    .join("");
-}
-
-function normalizeMeetingMathText(value: string) {
-  return value
-    .replace(/\\\$\\\$([\s\S]*?)\\\$\\\$/g, (_, expression: string) =>
-      normalizeMathExpression(expression)
-    )
-    .replace(/\$\$([\s\S]*?)\$\$/g, (_, expression: string) =>
-      normalizeMathExpression(expression)
-    )
-    .replace(/\\\(([\s\S]*?)\\\)/g, (_, expression: string) =>
-      normalizeMathExpression(expression)
-    )
-    .replace(/\\\[([\s\S]*?)\\\]/g, (_, expression: string) =>
-      normalizeMathExpression(expression)
-    )
-    .replace(/\\\$([^$\n]+?)\\\$/g, (_, expression: string) =>
-      normalizeMathExpression(expression)
-    )
-    .replace(/(^|[^\\$])\$([^$\n]+?)\$/g, (_, prefix: string, expression: string) =>
-      `${prefix}${normalizeMathExpression(expression)}`
-    );
-}
-
-function normalizeMathExpression(expression: string) {
-  return expression
-    .trim()
-    .replace(/\\(?:text|mathrm)\{([^{}]*)\}/g, "$1")
-    .replace(/\\times/g, "x")
-    .replace(/\\cdot/g, "*")
-    .replace(/\\leq/g, "<=")
-    .replace(/\\geq/g, ">=")
-    .replace(/\\neq/g, "!=")
-    .replace(/\\left|\\right/g, "")
-    .replace(/\\log/g, "log")
-    .replace(/[{}]/g, "")
-    .replace(/\\([a-zA-Z]+)/g, "$1")
-    .replace(/\s+/g, " ");
-}
 
 function formatInterviewTargetCompany(company: InterviewTargetCompany) {
   return [

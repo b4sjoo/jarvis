@@ -14,6 +14,12 @@ const globalStyles = await readFile(
   path.join(process.cwd(), "src/global.css"),
   "utf8"
 );
+const sharedMarkdownSource = await readFile(
+  path.join(process.cwd(), "src/pages/app/components/meeting/meeting-markdown-text.tsx"), "utf8"
+);
+const nativeFocusSource = await readFile(
+  path.join(process.cwd(), "src/pages/app/components/meeting/focus-window.tsx"), "utf8"
+);
 const recordedScreenOutput = await readFile(
   path.join(
     process.cwd(),
@@ -24,9 +30,13 @@ const recordedScreenOutput = await readFile(
 
 test("scopes generated markdown width containment to Meeting Assistant", () => {
   assert.match(
-    meetingUiSource,
+    sharedMarkdownSource,
     /meeting-assistant-markdown min-w-0 w-full max-w-full overflow-x-hidden/
   );
+  for (const consumer of [meetingUiSource, nativeFocusSource]) {
+    assert.match(consumer, /import \{ MeetingMarkdownText \} from "\.\/meeting-markdown-text"/);
+    assert.match(consumer, /<MeetingMarkdownText/);
+  }
   assert.match(
     globalStyles,
     /\.meeting-assistant-markdown \[data-streamdown="table-wrapper"\] > div:last-child \{[\s\S]*?overflow-x: auto;/

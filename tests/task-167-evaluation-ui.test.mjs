@@ -38,12 +38,12 @@ test("E167-8: real production React JSX, optional labels, specialist facts and p
       'export * from "./src/lib/meeting/question-type-observation";',
       'export * from "./src/lib/meeting/meeting-metadata-evaluation";',
     ].join("\n"),
-    "@/components": primitives.map((name) => `export { ${name} } from "./src/components/ui/${name.toLowerCase()}";`).join("\n"),
+    "@/components": ['export * from "./src/components/Markdown";', ...primitives.map((name) => `export { ${name} } from "./src/components/ui/${name.toLowerCase()}";`)].join("\n"),
   };
   // Only imported bindings outside the evaluation subtree receive inert stubs.
   for (const module of ["@/lib/meeting", "@/components"]) {
     const importBlock = [...source.matchAll(/import\s*\{([^}]+)\}\s*from\s*"([^"]+)"/g)].find((match) => match[2] === module)?.[1] ?? "";
-    const used = new Set(module === "@/components" ? primitives : ["freezeObservedTaskOwnerIdentityV2", "evaluateTaskSettlementTupleCompatibilityV2", "normalizeCanonicalQuestionType", "projectQuestionTypeObservation", "projectMeetingMetadataEvaluationObservation"]);
+    const used = new Set(module === "@/components" ? [...primitives, "Markdown"] : ["freezeObservedTaskOwnerIdentityV2", "evaluateTaskSettlementTupleCompatibilityV2", "normalizeCanonicalQuestionType", "projectQuestionTypeObservation", "projectMeetingMetadataEvaluationObservation"]);
     for (const name of importBlock.split(",").map((s) => s.trim()).filter(Boolean)) {
       if (!used.has(name)) mocks[module] += `\nexport const ${name} = () => null;`;
     }
@@ -51,6 +51,7 @@ test("E167-8: real production React JSX, optional labels, specialist facts and p
   const bundle = await build({
     entryPoints: [path.join(root, "tests/fixtures/task-167-evaluation-ui.tsx")],
     bundle: true, write: false, format: "iife", platform: "browser", jsx: "automatic",
+    loader: { ".css": "empty" },
     define: { "process.env.NODE_ENV": '"development"', "import.meta.env.DEV": "false" },
     plugins: [{ name: "evaluation-production-ui", setup(builder) {
       builder.onResolve({ filter: /.*/ }, (args) => {

@@ -3,6 +3,7 @@ import type {
   ClarifyingQuestionAnswer,
   ClarifyingQuestionOption,
   ClarifyingSelectionLifecycleState,
+  FactGuardrailVisibleNotice,
   InterviewBriefType,
   ManualQuestionTypeCorrection,
   ManualQuestionTypeCorrectionSource,
@@ -87,33 +88,34 @@ export function resolveFocusControlsGeometry(input: {
   };
 }
 
-export function guardAsyncUnlisten(
-  registration: Promise<() => void>,
-  onError?: (error: unknown) => void
-) {
-  let disposed = false;
-  let unlisten: (() => void) | undefined;
-
-  void registration
-    .then((registeredUnlisten) => {
-      if (disposed) {
-        registeredUnlisten();
-        return;
-      }
-      unlisten = registeredUnlisten;
-    })
-    .catch((error) => {
-      onError?.(error);
-    });
-
-  return () => {
-    disposed = true;
-    unlisten?.();
-    unlisten = undefined;
-  };
-}
 
 export type MeetingFocusWindowKind = "answer" | "controls";
+export const MEETING_FOCUS_SCHEMA_VERSION = 1;
+export type MeetingFocusSnapshotEnvelope = Readonly<{
+  schemaVersion: typeof MEETING_FOCUS_SCHEMA_VERSION;
+  publisherInstanceId: string;
+  sequence: number;
+  payload: MeetingFocusSnapshot;
+  requestId?: string;
+  windowKind?: MeetingFocusWindowKind;
+}>;
+export type MeetingFocusProtocolAction =
+  | Readonly<{
+      type: "request-snapshot";
+      schemaVersion: typeof MEETING_FOCUS_SCHEMA_VERSION;
+      windowKind: MeetingFocusWindowKind;
+      requestId: string;
+      publisherInstanceId?: string;
+    }>
+  | Readonly<{
+      type: "snapshot-applied";
+      schemaVersion: typeof MEETING_FOCUS_SCHEMA_VERSION;
+      windowKind: MeetingFocusWindowKind;
+      requestId: string;
+      publisherInstanceId: string;
+      sequence: number;
+    }>;
+export type MeetingFocusUserAction = Exclude<MeetingFocusAction, MeetingFocusProtocolAction>;
 
 export type MeetingFocusSectionsSnapshot = {
   chineseThinking: string;
@@ -139,14 +141,15 @@ export type MeetingFocusSpeechCorrectionSnapshot = Pick<
   | "term"
   | "appliedCount"
   | "deactivatedAt"
-  | "activeQuestion"
->;
+> & { activeQuestion?: Pick<NonNullable<SpeechCorrection["activeQuestion"]>, "disposition" | "regenerationStatus" | "error"> };
 
 export type MeetingFocusActiveTaskSnapshot = ReturnType<
   typeof getActiveMeetingTaskFocusSummary
 >;
 
-export type MeetingFocusSnapshot = {
+export type FocusReadonly<T> = { readonly [K in keyof T]: FocusReadonly<T[K]> };
+
+export type MeetingFocusSnapshot = FocusReadonly<{
   active: boolean;
   sections: MeetingFocusSectionsSnapshot;
   latestReliableAnswer: string;
@@ -157,6 +160,7 @@ export type MeetingFocusSnapshot = {
   answerDelivery: AnswerDeliveryPresentation;
   statusLabel: string;
   error: string | null;
+  factGuardrailNotice?: FactGuardrailVisibleNotice;
   isBusy: boolean;
   audioControl: NativeAudioPauseResumeControlPresentation;
   showClarifyingQuestion: boolean;
@@ -179,16 +183,17 @@ export type MeetingFocusSnapshot = {
   transientPersonalStatusLabel?: string;
   currentQuestionId?: string;
   questionTypeCorrected: boolean;
-  manualQuestionTypeCorrection?: ManualQuestionTypeCorrection;
+  manualQuestionTypeCorrection?: Pick<ManualQuestionTypeCorrection,
+    "taskId" | "questionId" | "correctedType" | "status" | "regenerationStatus" | "error">;
   activeTask?: MeetingFocusActiveTaskSnapshot;
   hasActiveMeetingTask: boolean;
   hasCorrectableQuestion: boolean;
   hasActiveScreenTask: boolean;
   speechCorrections: MeetingFocusSpeechCorrectionSnapshot[];
-};
+}>;
 
 export type MeetingFocusAction =
-  | { type: "request-snapshot" }
+  | MeetingFocusProtocolAction
   | { type: "toggle-listening" }
   | { type: "regenerate" }
   | { type: "force-advise" }
@@ -238,6 +243,7 @@ export const EMPTY_MEETING_FOCUS_SNAPSHOT: MeetingFocusSnapshot = {
   },
   statusLabel: "Ready",
   error: null,
+  factGuardrailNotice: undefined,
   isBusy: false,
   audioControl: {
     action: "unavailable",
@@ -265,6 +271,7 @@ export const EMPTY_MEETING_FOCUS_SNAPSHOT: MeetingFocusSnapshot = {
   durableOwnerMissing: false,
   durableOwnerMissingReason: undefined,
   transientPersonalStatusLabel: undefined,
+  currentQuestionId: undefined,
   questionTypeCorrected: false,
   manualQuestionTypeCorrection: undefined,
   activeTask: undefined,
