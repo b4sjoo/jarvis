@@ -1156,8 +1156,7 @@ export interface QuestionInstanceLineage {
 export type MeetingSetupWarningCode =
   | "stt-provider-missing"
   | "ai-provider-missing"
-  | "vision-provider-missing"
-  | "local-only-unavailable";
+  | "vision-provider-missing";
 
 export interface MeetingSetupWarning {
   code: MeetingSetupWarningCode;
@@ -1458,13 +1457,7 @@ export interface NativeAudioDebugFaultResult {
   currentStatus: MeetingAudioStatus;
 }
 
-export type MeetingPrivacyMode =
-  | "memory-only"
-  | "text-and-screen-to-cloud";
-
 export interface MeetingAssistantSettings {
-  screenContextEnabled: boolean;
-  privacyMode: MeetingPrivacyMode;
   activeScreenTaskTimeoutMinutes: number;
   useMemory: boolean;
   personalEvidenceGuardrailMode: PersonalEvidenceGuardrailMode;

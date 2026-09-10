@@ -347,7 +347,6 @@ import {
   InterviewTaskRelation,
   InterviewSessionBrief,
   InterviewSessionContext,
-  MeetingPrivacyMode,
   PersonalEvidenceDecision,
   PersonalEvidenceGuardrailMode,
   SemanticTaxonomyMode,
@@ -967,10 +966,6 @@ const MISSING_VISION_MESSAGE =
   "Choose an image-capable AI provider to analyze screen context.";
 const RUNTIME_RELATION_CONFIGURATION_ERROR =
   "Runtime relation model configuration failed. Jarvis preserved the current task; check the Runtime or Main Advisor provider settings.";
-const LOCAL_ONLY_UNAVAILABLE_MESSAGE =
-  "Local-only meeting mode needs local STT before it can start.";
-const SCREEN_CONTEXT_DISABLED_MESSAGE =
-  "Enable Cloud API mode before capturing screen context.";
 const NO_MEETING_CONTEXT_MESSAGE =
   "Jarvis needs transcript or screen context before it can suggest.";
 const NO_SUGGESTION_MESSAGE = "There is no suggestion to update yet.";
@@ -1497,8 +1492,6 @@ const INITIAL_STATE: MeetingAssistantState = {
   audioStatus: null,
   audioInputLiveness: null,
   settings: {
-    screenContextEnabled: true,
-    privacyMode: "text-and-screen-to-cloud",
     activeScreenTaskTimeoutMinutes: DEFAULT_ACTIVE_SCREEN_TASK_TIMEOUT_MINUTES,
     useMemory: true,
     personalEvidenceGuardrailMode: "enforcement",
@@ -1552,13 +1545,7 @@ function readMeetingAssistantSettings(): MeetingAssistantSettings {
 
   try {
     const parsed = JSON.parse(stored) as Partial<MeetingAssistantSettings>;
-    const privacyMode = isMeetingPrivacyMode(parsed.privacyMode)
-      ? parsed.privacyMode
-      : DEFAULT_MEETING_ASSISTANT_SETTINGS.privacyMode;
-
     return {
-      screenContextEnabled: privacyMode === "text-and-screen-to-cloud",
-      privacyMode,
       activeScreenTaskTimeoutMinutes:
         normalizeActiveScreenTaskTimeoutMinutes(
           parsed.activeScreenTaskTimeoutMinutes
@@ -2196,15 +2183,6 @@ function createTraceExportFileName(
     .toISOString()
     .replace(/[:.]/g, "-");
   return `jarvis-trace-${trace.kind}-${trigger}-${timestamp}-${trace.id}.json`;
-}
-
-function isMeetingPrivacyMode(
-  value: unknown
-): value is MeetingPrivacyMode {
-  return (
-    value === "memory-only" ||
-    value === "text-and-screen-to-cloud"
-  );
 }
 
 function evaluateRuntimeAnswerSufficiencyShadow(input: {
@@ -8326,14 +8304,6 @@ export function useMeetingAssistant() {
       });
     }
 
-    if (state.settings.privacyMode === "memory-only") {
-      warnings.push({
-        code: "local-only-unavailable",
-        severity: "blocking",
-        message: LOCAL_ONLY_UNAVAILABLE_MESSAGE,
-      });
-    }
-
     if (!aiProvider) {
       warnings.push({
         code: "ai-provider-missing",
@@ -8349,7 +8319,7 @@ export function useMeetingAssistant() {
     }
 
     return warnings;
-  }, [aiProvider, state.settings.privacyMode, sttProvider]);
+  }, [aiProvider, sttProvider]);
 
   const startSessionRecording = useCallback(async (options?: {
     scriptedValidationLock?: {
@@ -9577,30 +9547,6 @@ export function useMeetingAssistant() {
       interviewSessionContext: contextState.interviewSessionContext,
     }));
   }, []);
-
-  const setScreenContextEnabled = useCallback(
-    (screenContextEnabled: boolean) => {
-      updateSettings((previous) => ({
-        ...previous,
-        screenContextEnabled,
-        privacyMode: screenContextEnabled
-          ? "text-and-screen-to-cloud"
-          : "memory-only",
-      }));
-    },
-    [updateSettings]
-  );
-
-  const setPrivacyMode = useCallback(
-    (privacyMode: MeetingPrivacyMode) => {
-      updateSettings((previous) => ({
-        ...previous,
-        privacyMode,
-        screenContextEnabled: privacyMode === "text-and-screen-to-cloud",
-      }));
-    },
-    [updateSettings]
-  );
 
   const setActiveScreenTaskTimeoutMinutes = useCallback(
     (activeScreenTaskTimeoutMinutes: number) => {
@@ -25540,26 +25486,6 @@ export function useMeetingAssistant() {
         });
       }
 
-      if (state.settings.privacyMode === "memory-only") {
-        activeRef.current = false;
-        runtimeActiveRef.current = false;
-        invalidateAudioProcessingSession();
-        cancelActiveAdvisorJob("local-only-mode-unavailable");
-        screenAnalysisAbortRef.current?.abort();
-        screenAnalysisAbortRef.current = null;
-        reconcileCaptureStartFailure(LOCAL_ONLY_UNAVAILABLE_MESSAGE);
-        coordinator.authorize(lifecycleOperation, "blocked-local-only-mode");
-        if (manualRecoveryAttempt) {
-          sessionRecordingManagerRef.current?.recordCaptureLifecycle({
-            stage: "manual-recovery-failed",
-            manualRecoveryAttemptId: manualRecoveryAttempt.id,
-            recoveryDurationMs: Date.now() - manualRecoveryAttempt.startedAt,
-            reason: "blocked-local-only-mode",
-          });
-        }
-        return;
-      }
-
       if (!sttProvider) {
         activeRef.current = false;
         runtimeActiveRef.current = false;
@@ -25884,7 +25810,6 @@ export function useMeetingAssistant() {
       startAudioProcessingSession,
       resetMeetingRuntimeForNewSession,
       state.settings.audio.config,
-      state.settings.privacyMode,
       state.settings.useMemory,
       stopNativeMeetingCapture,
       sttProvider,
@@ -26223,8 +26148,6 @@ export function useMeetingAssistant() {
           supersedesScreenTraceId: screenOperationClaim.supersedesTraceId,
           screenOperationAdmissionLatencyMs:
             Date.now() - screenOperationRequestedAt,
-          privacyMode: state.settings.privacyMode,
-          screenContextEnabled: state.settings.screenContextEnabled,
           ...formatRefreshAuthorityForTrace(screenRefreshAuthority),
           ...formatManualScreenVoiceQuestionBindingForTrace(
             screenVoiceQuestionBinding
@@ -26545,22 +26468,6 @@ export function useMeetingAssistant() {
       };
 
       try {
-        if (
-          !state.settings.screenContextEnabled ||
-          state.settings.privacyMode !== "text-and-screen-to-cloud"
-        ) {
-          setState((previous) => ({
-            ...previous,
-            error: SCREEN_CONTEXT_DISABLED_MESSAGE,
-          }));
-          traceStoreRef.current.finishTrace(
-            trace.id,
-            "error",
-            SCREEN_CONTEXT_DISABLED_MESSAGE
-          );
-          return;
-        }
-
         captureStepId = traceStoreRef.current.startStep(
           trace.id,
           latePreflightRepair
@@ -26926,9 +26833,7 @@ export function useMeetingAssistant() {
         });
         let screenPreflight: ScreenPreflightResult | undefined =
           latePreflightRepair?.preflight;
-        const shouldRunScreenPreflight = Boolean(
-          state.settings.screenContextEnabled && !screenPreflight
-        );
+        const shouldRunScreenPreflight = !screenPreflight;
         traceStoreRef.current.updateMetadata(trace.id, {
           screenPreflightEnabled: Boolean(
             shouldRunScreenPreflight || screenPreflight
@@ -37549,8 +37454,6 @@ export function useMeetingAssistant() {
     ...state,
     meetingSessionId: contextManagerRef.current.getState().sessionId,
     setupWarnings,
-    setPrivacyMode,
-    setScreenContextEnabled,
     setActiveScreenTaskTimeoutMinutes,
     setInterviewSessionBrief,
     clearInterviewSessionBrief,

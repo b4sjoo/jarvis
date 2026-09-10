@@ -427,6 +427,20 @@
       ]
     },
     {
+      "id": "local-model-product-mode",
+      "symbolOrSurface": "Local Model selector and privacyMode/screenContextEnabled settings and gates",
+      "verdict": "delete",
+      "ownerTaskId": 115,
+      "replacement": "Configured provider display and existing provider, vision, native and source checks",
+      "persistedDataImpact": "settings",
+      "historicalReader": "Original recordings and settings bytes remain untouched; retired keys have no live reader and disappear on normal current-schema saves.",
+      "proofCommands": ["npm test", "npm run build", "npm run verify:architecture"],
+      "deletionGate": "Real settings, UI and Start/Screen callback fixtures prove full retirement and retained provider/source authority; no compatibility route.",
+      "rollbackBoundary": "UI/settings/entry deletion is one behavior boundary, without user-data migration.",
+      "status": "deleted",
+      "forbiddenPatterns": ["MeetingPrivacyMode", "privacyMode", "screenContextEnabled", "setPrivacyMode", "setScreenContextEnabled"]
+    },
+    {
       "id": "runtime-inference-request-duplication",
       "symbolOrSurface": "Seven live Runtime inference adapters' duplicate provider fetch and response collection wiring",
       "verdict": "migrate-then-delete",

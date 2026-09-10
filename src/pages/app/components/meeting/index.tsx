@@ -180,11 +180,6 @@ const statusLabel = {
   error: "Needs attention",
 };
 
-const privacyOptions = [
-  { id: "memory-only", label: "Local Model" },
-  { id: "text-and-screen-to-cloud", label: "Cloud API" },
-] as const;
-
 const responseLengthOptions: Array<{
   id: MeetingResponseLength;
   label: string;
@@ -940,9 +935,6 @@ export const MeetingAssistant = ({
   const meetingStatusLabel = manualAudioRecoveryRequired
     ? "Resume audio"
     : statusLabel[meeting.status];
-  const screenContextAllowed =
-    meeting.settings.screenContextEnabled &&
-    meeting.settings.privacyMode === "text-and-screen-to-cloud";
   const hasMeetingContext =
     meeting.transcriptTurns.length > 0 || meeting.screenObservations.length > 0;
   const hasSuggestion = Boolean(displaySuggestion.trim());
@@ -1753,8 +1745,7 @@ export const MeetingAssistant = ({
                   }}
                   disabled={
                     meeting.status === "starting" ||
-                    meeting.status === "reconnecting" ||
-                    !screenContextAllowed
+                    meeting.status === "reconnecting"
                   }
                 >
                   <CameraIcon className="h-4 w-4" />
@@ -1877,8 +1868,6 @@ export const MeetingAssistant = ({
                   meeting.setTaxonomyAdjudicationConfig
                 }
                 aiProviders={meeting.aiProviders}
-                privacyMode={meeting.settings.privacyMode}
-                onPrivacyModeChange={meeting.setPrivacyMode}
                 activeScreenTaskTimeoutMinutes={
                   meeting.settings.activeScreenTaskTimeoutMinutes
                 }
@@ -4132,8 +4121,6 @@ const ConfigurationsPanel = ({
   taxonomyAdjudication,
   onTaxonomyAdjudicationChange,
   aiProviders,
-  privacyMode,
-  onPrivacyModeChange,
   activeScreenTaskTimeoutMinutes,
   onActiveScreenTaskTimeoutMinutesChange,
   useMemory,
@@ -4180,8 +4167,6 @@ const ConfigurationsPanel = ({
     config: MeetingTaxonomyAdjudicationSettings
   ) => void;
   aiProviders: TYPE_PROVIDER[];
-  privacyMode: (typeof privacyOptions)[number]["id"];
-  onPrivacyModeChange: (mode: (typeof privacyOptions)[number]["id"]) => void;
   activeScreenTaskTimeoutMinutes: number;
   onActiveScreenTaskTimeoutMinutesChange: (minutes: number) => void;
   useMemory: boolean;
@@ -4330,26 +4315,12 @@ const ConfigurationsPanel = ({
             title="Context"
           >
             <div>
-              <div className="mb-1.5 flex items-center justify-between gap-2">
-                <Label className="text-[10px] font-medium uppercase text-muted-foreground">
-                  Privacy
-                </Label>
+              <div className="mb-1.5 text-[10px] font-medium uppercase text-muted-foreground">
+                Processing
               </div>
-              <div className="grid grid-cols-2 gap-1">
-                {privacyOptions.map((option) => (
-                  <Button
-                    key={option.id}
-                    size="sm"
-                    variant={privacyMode === option.id ? "default" : "outline"}
-                    className="h-7 px-1 text-[10px]"
-                    onClick={() => {
-                      onPrivacyModeChange(option.id);
-                    }}
-                  >
-                    {option.label}
-                  </Button>
-                ))}
-              </div>
+              <p className="text-[10px] text-muted-foreground">
+                Configured provider API
+              </p>
             </div>
 
             <div>
