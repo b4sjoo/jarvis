@@ -8,11 +8,11 @@ import {
 test("accepts the tracked privacy-safe deletion ledger", () => {
   const result = validateDeletionLedger(loadDeletionLedger());
   assert.equal(result.ok, true, result.errors.join("\n"));
-  assert.equal(result.entryCount, 21);
+  assert.equal(result.entryCount, 22);
   assert.deepEqual(result.statusCounts, {
     candidate: 0,
     "migration-ready": 0,
-    deleted: 21,
+    deleted: 22,
     retained: 0,
   });
 });

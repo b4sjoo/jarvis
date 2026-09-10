@@ -1,11 +1,11 @@
-import { fetchAIResponseEvents } from "@/lib/functions/ai-response.function";
+import { requestRuntimeInferenceResponse } from "./runtime-inference-request.js";
 import type { TYPE_PROVIDER } from "@/types";
 import type {
   AIResponseExecutionIdentityInput,
   AIResponseTerminalOutcome,
 } from "../functions/ai-response-events.js";
 import { getRuntimeInferenceOperationDefinition } from "./runtime-inference.js";
-import { consumeRuntimeInferenceResponse } from "./runtime-inference-response.js";
+
 import {
   buildTaskRelationAffinityPrompts,
   buildTaskRelationCanonicalShadowPrompts,
@@ -53,13 +53,12 @@ export async function requestTaskRelationSplitShadow(input: {
   const operation = getRuntimeInferenceOperationDefinition(
     input.request.operationKind
   );
-  const responseEvents = fetchAIResponseEvents({
+  const providerResponse = await requestRuntimeInferenceResponse({
     provider: input.provider,
     selectedProvider: input.selectedProvider,
     systemPrompt: prompts.systemPrompt,
     userMessage: prompts.userMessage,
     signal: input.signal,
-    applyResponseSettings: false,
     requestOptions: {
       timeoutMs: operation.timeoutMs,
       maxOutputTokens: operation.maxOutputTokens,
@@ -73,13 +72,10 @@ export async function requestTaskRelationSplitShadow(input: {
         input.executionIdentity?.logicalQuestionRevision ??
         input.request.identity.logicalQuestionUnitRevision,
     },
-  });
-  const providerResponse = await consumeRuntimeInferenceResponse({
-    responseEvents,
-    signal: input.signal,
     operationLabel: input.request.operationKind,
     onFirstToken: input.onFirstToken,
   });
+
   const { rawOutput, providerDisposition } = providerResponse;
   const parsed =
     providerDisposition === "completed-with-content"

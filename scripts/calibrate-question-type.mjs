@@ -60,7 +60,7 @@ export function createProductionRuntime({ cap, fetchImpl = () => { throw new Err
           return { ...exports.getRuntimeInferenceOperationDefinition(kind), maxOutputTokens: cap };
         } };
       }
-      if (filename.endsWith("question-type-adjudication-request.ts") && target.endsWith("ai-response.function.ts")) {
+      if (filename.endsWith("runtime-inference-request.ts") && target.endsWith("ai-response.function.ts")) {
         return { ...exports, fetchAIResponseEvents: async function* (params) {
           for await (const event of exports.fetchAIResponseEvents(params)) {
             events.push(event);

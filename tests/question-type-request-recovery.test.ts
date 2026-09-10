@@ -64,6 +64,7 @@ function typeHarness(outputs: Array<string | number>, options: { costMs?: number
     },
   };
   env.fetchAIResponseEvents = productionFunction("src/lib/functions/ai-response.function.ts", "fetchAIResponseEvents", env);
+  env.requestRuntimeInferenceResponse = productionFunction("src/lib/meeting/runtime-inference-request.ts", "requestRuntimeInferenceResponse", env);
   const run = productionFunction("src/lib/meeting/question-type-adjudication-request.ts", "requestQuestionTypeAdjudication", env);
   return { calls, run: () => run({
     request: { ...request, reviewScope: options.reviewScope ?? "full" },

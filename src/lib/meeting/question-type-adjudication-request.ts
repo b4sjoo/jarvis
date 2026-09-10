@@ -1,6 +1,4 @@
-import {
-  fetchAIResponseEvents,
-} from "@/lib/functions/ai-response.function";
+import { requestRuntimeInferenceResponse } from "./runtime-inference-request.js";
 import type {
   AIResponseExecutionIdentityInput,
   AIResponseTerminalOutcome,
@@ -15,7 +13,6 @@ import {
   type QuestionTypeAdjudicationRequest,
 } from "./question-type-adjudication.js";
 import { getRuntimeInferenceOperationDefinition } from "./runtime-inference.js";
-import { consumeRuntimeInferenceResponse } from "./runtime-inference-response.js";
 
 const OPERATION = getRuntimeInferenceOperationDefinition(
   "question-type-adjudication"
@@ -51,13 +48,12 @@ export async function requestQuestionTypeAdjudication(input: {
 }): Promise<QuestionTypeAdjudicationRequestResult> {
   const prompts = buildQuestionTypeAdjudicationPrompts(input.request);
   const retryEnabled = Boolean(input.readRetryDeadlineAt && input.request.reviewScope !== "field-vs-coding");
-  const responseEvents = fetchAIResponseEvents({
+  const providerResponse = await requestRuntimeInferenceResponse({
     provider: input.provider,
     selectedProvider: input.selectedProvider,
     systemPrompt: prompts.systemPrompt,
     userMessage: prompts.userMessage,
     signal: input.signal,
-    applyResponseSettings: false,
     requestOptions: {
       timeoutMs: input.timeoutMs ?? OPERATION.timeoutMs,
       maxOutputTokens: input.maxOutputTokens ?? OPERATION.maxOutputTokens,
@@ -80,13 +76,10 @@ export async function requestQuestionTypeAdjudication(input: {
         input.executionIdentity?.logicalQuestionRevision ??
         input.request.logicalQuestionUnitRevision,
     },
-  });
-  const providerResponse = await consumeRuntimeInferenceResponse({
-    responseEvents,
-    signal: input.signal,
     operationLabel: "Question type adjudication",
     onFirstToken: input.onFirstToken,
   });
+
   const { rawOutput, providerDisposition } = providerResponse;
   const parsed =
     providerDisposition === "completed-with-content"

@@ -1,6 +1,4 @@
-import {
-  fetchAIResponseEvents,
-} from "@/lib/functions/ai-response.function";
+import { requestRuntimeInferenceResponse } from "./runtime-inference-request.js";
 import type { AIResponseExecutionIdentityInput } from "../functions/ai-response-events.js";
 import type { TYPE_PROVIDER } from "@/types";
 import type { SelectedProviderState } from "./types.js";
@@ -13,7 +11,6 @@ import {
   type WhiteboardSyntaxRepairRequestResult,
 } from "./whiteboard-syntax-repair.js";
 import { getRuntimeInferenceOperationDefinition } from "./runtime-inference.js";
-import { consumeRuntimeInferenceResponse } from "./runtime-inference-response.js";
 
 const WHITEBOARD_REPAIR_OPERATION =
   getRuntimeInferenceOperationDefinition("whiteboard-syntax-repair");
@@ -27,26 +24,22 @@ export async function requestWhiteboardSyntaxRepair(input: {
   onFirstToken?: (at: number) => void;
 }): Promise<WhiteboardSyntaxRepairRequestResult> {
   const prompts = buildWhiteboardSyntaxRepairPrompts(input.request);
-  const responseEvents = fetchAIResponseEvents({
+  const providerResponse = await requestRuntimeInferenceResponse({
     provider: input.provider,
     selectedProvider: input.selectedProvider,
     systemPrompt: prompts.systemPrompt,
     userMessage: prompts.userMessage,
     signal: input.signal,
-    applyResponseSettings: false,
     requestOptions: {
       timeoutMs: WHITEBOARD_REPAIR_OPERATION.timeoutMs,
       maxOutputTokens: WHITEBOARD_REPAIR_OPERATION.maxOutputTokens,
     },
     executionIdentity: input.executionIdentity,
-  });
-  const providerResponse = await consumeRuntimeInferenceResponse({
-    responseEvents,
-    signal: input.signal,
     operationLabel: "Whiteboard syntax repair",
     onFirstToken: input.onFirstToken,
     maxOutputChars: WHITEBOARD_SYNTAX_REPAIR_MAX_RAW_OUTPUT_CHARS,
   });
+
   const { rawOutput, providerDisposition } = providerResponse;
   const parsed =
     providerDisposition === "completed-with-content"

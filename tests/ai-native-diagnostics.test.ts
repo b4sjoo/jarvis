@@ -62,11 +62,14 @@ function harness(responses: (() => Response)[], streaming = true, responseConten
     calls.push(JSON.parse(options.body));
     return responses[index]();
   } });
+  const runtimeRequest = loadModule("src/lib/meeting/runtime-inference-request.ts", {
+    "../functions/ai-response.function.js": transport,
+    "./runtime-inference-response.js": { consumeRuntimeInferenceResponse },
+  });
   const typeRequest = loadModule("src/lib/meeting/question-type-adjudication-request.ts", {
-    "@/lib/functions/ai-response.function": transport,
+    "./runtime-inference-request.js": runtimeRequest,
     "./question-type-adjudication.js": typeLogic,
     "./runtime-inference.js": { getRuntimeInferenceOperationDefinition },
-    "./runtime-inference-response.js": { consumeRuntimeInferenceResponse },
   });
   const params = {
     request,

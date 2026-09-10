@@ -427,6 +427,19 @@
       ]
     },
     {
+      "id": "runtime-inference-request-duplication",
+      "symbolOrSurface": "Seven live Runtime inference adapters' duplicate provider fetch and response collection wiring",
+      "verdict": "migrate-then-delete",
+      "ownerTaskId": 171,
+      "replacement": "requestRuntimeInferenceResponse composes the existing transport and collector; adapters retain prompts, parsing and policy",
+      "persistedDataImpact": "none",
+      "proofCommands": ["npm test", "npm run verify:architecture", "npm run build"],
+      "deletionGate": "All ten operations through seven adapters pass parameter/terminal parity and the adapter source guard rejects direct transport/collector calls.",
+      "rollbackBoundary": "Common request wiring and adapter migration are one behavior-preserving change; retry and settlement owners are unchanged.",
+      "status": "deleted",
+      "forbiddenPatterns": ["const responseEvents = fetchAIResponseEvents({"]
+    },
+    {
       "id": "meeting-dependency-contract-ownership",
       "symbolOrSurface": "Meeting state and phase declarations exported by implementation modules, and identity generation imported from Context Manager",
       "verdict": "migrate-then-delete",

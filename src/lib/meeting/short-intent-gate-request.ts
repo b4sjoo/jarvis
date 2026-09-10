@@ -1,6 +1,4 @@
-import {
-  fetchAIResponseEvents,
-} from "@/lib/functions/ai-response.function";
+import { requestRuntimeInferenceResponse } from "./runtime-inference-request.js";
 import type {
   AIResponseExecutionIdentityInput,
   AIResponseTerminalOutcome,
@@ -14,7 +12,6 @@ import {
   type ResponseOpportunityRequest,
 } from "./short-intent-gate.js";
 import { getRuntimeInferenceOperationDefinition } from "./runtime-inference.js";
-import { consumeRuntimeInferenceResponse } from "./runtime-inference-response.js";
 
 const OPERATION = getRuntimeInferenceOperationDefinition(
   "response-opportunity-inference"
@@ -43,13 +40,12 @@ export async function requestResponseOpportunity(input: {
   onFirstToken?: (at: number) => void;
 }): Promise<ResponseOpportunityRequestResult> {
   const prompts = buildResponseOpportunityPrompts(input.request);
-  const responseEvents = fetchAIResponseEvents({
+  const providerResponse = await requestRuntimeInferenceResponse({
     provider: input.provider,
     selectedProvider: input.selectedProvider,
     systemPrompt: prompts.systemPrompt,
     userMessage: prompts.userMessage,
     signal: input.signal,
-    applyResponseSettings: false,
     requestOptions: {
       timeoutMs: OPERATION.timeoutMs,
       maxOutputTokens: OPERATION.maxOutputTokens,
@@ -63,13 +59,10 @@ export async function requestResponseOpportunity(input: {
         input.executionIdentity?.logicalQuestionRevision ??
         input.request.logicalQuestionUnitRevision,
     },
-  });
-  const providerResponse = await consumeRuntimeInferenceResponse({
-    responseEvents,
-    signal: input.signal,
     operationLabel: "Response opportunity inference",
     onFirstToken: input.onFirstToken,
   });
+
   const { rawOutput, providerDisposition } = providerResponse;
   const parsed =
     providerDisposition === "completed-with-content"

@@ -1,6 +1,4 @@
-import {
-  fetchAIResponseEvents,
-} from "@/lib/functions/ai-response.function";
+import { requestRuntimeInferenceResponse } from "./runtime-inference-request.js";
 import type {
   AIResponseExecutionIdentityInput,
   AIResponseTerminalOutcome,
@@ -14,7 +12,6 @@ import {
   type MeetingMetadataInferenceRequest,
 } from "./meeting-metadata-inference.js";
 import { getRuntimeInferenceOperationDefinition } from "./runtime-inference.js";
-import { consumeRuntimeInferenceResponse } from "./runtime-inference-response.js";
 
 const OPERATION = getRuntimeInferenceOperationDefinition(
   "meeting-metadata-inference"
@@ -43,13 +40,12 @@ export async function requestMeetingMetadataInference(input: {
   onFirstToken?: (at: number) => void;
 }): Promise<MeetingMetadataInferenceRequestResult> {
   const prompts = buildMeetingMetadataInferencePrompts(input.request);
-  const responseEvents = fetchAIResponseEvents({
+  const providerResponse = await requestRuntimeInferenceResponse({
     provider: input.provider,
     selectedProvider: input.selectedProvider,
     systemPrompt: prompts.systemPrompt,
     userMessage: prompts.userMessage,
     signal: input.signal,
-    applyResponseSettings: false,
     requestOptions: {
       timeoutMs: OPERATION.timeoutMs,
       maxOutputTokens: OPERATION.maxOutputTokens,
@@ -65,13 +61,10 @@ export async function requestMeetingMetadataInference(input: {
         input.executionIdentity?.logicalQuestionRevision ??
         input.request.operationRevision,
     },
-  });
-  const providerResponse = await consumeRuntimeInferenceResponse({
-    responseEvents,
-    signal: input.signal,
     operationLabel: "Meeting metadata inference",
     onFirstToken: input.onFirstToken,
   });
+
   const { rawOutput, providerDisposition } = providerResponse;
   const parsed =
     providerDisposition === "completed-with-content"

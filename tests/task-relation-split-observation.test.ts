@@ -287,6 +287,10 @@ async function harness(options: { mode?: Mode; child?: boolean; source?: string;
       });
     })();
   };
+  const commonRequestSource = readFileSync("src/lib/meeting/runtime-inference-request.ts", "utf8");
+  environment.requestRuntimeInferenceResponse = compile([
+    declaration(commonRequestSource, "requestRuntimeInferenceResponse"), "requestRuntimeInferenceResponse",
+  ].join("\n"), environment);
   environment.requestTaskRelationSplitShadow = compile([
     declaration(requestSource, "requestTaskRelationSplitShadow"), "requestTaskRelationSplitShadow",
   ].join("\n"), environment);
