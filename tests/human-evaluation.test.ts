@@ -4,8 +4,6 @@ import {
   buildAdvisorIntentEvaluationFromTrace,
   buildQuestionEvaluationPatchFromTrace,
   findQuestionHumanEvaluationForTrace,
-  persistQuestionHumanEvaluations,
-  readQuestionHumanEvaluations,
   resolveSettledAttemptEvaluationTarget,
   resolveSuggestionQuestionLineage,
   resolveVisibleAnswerEvaluationTarget,
@@ -569,22 +567,7 @@ test("projects legacy correction and logistics expectations to relation N/A", ()
   );
 });
 
-test("preserves domain-resolved unknown settlement labels during normalization", () => {
-  const storage = new Map<string, string>();
-  Object.defineProperty(globalThis, "window", {
-    configurable: true,
-    value: {},
-  });
-  Object.defineProperty(globalThis, "localStorage", {
-    configurable: true,
-    value: {
-      getItem: (key: string) => storage.get(key) ?? null,
-      setItem: (key: string, value: string) => storage.set(key, value),
-      removeItem: (key: string) => storage.delete(key),
-    },
-  });
-
-  try {
+test("legacy readonly question projection retains explicit settlement labels", () => {
     const evaluations = upsertQuestionHumanEvaluation(
       [],
       {
@@ -598,18 +581,12 @@ test("preserves domain-resolved unknown settlement labels during normalization",
         },
       }
     );
-    persistQuestionHumanEvaluations(evaluations);
-
     assert.equal(
-      readQuestionHumanEvaluations().find(
+      evaluations.find(
         (evaluation) => evaluation.questionId === "question_domain_unknown"
       )?.currentQuestionSettlement?.expectedDisposition,
       "domain-resolved-unknown"
     );
-  } finally {
-    delete (globalThis as { window?: unknown }).window;
-    delete (globalThis as { localStorage?: unknown }).localStorage;
-  }
 });
 
 test("persists primary-ask correctness independently from advisor admission", () => {

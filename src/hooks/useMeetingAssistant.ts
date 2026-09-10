@@ -1,4 +1,6 @@
 import type { MeetingTaskDeadlineDelta } from "../lib/meeting/meeting-task-contracts.js";
+import { humanEvaluationStore } from "../lib/meeting/human-evaluation-store.js";
+import type { HumanGroundTruthEventV2, HumanEvaluationProjectionV2 } from "../lib/meeting/human-ground-truth-v2.js";
 import {
   useCallback,
   useEffect,
@@ -167,7 +169,7 @@ import {
   materializeHumanEvaluationAttemptProjectionV2,
   type HumanEvaluationAttemptEvidenceIndexV2,
 } from "@/lib/meeting/human-evaluation-attempt-projection";
-import { validateHumanEvaluationAttemptSubjectV2 } from "@/lib/meeting/human-evaluation-attempt";
+import { validateHumanEvaluationAttemptSubjectV2, resolveHumanEvaluationAttemptIdentityV2 } from "@/lib/meeting/human-evaluation-attempt";
 import { toHumanEvaluationCollectionProvenance } from "@/lib/meeting/session-evaluation-provenance";
 import {
   compileSettledAdvisorPromptContext,
@@ -340,9 +342,7 @@ import {
   MeetingTaskRuntimeTransitionKind,
   createMeetingTaskRuntimeState,
   InterviewBriefType,
-  FactAnchorState,
   InterviewPlaybookPhase,
-  ProjectTrajectoryChildContinuity,
   InterviewSubtaskIntent,
   InterviewTaskRelation,
   InterviewSessionBrief,
@@ -392,7 +392,6 @@ import {
   PreparationRuntimeProvenanceLedger,
   RecordPreparationArtifactUseInput,
   ParsedMeetingAnswer,
-  QuestionEvaluationIdentity,
   QuestionHumanEvaluation,
   QuestionInstanceLineage,
   ScreenObservation,
@@ -406,7 +405,6 @@ import {
   TaskBoundaryCandidate,
   SettledAdvisorExecutionPlan,
   TaskTopicDomain,
-  TraceHumanEvaluation,
   TranscriptTurn,
   type MeetingTranscriptionResult,
   base64WavToBlob,
@@ -432,7 +430,6 @@ import {
   correctionTargetOwnsParentOrigin,
   buildInterviewSessionBriefMemoryHint,
   buildInterviewSessionMemoryHint,
-  buildWhiteboardEvalTraceMetadata,
   captureScreenObservation,
   createInterviewSessionContextFromBrief,
   createMeetingId,
@@ -543,14 +540,9 @@ import {
   formatScreenPresentationArtifactAuthorityForTrace,
   formatInterviewPlaybookForTrace,
   withInterviewPlaybookPhase,
-  readTraceHumanEvaluations,
-  readQuestionHumanEvaluations,
-  readHumanGroundTruthEventsV2,
-  readHumanEvaluationProjectionsV2,
   readCriticalMomentCandidates,
   readCriticalMomentEvaluations,
   buildCriticalMomentGroundTruthSubject,
-  readMeetingEvalTraceMetadata,
   loadPreparationRuntimeContext,
   preparationProjectionArtifactIds,
   resolvePreparationPersonalizedGuidance,
@@ -560,7 +552,6 @@ import {
   toPreparationRuntimePresentation,
   toAdvisorPersonalizedPreparationEvidence,
   updatePreparationRuntimeCapabilities,
-  resolveActiveMeetingTaskIdentity,
   buildSpeechBiasContext,
   formatSpeechBiasPromptForTrace,
   normalizeTranscriptWithSpeechBias,
@@ -790,16 +781,12 @@ import {
   formatSttRequestEvidenceForTrace,
   formatSttPromptEchoRecoveryForTrace,
   runSttPromptEchoRecovery,
-  upsertTraceHumanEvaluation,
   upsertQuestionHumanEvaluation,
   appendHumanGroundTruthEventV2,
   buildHumanGroundTruthSubjectV2,
-  resolveObservedQuestionSourceKind,
   createHumanGroundTruthEventV2,
   deriveHumanEvaluationProjectionV2,
   findActiveHumanGroundTruthEventV2,
-  persistHumanEvaluationProjectionsV2,
-  persistHumanGroundTruthEventsV2,
   upsertHumanEvaluationProjectionV2,
   type HumanGroundTruthFactV2,
   type HumanGroundTruthInteractionV2,
@@ -814,7 +801,6 @@ import {
   persistCriticalMomentEvaluations,
   projectCriticalMomentTraceEvidence,
   type CriticalMomentOutcomeEvaluationPatch,
-  buildQuestionEvaluationPatchFromTrace,
   decideManualQuestionTypeCorrection,
   decideManualCorrectionScope,
   decideManualCorrectionTerminalState,
@@ -844,8 +830,6 @@ import {
   formatInterviewTaskBoundaryForTrace,
   type PendingInterviewSectionHint,
   type PendingInterviewTaskBoundary,
-  persistTraceHumanEvaluations,
-  persistQuestionHumanEvaluations,
   buildSessionRecordingProviderSummary,
   buildFactAnchorDecision,
   detectPersonalEvidenceRequirement,
@@ -2721,7 +2705,6 @@ interface CommitHumanGroundTruthInputV2 {
   options?: RecordHumanGroundTruthOptionsV2;
   sourceTraceId?: string;
   observed?: HumanEvaluationObservedSnapshotV2;
-  legacyEvaluation?: QuestionHumanEvaluation;
 }
 
 function getMeetingModelRequestOptions(
@@ -2761,17 +2744,24 @@ export function useMeetingAssistant() {
     interviewSessionContext: createInterviewSessionContextFromBrief(
       initialInterviewSessionBrief
     ),
-    humanEvaluations: readTraceHumanEvaluations(),
-    questionEvaluations: readQuestionHumanEvaluations(),
+    humanEvaluations: [],
+    questionEvaluations: [],
   }));
   const [scriptedValidation, setScriptedValidation] = useState(false);
   const scriptedValidationRef = useRef(scriptedValidation);
   scriptedValidationRef.current = scriptedValidation;
-  const [humanGroundTruthEventsV2, setHumanGroundTruthEventsV2] = useState(
-    () => readHumanGroundTruthEventsV2()
-  );
+  const [humanGroundTruthEventsV2, setHumanGroundTruthEventsV2] = useState<HumanGroundTruthEventV2[]>([]);
   const [humanEvaluationProjectionsV2, setHumanEvaluationProjectionsV2] =
-    useState(() => readHumanEvaluationProjectionsV2());
+    useState<HumanEvaluationProjectionV2[]>([]);
+  const [evaluationPersistence, setEvaluationPersistence] = useState<{ pending: number; error: string | null }>({ pending: 0, error: null });
+  const evaluationSavesRef = useRef(new Map<string, { event: HumanGroundTruthEventV2; run: () => Promise<void>; running: boolean; error?: string }>());
+  const retryHumanEvaluationSave = useCallback(() => {
+    if (!evaluationSavesRef.current.size) {
+      void loadHumanEvaluationSession(evaluationReadSessionRef.current);
+      return;
+    }
+    for (const save of evaluationSavesRef.current.values()) if (!save.running) void save.run();
+  }, []);
   const humanGroundTruthEventsV2Ref = useRef(humanGroundTruthEventsV2);
   humanGroundTruthEventsV2Ref.current = humanGroundTruthEventsV2;
   const humanEvaluationProjectionsV2Ref = useRef(
@@ -2957,6 +2947,40 @@ export function useMeetingAssistant() {
       interviewSessionBrief: initialInterviewSessionBrief,
     })
   );
+  const evaluationSessionId = contextManagerRef.current.getState().sessionId;
+  const evaluationReadSessionRef = useRef(evaluationSessionId);
+  const evaluationLoadRef = useRef(0);
+  const loadHumanEvaluationSession = useCallback(async (sessionId: string) => {
+    const request = ++evaluationLoadRef.current;
+    if (evaluationReadSessionRef.current !== sessionId) {
+      humanGroundTruthEventsV2Ref.current = [];
+      humanEvaluationProjectionsV2Ref.current = [];
+      setHumanGroundTruthEventsV2([]);
+      setHumanEvaluationProjectionsV2([]);
+    }
+    evaluationReadSessionRef.current = sessionId;
+    try {
+      const stored = await humanEvaluationStore.readSession(sessionId);
+      if (request !== evaluationLoadRef.current || evaluationReadSessionRef.current !== sessionId) return;
+      const events = humanGroundTruthEventsV2Ref.current.reduce(appendHumanGroundTruthEventV2, stored.events);
+      const projections = humanEvaluationProjectionsV2Ref.current.reduce(upsertHumanEvaluationProjectionV2, stored.projections);
+      humanGroundTruthEventsV2Ref.current = events;
+      humanEvaluationProjectionsV2Ref.current = projections;
+      setHumanGroundTruthEventsV2(events);
+      setHumanEvaluationProjectionsV2(projections);
+      setEvaluationPersistence(previous => ({ ...previous, error: Array.from(evaluationSavesRef.current.values()).find(save => save.error)?.error ?? null }));
+    } catch (error) {
+      if (request === evaluationLoadRef.current) setEvaluationPersistence(previous => ({ ...previous, error: `Evaluation storage unavailable: ${String(error)}` }));
+    }
+  }, []);
+  useEffect(() => {
+    humanGroundTruthEventsV2Ref.current = [];
+    humanEvaluationProjectionsV2Ref.current = [];
+    setHumanGroundTruthEventsV2([]);
+    setHumanEvaluationProjectionsV2([]);
+    void loadHumanEvaluationSession(evaluationSessionId);
+    return () => { evaluationLoadRef.current++; };
+  }, [evaluationSessionId, loadHumanEvaluationSession]);
   const preparationRuntimeContextRef = useRef<PreparationRuntimeContext>(
     createNeutralPreparationRuntimeContext({
       meetingSessionId: contextManagerRef.current.getState().sessionId,
@@ -3773,8 +3797,10 @@ export function useMeetingAssistant() {
 
       const next = result.projections;
       humanEvaluationProjectionsV2Ref.current = next;
-      persistHumanEvaluationProjectionsV2(next);
       setHumanEvaluationProjectionsV2(next);
+      void humanEvaluationStore.saveObservation(result.projection).catch(error => {
+        console.warn("Evaluation observed projection persistence failed", { projectionId: result.projection?.projectionId, error: String(error) });
+      });
       sessionRecordingManagerRef.current?.recordHumanEvaluationProjectionV2(
         result.projection
       );
@@ -8777,315 +8803,6 @@ export function useMeetingAssistant() {
     traceStoreRef.current.clear();
   }, []);
 
-  const buildQuestionEvaluationIdentity = useCallback(
-    (
-      trace: MeetingTrace,
-      evaluationPatch: Partial<TraceHumanEvaluation>,
-      sessionId?: string
-    ): QuestionEvaluationIdentity => {
-      const contextState = contextManagerRef.current.getState();
-      const activeMeetingTask = contextState.activeMeetingTask;
-      const canonicalQuestionType = normalizeCanonicalQuestionType(
-        normalizeQuestionTypeAlias(
-          evaluationPatch.questionType ??
-            readStringFromTraceMetadata(
-              trace.metadata,
-              "activeMeetingParentQuestionType"
-            ) ??
-            readStringFromTraceMetadata(trace.metadata, "canonicalQuestionType") ??
-            readStringFromTraceMetadata(trace.metadata, "questionType") ??
-            activeMeetingTask?.parent.questionType
-        )
-      );
-      const questionType = canonicalQuestionType
-        ? toHumanEvalQuestionType(canonicalQuestionType)
-        : undefined;
-      const traceEvalMetadata = readMeetingEvalTraceMetadata([trace.metadata]);
-      const memoryEvaluationSnapshot =
-        resolveTraceMemoryEvaluationSnapshot(trace).snapshot;
-      const activeWhiteboardEvalMetadata =
-        buildWhiteboardEvalTraceMetadata(activeMeetingTask);
-      const activeTaskIdentity = resolveActiveMeetingTaskIdentity({
-        metadata: trace.metadata,
-        activeMeetingTask,
-      });
-      const evaluationPhaseResolution = resolveEffectiveBranchPhase(
-        contextState.taskRuntime.parent
-      );
-      const evaluationPhaseView =
-        evaluationPhaseResolution.status === "resolved"
-          ? evaluationPhaseResolution.view
-          : undefined;
-
-      return {
-        sessionId,
-        questionId: readStringFromTraceMetadata(
-          trace.metadata,
-          "questionInstanceId"
-        ),
-        traceId: trace.id,
-        traceKind: trace.kind,
-        taskId: evaluationPatch.taskId ?? activeTaskIdentity.taskId,
-        parentTaskId:
-          evaluationPatch.parentTaskId ?? activeTaskIdentity.parentTaskId,
-        childTaskId:
-          evaluationPatch.childTaskId ?? activeTaskIdentity.childTaskId,
-        taskSource:
-          evaluationPatch.taskSource ??
-          resolveObservedQuestionSourceKind(
-            trace.kind,
-            trace.metadata ?? {}
-          ),
-        questionType,
-        company:
-          readStringFromTraceMetadata(trace.metadata, "targetCompany") ??
-          readStringFromTraceMetadata(trace.metadata, "screenTargetCompany") ??
-          contextState.interviewSessionContext?.targetCompany?.value ??
-          contextState.interviewSessionBrief?.targetCompany,
-        relation:
-          readStringFromTraceMetadata(trace.metadata, "taskRelation") ??
-          readStringFromTraceMetadata(trace.metadata, "relationToActiveTask") ??
-          readStringFromTraceMetadata(trace.metadata, "turnGateReason"),
-        playbookId:
-          readStringFromTraceMetadata(
-            trace.metadata,
-            "settledExecutionPlanResponsePlaybookId"
-          ) ??
-          readStringFromTraceMetadata(trace.metadata, "playbookId") ??
-          evaluationPhaseView?.playbook.id,
-        playbookPhase:
-          readStringFromTraceMetadata(
-            trace.metadata,
-            "effectiveAdvisorPlaybookPhase"
-          ) ??
-          readStringFromTraceMetadata(trace.metadata, "activeMeetingChildPhase") ??
-          readStringFromTraceMetadata(trace.metadata, "playbookPhaseDecisionPhase") ??
-          readStringFromTraceMetadata(trace.metadata, "playbookPhase") ??
-          evaluationPhaseView?.phase,
-        phaseOwnerKind:
-          readStringFromTraceMetadata(
-            trace.metadata,
-            "effectiveAdvisorPhaseOwnerKind"
-          ) === "child"
-            ? "child"
-            : readStringFromTraceMetadata(
-                  trace.metadata,
-                  "effectiveAdvisorPhaseOwnerKind"
-                ) === "parent"
-              ? "parent"
-              : evaluationPhaseView?.ownerKind,
-        phaseOwnerId:
-          readStringFromTraceMetadata(
-            trace.metadata,
-            "effectiveAdvisorPhaseOwnerId"
-          ) ?? evaluationPhaseView?.ownerId,
-        phaseOwnerRevision:
-          readNumberFromTraceMetadata(
-            trace.metadata,
-            "effectiveAdvisorPhaseOwnerRevision"
-          ) ?? evaluationPhaseView?.branchRevision,
-        projectTrajectory: {
-          detectedProjectId:
-            readStringFromTraceMetadata(
-              trace.metadata,
-              "activeMeetingProjectBindingId"
-            ) ??
-            readStringFromTraceMetadata(
-              trace.metadata,
-              "projectBindingProjectId"
-            ) ??
-            activeMeetingTask?.parent.projectBinding?.projectId,
-          detectedProjectName:
-            readStringFromTraceMetadata(
-              trace.metadata,
-              "activeMeetingProjectBindingName"
-            ) ??
-            readStringFromTraceMetadata(
-              trace.metadata,
-              "projectBindingProjectName"
-            ) ??
-            activeMeetingTask?.parent.projectBinding?.projectName,
-          detectedProjectBindingRevision:
-            readNumberFromTraceMetadata(
-              trace.metadata,
-              "activeMeetingProjectBindingRevision"
-            ) ??
-            readNumberFromTraceMetadata(
-              trace.metadata,
-              "projectBindingRevision"
-            ) ??
-            activeMeetingTask?.parent.projectBinding?.revision,
-          detectedPhase:
-            readInterviewPlaybookPhaseFromTraceMetadata(
-              trace.metadata,
-              "activeMeetingParentPhase"
-            ) ??
-            readInterviewPlaybookPhaseFromTraceMetadata(
-              trace.metadata,
-              "playbookPhaseDecisionPhase"
-            ) ??
-            activeMeetingTask?.parent.playbookPhase,
-          detectedFactAnchorState: readFactAnchorStateFromTraceMetadata(
-            trace.metadata,
-            "factAnchorState"
-          ),
-          detectedChildContinuity:
-            resolveProjectTrajectoryChildContinuity(
-              trace.metadata,
-              activeMeetingTask
-            ),
-        },
-        whiteboardArtifactId:
-          traceEvalMetadata.whiteboardArtifactId ??
-          activeWhiteboardEvalMetadata.whiteboardArtifactId,
-        whiteboardArtifactRevision:
-          traceEvalMetadata.whiteboardArtifactRevision ??
-          activeWhiteboardEvalMetadata.whiteboardArtifactRevision,
-        whiteboardArtifactDomainTrack:
-          traceEvalMetadata.whiteboardArtifactDomainTrack ??
-          activeWhiteboardEvalMetadata.whiteboardArtifactDomainTrack,
-        whiteboardRender: {
-          artifactId:
-            traceEvalMetadata.whiteboardArtifactId ??
-            activeWhiteboardEvalMetadata.whiteboardArtifactId,
-          validationOperationId: readStringFromTraceMetadata(
-            trace.metadata,
-            "whiteboardRenderValidationOperationId"
-          ),
-          repairOperationId: readStringFromTraceMetadata(
-            trace.metadata,
-            "whiteboardRepairOperationId"
-          ),
-          candidateRevision: readNumberFromTraceMetadata(
-            trace.metadata,
-            "whiteboardRenderCandidateRevision"
-          ),
-          visibleRevision: readNumberFromTraceMetadata(
-            trace.metadata,
-            "whiteboardRenderVisibleRevisionAfter"
-          ),
-        },
-        manualPhaseFrom: traceEvalMetadata.manualPhaseFrom,
-        manualPhaseTo: traceEvalMetadata.manualPhaseTo,
-        manualPhaseTargetArtifact: traceEvalMetadata.manualPhaseTargetArtifact,
-        manualPhaseGuardStatus: traceEvalMetadata.manualPhaseGuardStatus,
-        selectedDiagramOverlayIds:
-          traceEvalMetadata.selectedDiagramOverlayIds ?? [],
-        rejectedDiagramOverlayCount:
-          traceEvalMetadata.rejectedDiagramOverlayCount,
-        memoryRetrievalSnapshot: memoryEvaluationSnapshot,
-      };
-    },
-    []
-  );
-
-  const updateTraceHumanEvaluation = useCallback(
-    (traceId: string, patch: Partial<TraceHumanEvaluation>) => {
-      const trace = traceStoreRef.current
-        .getTraces()
-        .find((candidate) => candidate.id === traceId);
-      if (!trace) return;
-      const activeMeetingTask =
-        contextManagerRef.current.getState().activeMeetingTask;
-      const activeTaskIdentity = resolveActiveMeetingTaskIdentity({
-        metadata: trace.metadata,
-        activeMeetingTask,
-      });
-      const evaluationPatch: Partial<TraceHumanEvaluation> = {
-        taskId: activeTaskIdentity.taskId,
-        parentTaskId: activeTaskIdentity.parentTaskId,
-        childTaskId: activeTaskIdentity.childTaskId,
-        questionType:
-          normalizeQuestionTypeAlias(
-            readStringFromTraceMetadata(
-              trace.metadata,
-              "activeMeetingParentQuestionType"
-            ) ??
-              readStringFromTraceMetadata(
-                trace.metadata,
-                "canonicalQuestionType"
-              )
-          ) ?? activeMeetingTask?.parent.questionType,
-        ...patch,
-      };
-      const meetingSessionId =
-        contextManagerRef.current.getState().sessionId;
-
-      setState((previous) => {
-        const humanEvaluations = upsertTraceHumanEvaluation(
-          previous.humanEvaluations,
-          trace.id,
-          trace.kind,
-          evaluationPatch
-        );
-        const traceEvaluation = humanEvaluations.find(
-          (evaluation) => evaluation.traceId === trace.id
-        );
-        const questionEvaluations = traceEvaluation
-          ? upsertQuestionHumanEvaluation(
-              previous.questionEvaluations,
-              buildQuestionEvaluationIdentity(
-                trace,
-                traceEvaluation,
-                meetingSessionId
-              ),
-              buildQuestionEvaluationPatchFromTrace(traceEvaluation)
-            )
-          : previous.questionEvaluations;
-        persistTraceHumanEvaluations(humanEvaluations);
-        persistQuestionHumanEvaluations(questionEvaluations);
-        sessionRecordingManagerRef.current?.recordHumanEvaluations(
-          humanEvaluations
-        );
-        sessionRecordingManagerRef.current?.recordQuestionHumanEvaluations(
-          questionEvaluations
-        );
-        return {
-          ...previous,
-          humanEvaluations,
-          questionEvaluations,
-        };
-      });
-    },
-    [buildQuestionEvaluationIdentity]
-  );
-
-  const updateQuestionHumanEvaluation = useCallback(
-    (traceId: string, patch: Partial<QuestionHumanEvaluation>) => {
-      const trace = traceStoreRef.current
-        .getTraces()
-        .find((candidate) => candidate.id === traceId);
-      if (!trace) return;
-      const meetingSessionId =
-        contextManagerRef.current.getState().sessionId;
-
-      setState((previous) => {
-        const traceEvaluation = previous.humanEvaluations.find(
-          (evaluation) => evaluation.traceId === trace.id
-        );
-        const identity = buildQuestionEvaluationIdentity(
-          trace,
-          traceEvaluation ?? {},
-          meetingSessionId
-        );
-        const questionEvaluations = upsertQuestionHumanEvaluation(
-          previous.questionEvaluations,
-          identity,
-          patch
-        );
-        persistQuestionHumanEvaluations(questionEvaluations);
-        sessionRecordingManagerRef.current?.recordQuestionHumanEvaluations(
-          questionEvaluations
-        );
-        return {
-          ...previous,
-          questionEvaluations,
-        };
-      });
-    },
-    [buildQuestionEvaluationIdentity]
-  );
-
   const commitHumanGroundTruthV2 = useCallback(
     ({
       sessionId,
@@ -9094,7 +8811,6 @@ export function useMeetingAssistant() {
       options = {},
       sourceTraceId,
       observed,
-      legacyEvaluation,
     }: CommitHumanGroundTruthInputV2) => {
       const subjectIdentity = validateHumanEvaluationAttemptSubjectV2({
         subject,
@@ -9112,7 +8828,8 @@ export function useMeetingAssistant() {
         return;
       }
       const source = options.source ?? "explicit-ui";
-      const sessionEvents = humanGroundTruthEventsV2Ref.current.filter(
+      const sessionEvents = [...humanGroundTruthEventsV2Ref.current,
+        ...Array.from(evaluationSavesRef.current.values(), save => save.event)].filter(
         (candidate) => candidate.sessionId === sessionId
       );
       const previous =
@@ -9150,30 +8867,51 @@ export function useMeetingAssistant() {
       );
       if (events === humanGroundTruthEventsV2Ref.current) return;
 
-      humanGroundTruthEventsV2Ref.current = events;
-      persistHumanGroundTruthEventsV2(events);
-      setHumanGroundTruthEventsV2(events);
-
-      const projection = deriveHumanEvaluationProjectionV2({
-        sessionId,
-        subject,
-        events,
-        observed,
-        legacyEvaluation,
-      });
-      const projections = upsertHumanEvaluationProjectionV2(
-        humanEvaluationProjectionsV2Ref.current,
-        projection
-      );
-      humanEvaluationProjectionsV2Ref.current = projections;
-      persistHumanEvaluationProjectionsV2(projections);
-      setHumanEvaluationProjectionsV2(projections);
-      sessionRecordingManagerRef.current?.recordHumanGroundTruthEventV2(
-        event
-      );
-      sessionRecordingManagerRef.current?.recordHumanEvaluationProjectionV2(
-        projection
-      );
+      const frozenObserved = observed ? structuredClone(observed) : undefined;
+      const recorder = sessionRecordingManagerRef.current;
+      const recording = recorder?.getState();
+      const save = {
+        event, running: false, error: undefined as string | undefined,
+        run: async () => {
+          if (save.running) return;
+          save.running = true;
+          save.error = undefined;
+          setEvaluationPersistence(previous => ({ ...previous, pending: previous.pending + 1 }));
+          try {
+            const committed = await humanEvaluationStore.commit(event, frozenObserved);
+            evaluationSavesRef.current.delete(event.eventId);
+            if (evaluationReadSessionRef.current === sessionId) {
+              const nextEvents = appendHumanGroundTruthEventV2(humanGroundTruthEventsV2Ref.current, committed.event);
+              humanGroundTruthEventsV2Ref.current = nextEvents;
+              setHumanGroundTruthEventsV2(nextEvents);
+              const currentProjection = humanEvaluationProjectionsV2Ref.current.find(p => p.projectionId === committed.projection.projectionId);
+              const displayProjection = deriveHumanEvaluationProjectionV2({ sessionId, subject,
+                events: nextEvents, observed: currentProjection?.observed ?? committed.projection.observed });
+              const next = upsertHumanEvaluationProjectionV2(humanEvaluationProjectionsV2Ref.current, displayProjection);
+              humanEvaluationProjectionsV2Ref.current = next;
+              setHumanEvaluationProjectionsV2(next);
+            }
+            const currentRecording = recorder?.getState();
+            if (recording?.active && currentRecording?.active
+              && recording.sessionId === currentRecording.sessionId
+              && recording.startedAt === currentRecording.startedAt) {
+              recorder?.recordHumanGroundTruthEventV2(committed.event);
+              recorder?.recordHumanEvaluationProjectionV2(committed.projection);
+            } else if (recording?.active) {
+              console.warn("Evaluation committed to SQLite; recording closed before mirror", { eventId: event.eventId, sessionId, recordingId: recording.sessionId });
+            }
+          } catch (error) {
+            save.error = `Evaluation not saved: ${String(error)}`;
+            console.error("Evaluation persistence failed", { eventId: event.eventId, sessionId, error: String(error) });
+          } finally {
+            save.running = false;
+            setEvaluationPersistence(previous => ({ ...previous, pending: Math.max(0, previous.pending - 1),
+              error: Array.from(evaluationSavesRef.current.values()).find(pending => pending.error)?.error ?? null }));
+          }
+        },
+      };
+      evaluationSavesRef.current.set(event.eventId, save);
+      void save.run();
     },
     []
   );
@@ -9189,7 +8927,8 @@ export function useMeetingAssistant() {
         .find((candidate) => candidate.id === traceId);
       if (!trace) return;
 
-      const sessionId = contextManagerRef.current.getState().sessionId;
+      const sessionId = resolveHumanEvaluationAttemptIdentityV2(trace)?.sessionId
+        ?? contextManagerRef.current.getState().sessionId;
       const evaluation =
         options.evaluation ??
         questionEvaluationsRef.current.find(
@@ -9240,7 +8979,6 @@ export function useMeetingAssistant() {
         options,
         sourceTraceId: traceId,
         observed: attemptEvidence.observed,
-        legacyEvaluation: evaluation,
       });
     },
     [commitHumanGroundTruthV2]
@@ -32814,10 +32552,6 @@ export function useMeetingAssistant() {
           ...correction,
           evaluationId: evaluation?.id,
         };
-        persistQuestionHumanEvaluations(questionEvaluations);
-        sessionRecordingManagerRef.current?.recordQuestionHumanEvaluations(
-          questionEvaluations
-        );
         sessionRecordingManagerRef.current?.recordManualQuestionTypeCorrection(
           correction
         );
@@ -32905,10 +32639,6 @@ export function useMeetingAssistant() {
                   updatedAt: Date.now(),
                 }
               : candidate
-        );
-        persistQuestionHumanEvaluations(resettledQuestionEvaluations);
-        sessionRecordingManagerRef.current?.recordQuestionHumanEvaluations(
-          resettledQuestionEvaluations
         );
         sessionRecordingManagerRef.current?.recordManualQuestionTypeCorrection(
           correction
@@ -33743,58 +33473,6 @@ export function useMeetingAssistant() {
       ),
       humanEvaluationCollection: forceAdviseEvaluationCollection,
     });
-    const repairCause = classifyForceAdviseRepairCause(
-      target.presentation
-    );
-    if (
-      forceAdviseEvaluationCollection !== "scripted-validation" &&
-      repairCause === "intent-false-negative"
-    ) {
-      updateTraceHumanEvaluation(target.presentation.originalTraceId, {
-        advisorGateCorrectlySkipped: false,
-        advisorGateShouldAdvise: true,
-      });
-    }
-    if (forceAdviseEvaluationCollection !== "scripted-validation") {
-      updateQuestionHumanEvaluation(target.presentation.originalTraceId, {
-        questionId: target.questionLineage.questionInstanceId,
-        traceIds: [
-          target.presentation.originalTraceId,
-          repairTrace.id,
-        ],
-        advisorIntent: {
-          schemaVersion: 1,
-          verdict:
-            repairCause === "intent-false-negative"
-              ? "false-negative"
-              : "ok",
-          expectedAction: "advise",
-          observedAction:
-            repairCause === "intent-false-negative"
-              ? target.presentation.observedAction
-              : "advised",
-          failureReason:
-            repairCause === "intent-false-negative"
-              ? "advisor-false-negative"
-              : undefined,
-          source: "manual-force-advise",
-          originalTraceId: target.presentation.originalTraceId,
-          logicalQuestionUnitId: target.logicalQuestionUnit.id,
-          logicalQuestionUnitRevision: target.logicalQuestionUnit.revision,
-          sourceTurnIds: [...target.logicalQuestionUnit.sourceTurnIds],
-          preDecision: {
-            intent: target.intentDecision.intent,
-            action: target.intentDecision.action,
-            enforcement: target.intentDecision.enforcement,
-            wouldSuppress: target.intentDecision.wouldSuppress,
-            executionAuthorized: target.intentDecision.executionAuthorized,
-          },
-          repairTraceId: repairTrace.id,
-          createdAt: requestedAt,
-          updatedAt: requestedAt,
-        },
-      });
-    }
     recordHumanGroundTruthV2(
       target.presentation.originalTraceId,
       {
@@ -33945,17 +33623,13 @@ export function useMeetingAssistant() {
         : completedTrace?.error ?? "visible-answer-not-committed",
       occurredAt: completedAt,
     });
-  }, [
-    flushPendingSentenceCompletion,
+  }, [flushPendingSentenceCompletion,
     recordHumanGroundTruthV2,
     recordManualRuntimeAction,
     refreshRecordedCompletedTrace,
     runAdvisor,
     transitionForceAdviseTarget,
-    tryCommitPendingAnswer,
-    updateQuestionHumanEvaluation,
-    updateTraceHumanEvaluation,
-  ]);
+    tryCommitPendingAnswer]);
 
   const applyResponseAction = useCallback(
     async (
@@ -35123,10 +34797,6 @@ export function useMeetingAssistant() {
               manualTermCorrectionReason:
                 "manual-term-correction",
             }
-          );
-          persistQuestionHumanEvaluations(questionEvaluations);
-          sessionRecordingManagerRef.current?.recordQuestionHumanEvaluations(
-            questionEvaluations
           );
           return {
             ...previous,
@@ -37490,8 +37160,6 @@ export function useMeetingAssistant() {
     injectNativeAudioFault,
     captureScreenContext,
     exportTrace,
-    updateTraceHumanEvaluation,
-    updateQuestionHumanEvaluation,
     recordHumanGroundTruthV2,
     recordCriticalMomentGroundTruthV2,
     updateCriticalMomentEvaluation,
@@ -37507,6 +37175,9 @@ export function useMeetingAssistant() {
     criticalMomentEvaluations,
     humanGroundTruthEventsV2,
     humanEvaluationProjectionsV2,
+    evaluationPersistence,
+    retryHumanEvaluationSave,
+    loadHumanEvaluationSession,
     preparationArtifactUses,
     preparationArtifactEvaluations,
     recordPreparationArtifactUse,
@@ -37659,94 +37330,6 @@ function sameAudioInputLiveness(
     left.captureSessionId === right.captureSessionId &&
     left.snapshotSequence === right.snapshotSequence
   );
-}
-
-function readStringFromTraceMetadata(
-  metadata: Record<string, unknown> | undefined,
-  key: string
-) {
-  const value = metadata?.[key];
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
-
-function readNumberFromTraceMetadata(
-  metadata: Record<string, unknown> | undefined,
-  key: string
-) {
-  const value = metadata?.[key];
-  return typeof value === "number" && Number.isFinite(value)
-    ? value
-    : undefined;
-}
-
-function readInterviewPlaybookPhaseFromTraceMetadata(
-  metadata: Record<string, unknown> | undefined,
-  key: string
-): InterviewPlaybookPhase | undefined {
-  const value = readStringFromTraceMetadata(metadata, key);
-  return value === "story_selection" ||
-    value === "baseline_reasoning" ||
-    value === "optimized_pseudocode" ||
-    value === "implementation_validation" ||
-    value === "solution_planning" ||
-    value === "requirement_clarification" ||
-    value === "design_framing" ||
-    value === "project_narrative" ||
-    value === "architecture_decision" ||
-    value === "validation_reliability" ||
-    value === "impact_lessons" ||
-    value === "concept_explanation" ||
-    value === "follow_up"
-    ? value
-    : undefined;
-}
-
-function readFactAnchorStateFromTraceMetadata(
-  metadata: Record<string, unknown> | undefined,
-  key: string
-): FactAnchorState | undefined {
-  const value = readStringFromTraceMetadata(metadata, key);
-  return value === "strong-anchor" ||
-    value === "weak-anchor" ||
-    value === "no-anchor" ||
-    value === "not-required"
-    ? value
-    : undefined;
-}
-
-function resolveProjectTrajectoryChildContinuity(
-  metadata: Record<string, unknown> | undefined,
-  activeMeetingTask: ActiveMeetingTask | undefined
-): ProjectTrajectoryChildContinuity | undefined {
-  const transitionKind = readStringFromTraceMetadata(
-    metadata,
-    "sourceTransitionKind"
-  );
-  const relation =
-    readStringFromTraceMetadata(
-      metadata,
-      "currentQuestionSettlementRelation"
-    ) ??
-    readStringFromTraceMetadata(metadata, "sourceTransitionRelation") ??
-    readStringFromTraceMetadata(metadata, "taskRelation");
-  if (
-    transitionKind === "resume-parent" ||
-    relation === "resume-parent"
-  ) {
-    return "parent-resumed";
-  }
-  if (
-    transitionKind === "child-probe" ||
-    relation === "child-probe" ||
-    readStringFromTraceMetadata(metadata, "activeMeetingChildId") ||
-    activeMeetingTask?.child
-  ) {
-    return "child-attached";
-  }
-  return activeMeetingTask?.parent ||
-    readStringFromTraceMetadata(metadata, "activeMeetingParentId")
-    ? "none"
-    : undefined;
 }
 
 function readSelectedProviderModelId(provider: SelectedProviderState) {

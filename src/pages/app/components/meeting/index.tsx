@@ -23,14 +23,11 @@ import type {
   AdvisorSuggestion,
   HumanEvalFailureReason,
   HumanEvalQuestionType,
-  HumanEvalTaskQuality,
   HumanEvaluationProjectionV2,
   HumanEvaluationTaskRelation,
   HumanExpectedParentAction,
   HumanGroundTruthFactV2,
   HumanGroundTruthInteractionV2,
-  HumanEvaluationVerdict,
-  HumanEvaluationVerdictBlock,
   InterviewBriefType,
   InterviewSessionBrief,
   InterviewTargetCompany,
@@ -74,10 +71,8 @@ import type {
   PreparationArtifactUseReceipt,
   PreparationRuntimePresentation,
   PersonalEvidenceGuardrailMode,
-  PersonalStatusDomain,
   ProjectTrajectoryChildContinuity,
   SemanticTaxonomyMode,
-  QuestionHumanEvaluation,
   ScreenCaptureTarget,
   SpeechCorrection,
   AnswerDeliveryPresentation,
@@ -99,7 +94,6 @@ import {
   freezeObservedTaskOwnerIdentityV2,
   guardAsyncUnlisten,
   normalizeCanonicalQuestionType,
-  meetingCompanyLabelsEqual,
   overlayMeetingAnswerArtifacts,
   projectQuestionTypeObservation,
   projectMeetingMetadataEvaluationObservation,
@@ -247,14 +241,6 @@ const humanEvalQuestionTypeOptions: Array<{
   { id: "unknown", label: "Unknown" },
 ];
 
-const humanEvalQualityOptions: Array<{
-  id: HumanEvalTaskQuality;
-  label: string;
-}> = [
-  { id: "success", label: "Good" },
-  { id: "partial", label: "Partial" },
-  { id: "fail", label: "Fail" },
-];
 
 const humanEvalFailureReasonOptions: Array<{
   id: HumanEvalFailureReason;
@@ -296,14 +282,6 @@ const criticalMomentFailureReasonOptions: Array<{
   { id: "other", label: "Other" },
 ];
 
-const humanEvaluationVerdictLabel: Record<HumanEvaluationVerdict, string> = {
-  ok: "OK",
-  partial: "Partial",
-  wrong: "Wrong",
-  missing: "Missing",
-  forbidden: "Forbidden",
-  not_applicable: "N/A",
-};
 
 const memoryEntryLabelOptions: Array<{
   id: MemoryEntryEvaluationLabelValue;
@@ -314,15 +292,6 @@ const memoryEntryLabelOptions: Array<{
   { id: "forbidden", label: "Forbidden" },
 ];
 
-const preparationArtifactEvaluationOptions: Array<{
-  id: PreparationArtifactEvaluationLabel;
-  label: string;
-}> = [
-  { id: "helpful", label: "Helpful" },
-  { id: "irrelevant", label: "Irrelevant" },
-  { id: "polluting", label: "Polluting" },
-  { id: "over-constraining", label: "Over-constraining" },
-];
 
 const HOTKEY_CAPTURE_SETTLE_MS = 180;
 const HOTKEY_CAPTURE_DEBOUNCE_MS = 250;
@@ -708,11 +677,9 @@ export const MeetingAssistant = ({
   const evaluationTrace = evaluationTarget.traceId
     ? meeting.traces.find((trace) => trace.id === evaluationTarget.traceId)
     : undefined;
-  const answerTraceEvaluation = evaluationTrace
-    ? meeting.humanEvaluations.find(
-        (evaluation) => evaluation.traceId === evaluationTrace.id
-      )
-    : undefined;
+  const evaluationSessionId = typeof evaluationTrace?.metadata?.effectiveCurrentQuestionSettlementSessionId === "string"
+    ? evaluationTrace.metadata.effectiveCurrentQuestionSettlementSessionId : meeting.meetingSessionId;
+  useEffect(() => { void meeting.loadHumanEvaluationSession(evaluationSessionId); }, [evaluationSessionId, meeting.loadHumanEvaluationSession]);
   const answerQuestionEvaluation = evaluationTrace
     ? findQuestionHumanEvaluationForTrace(
         meeting.questionEvaluations,
@@ -2790,6 +2757,7 @@ export const MeetingAssistant = ({
                   ) : evaluationTrace ? (
                     <>
                       <TraceHumanEvaluationPanel
+                        key={evaluationTrace.id}
                         trace={evaluationTrace}
                         traces={meeting.traces}
                         detectedQuestionType={formatDetectedQuestionType(
@@ -2798,33 +2766,6 @@ export const MeetingAssistant = ({
                         detectedPlaybook={formatDetectedQuestionType(
                           evaluationTrace.metadata?.playbookId
                         )}
-                        detectedPlaybookPhase={formatDetectedQuestionType(
-                          getTraceEffectivePlaybookPhase(
-                            evaluationTrace.metadata
-                          )
-                        )}
-                        detectedPhaseOwner={formatDetectedPhaseOwner(
-                          evaluationTrace.metadata
-                        )}
-                        advisorTurnIntent={
-                          typeof evaluationTrace.metadata?.advisorTurnIntent ===
-                          "string"
-                            ? evaluationTrace.metadata.advisorTurnIntent
-                            : undefined
-                        }
-                        advisorTurnEnforcement={
-                          typeof evaluationTrace.metadata
-                            ?.advisorTurnEnforcement === "string"
-                            ? evaluationTrace.metadata.advisorTurnEnforcement
-                            : undefined
-                        }
-                        advisorExecutionAuthorized={
-                          typeof evaluationTrace.metadata
-                            ?.advisorExecutionAuthorized === "boolean"
-                            ? evaluationTrace.metadata
-                                .advisorExecutionAuthorized
-                            : undefined
-                        }
                         taxonomyAdjudicationCandidateType={
                           typeof evaluationTrace.metadata
                             ?.questionTypeAdjudicationCandidateType ===
@@ -2861,8 +2802,6 @@ export const MeetingAssistant = ({
                                   .taxonomyAdjudicationWouldRepair
                               : undefined
                         }
-                        evaluation={answerTraceEvaluation}
-                        questionEvaluation={answerQuestionEvaluation}
                         projectionV2={answerEvaluationProjectionV2}
                         memorySnapshot={answerMemoryEvaluationSnapshot}
                         preparationArtifactUses={
@@ -2871,19 +2810,10 @@ export const MeetingAssistant = ({
                         preparationArtifactEvaluations={
                           meeting.preparationArtifactEvaluations
                         }
-                        onUpdate={(patch) => {
-                          meeting.updateTraceHumanEvaluation(
-                            evaluationTrace.id,
-                            patch
-                          );
-                        }}
-                        onUpdateQuestion={(patch) => {
-                          meeting.updateQuestionHumanEvaluation(
-                            evaluationTrace.id,
-                            patch
-                          );
-                        }}
-                        onRecordGroundTruth={(fact, options) => {
+                        onUpdatePreparationArtifactEvaluation={meeting.updatePreparationArtifactEvaluation}
+                        evaluationPersistence={meeting.evaluationPersistence}
+                        onRetrySave={meeting.retryHumanEvaluationSave}
+                        onRecordGroundTruthV2={(fact, options) => {
                           meeting.recordHumanGroundTruthV2(
                             evaluationTrace.id,
                             fact,
@@ -2891,15 +2821,6 @@ export const MeetingAssistant = ({
                               ...options,
                               uiSurface: "normal-debug-evaluation",
                             }
-                          );
-                        }}
-                        onUpdatePreparationArtifactEvaluation={(
-                          receiptId,
-                          label
-                        ) => {
-                          meeting.updatePreparationArtifactEvaluation(
-                            receiptId,
-                            label
                           );
                         }}
                       />
@@ -5822,72 +5743,33 @@ const TraceHumanEvaluationPanel = ({
   traces,
   detectedQuestionType,
   detectedPlaybook,
-  detectedPlaybookPhase,
-  detectedPhaseOwner,
-  advisorTurnIntent,
-  advisorTurnEnforcement,
-  advisorExecutionAuthorized,
   taxonomyAdjudicationCandidateType,
   taxonomyAdjudicationDisposition,
   taxonomyAdjudicationWouldRepair,
-  evaluation,
-  questionEvaluation,
   projectionV2,
   memorySnapshot,
   preparationArtifactUses,
   preparationArtifactEvaluations,
-  onUpdate,
-  onUpdateQuestion,
-  onRecordGroundTruth,
   onUpdatePreparationArtifactEvaluation,
+  evaluationPersistence,
+  onRetrySave,
+  onRecordGroundTruthV2,
 }: {
   trace: MeetingTrace;
   traces: MeetingTrace[];
   detectedQuestionType?: string;
   detectedPlaybook?: string;
-  detectedPlaybookPhase?: string;
-  detectedPhaseOwner?: string;
-  advisorTurnIntent?: string;
-  advisorTurnEnforcement?: string;
-  advisorExecutionAuthorized?: boolean;
   taxonomyAdjudicationCandidateType?: string;
   taxonomyAdjudicationDisposition?: string;
   taxonomyAdjudicationWouldRepair?: boolean;
-  evaluation:
-    | {
-        taskQuality?: HumanEvalTaskQuality;
-        correctedQuestionType?: HumanEvalQuestionType;
-        playbookCorrect?: boolean;
-        playbookWrong?: boolean;
-        playbookWrongPhase?: boolean;
-        memoryRelevant?: boolean;
-        memoryMissing?: boolean;
-        memoryWrong?: boolean;
-        advisorGateCorrectlySkipped?: boolean;
-        advisorGateShouldAdvise?: boolean;
-        failureReasons: HumanEvalFailureReason[];
-      }
-    | undefined;
-  questionEvaluation: QuestionHumanEvaluation | undefined;
   projectionV2: HumanEvaluationProjectionV2 | undefined;
   memorySnapshot: MemoryRetrievalEvaluationSnapshotResolution;
   preparationArtifactUses: PreparationArtifactUseReceipt[];
   preparationArtifactEvaluations: PreparationArtifactEvaluation[];
-  onUpdate: (patch: {
-    taskQuality?: HumanEvalTaskQuality;
-    correctedQuestionType?: HumanEvalQuestionType;
-    playbookCorrect?: boolean;
-    playbookWrong?: boolean;
-    playbookWrongPhase?: boolean;
-    memoryRelevant?: boolean;
-    memoryMissing?: boolean;
-    memoryWrong?: boolean;
-    advisorGateCorrectlySkipped?: boolean;
-    advisorGateShouldAdvise?: boolean;
-    failureReasons?: HumanEvalFailureReason[];
-  }) => void;
-  onUpdateQuestion: (patch: Partial<QuestionHumanEvaluation>) => void;
-  onRecordGroundTruth: (
+  onUpdatePreparationArtifactEvaluation: (receiptId: string, label: PreparationArtifactEvaluationLabel) => void;
+  evaluationPersistence: { pending: number; error: string | null };
+  onRetrySave: () => void;
+  onRecordGroundTruthV2: (
     fact: HumanGroundTruthFactV2,
     options?: {
       actionId?: string;
@@ -5895,13 +5777,9 @@ const TraceHumanEvaluationPanel = ({
       interaction?: HumanGroundTruthInteractionV2;
     }
   ) => void;
-  onUpdatePreparationArtifactEvaluation: (
-    receiptId: string,
-    label: PreparationArtifactEvaluationLabel
-  ) => void;
 }) => {
-  const failureReasons = evaluation?.failureReasons ?? [];
-  const [missingMemoryNote, setMissingMemoryNote] = useState("");
+  const [draftFailureReasons, setDraftFailureReasons] = useState<string[]>();
+  const [missingMemoryId, setMissingMemoryId] = useState("");
   const [taskFixOpen, setTaskFixOpen] = useState(false);
   const [primaryAskFixOpen, setPrimaryAskFixOpen] = useState(false);
   const [primaryAskCorrection, setPrimaryAskCorrection] = useState("");
@@ -5935,23 +5813,6 @@ const TraceHumanEvaluationPanel = ({
   const evaluationOpenedAtRef = useRef<number | undefined>(undefined);
   const evaluationClickCountRef = useRef(0);
   const expandedEvaluationRegionsRef = useRef(new Set<string>());
-  const memoryEntries = memorySnapshot.snapshot?.entries ?? [];
-  const answerSufficiencyStatus =
-    typeof trace.metadata?.answerSufficiencyStatus === "string"
-      ? trace.metadata.answerSufficiencyStatus
-      : undefined;
-  const answerSufficiencyRepair =
-    typeof trace.metadata?.answerRepairRecommendation === "string"
-      ? trace.metadata.answerRepairRecommendation
-      : undefined;
-  const answerSufficiencyContextResolvable =
-    typeof trace.metadata?.contextResolvable === "boolean"
-      ? trace.metadata.contextResolvable
-      : undefined;
-  const primaryAskDisposition =
-    typeof trace.metadata?.primaryAskDisposition === "string"
-      ? trace.metadata.primaryAskDisposition
-      : undefined;
   const primaryAskNormalizedText =
     projectionV2?.observed?.primaryAsk ??
     (typeof trace.metadata?.primaryAskNormalizedText === "string"
@@ -5959,38 +5820,10 @@ const TraceHumanEvaluationPanel = ({
       : undefined);
   const primaryAskTargetSource =
     projectionV2?.observed?.primaryAskTargetSource ??
-    (primaryAskDisposition ? "local-fallback" : "unavailable");
-  const clarifyingOptionSource =
-    typeof trace.metadata?.clarifyingOptionSource === "string"
-      ? trace.metadata.clarifyingOptionSource
-      : undefined;
-  const clarifyingOptionCount =
-    typeof trace.metadata?.clarifyingOptionCount === "number"
-      ? trace.metadata.clarifyingOptionCount
-      : undefined;
-  const showClarifyingOptionsEvaluation =
-    trace.metadata?.clarifyingQuestionPresent === true ||
-    typeof trace.metadata?.clarifyingRequestId === "string";
-  const currentQuestionSettlementId =
-    typeof trace.metadata?.currentQuestionSettlementId === "string"
-      ? trace.metadata.currentQuestionSettlementId
-      : undefined;
-  const currentQuestionSettlementType =
-    typeof trace.metadata?.currentQuestionSettlementType === "string"
-      ? trace.metadata.currentQuestionSettlementType
-      : undefined;
-  const currentQuestionSettlementRelation =
-    typeof trace.metadata?.currentQuestionSettlementRelation === "string"
-      ? trace.metadata.currentQuestionSettlementRelation
-      : undefined;
+    "unavailable";
   const currentQuestionSettlementDisposition =
     typeof trace.metadata?.currentQuestionSettlementDisposition === "string"
       ? trace.metadata.currentQuestionSettlementDisposition
-      : undefined;
-  const currentQuestionParentMutationAuthorized =
-    typeof trace.metadata?.currentQuestionSettlementParentMutationAuthorized ===
-    "boolean"
-      ? trace.metadata.currentQuestionSettlementParentMutationAuthorized
       : undefined;
   const observedSnapshotV2 = buildHumanEvaluationAttemptEvidenceV2({
     trace,
@@ -6025,6 +5858,8 @@ const TraceHumanEvaluationPanel = ({
     projectionV2?.activeFacts["expected-task-settlement"]?.fact;
   const activeAnswerFact =
     projectionV2?.activeFacts["answer-quality"]?.fact;
+  const answerFailureReasons = draftFailureReasons ??
+    (activeAnswerFact?.kind === "answer-quality" ? activeAnswerFact.failureReasons : []);
   const activeContextReadScopeFact =
     projectionV2?.activeFacts["expected-context-read-scope"]?.fact;
   const activeArtifactIntentFact =
@@ -6055,149 +5890,6 @@ const TraceHumanEvaluationPanel = ({
   const observedContextReadScope = observedSnapshotV2.contextReadScope;
   const observedArtifactIntent = observedSnapshotV2.artifactIntent;
   const observedRuntimeAction = observedSnapshotV2.runtimeAction;
-  const transientPersonalStatusDomain =
-    typeof trace.metadata?.transientPersonalStatusDomain === "string"
-      ? (trace.metadata
-          .transientPersonalStatusDomain as PersonalStatusDomain)
-      : undefined;
-  const transientPersonalStatusApplied =
-    trace.metadata?.transientPersonalStatusApplied === true;
-  const whiteboardRenderStatus =
-    typeof trace.metadata?.whiteboardRenderStatus === "string"
-      ? trace.metadata.whiteboardRenderStatus
-      : undefined;
-  const whiteboardRenderValidationDisposition =
-    typeof trace.metadata?.whiteboardRenderValidationDisposition === "string"
-      ? trace.metadata.whiteboardRenderValidationDisposition
-      : undefined;
-  const whiteboardRepairDisposition =
-    typeof trace.metadata?.whiteboardRepairDisposition === "string"
-      ? trace.metadata.whiteboardRepairDisposition
-      : undefined;
-  const whiteboardRenderFallbackKind =
-    typeof trace.metadata?.whiteboardRenderFallbackKind === "string"
-      ? trace.metadata.whiteboardRenderFallbackKind
-      : undefined;
-  const toggleFailureReason = (reason: HumanEvalFailureReason) => {
-    onUpdate({
-      failureReasons: failureReasons.includes(reason)
-        ? failureReasons.filter((candidate) => candidate !== reason)
-        : [...failureReasons, reason],
-    });
-  };
-
-  const updateQuestionVerdict = (
-    field:
-      | "classification"
-      | "playbook"
-      | "playbookPhase"
-      | "memory"
-      | "whiteboard"
-      | "manualPhaseTransition"
-      | "diagramOverlay"
-      | "guardrail"
-      | "answer",
-    verdict: HumanEvaluationVerdict,
-    reasons: string[]
-  ) => {
-    onUpdateQuestion({
-      [field]: {
-        verdict,
-        reasons,
-      },
-    } as Partial<QuestionHumanEvaluation>);
-  };
-
-  const updateMemoryEntryLabel = (
-    memoryId: string,
-    title: string,
-    label: MemoryEntryEvaluationLabelValue
-  ) => {
-    onUpdateQuestion({
-      memoryEntryLabels: [{ memoryId, title, label }],
-    });
-  };
-
-  const addMissingMemoryNote = () => {
-    const note = missingMemoryNote.trim();
-    if (!note) return;
-    onUpdateQuestion({
-      missingExpectedMemory: [{ note }],
-      memory: {
-        verdict: "missing",
-        reasons: ["missing-expected-memory"],
-      },
-    });
-    setMissingMemoryNote("");
-  };
-
-  const updateTaxonomyAdjudicationEvaluation = (
-    patch: NonNullable<QuestionHumanEvaluation["taxonomyAdjudication"]>
-  ) => {
-    onUpdateQuestion({
-      taxonomyAdjudication: {
-        ...questionEvaluation?.taxonomyAdjudication,
-        ...patch,
-      },
-    });
-  };
-
-  const updateAnswerSufficiencyEvaluation = (
-    patch: Partial<
-      NonNullable<QuestionHumanEvaluation["answerSufficiency"]>
-    >
-  ) => {
-    onUpdateQuestion({
-      answerSufficiency: {
-        expectedContextKinds:
-          questionEvaluation?.answerSufficiency?.expectedContextKinds ?? [],
-        operationId:
-          typeof trace.metadata?.answerSufficiencyOperationId === "string"
-            ? trace.metadata.answerSufficiencyOperationId
-            : undefined,
-        answerRevision:
-          typeof trace.metadata?.answerSufficiencyAnswerRevision === "number"
-            ? trace.metadata.answerSufficiencyAnswerRevision
-            : undefined,
-        ...questionEvaluation?.answerSufficiency,
-        ...patch,
-      },
-    });
-  };
-
-  const updateWhiteboardRenderEvaluation = (
-    patch: NonNullable<QuestionHumanEvaluation["whiteboardRender"]>
-  ) => {
-    onUpdateQuestion({
-      whiteboardRender: {
-        artifactId:
-          questionEvaluation?.detectedWhiteboardArtifactId ??
-          (typeof trace.metadata?.whiteboardArtifactId === "string"
-            ? trace.metadata.whiteboardArtifactId
-            : undefined),
-        validationOperationId:
-          typeof trace.metadata?.whiteboardRenderValidationOperationId ===
-          "string"
-            ? trace.metadata.whiteboardRenderValidationOperationId
-            : undefined,
-        repairOperationId:
-          typeof trace.metadata?.whiteboardRepairOperationId === "string"
-            ? trace.metadata.whiteboardRepairOperationId
-            : undefined,
-        candidateRevision:
-          typeof trace.metadata?.whiteboardRenderCandidateRevision === "number"
-            ? trace.metadata.whiteboardRenderCandidateRevision
-            : undefined,
-        visibleRevision:
-          typeof trace.metadata?.whiteboardRenderVisibleRevisionAfter ===
-          "number"
-            ? trace.metadata.whiteboardRenderVisibleRevisionAfter
-            : undefined,
-        ...questionEvaluation?.whiteboardRender,
-        ...patch,
-      },
-    });
-  };
 
   const recordGroundTruth = (
     fact: HumanGroundTruthFactV2,
@@ -6209,7 +5901,7 @@ const TraceHumanEvaluationPanel = ({
     const now = Date.now();
     const startedAt = evaluationOpenedAtRef.current ?? now;
     evaluationOpenedAtRef.current = startedAt;
-    onRecordGroundTruth(fact, {
+    onRecordGroundTruthV2(fact, {
       ...options,
       interaction: {
         startedAt,
@@ -6263,47 +5955,6 @@ const TraceHumanEvaluationPanel = ({
       { kind: "expected-project-trajectory" }
     >
   ) => {
-    const projectCorrect = compareProjectEvaluationLabels(
-      fact.expectedProjectId ?? fact.expectedProjectName,
-      observedProjectId ?? observedProjectName
-    );
-    const phaseCorrect =
-      fact.expectedPhase && observedProjectPhase
-        ? fact.expectedPhase === observedProjectPhase
-        : undefined;
-    const factSupportCorrect =
-      fact.expectedFactAnchorState && observedProjectFactAnchorState
-        ? fact.expectedFactAnchorState ===
-          observedProjectFactAnchorState
-        : undefined;
-    const childContinuityCorrect =
-      fact.expectedChildContinuity && observedProjectChildContinuity
-        ? fact.expectedChildContinuity ===
-          observedProjectChildContinuity
-        : undefined;
-    onUpdateQuestion({
-      projectTrajectory: {
-        ...questionEvaluation?.projectTrajectory,
-        detectedProjectId: observedProjectId,
-        detectedProjectName: observedProjectName,
-        detectedProjectBindingRevision:
-          observedProjectBindingRevision,
-        detectedPhase: observedProjectPhase,
-        detectedFactAnchorState: observedProjectFactAnchorState,
-        detectedChildContinuity: observedProjectChildContinuity,
-        expectedProjectId: fact.expectedProjectId,
-        expectedProjectName: fact.expectedProjectName,
-        expectedPhase: fact.expectedPhase,
-        expectedFactAnchorState: fact.expectedFactAnchorState,
-        expectedChildContinuity: fact.expectedChildContinuity,
-        projectCorrect,
-        phaseCorrect,
-        factSupportCorrect,
-        childContinuityCorrect,
-        unsupportedFirstPersonClaim:
-          fact.unsupportedFirstPersonClaim,
-      },
-    });
     recordGroundTruth(fact);
   };
 
@@ -6313,28 +5964,6 @@ const TraceHumanEvaluationPanel = ({
     expectedMutationDisposition: MeetingMetadataMutationDisposition;
     errorKind?: MeetingMetadataEvaluationErrorKind;
   }) => {
-    const sourceCorrect = meetingCompanyLabelsEqual(
-      input.sourceCompany,
-      observedMeetingMetadata.proposalCompany
-    );
-    const effectiveCompanyCorrect = meetingCompanyLabelsEqual(
-      input.expectedEffectiveCompany,
-      observedMeetingMetadata.effectiveCompany
-    );
-    const mutationCorrect =
-      input.expectedMutationDisposition ===
-      observedMeetingMetadata.mutationOutcome;
-    const metadataCorrect =
-      sourceCorrect && effectiveCompanyCorrect && mutationCorrect;
-    onUpdateQuestion({
-      correctedCompany: input.expectedEffectiveCompany ?? "",
-    });
-    onUpdate({
-      failureReasons:
-        metadataCorrect && !input.errorKind
-          ? failureReasons.filter((reason) => reason !== "wrong-company")
-          : Array.from(new Set([...failureReasons, "wrong-company"])),
-    });
     recordGroundTruth({
       kind: "expected-meeting-metadata",
       sourceCompany: input.sourceCompany,
@@ -6381,17 +6010,6 @@ const TraceHumanEvaluationPanel = ({
       setTaskFixOpen(true);
       return;
     }
-    onUpdateQuestion({
-      correctedQuestionType: observedQuestionType,
-      expectedRelation: observedRelation,
-      expectedParentAction: observedParentAction,
-      ...freezeObservedTaskOwnerIdentityV2(observedSnapshotV2),
-      currentQuestionSettlement: {
-        questionTypeCorrect: true,
-        relationCorrect: true,
-        parentMutationCorrect: true,
-      },
-    });
     recordGroundTruth({
       kind: "expected-task-settlement",
       expectedQuestionType: observedQuestionType,
@@ -6414,18 +6032,6 @@ const TraceHumanEvaluationPanel = ({
     ) {
       return;
     }
-    onUpdateQuestion({
-      correctedQuestionType: expectedQuestionType,
-      expectedRelation,
-      expectedParentAction,
-      currentQuestionSettlement: {
-        questionTypeCorrect:
-          observedQuestionType === expectedQuestionType,
-        relationCorrect: observedRelation === expectedRelation,
-        parentMutationCorrect:
-          observedParentAction === expectedParentAction,
-      },
-    });
     recordGroundTruth({
       kind: "expected-task-settlement",
       expectedQuestionType,
@@ -6443,43 +6049,20 @@ const TraceHumanEvaluationPanel = ({
   const recordAnswerOutcome = (
     outcome: "useful" | "partial" | "wrong" | "no-answer"
   ) => {
-    const legacy = {
-      useful: {
-        verdict: "ok" as const,
-        quality: "success" as const,
-        reason: "useful",
-      },
-      partial: {
-        verdict: "partial" as const,
-        quality: "partial" as const,
-        reason: "partially-useful",
-      },
-      wrong: {
-        verdict: "wrong" as const,
-        quality: "fail" as const,
-        reason: "wrong-answer",
-      },
-      "no-answer": {
-        verdict: "missing" as const,
-        quality: "fail" as const,
-        reason: "missing-answer",
-      },
-    }[outcome];
-    updateQuestionVerdict("answer", legacy.verdict, [legacy.reason]);
-    onUpdate({ taskQuality: legacy.quality });
     recordGroundTruth({
       kind: "answer-quality",
       outcome,
-      failureReasons: outcome === "useful" ? [] : [legacy.reason],
+      failureReasons: answerFailureReasons,
       expectedContextTurnIds:
-        questionEvaluation?.expectedContextTurnIds ?? [],
+        activeAnswerFact?.kind === "answer-quality"
+          ? activeAnswerFact.expectedContextTurnIds
+          : [],
     });
   };
 
   const savePrimaryAskCorrection = () => {
     const correctedPrimaryAsk = primaryAskCorrection.trim();
-    if (!correctedPrimaryAsk) return;
-    onUpdateQuestion({ primaryAskCorrect: false });
+    if (!correctedPrimaryAsk || correctedPrimaryAsk === primaryAskNormalizedText?.trim()) return;
     recordGroundTruth({
       kind: "primary-ask-correction",
       correctedPrimaryAsk,
@@ -6489,6 +6072,18 @@ const TraceHumanEvaluationPanel = ({
 
   return (
     <div className="space-y-3">
+      {evaluationPersistence.error ? (
+        <div role="alert" className="flex flex-wrap items-center gap-2 text-[10px] text-destructive">
+          <span className="min-w-0 break-words">Human evaluation not saved: {evaluationPersistence.error}</span>
+          <Button size="sm" variant="outline" className="h-7 px-2 text-[10px]" onClick={onRetrySave}>
+            Retry save
+          </Button>
+        </div>
+      ) : evaluationPersistence.pending > 0 ? (
+        <div role="status" className="text-[10px] text-muted-foreground">
+          Saving human evaluation ({evaluationPersistence.pending})...
+        </div>
+      ) : null}
       {taxonomyAdjudicationDisposition ? (
         <div className="rounded-sm border border-border/60 bg-muted/30 p-2 text-[10px]">
           <div className="font-medium uppercase text-muted-foreground">
@@ -6520,13 +6115,22 @@ const TraceHumanEvaluationPanel = ({
         Human evaluation
       </summary>
       <div className="mt-2 space-y-3">
-        <div className="rounded-sm border border-border/60 p-2">
+<div data-evaluation-group="response-opportunity" className="rounded-sm border border-border/60 p-2">
           <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
-            Runtime action
+            Response Opportunity
           </div>
           <div className="mb-2 font-mono text-[9px] text-muted-foreground">
             observed:{" "}
             {observedRuntimeAction ?? "unknown"}
+          </div>
+          <div className="mb-2 space-y-1 text-[10px]">
+            <div className="text-muted-foreground">Primary Ask / {primaryAskTargetSource}</div>
+            <div className="whitespace-pre-wrap break-words">{primaryAskNormalizedText ?? "Unavailable"}</div>
+            {projectionV2?.activeFacts["primary-ask-correction"]?.fact.kind === "primary-ask-correction" ? (
+              <div className="whitespace-pre-wrap break-words">
+                Correction: {projectionV2.activeFacts["primary-ask-correction"].fact.correctedPrimaryAsk}
+              </div>
+            ) : null}
           </div>
           <div className="flex flex-wrap gap-1">
             {(
@@ -6561,7 +6165,7 @@ const TraceHumanEvaluationPanel = ({
                 setPrimaryAskFixOpen((open) => !open);
               }}
             >
-              Wrong ask
+              Correct primary ask
             </Button>
           </div>
           {primaryAskFixOpen ? (
@@ -6577,7 +6181,7 @@ const TraceHumanEvaluationPanel = ({
               <Button
                 size="sm"
                 className="h-8 shrink-0 px-2 text-[10px]"
-                disabled={!primaryAskCorrection.trim()}
+                disabled={!primaryAskCorrection.trim() || primaryAskCorrection.trim() === primaryAskNormalizedText?.trim()}
                 onClick={savePrimaryAskCorrection}
               >
                 Save
@@ -6586,43 +6190,8 @@ const TraceHumanEvaluationPanel = ({
           ) : null}
         </div>
 
-        {showClarifyingOptionsEvaluation ? (
-          <div className="rounded-sm border border-border/60 p-2">
-            <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
-              Clarifying options
-            </div>
-            <div className="mb-2 break-words font-mono text-[9px] text-muted-foreground">
-              observed: {clarifyingOptionSource ?? "none"} / {clarifyingOptionCount ?? 0} options
-            </div>
-            <div className="flex flex-wrap gap-1">
-              {(
-                [
-                  ["correct", "Correct"],
-                  ["misleading", "Misleading"],
-                  ["missing", "Missing"],
-                ] as const
-              ).map(([verdict, label]) => (
-                <Button
-                  key={verdict}
-                  size="sm"
-                  variant={
-                    questionEvaluation?.clarifyingOptionsVerdict === verdict
-                      ? "default"
-                      : "outline"
-                  }
-                  className="h-7 px-2 text-[10px]"
-                  onClick={() =>
-                    onUpdateQuestion({ clarifyingOptionsVerdict: verdict })
-                  }
-                >
-                  {label}
-                </Button>
-              ))}
-            </div>
-          </div>
-        ) : null}
 
-        <div className="rounded-sm border border-border/60 p-2">
+<div data-evaluation-group="task-settlement" className="rounded-sm border border-border/60 p-2">
           <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
             Task settlement
           </div>
@@ -6663,6 +6232,9 @@ const TraceHumanEvaluationPanel = ({
                 ? ` / ${trace.metadata.responseOnlyContextReadScope}`
                 : ""}
             </div>
+            <div>parent owner: {observedSnapshotV2.settledParentId ?? "none"}</div>
+            <div>branch owner: {observedSnapshotV2.settledBranchId ?? "none"}</div>
+            <div>context owner: {observedSnapshotV2.contextOwnerId ?? "none"}</div>
             <div>
               applied: response{" "}
               {formatObservedBoolean(
@@ -6697,9 +6269,7 @@ const TraceHumanEvaluationPanel = ({
             <Button
               size="sm"
               variant={
-                projectionV2?.verdicts.questionTypeCorrect === true &&
-                projectionV2.verdicts.relationCorrect === true &&
-                projectionV2.verdicts.parentActionCorrect === true
+                projectionV2?.verdicts.taskSettlementCorrect === true
                   ? "default"
                   : "outline"
               }
@@ -6714,11 +6284,11 @@ const TraceHumanEvaluationPanel = ({
               className="h-7 px-2 text-[10px]"
               onClick={() => {
                 setExpectedQuestionType(
-                  observedQuestionType ?? "unknown"
+                  observedQuestionType
                 );
-                setExpectedRelation(observedRelation ?? "none");
+                setExpectedRelation(observedRelation);
                 setExpectedParentAction(
-                  observedParentAction ?? "none"
+                  observedParentAction
                 );
                 setTaskFixOpen((open) => !open);
               }}
@@ -6752,20 +6322,6 @@ const TraceHumanEvaluationPanel = ({
                   const relation =
                     normalizeEvaluationTaskRelation(value);
                   setExpectedRelation(relation);
-                  if (relation) {
-                    setExpectedParentAction((current) =>
-                      current &&
-                      evaluateTaskSettlementTupleCompatibilityV2({
-                        relation,
-                        parentAction: current,
-                      }).compatible
-                        ? current
-                        : evaluateTaskSettlementTupleCompatibilityV2({
-                            relation,
-                            parentAction: "none",
-                          }).recommendedParentAction
-                    );
-                  }
                 }}
               />
               <CriticalMomentButtonGroup
@@ -6823,9 +6379,9 @@ const TraceHumanEvaluationPanel = ({
           ) : null}
         </div>
 
-        <div className="rounded-sm border border-border/60 p-2">
+<div data-evaluation-group="answer-quality" className="rounded-sm border border-border/60 p-2">
           <div className="mb-2 text-[10px] font-medium uppercase text-muted-foreground">
-            Answer outcome
+            Answer Quality
           </div>
           <div className="flex flex-wrap gap-1">
             {(
@@ -6852,6 +6408,29 @@ const TraceHumanEvaluationPanel = ({
               </Button>
             ))}
           </div>
+          <details className="mt-2">
+            <summary className="cursor-pointer text-[10px] text-muted-foreground">Failure reasons</summary>
+            <div className="mt-1 flex flex-wrap gap-2">
+              {humanEvalFailureReasonOptions.map((option) => (
+                <label key={option.id} className="flex items-center gap-1 text-[10px]">
+                  <input
+                    type="checkbox"
+                    checked={answerFailureReasons.includes(option.id)}
+                    onChange={(event) => {
+                      const reasons = event.target.checked
+                        ? [...answerFailureReasons, option.id]
+                        : answerFailureReasons.filter((reason) => reason !== option.id);
+                      setDraftFailureReasons(reasons);
+                      if (activeAnswerFact?.kind === "answer-quality") {
+                        recordGroundTruth({ ...activeAnswerFact, failureReasons: reasons });
+                      }
+                    }}
+                  />
+                  {option.label}
+                </label>
+              ))}
+            </div>
+          </details>
         </div>
 
         {projectionV2?.conflicts.length ? (
@@ -6876,7 +6455,7 @@ const TraceHumanEvaluationPanel = ({
           </summary>
           <div className="mt-2 space-y-2">
         {showMeetingMetadataEvaluation ? (
-          <div className="rounded-sm border border-border/60 p-2">
+<div data-evaluation-group="metadata" className="rounded-sm border border-border/60 p-2">
             <div className="text-[10px] font-medium uppercase text-muted-foreground">
               Meeting metadata
             </div>
@@ -6945,16 +6524,16 @@ const TraceHumanEvaluationPanel = ({
                     : "outline"
                 }
                 className="h-6 px-2 text-[9px]"
-                onClick={() =>
+                disabled={!observedMeetingMetadata.proposalCompany || !observedMeetingMetadata.effectiveCompany}
+                onClick={() => {
+                  if (!observedMeetingMetadata.proposalCompany || !observedMeetingMetadata.effectiveCompany) return;
                   recordExpectedMeetingMetadata({
-                    sourceCompany:
-                      observedMeetingMetadata.proposalCompany ?? null,
-                    expectedEffectiveCompany:
-                      observedMeetingMetadata.effectiveCompany ?? null,
+                    sourceCompany: observedMeetingMetadata.proposalCompany,
+                    expectedEffectiveCompany: observedMeetingMetadata.effectiveCompany,
                     expectedMutationDisposition:
                       observedMeetingMetadata.mutationOutcome,
-                  })
-                }
+                  });
+                }}
               >
                 Correct
               </Button>
@@ -7098,7 +6677,7 @@ const TraceHumanEvaluationPanel = ({
             ) : null}
           </div>
         ) : null}
-        <div className="rounded-sm border border-border/60 p-2">
+<div data-evaluation-group="context" className="rounded-sm border border-border/60 p-2">
           <div className="text-[10px] font-medium uppercase text-muted-foreground">
             Context read scope
           </div>
@@ -7132,7 +6711,7 @@ const TraceHumanEvaluationPanel = ({
             ))}
           </div>
         </div>
-        <div className="rounded-sm border border-border/60 p-2">
+<div data-evaluation-group="artifact-intent" className="rounded-sm border border-border/60 p-2">
           <div className="text-[10px] font-medium uppercase text-muted-foreground">
             Artifact intent
           </div>
@@ -7167,7 +6746,7 @@ const TraceHumanEvaluationPanel = ({
           </div>
         </div>
         {showProjectTrajectoryEvaluation ? (
-          <div className="rounded-sm border border-border/60 p-2">
+<div data-evaluation-group="project" className="rounded-sm border border-border/60 p-2">
             <div className="text-[10px] font-medium uppercase text-muted-foreground">
               Project trajectory
             </div>
@@ -7358,1343 +6937,126 @@ const TraceHumanEvaluationPanel = ({
             ) : null}
           </div>
         ) : null}
-        {detectedQuestionType ? (
-          <div className="rounded-sm bg-muted/40 p-2 text-[10px]">
-            <span className="text-muted-foreground">Detected type: </span>
-            <span className="font-mono">{detectedQuestionType}</span>
+        <EvaluationMemoryAndArtifacts
+          projection={projectionV2}
+          memorySnapshot={memorySnapshot}
+          preparationArtifactUses={preparationArtifactUses}
+          preparationArtifactEvaluations={preparationArtifactEvaluations}
+          onUpdatePreparationArtifactEvaluation={onUpdatePreparationArtifactEvaluation}
+          missingMemoryId={missingMemoryId}
+          onMissingMemoryIdChange={setMissingMemoryId}
+          onRecord={recordGroundTruth}
+        />
           </div>
-        ) : null}
-        {transientPersonalStatusApplied &&
-        transientPersonalStatusDomain ? (
-          <div className="rounded-sm border border-border/60 p-2">
-            <div className="text-[10px] font-medium uppercase text-muted-foreground">
-              Personal status policy
-            </div>
-            <div className="mt-1 text-[10px]">
-              <span className="text-muted-foreground">Detected: </span>
-              <span className="font-mono">
-                {transientPersonalStatusDomain}
-              </span>
-            </div>
-            <div className="mt-2 flex flex-wrap gap-1">
-              {(
-                [
-                  "relocation",
-                  "compensation",
-                  "work-authorization",
-                  "start-date",
-                ] as PersonalStatusDomain[]
-              ).map((domain) => (
-                <Button
-                  key={domain}
-                  size="sm"
-                  variant={
-                    questionEvaluation?.transientPersonalStatus
-                      ?.expectedDomain === domain
-                      ? "default"
-                      : "outline"
-                  }
-                  className="h-6 px-2 text-[9px]"
-                  onClick={() =>
-                    onUpdateQuestion({
-                      transientPersonalStatus: {
-                        ...questionEvaluation?.transientPersonalStatus,
-                        detectedDomain: transientPersonalStatusDomain,
-                        expectedDomain: domain,
-                      },
-                    })
-                  }
-                >
-                  {domain}
-                </Button>
-              ))}
-            </div>
-            <div className="mt-2 grid grid-cols-2 gap-1">
-              {(
-                [
-                  ["policyApplicable", "Policy"],
-                  ["profileOnlyEvidenceCorrect", "Profile evidence"],
-                  ["parentPreserved", "Parent preserved"],
-                  ["artifactsPreserved", "Artifacts preserved"],
-                ] as const
-              ).map(([field, label]) => (
-                <div
-                  key={field}
-                  className="flex items-center justify-between gap-1 rounded-sm bg-muted/40 px-1.5 py-1 text-[9px]"
-                >
-                  <span>{label}</span>
-                  <div className="flex gap-1">
-                    {[true, false].map((value) => (
-                      <Button
-                        key={String(value)}
-                        size="sm"
-                        variant={
-                          questionEvaluation?.transientPersonalStatus?.[
-                            field
-                          ] === value
-                            ? "default"
-                            : "ghost"
-                        }
-                        className="h-5 px-1.5 text-[8px]"
-                        onClick={() =>
-                          onUpdateQuestion({
-                            transientPersonalStatus: {
-                              ...questionEvaluation?.transientPersonalStatus,
-                              detectedDomain:
-                                transientPersonalStatusDomain,
-                              [field]: value,
-                            },
-                          })
-                        }
-                      >
-                        {value ? "Yes" : "No"}
-                      </Button>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        ) : null}
-        {detectedPlaybook ? (
-          <div className="rounded-sm bg-muted/40 p-2 text-[10px]">
-            <span className="text-muted-foreground">Playbook: </span>
-            <span className="font-mono">{detectedPlaybook}</span>
-            {detectedPlaybookPhase ? (
-              <>
-                <span className="text-muted-foreground"> / phase: </span>
-                <span className="font-mono">{detectedPlaybookPhase}</span>
-              </>
-            ) : null}
-            {detectedPhaseOwner ? (
-              <>
-                <span className="text-muted-foreground"> / owner: </span>
-                <span className="font-mono">{detectedPhaseOwner}</span>
-              </>
-            ) : null}
-          </div>
-        ) : null}
-        <div className="rounded-sm border border-border/60 p-2">
-          <div className="text-[10px] font-medium uppercase text-muted-foreground">
-            Primary ask target
-          </div>
-          <div className="mt-1 break-words font-mono text-[10px] text-muted-foreground">
-            {primaryAskNormalizedText ?? "No source-backed target"}
-            {` / ${primaryAskTargetSource}`}
-            {primaryAskDisposition &&
-            primaryAskTargetSource === "local-fallback"
-              ? ` / ${primaryAskDisposition}`
-              : ""}
-          </div>
-          <div className="mt-2 flex flex-wrap gap-1">
-            <Button
-              size="sm"
-              variant={
-                questionEvaluation?.primaryAskCorrect === true
-                  ? "default"
-                  : "outline"
-              }
-              className="h-6 px-2 text-[10px]"
-              onClick={() =>
-                onUpdateQuestion({ primaryAskCorrect: true })
-              }
-            >
-              Primary ask correct
-            </Button>
-            <Button
-              size="sm"
-              variant={
-                questionEvaluation?.primaryAskCorrect === false
-                  ? "default"
-                  : "outline"
-              }
-              className="h-6 px-2 text-[10px]"
-              onClick={() =>
-                onUpdateQuestion({ primaryAskCorrect: false })
-              }
-            >
-              Primary ask wrong
-            </Button>
-          </div>
-        </div>
-        {currentQuestionSettlementId ? (
-          <div className="rounded-sm border border-border/60 p-2">
-            <div className="text-[10px] font-medium uppercase text-muted-foreground">
-              Current-question settlement
-            </div>
-            <div className="mt-1 break-words font-mono text-[10px] text-muted-foreground">
-              {currentQuestionSettlementType ?? "unknown"}
-              {currentQuestionSettlementRelation
-                ? ` / ${currentQuestionSettlementRelation}`
-                : ""}
-              {currentQuestionSettlementDisposition
-                ? ` / ${currentQuestionSettlementDisposition}`
-                : ""}
-              {typeof currentQuestionParentMutationAuthorized === "boolean"
-                ? currentQuestionParentMutationAuthorized
-                  ? " / parent mutation authorized"
-                  : " / parent preserved"
-                : ""}
-            </div>
-            <div className="mt-1 space-y-0.5 break-words font-mono text-[9px] text-muted-foreground">
-              <div>
-                type authority:{" "}
-                {questionTypeObservation.observedCurrentQuestionTypeAuthority ??
-                  "unknown"}
-              </div>
-              <div>
-                durable parent:{" "}
-                {questionTypeObservation.observedParentType ?? "none"}
-                {questionTypeObservation.observedParentId
-                  ? ` (${questionTypeObservation.observedParentId})`
-                  : ""}
-              </div>
-              <div>
-                applied: response{" "}
-                {formatObservedBoolean(
-                  questionTypeObservation.typeAppliedToResponse
-                )}
-                {" / settlement "}
-                {formatObservedBoolean(
-                  questionTypeObservation.typeAppliedToSettlement
-                )}
-                {" / parent "}
-                {formatObservedBoolean(
-                  questionTypeObservation.typeAppliedToParent
-                )}
-              </div>
-            </div>
-            <div className="mt-2 space-y-2">
-              <TaxonomyAdjudicationBooleanLabel
-                label="Settled type"
-                positiveLabel="Correct"
-                negativeLabel="Wrong"
-                value={
-                  questionEvaluation?.currentQuestionSettlement
-                    ?.questionTypeCorrect
-                }
-                onChange={(questionTypeCorrect) =>
-                  onUpdateQuestion({
-                    currentQuestionSettlement: {
-                      ...questionEvaluation?.currentQuestionSettlement,
-                      questionTypeCorrect,
-                    },
-                  })
-                }
-              />
-              <TaxonomyAdjudicationBooleanLabel
-                label="Relation"
-                positiveLabel="Correct"
-                negativeLabel="Wrong"
-                value={
-                  questionEvaluation?.currentQuestionSettlement
-                    ?.relationCorrect
-                }
-                onChange={(relationCorrect) =>
-                  onUpdateQuestion({
-                    currentQuestionSettlement: {
-                      ...questionEvaluation?.currentQuestionSettlement,
-                      relationCorrect,
-                    },
-                  })
-                }
-              />
-              <TaxonomyAdjudicationBooleanLabel
-                label="Parent decision"
-                positiveLabel="Correct"
-                negativeLabel="Wrong"
-                value={
-                  questionEvaluation?.currentQuestionSettlement
-                    ?.parentMutationCorrect
-                }
-                onChange={(parentMutationCorrect) =>
-                  onUpdateQuestion({
-                    currentQuestionSettlement: {
-                      ...questionEvaluation?.currentQuestionSettlement,
-                      parentMutationCorrect,
-                    },
-                  })
-                }
-              />
-            </div>
-          </div>
-        ) : null}
-        {taxonomyAdjudicationDisposition ? (
-          <div className="rounded-sm border border-border/60 p-2">
-            <div className="mb-2 text-[10px] font-medium uppercase text-muted-foreground">
-              Runtime type adjudication labels
-            </div>
-            <div className="space-y-2">
-              <TaxonomyAdjudicationBooleanLabel
-                label="Needed"
-                positiveLabel="Needed"
-                negativeLabel="Not needed"
-                value={questionEvaluation?.taxonomyAdjudication?.needed}
-                onChange={(needed) =>
-                  updateTaxonomyAdjudicationEvaluation({ needed })
-                }
-              />
-              <TaxonomyAdjudicationBooleanLabel
-                label="Type"
-                positiveLabel="Correct"
-                negativeLabel="Wrong"
-                value={questionEvaluation?.taxonomyAdjudication?.typeCorrect}
-                onChange={(typeCorrect) =>
-                  updateTaxonomyAdjudicationEvaluation({ typeCorrect })
-                }
-              />
-              <div>
-                <div className="mb-1 text-[10px] text-muted-foreground">
-                  Repair policy
-                </div>
-                <div className="flex flex-wrap gap-1">
-                  {[
-                    ["automatic-repair", "Auto repair"],
-                    ["suggest-only", "Suggest"],
-                    ["abstain", "Abstain"],
-                  ].map(([value, label]) => (
-                    <Button
-                      key={value}
-                      size="sm"
-                      variant={
-                        questionEvaluation?.taxonomyAdjudication
-                          ?.repairDisposition === value
-                          ? "default"
-                          : "outline"
-                      }
-                      className="h-6 px-2 text-[10px]"
-                      onClick={() =>
-                        updateTaxonomyAdjudicationEvaluation({
-                          repairDisposition:
-                            value as NonNullable<
-                              QuestionHumanEvaluation["taxonomyAdjudication"]
-                            >["repairDisposition"],
-                        })
-                      }
-                    >
-                      {label}
-                    </Button>
-                  ))}
-                </div>
-              </div>
-              <TaxonomyAdjudicationBooleanLabel
-                label="Context"
-                positiveLabel="Preserved"
-                negativeLabel="Lost"
-                value={
-                  questionEvaluation?.taxonomyAdjudication?.contextPreserved
-                }
-                onChange={(contextPreserved) =>
-                  updateTaxonomyAdjudicationEvaluation({ contextPreserved })
-                }
-              />
-              <TaxonomyAdjudicationBooleanLabel
-                label="Timing"
-                positiveLabel="Early enough"
-                negativeLabel="Too late"
-                value={questionEvaluation?.taxonomyAdjudication?.timely}
-                onChange={(timely) =>
-                  updateTaxonomyAdjudicationEvaluation({ timely })
-                }
-              />
-            </div>
-          </div>
-        ) : null}
-        {advisorTurnIntent ? (
-          <div className="rounded-sm border border-border/60 p-2">
-            <div className="text-[10px] font-medium uppercase text-muted-foreground">
-              Advisor gate
-            </div>
-            <div className="mt-1 font-mono text-[10px] text-muted-foreground">
-              {advisorTurnIntent}
-              {advisorTurnEnforcement ? ` / ${advisorTurnEnforcement}` : ""}
-              {typeof advisorExecutionAuthorized === "boolean"
-                ? advisorExecutionAuthorized
-                  ? " / advised"
-                  : " / skipped"
-                : ""}
-            </div>
-            {advisorExecutionAuthorized === false ? (
-              <div className="mt-2 flex flex-wrap gap-1">
-                <Button
-                  size="sm"
-                  variant={
-                    activeRuntimeFact?.kind === "expected-runtime-action" &&
-                    activeRuntimeFact.expectedAction === "ignore"
-                      ? "default"
-                      : "outline"
-                  }
-                  className="h-6 px-2 text-[10px]"
-                  onClick={() => recordExpectedRuntimeAction("ignore")}
-                >
-                  Correctly skipped
-                </Button>
-                <Button
-                  size="sm"
-                  variant={
-                    activeRuntimeFact?.kind === "expected-runtime-action" &&
-                    activeRuntimeFact.expectedAction === "advise"
-                      ? "default"
-                      : "outline"
-                  }
-                  className="h-6 px-2 text-[10px]"
-                  onClick={() => recordExpectedRuntimeAction("advise")}
-                >
-                  Should advise
-                </Button>
-              </div>
-            ) : null}
-            {advisorExecutionAuthorized === true ? (
-              <div className="mt-2 flex flex-wrap gap-1">
-                <Button
-                  size="sm"
-                  variant={
-                    activeRuntimeFact?.kind === "expected-runtime-action" &&
-                    activeRuntimeFact.expectedAction === "advise"
-                      ? "default"
-                      : "outline"
-                  }
-                  className="h-6 px-2 text-[10px]"
-                  onClick={() => recordExpectedRuntimeAction("advise")}
-                >
-                  Correctly advised
-                </Button>
-                <Button
-                  size="sm"
-                  variant={
-                    activeRuntimeFact?.kind === "expected-runtime-action" &&
-                    activeRuntimeFact.expectedAction === "ignore"
-                      ? "default"
-                      : "outline"
-                  }
-                  className="h-6 px-2 text-[10px]"
-                  onClick={() => recordExpectedRuntimeAction("ignore")}
-                >
-                  Should not advise
-                </Button>
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-        {answerSufficiencyStatus ? (
-          <div className="rounded-sm border border-border/60 p-2">
-            <div className="text-[10px] font-medium uppercase text-muted-foreground">
-              Answer sufficiency
-            </div>
-            <div className="mt-1 font-mono text-[10px] text-muted-foreground">
-              {answerSufficiencyStatus}
-              {answerSufficiencyRepair
-                ? ` / ${answerSufficiencyRepair}`
-                : ""}
-              {typeof answerSufficiencyContextResolvable === "boolean"
-                ? answerSufficiencyContextResolvable
-                  ? " / nearby context found"
-                  : " / no new nearby context"
-                : ""}
-            </div>
-            <div className="mt-2 flex flex-wrap gap-1">
-              {(["sufficient", "insufficient"] as const).map((status) => (
-                <Button
-                  key={status}
-                  size="sm"
-                  variant={
-                    questionEvaluation?.answerSufficiency
-                      ?.observedStatus === status
-                      ? "default"
-                      : "outline"
-                  }
-                  className="h-6 px-2 text-[10px]"
-                  onClick={() =>
-                    updateAnswerSufficiencyEvaluation({
-                      observedStatus: status,
-                    })
-                  }
-                >
-                  {status === "sufficient"
-                    ? "Answer sufficient"
-                    : "Answer insufficient"}
-                </Button>
-              ))}
-            </div>
-            <div className="mt-2 flex flex-wrap gap-1">
-              <Button
-                size="sm"
-                variant={
-                  questionEvaluation?.answerSufficiency
-                    ?.nearbyContextExisted === true
-                    ? "default"
-                    : "outline"
-                }
-                className="h-6 px-2 text-[10px]"
-                onClick={() =>
-                  updateAnswerSufficiencyEvaluation({
-                    nearbyContextExisted: true,
-                  })
-                }
-              >
-                Context existed
-              </Button>
-              <Button
-                size="sm"
-                variant={
-                  questionEvaluation?.answerSufficiency
-                    ?.nearbyContextExisted === false
-                    ? "default"
-                    : "outline"
-                }
-                className="h-6 px-2 text-[10px]"
-                onClick={() =>
-                  updateAnswerSufficiencyEvaluation({
-                    nearbyContextExisted: false,
-                  })
-                }
-              >
-                No nearby context
-              </Button>
-            </div>
-            <div className="mt-2">
-              <div className="mb-1 text-[10px] text-muted-foreground">
-                Expected repair
-              </div>
-              <div className="flex flex-wrap gap-1">
-                {[
-                  "none",
-                  "narrow",
-                  "enhance",
-                  "buffer",
-                  "ignore",
-                  "wait",
-                  "manual-clarification",
-                ].map((repair) => (
-                  <Button
-                    key={repair}
-                    size="sm"
-                    variant={
-                      questionEvaluation?.answerSufficiency
-                        ?.expectedRepair === repair
-                        ? "default"
-                        : "outline"
-                    }
-                    className="h-6 px-2 text-[10px]"
-                    onClick={() =>
-                      updateAnswerSufficiencyEvaluation({
-                        expectedRepair:
-                          repair as NonNullable<
-                            QuestionHumanEvaluation["answerSufficiency"]
-                          >["expectedRepair"],
-                      })
-                    }
-                  >
-                    {repair}
-                  </Button>
-                ))}
-              </div>
-            </div>
-          </div>
-        ) : null}
-        <div>
-          <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
-            Task quality
-          </div>
-          <div className="flex flex-wrap gap-1">
-            {humanEvalQualityOptions.map((option) => (
-              <Button
-                key={option.id}
-                size="sm"
-                variant={
-                  evaluation?.taskQuality === option.id ? "default" : "outline"
-                }
-                className="h-6 px-2 text-[10px]"
-                onClick={() => {
-                  onUpdate({ taskQuality: option.id });
+        </details>
+      </div>
+    </details>
+    </div>
+  );
+};
+
+
+const EvaluationMemoryAndArtifacts = ({
+  projection,
+  memorySnapshot,
+  preparationArtifactUses,
+  preparationArtifactEvaluations,
+  onUpdatePreparationArtifactEvaluation,
+  missingMemoryId,
+  onMissingMemoryIdChange,
+  onRecord,
+}: {
+  projection: HumanEvaluationProjectionV2 | undefined;
+  memorySnapshot: MemoryRetrievalEvaluationSnapshotResolution;
+  preparationArtifactUses: PreparationArtifactUseReceipt[];
+  preparationArtifactEvaluations: PreparationArtifactEvaluation[];
+  onUpdatePreparationArtifactEvaluation: (receiptId: string, label: PreparationArtifactEvaluationLabel) => void;
+  missingMemoryId: string;
+  onMissingMemoryIdChange: (value: string) => void;
+  onRecord: (fact: HumanGroundTruthFactV2) => void;
+}) => {
+  const memoryFact = projection?.activeFacts["memory-label"]?.fact;
+  const artifactFact = projection?.activeFacts["artifact-quality"]?.fact;
+  const entries = memorySnapshot.snapshot?.entries ?? [];
+  return (
+    <>
+      <details className="border-t border-border/50 pt-2">
+        <summary className="cursor-pointer text-[10px] font-medium text-muted-foreground">Memory</summary>
+        <div className="mt-2 space-y-2">
+          {entries.map((entry) => (
+            <div key={entry.id} className="min-w-0 border-b border-border/40 pb-2">
+              <div className="break-words text-[10px]">{entry.title}</div>
+              <div className="break-words font-mono text-[9px] text-muted-foreground">{entry.id}</div>
+              <CriticalMomentButtonGroup
+                label={`Memory relevance: ${entry.title}`}
+                options={memoryEntryLabelOptions.map((option) => [option.id, option.label])}
+                value={memoryFact?.kind === "memory-label" && memoryFact.memoryIds.includes(entry.id)
+                  ? memoryFact.verdict : undefined}
+                onSelect={(value) => {
+                  const verdict = memoryEntryLabelOptions.find((option) => option.id === value)?.id;
+                  if (verdict) onRecord({ kind: "memory-label", verdict, memoryIds: [entry.id] });
                 }}
-              >
-                {option.label}
-              </Button>
-            ))}
-          </div>
-        </div>
-        <div>
-          <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
-            Correct question type
-          </div>
-          <div className="flex flex-wrap gap-1">
-            {humanEvalQuestionTypeOptions.map((option) => (
-              <Button
-                key={option.id}
-                size="sm"
-                variant={
-                  evaluation?.correctedQuestionType === option.id
-                    ? "default"
-                    : "outline"
-                }
-                className="h-6 px-2 text-[10px]"
-                onClick={() => {
-                  onUpdate({ correctedQuestionType: option.id });
-                }}
-              >
-                {option.label}
-              </Button>
-            ))}
-          </div>
-        </div>
-        <div>
-          <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
-            Playbook
-          </div>
-          <div className="flex flex-wrap gap-1">
-            <Button
-              size="sm"
-              variant={evaluation?.playbookCorrect ? "default" : "outline"}
-              className="h-6 px-2 text-[10px]"
-              onClick={() => {
-                onUpdate({ playbookCorrect: !evaluation?.playbookCorrect });
-              }}
-            >
-              Playbook OK
-            </Button>
-            <Button
-              size="sm"
-              variant={evaluation?.playbookWrong ? "default" : "outline"}
-              className="h-6 px-2 text-[10px]"
-              onClick={() => {
-                onUpdate({ playbookWrong: !evaluation?.playbookWrong });
-              }}
-            >
-              Wrong playbook
-            </Button>
-            <Button
-              size="sm"
-              variant={evaluation?.playbookWrongPhase ? "default" : "outline"}
-              className="h-6 px-2 text-[10px]"
-              onClick={() => {
-                onUpdate({
-                  playbookWrongPhase: !evaluation?.playbookWrongPhase,
-                });
-              }}
-            >
-              Wrong phase
-            </Button>
-          </div>
-        </div>
-        <div>
-          <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
-            Memory retrieval
-          </div>
-          <div className="flex flex-wrap gap-1">
-            <Button
-              size="sm"
-              variant={evaluation?.memoryRelevant ? "default" : "outline"}
-              className="h-6 px-2 text-[10px]"
-              onClick={() => {
-                onUpdate({ memoryRelevant: !evaluation?.memoryRelevant });
-              }}
-            >
-              Memory OK
-            </Button>
-            <Button
-              size="sm"
-              variant={evaluation?.memoryMissing ? "default" : "outline"}
-              className="h-6 px-2 text-[10px]"
-              onClick={() => {
-                onUpdate({ memoryMissing: !evaluation?.memoryMissing });
-              }}
-            >
-              Missing memory
-            </Button>
-            <Button
-              size="sm"
-              variant={evaluation?.memoryWrong ? "default" : "outline"}
-              className="h-6 px-2 text-[10px]"
-              onClick={() => {
-                onUpdate({ memoryWrong: !evaluation?.memoryWrong });
-              }}
-            >
-              Wrong memory
-            </Button>
-          </div>
-        </div>
-        <div className="rounded-sm border border-border/60 p-2">
-          <div className="mb-2 flex min-w-0 items-center justify-between gap-2">
-            <div className="text-[10px] font-medium uppercase text-muted-foreground">
-              Question evaluation v2
+              />
             </div>
-            {questionEvaluation?.questionId ? (
-              <div
-                className="min-w-0 truncate font-mono text-[10px] text-muted-foreground"
-                title={questionEvaluation.questionId}
-              >
-                {questionEvaluation.questionId}
-              </div>
-            ) : null}
-          </div>
-          <div className="grid grid-cols-2 gap-1 text-[10px]">
-            <QuestionVerdictRow
-              label="Classification"
-              value={questionEvaluation?.classification}
-            />
-            <QuestionVerdictRow
-              label="Playbook"
-              value={questionEvaluation?.playbook}
-            />
-            <QuestionVerdictRow
-              label="Phase"
-              value={questionEvaluation?.playbookPhase}
-            />
-            <QuestionVerdictRow
-              label="Memory"
-              value={questionEvaluation?.memory}
-            />
-            <QuestionVerdictRow
-              label="Whiteboard"
-              value={questionEvaluation?.whiteboard}
-            />
-            <QuestionVerdictRow
-              label="Next"
-              value={questionEvaluation?.manualPhaseTransition}
-            />
-            <QuestionVerdictRow
-              label="Overlay"
-              value={questionEvaluation?.diagramOverlay}
-            />
-            <QuestionVerdictRow
-              label="Guardrail"
-              value={questionEvaluation?.guardrail}
-            />
-            <QuestionVerdictRow
-              label="Answer"
-              value={questionEvaluation?.answer}
-            />
-          </div>
-          <div className="mt-2">
-            <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
-              Guardrail verdict
-            </div>
-            <div className="flex flex-wrap gap-1">
-              {[
-                { label: "OK", verdict: "ok", reason: "confirmed" },
-                {
-                  label: "Too strict",
-                  verdict: "wrong",
-                  reason: "over-conservative",
-                },
-                { label: "Too loose", verdict: "wrong", reason: "too-loose" },
-              ].map((option) => (
-                <Button
-                  key={option.reason}
-                  size="sm"
-                  variant={
-                    hasVerdictReason(
-                      questionEvaluation?.guardrail,
-                      option.verdict as HumanEvaluationVerdict,
-                      option.reason
-                    )
-                      ? "default"
-                      : "outline"
-                  }
-                  className="h-6 px-2 text-[10px]"
-                  onClick={() => {
-                    updateQuestionVerdict(
-                      "guardrail",
-                      option.verdict as HumanEvaluationVerdict,
-                      [option.reason]
-                    );
-                  }}
-                >
-                  {option.label}
-                </Button>
-              ))}
-            </div>
-          </div>
-          <div className="mt-2">
-            <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
-              Whiteboard artifact
-            </div>
-            {questionEvaluation?.detectedWhiteboardArtifactId ? (
-              <div
-                className="mb-1 truncate font-mono text-[9px] text-muted-foreground"
-                title={questionEvaluation.detectedWhiteboardArtifactId}
-              >
-                {questionEvaluation.detectedWhiteboardArtifactId}
-                {typeof questionEvaluation.detectedWhiteboardArtifactRevision ===
-                "number"
-                  ? ` / r${questionEvaluation.detectedWhiteboardArtifactRevision}`
-                  : ""}
-                {questionEvaluation.detectedWhiteboardArtifactDomainTrack
-                  ? ` / ${questionEvaluation.detectedWhiteboardArtifactDomainTrack}`
-                  : ""}
-              </div>
-            ) : null}
-            <div className="flex flex-wrap gap-1">
-              {[
-                { label: "Useful", verdict: "ok", reason: "whiteboard-useful" },
-                { label: "Stale", verdict: "wrong", reason: "whiteboard-stale" },
-                {
-                  label: "Generic",
-                  verdict: "partial",
-                  reason: "whiteboard-too-generic",
-                },
-                {
-                  label: "Missing",
-                  verdict: "missing",
-                  reason: "whiteboard-missing",
-                },
-              ].map((option) => (
-                <Button
-                  key={option.reason}
-                  size="sm"
-                  variant={
-                    hasVerdictReason(
-                      questionEvaluation?.whiteboard,
-                      option.verdict as HumanEvaluationVerdict,
-                      option.reason
-                    )
-                      ? "default"
-                      : "outline"
-                  }
-                  className="h-6 px-2 text-[10px]"
-                  onClick={() => {
-                    updateQuestionVerdict(
-                      "whiteboard",
-                      option.verdict as HumanEvaluationVerdict,
-                      [option.reason]
-                    );
-                  }}
-                >
-                  {option.label}
-                </Button>
-              ))}
-            </div>
-          </div>
-          <div className="mt-2">
-            <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
-              Whiteboard render
-            </div>
-            {whiteboardRenderStatus ||
-            whiteboardRenderValidationDisposition ||
-            whiteboardRepairDisposition ||
-            whiteboardRenderFallbackKind ? (
-              <div className="mb-1 truncate font-mono text-[9px] text-muted-foreground">
-                {whiteboardRenderStatus ?? "unknown"}
-                {whiteboardRenderValidationDisposition
-                  ? ` / ${whiteboardRenderValidationDisposition}`
-                  : ""}
-                {whiteboardRepairDisposition
-                  ? ` / repair:${whiteboardRepairDisposition}`
-                  : ""}
-                {whiteboardRenderFallbackKind
-                  ? ` / fallback:${whiteboardRenderFallbackKind}`
-                  : ""}
-              </div>
-            ) : null}
-            <div className="flex flex-wrap gap-1">
-              {[
-                { label: "Rendered", value: "rendered" },
-                { label: "Repaired", value: "repaired" },
-                { label: "Preserved", value: "preserved-last-valid" },
-                { label: "ASCII", value: "ascii-fallback" },
-                { label: "Error shown", value: "error-visible" },
-                { label: "Missing", value: "missing" },
-              ].map((option) => (
-                <Button
-                  key={option.value}
-                  size="sm"
-                  variant={
-                    questionEvaluation?.whiteboardRender?.observedOutcome ===
-                    option.value
-                      ? "default"
-                      : "outline"
-                  }
-                  className="h-6 px-2 text-[10px]"
-                  onClick={() => {
-                    updateWhiteboardRenderEvaluation({
-                      observedOutcome:
-                        option.value as NonNullable<
-                          QuestionHumanEvaluation["whiteboardRender"]
-                        >["observedOutcome"],
-                    });
-                  }}
-                >
-                  {option.label}
-                </Button>
-              ))}
-            </div>
-            <div className="mt-1 flex flex-wrap gap-1">
-              {[
-                { label: "Repair correct", value: "correct" },
-                { label: "Semantic drift", value: "semantic-drift" },
-                { label: "Repair failed", value: "failed" },
-              ].map((option) => (
-                <Button
-                  key={option.value}
-                  size="sm"
-                  variant={
-                    questionEvaluation?.whiteboardRender?.repairVerdict ===
-                    option.value
-                      ? "default"
-                      : "outline"
-                  }
-                  className="h-6 px-2 text-[10px]"
-                  onClick={() => {
-                    updateWhiteboardRenderEvaluation({
-                      repairVerdict:
-                        option.value as NonNullable<
-                          QuestionHumanEvaluation["whiteboardRender"]
-                        >["repairVerdict"],
-                    });
-                  }}
-                >
-                  {option.label}
-                </Button>
-              ))}
-              {[
-                { label: "Fallback useful", value: "useful" },
-                { label: "Fallback poor", value: "not-useful" },
-              ].map((option) => (
-                <Button
-                  key={option.value}
-                  size="sm"
-                  variant={
-                    questionEvaluation?.whiteboardRender?.fallbackVerdict ===
-                    option.value
-                      ? "default"
-                      : "outline"
-                  }
-                  className="h-6 px-2 text-[10px]"
-                  onClick={() => {
-                    updateWhiteboardRenderEvaluation({
-                      fallbackVerdict:
-                        option.value as NonNullable<
-                          QuestionHumanEvaluation["whiteboardRender"]
-                        >["fallbackVerdict"],
-                    });
-                  }}
-                >
-                  {option.label}
-                </Button>
-              ))}
-            </div>
-          </div>
-          <div className="mt-2">
-            <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
-              Manual Next / phase
-            </div>
-            {questionEvaluation?.detectedManualPhaseFrom ||
-            questionEvaluation?.detectedManualPhaseTo ? (
-              <div className="mb-1 truncate font-mono text-[9px] text-muted-foreground">
-                {questionEvaluation.detectedManualPhaseFrom ?? "?"} {"->"}{" "}
-                {questionEvaluation.detectedManualPhaseTo ?? "?"}
-                {questionEvaluation.detectedManualPhaseTargetArtifact
-                  ? ` / ${questionEvaluation.detectedManualPhaseTargetArtifact}`
-                  : ""}
-                {questionEvaluation.detectedManualPhaseGuardStatus
-                  ? ` / ${questionEvaluation.detectedManualPhaseGuardStatus}`
-                  : ""}
-              </div>
-            ) : null}
-            <div className="flex flex-wrap gap-1">
-              {[
-                { label: "Good", verdict: "ok", reason: "manual-next-good" },
-                {
-                  label: "Wrong",
-                  verdict: "wrong",
-                  reason: "manual-next-wrong-phase",
-                },
-                {
-                  label: "Too many clicks",
-                  verdict: "partial",
-                  reason: "manual-next-too-granular",
-                },
-                {
-                  label: "No effect",
-                  verdict: "wrong",
-                  reason: "manual-next-no-effect",
-                },
-              ].map((option) => (
-                <Button
-                  key={option.reason}
-                  size="sm"
-                  variant={
-                    hasVerdictReason(
-                      questionEvaluation?.manualPhaseTransition,
-                      option.verdict as HumanEvaluationVerdict,
-                      option.reason
-                    )
-                      ? "default"
-                      : "outline"
-                  }
-                  className="h-6 px-2 text-[10px]"
-                  onClick={() => {
-                    updateQuestionVerdict(
-                      "manualPhaseTransition",
-                      option.verdict as HumanEvaluationVerdict,
-                      [option.reason]
-                    );
-                  }}
-                >
-                  {option.label}
-                </Button>
-              ))}
-            </div>
-          </div>
-          <div className="mt-2">
-            <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
-              Diagram overlay
-            </div>
-            {questionEvaluation?.selectedDiagramOverlayIds.length ? (
-              <div
-                className="mb-1 truncate font-mono text-[9px] text-muted-foreground"
-                title={questionEvaluation.selectedDiagramOverlayIds.join(", ")}
-              >
-                selected: {questionEvaluation.selectedDiagramOverlayIds.join(", ")}
-              </div>
-            ) : null}
-            {typeof questionEvaluation?.rejectedDiagramOverlayCount ===
-            "number" ? (
-              <div className="mb-1 font-mono text-[9px] text-muted-foreground">
-                rejected: {questionEvaluation.rejectedDiagramOverlayCount}
-              </div>
-            ) : null}
-            <div className="flex flex-wrap gap-1">
-              {[
-                { label: "Useful", verdict: "ok", reason: "overlay-useful" },
-                {
-                  label: "Wrong family",
-                  verdict: "forbidden",
-                  reason: "overlay-wrong-family",
-                },
-                {
-                  label: "Missing",
-                  verdict: "missing",
-                  reason: "overlay-missing",
-                },
-                {
-                  label: "Distracting",
-                  verdict: "partial",
-                  reason: "overlay-distracting",
-                },
-              ].map((option) => (
-                <Button
-                  key={option.reason}
-                  size="sm"
-                  variant={
-                    hasVerdictReason(
-                      questionEvaluation?.diagramOverlay,
-                      option.verdict as HumanEvaluationVerdict,
-                      option.reason
-                    )
-                      ? "default"
-                      : "outline"
-                  }
-                  className="h-6 px-2 text-[10px]"
-                  onClick={() => {
-                    updateQuestionVerdict(
-                      "diagramOverlay",
-                      option.verdict as HumanEvaluationVerdict,
-                      [option.reason]
-                    );
-                  }}
-                >
-                  {option.label}
-                </Button>
-              ))}
-            </div>
-          </div>
-          <div className="mt-2">
-            <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
-              Answer verdict
-            </div>
-            <div className="flex flex-wrap gap-1">
-              {[
-                { label: "Useful", verdict: "ok", reason: "useful" },
-                {
-                  label: "Partial",
-                  verdict: "partial",
-                  reason: "partially-useful",
-                },
-                { label: "Wrong", verdict: "wrong", reason: "wrong-answer" },
-                { label: "Too shallow", verdict: "partial", reason: "too-shallow" },
-              ].map((option) => (
-                <Button
-                  key={option.reason}
-                  size="sm"
-                  variant={
-                    hasVerdictReason(
-                      questionEvaluation?.answer,
-                      option.verdict as HumanEvaluationVerdict,
-                      option.reason
-                    )
-                      ? "default"
-                      : "outline"
-                  }
-                  className="h-6 px-2 text-[10px]"
-                  onClick={() => {
-                    updateQuestionVerdict(
-                      "answer",
-                      option.verdict as HumanEvaluationVerdict,
-                      [option.reason]
-                    );
-                  }}
-                >
-                  {option.label}
-                </Button>
-              ))}
-            </div>
-          </div>
-          <div className="mt-2">
-            <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
-              Memory entry labels
-            </div>
-            {memoryEntries.length ? (
-              <div className="space-y-1">
-                {memoryEntries.map((entry) => {
-                  const selectedLabel = questionEvaluation?.memoryEntryLabels.find(
-                    (label) => label.memoryId === entry.id
-                  )?.label;
-                  return (
-                    <div
-                      key={entry.id}
-                      className="min-w-0 rounded-sm bg-muted/40 p-2"
-                    >
-                      <div
-                        className="mb-1 truncate text-[10px] font-medium"
-                        title={entry.title}
-                      >
-                        {entry.title}
-                      </div>
-                      <div className="mb-1 truncate font-mono text-[9px] text-muted-foreground">
-                        {entry.id} / score {entry.score} /{" "}
-                        {entry.matchReason.join(", ") || "always"}
-                      </div>
-                      <div className="flex flex-wrap gap-1">
-                        {memoryEntryLabelOptions.map((option) => (
-                          <Button
-                            key={option.id}
-                            size="sm"
-                            variant={
-                              selectedLabel === option.id ? "default" : "outline"
-                            }
-                            className="h-6 px-2 text-[10px]"
-                            onClick={() =>
-                              updateMemoryEntryLabel(
-                                entry.id,
-                                entry.title,
-                                option.id
-                              )
-                            }
-                          >
-                            {option.label}
-                          </Button>
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            ) : memorySnapshot.status === "empty" ? (
-              <div className="text-[10px] text-muted-foreground">
-                No memory entries were injected for this trace.
-              </div>
-            ) : (
-              <div className="text-[10px] text-muted-foreground">
-                Memory evidence is unavailable for this trace. Entry labels are
-                disabled.
-              </div>
-            )}
-          </div>
-          {preparationArtifactUses.length ? (
-            <div className="mt-2">
-              <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
-                Used preparation artifacts
-              </div>
-              <div className="space-y-1">
-                {preparationArtifactUses.map((receipt) => {
-                  const selectedLabel = preparationArtifactEvaluations.find(
-                    (evaluation) => evaluation.receiptId === receipt.receiptId
-                  )?.label;
-                  return (
-                    <div
-                      key={receipt.receiptId}
-                      className="min-w-0 rounded-sm bg-muted/40 p-2"
-                    >
-                      <div
-                        className="mb-1 truncate text-[10px] font-medium"
-                        title={receipt.artifactPath}
-                      >
-                        {receipt.artifactPath}
-                      </div>
-                      <div
-                        className="mb-1 truncate font-mono text-[9px] text-muted-foreground"
-                        title={`${receipt.artifactId} / ${receipt.lineageKey}`}
-                      >
-                        {receipt.consumer} / {receipt.targetKind} / snapshot v
-                        {receipt.snapshotVersion}
-                        {receipt.answerRevision == null
-                          ? ""
-                          : ` / answer r${receipt.answerRevision}`}
-                      </div>
-                      <div className="flex flex-wrap gap-1">
-                        {preparationArtifactEvaluationOptions.map((option) => (
-                          <Button
-                            key={option.id}
-                            size="sm"
-                            variant={
-                              selectedLabel === option.id
-                                ? "default"
-                                : "outline"
-                            }
-                            className="h-6 px-2 text-[10px]"
-                            onClick={() =>
-                              onUpdatePreparationArtifactEvaluation(
-                                receipt.receiptId,
-                                option.id
-                              )
-                            }
-                          >
-                            {option.label}
-                          </Button>
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+          ))}
+          {!entries.length ? (
+            <div className="text-[10px] text-muted-foreground">
+              {memorySnapshot.status === "empty"
+                ? "No memory entries were injected for this trace."
+                : "Memory evidence is unavailable for this trace."}
             </div>
           ) : null}
-          <div className="mt-2">
-            <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
-              Missing expected memory
-            </div>
-            <div className="flex gap-1">
-              <Textarea
-                value={missingMemoryNote}
-                onChange={(event) => setMissingMemoryNote(event.target.value)}
-                placeholder="Memory id or short note"
-                className="min-h-8 text-[10px]"
-              />
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-8 shrink-0 px-2 text-[10px]"
-                onClick={addMissingMemoryNote}
-              >
-                Add
-              </Button>
-            </div>
-            {questionEvaluation?.missingExpectedMemory.length ? (
-              <div className="mt-1 space-y-1">
-                {questionEvaluation.missingExpectedMemory.map((item, index) => (
-                  <div
-                    key={`${item.id ?? item.note}-${index}`}
-                    className="truncate text-[10px] text-muted-foreground"
-                    title={item.id ?? item.note}
-                  >
-                    {item.id ?? item.note}
-                  </div>
+          <label className="block text-[10px]">
+            Missing expected memory ID
+            <Input value={missingMemoryId} onChange={(event) => onMissingMemoryIdChange(event.target.value)} className="mt-1 h-7 text-[10px]" />
+          </label>
+          <Button size="sm" variant="outline" className="h-7 px-2 text-[10px]" disabled={!missingMemoryId.trim()} onClick={() => {
+            const id = missingMemoryId.trim();
+            if (!id) return;
+            onRecord({ kind: "memory-label", verdict: "missing", memoryIds: [id] });
+            onMissingMemoryIdChange("");
+          }}>Record missing memory</Button>
+          {memoryFact?.kind === "memory-label" ? (
+            <div className="break-words text-[10px]">{memoryFact.verdict}: {memoryFact.memoryIds.join(", ")}</div>
+          ) : null}
+        </div>
+      </details>
+      <details className="border-t border-border/50 pt-2">
+        <summary className="cursor-pointer text-[10px] font-medium text-muted-foreground">Artifact quality</summary>
+        <div className="mt-2 space-y-2">
+          {(["code", "complexity", "whiteboard"] as const).map((artifact) => (
+            <CriticalMomentButtonGroup
+              key={artifact}
+              label={`Artifact quality: ${artifact}`}
+              options={[["useful", "Useful"], ["partial", "Partial"], ["wrong", "Wrong"], ["missing", "Missing"]]}
+              value={artifactFact?.kind === "artifact-quality" && artifactFact.artifact === artifact ? artifactFact.verdict : undefined}
+              onSelect={(value) => {
+                const verdict = (["useful", "partial", "wrong", "missing"] as const).find((candidate) => candidate === value);
+                if (verdict) onRecord({ kind: "artifact-quality", artifact, verdict });
+              }}
+            />
+          ))}
+          {preparationArtifactUses.map((receipt) => (
+            <div key={receipt.receiptId} className="break-words text-[10px]">
+              <div>{receipt.artifactPath}</div>
+              <div className="font-mono text-[9px] text-muted-foreground">
+                {receipt.artifactId} / {receipt.consumer} / snapshot v{receipt.snapshotVersion}
+                {receipt.answerRevision == null ? "" : ` / answer r${receipt.answerRevision}`}
+              </div>
+              <div>{preparationArtifactEvaluations.find((evaluation) => evaluation.receiptId === receipt.receiptId)?.label ?? "Unrated"}</div>
+              <div className="flex flex-wrap gap-1">
+                {(["helpful", "irrelevant", "polluting", "over-constraining"] as const).map(label => (
+                  <Button key={label} size="sm" variant={preparationArtifactEvaluations.find(e => e.receiptId === receipt.receiptId)?.label === label ? "default" : "outline"}
+                    className="h-6 px-2 text-[10px]" onClick={() => onUpdatePreparationArtifactEvaluation(receipt.receiptId, label)}>{label}</Button>
                 ))}
               </div>
-            ) : null}
-          </div>
+            </div>
+          ))}
         </div>
-        <div>
-          <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
-            Failure reasons
-          </div>
-          <div className="flex flex-wrap gap-1">
-            {humanEvalFailureReasonOptions.map((option) => (
-              <Button
-                key={option.id}
-                size="sm"
-                variant={
-                  failureReasons.includes(option.id) ? "default" : "outline"
-                }
-                className="h-6 px-2 text-[10px]"
-                onClick={() => toggleFailureReason(option.id)}
-              >
-                {option.label}
-              </Button>
-            ))}
-          </div>
-        </div>
-      </div>
-    </details>
-    </div>
-    </details>
-    </div>
+      </details>
+    </>
   );
 };
-
-const TaxonomyAdjudicationBooleanLabel = ({
-  label,
-  positiveLabel,
-  negativeLabel,
-  value,
-  onChange,
-}: {
-  label: string;
-  positiveLabel: string;
-  negativeLabel: string;
-  value?: boolean;
-  onChange: (value: boolean) => void;
-}) => (
-  <div>
-    <div className="mb-1 text-[10px] text-muted-foreground">{label}</div>
-    <div className="flex flex-wrap gap-1">
-      <Button
-        size="sm"
-        variant={value === true ? "default" : "outline"}
-        className="h-6 px-2 text-[10px]"
-        onClick={() => onChange(true)}
-      >
-        {positiveLabel}
-      </Button>
-      <Button
-        size="sm"
-        variant={value === false ? "default" : "outline"}
-        className="h-6 px-2 text-[10px]"
-        onClick={() => onChange(false)}
-      >
-        {negativeLabel}
-      </Button>
-    </div>
-  </div>
-);
-
-const QuestionVerdictRow = ({
-  label,
-  value,
-}: {
-  label: string;
-  value?: HumanEvaluationVerdictBlock;
-}) => {
-  return (
-    <div className="min-w-0 rounded-sm bg-muted/40 p-1.5">
-      <div className="text-[9px] text-muted-foreground">{label}</div>
-      <div
-        className="truncate text-[10px] font-medium"
-        title={formatHumanEvaluationVerdictBlock(value)}
-      >
-        {formatHumanEvaluationVerdictBlock(value)}
-      </div>
-    </div>
-  );
-};
-
-function formatHumanEvaluationVerdictBlock(
-  value: HumanEvaluationVerdictBlock | undefined
-) {
-  if (!value) return humanEvaluationVerdictLabel.not_applicable;
-  const label = humanEvaluationVerdictLabel[value.verdict];
-  return value.reasons.length ? `${label}: ${value.reasons.join(", ")}` : label;
-}
-
-function hasVerdictReason(
-  value: HumanEvaluationVerdictBlock | undefined,
-  verdict: HumanEvaluationVerdict,
-  reason: string
-) {
-  return value?.verdict === verdict && value.reasons.includes(reason);
-}
 
 function formatDetectedQuestionType(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
@@ -8712,23 +7074,6 @@ function getTraceEffectivePlaybookPhase(
   );
 }
 
-function formatDetectedPhaseOwner(
-  metadata: Record<string, unknown> | undefined
-) {
-  const kind =
-    readStringMetadata(metadata, "effectiveAdvisorPhaseOwnerKind") ??
-    (readStringMetadata(metadata, "activeMeetingChildPhase")
-      ? "child"
-      : readStringMetadata(metadata, "activeMeetingParentPhase")
-        ? "parent"
-        : undefined);
-  const id =
-    readStringMetadata(metadata, "effectiveAdvisorPhaseOwnerId") ??
-    (kind === "child"
-      ? readStringMetadata(metadata, "activeMeetingChildId")
-      : readStringMetadata(metadata, "activeMeetingParentId"));
-  return kind && id ? `${kind}:${id}` : undefined;
-}
 
 function readStringMetadata(
   metadata: Record<string, unknown> | undefined,
@@ -8742,15 +7087,6 @@ function formatObservedBoolean(value: boolean | undefined) {
   return value === true ? "yes" : value === false ? "no" : "unknown";
 }
 
-function compareProjectEvaluationLabels(
-  expected: string | undefined,
-  observed: string | undefined
-) {
-  if (!expected || !observed) return undefined;
-  const normalize = (value: string) =>
-    value.trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-  return normalize(expected) === normalize(observed);
-}
 
 const TraceClassifierMetadata = ({
   metadata,

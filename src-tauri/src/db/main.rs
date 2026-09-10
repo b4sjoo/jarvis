@@ -141,5 +141,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("migrations/memory-content-revisions-and-snapshot-pins.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 21,
+            description: "human_evaluation_storage",
+            sql: include_str!("migrations/human-evaluation.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

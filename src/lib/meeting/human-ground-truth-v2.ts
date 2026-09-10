@@ -1,5 +1,4 @@
-import { STORAGE_KEYS } from "../../config/constants.js";
-import { safeLocalStorage } from "../storage/helper.js";
+
 import {
   fromHumanEvalQuestionType,
   normalizeCanonicalQuestionType,
@@ -1092,38 +1091,6 @@ export function importLegacyQuestionEvaluationV2(
   return events;
 }
 
-export function readHumanGroundTruthEventsV2() {
-  return readStoredArray(
-    STORAGE_KEYS.MEETING_HUMAN_GROUND_TRUTH_EVENTS_V2,
-    normalizeEvent
-  );
-}
-
-export function persistHumanGroundTruthEventsV2(
-  events: HumanGroundTruthEventV2[]
-) {
-  safeLocalStorage.setItem(
-    STORAGE_KEYS.MEETING_HUMAN_GROUND_TRUTH_EVENTS_V2,
-    JSON.stringify(events)
-  );
-}
-
-export function readHumanEvaluationProjectionsV2() {
-  return readStoredArray(
-    STORAGE_KEYS.MEETING_HUMAN_EVALUATION_PROJECTIONS_V2,
-    normalizeProjection
-  );
-}
-
-export function persistHumanEvaluationProjectionsV2(
-  projections: HumanEvaluationProjectionV2[]
-) {
-  safeLocalStorage.setItem(
-    STORAGE_KEYS.MEETING_HUMAN_EVALUATION_PROJECTIONS_V2,
-    JSON.stringify(projections)
-  );
-}
-
 export function upsertHumanEvaluationProjectionV2(
   projections: HumanEvaluationProjectionV2[],
   projection: HumanEvaluationProjectionV2
@@ -1397,63 +1364,6 @@ function mapLegacyAnswerOutcome(
   return "wrong";
 }
 
-function normalizeEvent(value: unknown) {
-  if (!isRecord(value) || value.schemaVersion !== 2) return undefined;
-  if (
-    typeof value.eventId !== "string" ||
-    typeof value.sessionId !== "string" ||
-    !isRecord(value.subject) ||
-    !isRecord(value.fact) ||
-    !isRecord(value.provenance)
-  ) {
-    return undefined;
-  }
-  const source = value.provenance.source;
-  if (!isGroundTruthSource(source)) return undefined;
-  const fact = normalizeStoredFact(value.fact);
-  if (!fact) return undefined;
-  return createHumanGroundTruthEventV2({
-    eventId: value.eventId,
-    sessionId: value.sessionId,
-    subject: {
-      attemptId: readString(value.subject.attemptId),
-      questionId: readString(value.subject.questionId),
-      momentId: readString(value.subject.momentId),
-      taskId: readString(value.subject.taskId),
-      traceIds: readStringArray(value.subject.traceIds),
-      sourceTurnIds: readStringArray(value.subject.sourceTurnIds),
-    },
-    fact,
-    source,
-    collection: normalizeCollectionProvenance(
-      value.provenance.collection
-    ),
-    confirmation:
-      value.confirmation === "suggested" ? "suggested" : "confirmed",
-    sourceTraceId: readString(value.provenance.sourceTraceId),
-    repairTraceId: readString(value.provenance.repairTraceId),
-    actionId: readString(value.provenance.actionId),
-    uiSurface: readString(value.provenance.uiSurface),
-    interaction: normalizeStoredInteraction(
-      value.provenance.interaction,
-      typeof value.provenance.recordedAt === "number"
-        ? value.provenance.recordedAt
-        : Date.now()
-    ),
-    evaluationTarget: normalizeStoredEvaluationTarget(
-      value.provenance.evaluationTarget,
-      typeof value.provenance.recordedAt === "number"
-        ? value.provenance.recordedAt
-        : Date.now()
-    ),
-    supersedesEventId: readString(value.supersedesEventId),
-    now:
-      typeof value.provenance.recordedAt === "number"
-        ? value.provenance.recordedAt
-        : Date.now(),
-  });
-}
-
 function summarizeInteraction(
   events: HumanGroundTruthEventV2[]
 ): HumanGroundTruthInteractionV2 | undefined {
@@ -1474,25 +1384,6 @@ function summarizeInteraction(
       interactions.flatMap((value) => value.expandedRegions)
     ),
   };
-}
-
-function normalizeStoredInteraction(
-  value: unknown,
-  recordedAt: number
-): HumanGroundTruthInteractionV2 | undefined {
-  if (!isRecord(value)) return undefined;
-  return normalizeInteraction(
-    {
-      startedAt:
-        typeof value.startedAt === "number" ? value.startedAt : recordedAt,
-      durationMs:
-        typeof value.durationMs === "number" ? value.durationMs : 0,
-      clickCount:
-        typeof value.clickCount === "number" ? value.clickCount : 0,
-      expandedRegions: readStringArray(value.expandedRegions),
-    },
-    recordedAt
-  );
 }
 
 function normalizeInteraction(
@@ -1542,266 +1433,6 @@ function normalizeEvaluationTarget(
       ? Math.min(Math.max(0, value.frozenAt), recordedAt)
       : recordedAt,
   };
-}
-
-function normalizeStoredEvaluationTarget(
-  value: unknown,
-  recordedAt: number
-) {
-  if (!isRecord(value)) return undefined;
-  return normalizeEvaluationTarget(
-    {
-      attemptId: readString(value.attemptId),
-      questionId: readString(value.questionId),
-      taskId: readString(value.taskId),
-      logicalQuestionUnitId: readString(value.logicalQuestionUnitId),
-      logicalQuestionUnitRevision:
-        typeof value.logicalQuestionUnitRevision === "number"
-          ? value.logicalQuestionUnitRevision
-          : undefined,
-      currentTurnId: readString(value.currentTurnId),
-      sourceTurnIds: readStringArray(value.sourceTurnIds),
-      sourceTraceId: readString(value.sourceTraceId),
-      repairTraceId: readString(value.repairTraceId),
-      frozenAt:
-        typeof value.frozenAt === "number" ? value.frozenAt : recordedAt,
-    },
-    recordedAt
-  );
-}
-
-function normalizeProjection(value: unknown) {
-  if (!isRecord(value) || value.schemaVersion !== 2) return undefined;
-  if (
-    typeof value.projectionId !== "string" ||
-    typeof value.sessionId !== "string" ||
-    !isRecord(value.subject)
-  ) {
-    return undefined;
-  }
-  const inputEventIds = readStringArray(value.inputEventIds);
-  return {
-    ...value,
-    subject: normalizeSubject({
-      attemptId: readString(value.subject.attemptId),
-      questionId: readString(value.subject.questionId),
-      momentId: readString(value.subject.momentId),
-      taskId: readString(value.subject.taskId),
-      traceIds: readStringArray(value.subject.traceIds),
-      sourceTurnIds: readStringArray(value.subject.sourceTurnIds),
-    }),
-    inputEventIds,
-    semanticInputEventIds: Array.isArray(value.semanticInputEventIds)
-      ? readStringArray(value.semanticInputEventIds)
-      : inputEventIds,
-    interventionOnlyEventIds: readStringArray(
-      value.interventionOnlyEventIds
-    ),
-  } as unknown as HumanEvaluationProjectionV2;
-}
-
-function normalizeStoredFact(
-  fact: Record<string, unknown>
-): HumanGroundTruthFactV2 | undefined {
-  if (fact.kind === "expected-runtime-action") {
-    const expectedAction = fact.expectedAction;
-    if (
-      expectedAction === "advise" ||
-      expectedAction === "append-context" ||
-      expectedAction === "buffer" ||
-      expectedAction === "ignore"
-    ) {
-      return { kind: fact.kind, expectedAction };
-    }
-  }
-  if (fact.kind === "expected-question-type") {
-    const expectedQuestionType = normalizeCanonicalQuestionType(
-      fact.expectedQuestionType
-    );
-    if (expectedQuestionType) {
-      return {
-        kind: fact.kind,
-        expectedQuestionType,
-        correctionScope: readString(fact.correctionScope),
-      };
-    }
-  }
-  if (fact.kind === "expected-context-read-scope") {
-    const expectedScope = normalizeContextReadScope(fact.expectedScope);
-    if (expectedScope) {
-      return { kind: fact.kind, expectedScope };
-    }
-  }
-  if (fact.kind === "expected-artifact-intent") {
-    const expectedIntent = normalizeArtifactIntentEvaluationFamily(
-      fact.expectedIntent
-    );
-    if (expectedIntent) {
-      return { kind: fact.kind, expectedIntent };
-    }
-  }
-  if (fact.kind === "expected-task-settlement") {
-    const expectedQuestionType = normalizeCanonicalQuestionType(
-      fact.expectedQuestionType
-    );
-    const expectedRelation = normalizeRelation(fact.expectedRelation);
-    const expectedParentAction = normalizeParentAction(
-      fact.expectedParentAction
-    );
-    if (expectedQuestionType && expectedRelation && expectedParentAction) {
-      return {
-        kind: fact.kind,
-        expectedQuestionType,
-        expectedRelation,
-        expectedParentAction,
-        expectedParentId: readString(fact.expectedParentId),
-        expectedBranchId: readString(fact.expectedBranchId),
-        expectedContextOwnerId: readString(
-          fact.expectedContextOwnerId
-        ),
-      };
-    }
-  }
-  if (
-    fact.kind === "primary-ask-correction" &&
-    typeof fact.correctedPrimaryAsk === "string"
-  ) {
-    return {
-      kind: fact.kind,
-      correctedPrimaryAsk: fact.correctedPrimaryAsk,
-    };
-  }
-  if (
-    fact.kind === "answer-quality" &&
-    (fact.outcome === "useful" ||
-      fact.outcome === "partial" ||
-      fact.outcome === "wrong" ||
-      fact.outcome === "no-answer")
-  ) {
-    return {
-      kind: fact.kind,
-      outcome: fact.outcome,
-      failureReasons: readStringArray(fact.failureReasons),
-      expectedContextTurnIds: readStringArray(
-        fact.expectedContextTurnIds
-      ),
-    };
-  }
-  if (
-    fact.kind === "memory-label" &&
-    (fact.verdict === "relevant" ||
-      fact.verdict === "irrelevant" ||
-      fact.verdict === "missing" ||
-      fact.verdict === "forbidden")
-  ) {
-    return {
-      kind: fact.kind,
-      verdict: fact.verdict,
-      memoryIds: readStringArray(fact.memoryIds),
-    };
-  }
-  if (
-    fact.kind === "artifact-quality" &&
-    (fact.artifact === "code" ||
-      fact.artifact === "complexity" ||
-      fact.artifact === "whiteboard") &&
-    (fact.verdict === "useful" ||
-      fact.verdict === "partial" ||
-      fact.verdict === "wrong" ||
-      fact.verdict === "missing")
-  ) {
-    return {
-      kind: fact.kind,
-      artifact: fact.artifact,
-      verdict: fact.verdict,
-    };
-  }
-  if (fact.kind === "expected-project-trajectory") {
-    const expectedPhase = normalizePlaybookPhase(fact.expectedPhase);
-    const expectedFactAnchorState = normalizeFactAnchorState(
-      fact.expectedFactAnchorState
-    );
-    const expectedChildContinuity = normalizeChildContinuity(
-      fact.expectedChildContinuity
-    );
-    const expectedProjectId = readString(fact.expectedProjectId);
-    const expectedProjectName = readString(fact.expectedProjectName);
-    const unsupportedFirstPersonClaim = readBoolean(
-      fact.unsupportedFirstPersonClaim
-    );
-    if (
-      expectedProjectId ||
-      expectedProjectName ||
-      expectedPhase ||
-      expectedFactAnchorState ||
-      expectedChildContinuity ||
-      unsupportedFirstPersonClaim !== undefined
-    ) {
-      return {
-        kind: fact.kind,
-        expectedProjectId,
-        expectedProjectName,
-        expectedPhase,
-        expectedFactAnchorState,
-        expectedChildContinuity,
-        unsupportedFirstPersonClaim,
-      };
-    }
-  }
-  if (fact.kind === "expected-meeting-metadata") {
-    const legacyExpectedCompany =
-      (fact as { expectedCompany?: unknown }).expectedCompany;
-    const sourceCompany = readNullableString(fact.sourceCompany);
-    const expectedEffectiveCompany = readNullableString(
-      fact.expectedEffectiveCompany !== undefined
-        ? fact.expectedEffectiveCompany
-        : legacyExpectedCompany
-    );
-    const expectedMutationDisposition =
-      normalizeMeetingMetadataMutationDisposition(
-        fact.expectedMutationDisposition
-      );
-    const errorKind = normalizeMeetingMetadataErrorKind(fact.errorKind);
-    if (
-      sourceCompany !== undefined ||
-      expectedEffectiveCompany !== undefined ||
-      expectedMutationDisposition !== undefined
-    ) {
-      return {
-        kind: fact.kind,
-        sourceCompany,
-        expectedEffectiveCompany,
-        expectedMutationDisposition,
-        errorKind,
-      };
-    }
-  }
-  return undefined;
-}
-
-function normalizeMeetingMetadataMutationDisposition(
-  value: unknown
-): MeetingMetadataMutationDisposition | undefined {
-  return value === "commit" ||
-    value === "preserve" ||
-    value === "abstain"
-    ? value
-    : undefined;
-}
-
-function normalizeMeetingMetadataErrorKind(
-  value: unknown
-): MeetingMetadataEvaluationErrorKind | undefined {
-  return value === "missed-target-company" ||
-    value === "wrong-target-company" ||
-    value === "comparison-as-target" ||
-    value === "candidate-history-as-target" ||
-    value === "location-as-target" ||
-    value === "product-as-target" ||
-    value === "locked-brief-overridden" ||
-    value === "other"
-    ? value
-    : undefined;
 }
 
 function compareExpectedProject(
@@ -1854,16 +1485,6 @@ function resolveObservedChildContinuity(
   return undefined;
 }
 
-function normalizeChildContinuity(
-  value: unknown
-): ProjectTrajectoryChildContinuity | undefined {
-  return value === "none" ||
-    value === "child-attached" ||
-    value === "parent-resumed"
-    ? value
-    : undefined;
-}
-
 function normalizeFactAnchorState(
   value: unknown
 ): FactAnchorState | undefined {
@@ -1895,19 +1516,6 @@ function normalizePlaybookPhase(
     : undefined;
 }
 
-function normalizeParentAction(
-  value: unknown
-): HumanExpectedParentAction | undefined {
-  return value === "create" ||
-    value === "preserve" ||
-    value === "retype" ||
-    value === "resume" ||
-    value === "attach-child" ||
-    value === "none"
-    ? value
-    : undefined;
-}
-
 function normalizeContextReadScope(
   value: unknown
 ): AdvisorContextReadScope | undefined {
@@ -1929,41 +1537,6 @@ export function normalizeArtifactIntentEvaluationFamily(
     value === "revise-whiteboard"
     ? value
     : undefined;
-}
-
-function isGroundTruthSource(value: unknown): value is HumanGroundTruthSource {
-  return (
-    value === "explicit-ui" ||
-    value === "manual-type-correction" ||
-    value === "manual-force-advise" ||
-    value === "manual-term-correction" ||
-    value === "manual-context-action" ||
-    value === "imported-legacy"
-  );
-}
-
-function normalizeCollectionProvenance(
-  value: unknown
-): HumanEvaluationCollectionProvenance {
-  return value === "scripted-validation" || value === "replay"
-    ? value
-    : "organic";
-}
-
-function readStoredArray<T>(
-  key: string,
-  normalize: (value: unknown) => T | undefined
-) {
-  const raw = safeLocalStorage.getItem(key);
-  if (!raw) return [] as T[];
-  try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed)
-      ? parsed.map(normalize).filter((value): value is T => Boolean(value))
-      : [];
-  } catch {
-    return [];
-  }
 }
 
 function cleanOptional(value: string | undefined) {
@@ -1992,10 +1565,6 @@ function readString(value: unknown) {
   return typeof value === "string" && value.trim()
     ? value.trim()
     : undefined;
-}
-
-function readNullableString(value: unknown): string | null | undefined {
-  return value === null ? null : readString(value);
 }
 
 function readStringArray(value: unknown) {

@@ -427,6 +427,20 @@
       ]
     },
     {
+      "id": "human-evaluation-local-storage-writers",
+      "symbolOrSurface": "V1/V2 localStorage human evaluation writers and duplicate V1 UI mutation controls",
+      "verdict": "migrate-then-delete",
+      "ownerTaskId": 167,
+      "replacement": "One SQLite V2 event writer, transactional one-time import and readonly derived projections",
+      "persistedDataImpact": "recording",
+      "historicalReader": "Original localStorage and recordings remain; only explicit V2 and unambiguous V1 facts import with original provenance. V1-only controls retire without fabricated labels.",
+      "proofCommands": ["npm test", "cargo test --manifest-path src-tauri/Cargo.toml --lib --offline db::human_evaluation::tests", "npm run verify:architecture"],
+      "deletionGate": "SQLite transaction/conflict/restart and real Hook/UI tests pass; failed saves do not publish human truth or fall back to localStorage.",
+      "rollbackBoundary": "Source data is retained; reverting code does not make new SQLite events available to old clients, so preserve new DB facts before rollback.",
+      "status": "deleted",
+      "forbiddenPatterns": ["persistTraceHumanEvaluations", "persistQuestionHumanEvaluations", "persistHumanGroundTruthEventsV2", "persistHumanEvaluationProjectionsV2", "const updateTraceHumanEvaluation =", "const updateQuestionHumanEvaluation ="]
+    },
+    {
       "id": "legacy-system-audio-product",
       "symbolOrSurface": "Unused SystemAudio UI, Hook, settings and exclusive native IPC wrappers/notifications",
       "verdict": "delete",

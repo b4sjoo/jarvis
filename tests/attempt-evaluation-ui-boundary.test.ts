@@ -19,22 +19,10 @@ test("keeps final task settlement visible without duplicate relation shadow cont
 
   assert.doesNotMatch(source, /LLM type adjudication \(Shadow\)/);
   assert.match(source, /Runtime type adjudication/);
-  const typeLabelsStart = source.indexOf(
-    "Runtime type adjudication labels"
-  );
-  const typeLabelsEnd = source.indexOf(
-    "{advisorTurnIntent ?",
-    typeLabelsStart
-  );
-  assert.ok(typeLabelsStart >= 0);
-  assert.ok(typeLabelsEnd > typeLabelsStart);
-  const typeLabels = source.slice(typeLabelsStart, typeLabelsEnd);
-  assert.match(typeLabels, /label="Type"/);
-  assert.doesNotMatch(typeLabels, /label="Relation"/);
-  assert.doesNotMatch(typeLabels, /label="Expected relation"/);
-  assert.doesNotMatch(typeLabels, /label="Parent decision"/);
-  assert.doesNotMatch(typeLabels, /label="Response-only"/);
-  assert.doesNotMatch(typeLabels, /label="Context outcome"/);
+  assert.doesNotMatch(source, /Runtime type adjudication labels/);
+  assert.doesNotMatch(source, /updateTaxonomyAdjudicationEvaluation/);
+  assert.match(source, /kind: "expected-task-settlement"/);
+  assert.match(source, /expectedQuestionType/);
   assert.doesNotMatch(source, /Response-only handling/);
   assert.doesNotMatch(
     source,
