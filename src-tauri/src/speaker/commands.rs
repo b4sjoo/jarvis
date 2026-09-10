@@ -15,8 +15,7 @@ use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Emitter, Listener, Manager};
-use tauri_plugin_shell::ShellExt;
+use tauri::{AppHandle, Emitter, Manager};
 use tracing::{error, warn};
 use uuid::Uuid;
 
@@ -940,22 +939,6 @@ fn take_capture_termination_request(
 }
 
 #[tauri::command]
-pub async fn start_system_audio_capture(
-    app: AppHandle,
-    vad_config: Option<VadConfig>,
-    device_id: Option<String>,
-) -> Result<MeetingAudioStatus, String> {
-    start_audio_capture(
-        app.clone(),
-        vad_config,
-        device_id,
-        NativeCaptureOwner::System,
-    )
-    .await?;
-    get_meeting_audio_status(app).await
-}
-
-#[tauri::command]
 pub async fn start_meeting_audio_session(
     app: AppHandle,
     vad_config: Option<VadConfig>,
@@ -1513,7 +1496,6 @@ async fn run_vad_capture(
                                         &config,
                                         dropped_at_ms,
                                     );
-                                    let _ = app.emit("audio-encoding-error", error);
                                 }
                             }
                         } else {
@@ -1532,10 +1514,6 @@ async fn run_vad_capture(
                                 Some("below-minimum-speech"),
                                 &config,
                                 now_ms(),
-                            );
-                            let _ = app.emit(
-                                "speech-discarded",
-                                "Audio too short (likely background noise)",
                             );
                         }
 
@@ -1749,21 +1727,6 @@ async fn run_continuous_capture(
         None
     };
 
-    // Atomic flag for manual stop
-    let stop_flag = Arc::new(AtomicBool::new(false));
-    let stop_flag_for_listener = stop_flag.clone();
-
-    // Listen for manual stop event
-    let stop_listener = app.listen("manual-stop-continuous", move |_| {
-        stop_flag_for_listener.store(true, Ordering::Release);
-    });
-
-    // Emit recording started
-    let _ = app.emit(
-        "continuous-recording-start",
-        config.max_recording_duration_secs,
-    );
-
     // Accumulate audio - check stop flag on EVERY sample for immediate response
     let mut outcome = CaptureRunOutcome::expected(CaptureTerminationReason::RequestedStop);
     let mut termination_requested_for_capture = false;
@@ -1780,7 +1743,7 @@ async fn run_continuous_capture(
             break;
         }
         // Check stop flag FIRST on every iteration for immediate stopping
-        if stop_flag.load(Ordering::Acquire) || capture_stop_requested.load(Ordering::Acquire) {
+        if capture_stop_requested.load(Ordering::Acquire) {
             break;
         }
 
@@ -1788,9 +1751,7 @@ async fn run_continuous_capture(
             sample_opt = stream.next() => {
                 match sample_opt {
                     Some(sample) => {
-                        if stop_flag.load(Ordering::Acquire)
-                            || capture_stop_requested.load(Ordering::Acquire)
-                        {
+                        if capture_stop_requested.load(Ordering::Acquire) {
                             break;
                         }
 
@@ -1800,11 +1761,6 @@ async fn run_continuous_capture(
                         audio_buffer.push(sample);
 
                         let elapsed = start_time.elapsed();
-
-                        // Emit progress every second
-                        if audio_buffer.len() % (sr as usize) == 0 {
-                            let _ = app.emit("recording-progress", elapsed.as_secs());
-                        }
 
                         // Check size limit (safety)
                         if audio_buffer.len() >= max_samples {
@@ -1835,7 +1791,6 @@ async fn run_continuous_capture(
     }
 
     // Clean up event listener (CRITICAL)
-    app.unlisten(stop_listener);
 
     // Process and emit audio
     let mut termination_emitted_segment_sequence = None;
@@ -1896,12 +1851,10 @@ async fn run_continuous_capture(
                     "wav-encoding-failed",
                     &e,
                 );
-                let _ = app.emit("audio-encoding-error", e);
             }
         }
     } else {
         warn!("No audio captured in continuous mode");
-        let _ = app.emit("audio-encoding-error", "No audio recorded");
     }
 
     if termination_requested_for_capture {
@@ -1915,7 +1868,6 @@ async fn run_continuous_capture(
         );
     }
 
-    let _ = app.emit("continuous-recording-stopped", ());
     outcome
 }
 
@@ -2642,16 +2594,6 @@ fn capture_status_snapshot(state: &crate::AudioState) -> Result<MeetingAudioStat
     })
 }
 
-/// Manual stop for continuous recording
-#[tauri::command]
-pub async fn manual_stop_continuous(app: AppHandle) -> Result<(), String> {
-    let _ = app.emit("manual-stop-continuous", ());
-
-    tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
-
-    Ok(())
-}
-
 #[tauri::command]
 pub fn check_system_audio_access(_app: AppHandle) -> Result<bool, String> {
     match SpeakerInput::new() {
@@ -2661,76 +2603,6 @@ pub fn check_system_audio_access(_app: AppHandle) -> Result<bool, String> {
             Ok(false)
         }
     }
-}
-
-#[tauri::command]
-pub async fn request_system_audio_access(app: AppHandle) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    {
-        app.shell()
-            .command("open")
-            .args(["x-apple.systempreferences:com.apple.preference.security?Privacy_AudioCapture"])
-            .spawn()
-            .map_err(|e| {
-                error!("Failed to open system preferences: {}", e);
-                e.to_string()
-            })?;
-    }
-    #[cfg(target_os = "windows")]
-    {
-        app.shell()
-            .command("ms-settings:sound")
-            .spawn()
-            .map_err(|e| {
-                error!("Failed to open sound settings: {}", e);
-                e.to_string()
-            })?;
-    }
-    #[cfg(target_os = "linux")]
-    {
-        let commands = ["pavucontrol", "gnome-control-center sound"];
-        let mut opened = false;
-
-        for cmd in &commands {
-            if app.shell().command(cmd).spawn().is_ok() {
-                opened = true;
-                break;
-            }
-        }
-
-        if !opened {
-            warn!("Failed to open audio settings on Linux");
-        }
-    }
-
-    Ok(())
-}
-
-// VAD Configuration Management
-#[tauri::command]
-pub async fn get_vad_config(app: AppHandle) -> Result<VadConfig, String> {
-    let state = app.state::<crate::AudioState>();
-    let config = state
-        .capture_control
-        .lock()
-        .map_err(|e| format!("Failed to get VAD config: {}", e))?
-        .vad_config
-        .clone();
-    Ok(config)
-}
-
-#[tauri::command]
-pub async fn update_vad_config(app: AppHandle, config: VadConfig) -> Result<(), String> {
-    validate_vad_config(&config)?;
-
-    let state = app.state::<crate::AudioState>();
-    state
-        .capture_control
-        .lock()
-        .map_err(|e| format!("Failed to update VAD config: {}", e))?
-        .vad_config = config;
-
-    Ok(())
 }
 
 fn validate_vad_config(config: &VadConfig) -> Result<(), String> {
@@ -2871,6 +2743,52 @@ mod tests {
     };
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Mutex;
+
+    #[tokio::test]
+    async fn task128_meeting_config_and_shared_stop_survive_wrapper_retirement() {
+        let state = crate::AudioState::default();
+        for enabled in [true, false] {
+            let config = VadConfig {
+                enabled,
+                silence_duration_ms: 900,
+                ..VadConfig::default()
+            };
+            let (lease, signals, reserved_config) = super::reserve_capture(
+                &state,
+                NativeCaptureOwner::Meeting,
+                format!("task128-{enabled}"),
+                Some(config),
+            )
+            .unwrap();
+            assert_eq!(reserved_config.enabled, enabled);
+            assert_eq!(reserved_config.silence_duration_ms, 900);
+            let status = super::capture_status_snapshot(&state).unwrap();
+            assert!(status.active && status.system_capture_active);
+            assert_eq!(status.capture_owner.as_deref(), Some("meeting"));
+            assert_eq!(status.vad_enabled, enabled);
+            let (mismatch, _) = super::stop_capture_for_owner(
+                &state,
+                NativeCaptureOwner::System,
+                Some(&lease.session_id),
+                Some(lease.generation),
+            )
+            .await
+            .unwrap();
+            assert_eq!(mismatch, super::NativeStopDisposition::OwnerMismatch);
+            assert!(!signals.stop_requested.load(Ordering::Acquire));
+            let (stopped, _) = super::stop_capture_for_owner(
+                &state,
+                NativeCaptureOwner::Meeting,
+                Some(&lease.session_id),
+                Some(lease.generation),
+            )
+            .await
+            .unwrap();
+            assert_eq!(stopped, super::NativeStopDisposition::Stopped);
+            assert!(signals.stop_requested.load(Ordering::Acquire));
+            assert!(!super::capture_status_snapshot(&state).unwrap().active);
+        }
+    }
 
     #[test]
     fn serializes_native_speech_event_for_typescript_consumers() {

@@ -49,8 +49,8 @@ test("accepts the tracked architecture baseline", () => {
   assert.equal(result.metrics.taskWriterModules, 1);
   assert.equal(result.metrics.liveLegacyImports, 0);
   assert.equal(result.metrics.importCycles, 5);
-  assert.equal(result.metrics.importCycleEdges, 41);
-  assert.equal(result.metrics.frontendCommandsWithoutNativeRegistration, 1);
+  assert.equal(result.metrics.importCycleEdges, 39);
+  assert.equal(result.metrics.frontendCommandsWithoutNativeRegistration, 0);
 });
 
 test("all retired Meeting cycles and moved contracts remain acyclic", () => {

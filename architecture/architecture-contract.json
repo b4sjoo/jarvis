@@ -55,8 +55,7 @@
       [
         "src/hooks/index.ts",
         "src/hooks/useApp.ts",
-        "src/hooks/useCompletion.ts",
-        "src/hooks/useSystemAudio.ts"
+        "src/hooks/useCompletion.ts"
       ],
       [
         "src/lib/database/memory.action.ts",
@@ -85,10 +84,8 @@
       "src/config/shortcuts.ts -> src/types/index.ts",
       "src/hooks/index.ts -> src/hooks/useApp.ts",
       "src/hooks/index.ts -> src/hooks/useCompletion.ts",
-      "src/hooks/index.ts -> src/hooks/useSystemAudio.ts",
       "src/hooks/useApp.ts -> src/hooks/index.ts",
       "src/hooks/useCompletion.ts -> src/hooks/index.ts",
-      "src/hooks/useSystemAudio.ts -> src/hooks/index.ts",
       "src/lib/database/memory.action.ts -> src/lib/memory/index.ts",
       "src/lib/memory/index.ts -> src/lib/memory/retrieval.ts",
       "src/lib/memory/retrieval.ts -> src/lib/database/memory.action.ts",
@@ -113,14 +110,13 @@
     ],
     "broadMeetingBarrelAllowedConsumers": [
       "src/hooks/useMeetingAssistant.ts",
-      "src/hooks/useSystemAudio.ts",
       "src/lib/index.ts",
       "src/pages/app/components/meeting/focus-window.tsx",
       "src/pages/app/components/meeting/index.tsx",
       "src/pages/app/components/meeting/whiteboard-mermaid-error.tsx",
       "src/pages/app/components/meeting/whiteboard-viewer.tsx"
     ],
-    "broadMeetingBarrelMaxConsumers": 7,
+    "broadMeetingBarrelMaxConsumers": 6,
     "acyclicModules": [
       "src/lib/meeting/active-meeting-task.ts",
       "src/lib/meeting/adjacent-question-constraint.ts",
@@ -210,11 +206,9 @@
       "get_output_devices",
       "get_registered_shortcuts",
       "get_stt_evaluation_capture_status",
-      "get_vad_config",
       "hide_meeting_focus_windows",
       "import_preparation_material_file",
       "log_preparation_material_import_summary",
-      "manual_stop_continuous",
       "memory_content_initialize",
       "memory_content_publish",
       "move_window",
@@ -230,7 +224,6 @@
       "record_stt_evaluation_submitted_audio",
       "record_stt_evaluation_transcript_event",
       "report_app_shutdown",
-      "request_system_audio_access",
       "restore_preparation_material_storage_delete",
       "restore_preparation_workspace_storage_delete",
       "retry_app_shutdown",
@@ -245,13 +238,11 @@
       "start_meeting_session_recording",
       "start_screen_capture",
       "start_stt_evaluation_capture",
-      "start_system_audio_capture",
       "stop_meeting_audio_session",
       "stop_stt_evaluation_capture",
       "stop_system_audio_capture",
       "toggle_dashboard",
       "update_shortcuts",
-      "update_vad_config",
       "validate_shortcut_key",
       "write_meeting_session_recording_base64",
       "write_meeting_session_recording_text",
@@ -261,7 +252,6 @@
     ],
     "staticFrontendInvokes": [
       "capture_screen_context_to_base64",
-      "capture_screenshot",
       "capture_selected_area",
       "capture_to_base64",
       "check_shortcuts_registered",
@@ -284,7 +274,6 @@
       "hide_meeting_focus_windows",
       "import_preparation_material_file",
       "log_preparation_material_import_summary",
-      "manual_stop_continuous",
       "memory_content_initialize",
       "memory_content_publish",
       "open_dashboard",
@@ -296,7 +285,6 @@
       "read_meeting_trace_metrics",
       "read_preparation_material_image",
       "read_preparation_material_visuals",
-      "request_system_audio_access",
       "restore_preparation_material_storage_delete",
       "restore_preparation_workspace_storage_delete",
       "retry_app_shutdown",
@@ -309,11 +297,9 @@
       "stage_preparation_workspace_storage_delete",
       "start_meeting_audio_session",
       "start_screen_capture",
-      "start_system_audio_capture",
       "stop_meeting_audio_session",
       "stop_system_audio_capture",
       "update_shortcuts",
-      "update_vad_config",
       "validate_shortcut_key",
       "write_meeting_trace_log",
       "write_meeting_trace_metrics",
@@ -346,43 +332,32 @@
       }
     ],
     "nativeEmittedEvents": [
-      "audio-encoding-error",
       "capture-closed",
       "capture-started",
       "capture-stopped",
       "captured-selection",
-      "continuous-recording-start",
-      "continuous-recording-stopped",
       "custom-shortcut-triggered",
       "focus-text-input",
       "jarvis-emergency-hide",
       "jarvis-shutdown-requested",
       "jarvis-shutdown-status",
-      "manual-stop-continuous",
       "native-audio-lifecycle",
       "native-audio-liveness",
       "native-audio-segment-dropped",
-      "recording-progress",
       "shortcut-registration-error",
       "speech-detected",
-      "speech-discarded",
       "speech-start",
       "toggle-window-visibility"
     ],
-    "nativeListenedEvents": [
-      "manual-stop-continuous"
-    ],
+    "nativeListenedEvents": [],
     "staticFrontendEmittedEvents": [
       "meeting-focus-action",
       "meeting-focus-snapshot",
       "preparation-snapshot-selection-invalidated"
     ],
     "staticFrontendListenedEvents": [
-      "audio-encoding-error",
       "capture-closed",
       "captured-selection",
-      "continuous-recording-start",
-      "continuous-recording-stopped",
       "custom-shortcut-triggered",
       "focus-text-input",
       "handle-app-icon-on-hide",
@@ -396,22 +371,15 @@
       "native-audio-liveness",
       "native-audio-segment-dropped",
       "preparation-snapshot-selection-invalidated",
-      "recording-progress",
       "shortcut-registration-error",
       "speech-detected",
-      "speech-discarded",
       "speech-start",
       "toggle-window-visibility"
     ],
     "dynamicFrontendEmitCallsites": [],
     "dynamicFrontendListenCallsites": [],
     "reconciliation": {
-      "allowedFrontendCommandsWithoutNativeRegistration": [
-        {
-          "name": "capture_screenshot",
-          "reason": "Legacy speech UI call has no Rust handler and is a Task 172 retirement candidate."
-        }
-      ],
+      "allowedFrontendCommandsWithoutNativeRegistration": [],
       "allowedNativeCommandsWithoutFrontendCall": [
         {
           "name": "get_audio_sample_rate",
@@ -420,10 +388,6 @@
         {
           "name": "get_capture_status",
           "reason": "Registered native diagnostic command with no current TypeScript consumer."
-        },
-        {
-          "name": "get_vad_config",
-          "reason": "Registered native configuration reader with no current TypeScript consumer."
         },
         {
           "name": "move_window",
@@ -442,10 +406,6 @@
         {
           "name": "capture-stopped",
           "reason": "Native capture lifecycle notification currently has no webview subscriber."
-        },
-        {
-          "name": "manual-stop-continuous",
-          "reason": "Native-internal stop signal is emitted and consumed inside the Rust audio loop."
         }
       ],
       "allowedFrontendListenersWithoutNativeEmitter": [
@@ -484,12 +444,7 @@
           "reason": "Frontend-to-frontend Tauri event invalidates idle Snapshot previews across Dashboard and Main webviews."
         }
       ],
-      "allowedNativeListenersWithoutFrontendEmitter": [
-        {
-          "name": "manual-stop-continuous",
-          "reason": "Native-internal stop signal is emitted and consumed inside the Rust audio loop."
-        }
-      ]
+      "allowedNativeListenersWithoutFrontendEmitter": []
     }
   }
 }

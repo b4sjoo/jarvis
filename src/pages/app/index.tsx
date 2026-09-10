@@ -1,11 +1,5 @@
 import { Card, DragButton, CustomCursor, Button } from "@/components";
-import {
-  SystemAudio,
-  Completion,
-  AudioVisualizer,
-  StatusIndicator,
-  MeetingAssistant,
-} from "./components";
+import { Completion, MeetingAssistant } from "./components";
 import { useApp } from "@/hooks";
 import { useApp as useAppContext } from "@/contexts";
 import { SparklesIcon } from "lucide-react";
@@ -16,7 +10,7 @@ import { getPlatform } from "@/lib";
 import { useState } from "react";
 
 const App = () => {
-  const { isHidden, systemAudio } = useApp();
+  const { isHidden } = useApp();
   const { customizable } = useAppContext();
   const platform = getPlatform();
   const [meetingFocusModeActive, setMeetingFocusModeActive] = useState(false);
@@ -51,35 +45,11 @@ const App = () => {
               : "p-2"
           }`}
         >
-          {meetingFocusModeActive ? null : <SystemAudio {...systemAudio} />}
           <MeetingAssistant
             onFocusModeActiveChange={setMeetingFocusModeActive}
           />
-          {!meetingFocusModeActive && systemAudio?.capturing ? (
-            <div className="flex flex-row items-center gap-2 justify-between w-full">
-              <div className="flex flex-1 items-center gap-2">
-                <AudioVisualizer isRecording={systemAudio?.capturing} />
-              </div>
-              <div className="flex !w-fit items-center gap-2">
-                <StatusIndicator
-                  setupRequired={systemAudio.setupRequired}
-                  error={systemAudio.error}
-                  isProcessing={systemAudio.isProcessing}
-                  isAIProcessing={systemAudio.isAIProcessing}
-                  capturing={systemAudio.capturing}
-                />
-              </div>
-            </div>
-          ) : null}
-
           {!meetingFocusModeActive ? (
-            <div
-              className={`${
-                systemAudio?.capturing
-                  ? "hidden w-full fade-out transition-all duration-300"
-                  : "w-full flex flex-row gap-2 items-center"
-              }`}
-            >
+            <div className="w-full flex flex-row gap-2 items-center">
               <Completion isHidden={isHidden} />
               <Button
                 size={"icon"}

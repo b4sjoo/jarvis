@@ -50,7 +50,6 @@ for (const blob of [null, "", "{broken", "[]", '[{"id":"legacy","title":"Old cha
       const listeners = new Map();
       let migrations = 0;
       let titles = 0;
-      const systemAudio = {};
       const config = { screenshot: "CommandOrControl+Shift+S" };
       const safeLocalStorage = {
         getItem(key) { storageCalls.push(["get", key]); return storage.get(key) ?? null; },
@@ -59,7 +58,7 @@ for (const blob of [null, "", "{broken", "[]", '[{"id":"legacy","title":"Old cha
       };
       const api = loadModule(hookSource, {
         react: { useEffect: (fn) => effects.push(fn), useState: (value) => [value, () => {}] },
-        "@/hooks": { useTitles: () => { titles++; }, useSystemAudio: () => systemAudio },
+        "@/hooks": { useTitles: () => { titles++; } },
         "@tauri-apps/api/event": { listen: async () => () => {} },
         "@/lib": { safeLocalStorage, migrateLocalStorageToSQLite: async () => { migrations++; return { success: true, migratedCount: 0 }; } },
         "@/lib/storage": { getShortcutsConfig: () => config },
@@ -76,7 +75,7 @@ for (const blob of [null, "", "{broken", "[]", '[{"id":"legacy","title":"Old cha
       const cleanup = effects.map((effect) => effect());
       await new Promise((resolve) => setImmediate(resolve));
       assert.equal(titles, 1);
-      assert.equal(app.systemAudio, systemAudio);
+      assert.equal(Object.hasOwn(app, "systemAudio"), false);
       assert.equal(invocations.length, 1);
       assert.equal(invocations[0][0], "update_shortcuts");
       assert.equal(invocations[0][1].config, config);

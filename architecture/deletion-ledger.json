@@ -427,6 +427,20 @@
       ]
     },
     {
+      "id": "legacy-system-audio-product",
+      "symbolOrSurface": "Unused SystemAudio UI, Hook, settings and exclusive native IPC wrappers/notifications",
+      "verdict": "delete",
+      "ownerTaskId": 128,
+      "replacement": "None for retired product; Meeting capture and Chat audio remain independent existing owners",
+      "persistedDataImpact": "settings",
+      "historicalReader": "Residual settings bytes are unread and unwritten; original recordings and conversations remain untouched.",
+      "proofCommands": ["node --test tests/legacy-system-audio-retirement.test.mjs", "cargo test --manifest-path src-tauri/Cargo.toml --lib --offline speaker::", "npm run verify:architecture"],
+      "deletionGate": "Real App/Chat fixtures and shared native stop tests pass; exclusive UI/IPC surfaces and orphan notifications are absent without adding reconciliation exceptions.",
+      "rollbackBoundary": "Old product exit is independent of shared Meeting capture algorithms and native owner-qualified stop.",
+      "status": "deleted",
+      "forbiddenPatterns": ["useSystemAudio", "SYSTEM_AUDIO_CONTEXT", "SYSTEM_AUDIO_QUICK_ACTIONS", "fn start_system_audio_capture", "fn manual_stop_continuous", "fn request_system_audio_access", "fn get_vad_config", "fn update_vad_config"]
+    },
+    {
       "id": "local-model-product-mode",
       "symbolOrSurface": "Local Model selector and privacyMode/screenContextEnabled settings and gates",
       "verdict": "delete",
