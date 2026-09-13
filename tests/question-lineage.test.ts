@@ -102,6 +102,10 @@ test("binds lineage to the visible suggestion and validates runtime ownership", 
       sessionId: "session_1",
       runtimeEpoch: 4,
     }),
+    true
+  );
+  assert.equal(
+    isCurrentQuestionLineage({ lineage, suggestion, sessionId: "session_1", runtimeEpoch: 2 }),
     false
   );
   assert.equal(promoteQuestionLineage(lineage)?.identityState, "canonical");

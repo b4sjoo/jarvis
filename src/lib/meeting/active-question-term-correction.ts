@@ -130,6 +130,7 @@ export function authorizeActiveQuestionTermCorrection(input: {
   currentLogicalQuestionUnit: LogicalQuestionUnit | undefined;
   currentSessionId: string;
   currentRuntimeEpoch: number;
+  expectedExecutionEpoch?: number;
   currentManualCorrectionRevision: number;
 }): ActiveQuestionTermCorrectionAuthorization {
   const current = input.currentLogicalQuestionUnit;
@@ -139,7 +140,10 @@ export function authorizeActiveQuestionTermCorrection(input: {
   if (current.sessionId !== input.currentSessionId) {
     return { authorized: false, reason: "logical-question-session-mismatch" };
   }
-  if (current.runtimeEpoch !== input.currentRuntimeEpoch) {
+  if (
+    (input.expectedExecutionEpoch ?? current.runtimeEpoch) !== input.currentRuntimeEpoch ||
+    current.runtimeEpoch > input.currentRuntimeEpoch
+  ) {
     return { authorized: false, reason: "logical-question-runtime-mismatch" };
   }
   if (current.id !== input.transaction.logicalQuestionUnitId) {

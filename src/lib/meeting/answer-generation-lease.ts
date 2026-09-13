@@ -260,6 +260,7 @@ export function decideRefreshAuthority(input: {
 export function createRuntimeTypeAdjudicationOutputAuthority(input: {
   operationId: string;
   settlement: CurrentQuestionSettlementDecision;
+  executionRuntimeEpoch?: number;
   manualCorrectionRevision: number;
   createdAt?: number;
 }): RuntimeTypeAdjudicationOutputAuthority | undefined {
@@ -290,7 +291,7 @@ export function createRuntimeTypeAdjudicationOutputAuthority(input: {
     operationId: input.operationId,
     settlementId: input.settlement.settlementId,
     sessionId: input.settlement.sessionId,
-    runtimeEpoch: input.settlement.runtimeEpoch,
+    runtimeEpoch: input.executionRuntimeEpoch ?? input.settlement.runtimeEpoch,
     logicalQuestionUnitId:
       input.settlement.logicalQuestionUnitId,
     logicalQuestionRevision: input.settlement.revision,

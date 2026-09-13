@@ -321,13 +321,14 @@ function actionHarness(f = screenFixture()) {
     assert.equal(owner.status, "resolved");
     if (owner.status !== "resolved") return;
     const plan = buildSettledAdvisorExecutionPlan({
+      executionRuntimeEpoch: environment.runtimeEpochRef.current,
       settlement: settled, activeMeetingTask: context.activeMeetingTask, taskBoundaryCommitted: false, childOwnsResponse: binding.owner.kind === "active-child",
       providerSnapshot: { providers: [], selectedProvider: { provider: "main", variables: {} }, codingProvider: { provider: "main", variables: {} } },
       playbook: owner.view.playbook, memoryUseCase: "meeting_assistant", askFrame: "hypothetical-design", topicDomain: "unknown", sourceQuestion: unit.normalizedText,
       explicitTaskMutationCommand: change ? { kind: "set-phase", owner: { kind: change.ownerKind, id: change.ownerId }, phase: change.toPhase } : undefined,
       taskMutationCommittedBeforeAdvisor: Boolean(change), artifactRequest: { manualPhaseCommitted: Boolean(change), artifactRegenerationArtifacts: options.artifactRegenerationTarget?.artifactFamilies },
     });
-    const authorization = authorizeSettledAdvisorExecutionPlan({ plan, currentSettlement: settled, currentSessionId: "session", currentRuntimeEpoch: 3, currentLogicalQuestionUnitId: unit.id, currentLogicalQuestionRevision: unit.revision, currentSourceHash: provisional.sourceHash, currentActiveMeetingTask: context.activeMeetingTask });
+    const authorization = authorizeSettledAdvisorExecutionPlan({ plan, currentSettlement: settled, currentSessionId: "session", currentRuntimeEpoch: environment.runtimeEpochRef.current, currentLogicalQuestionUnitId: unit.id, currentLogicalQuestionRevision: unit.revision, currentSourceHash: provisional.sourceHash, currentActiveMeetingTask: context.activeMeetingTask });
     assert.equal(authorization.authorized, true);
     plans.push(plan);
     const content = `Answer: Sliding window answer ${++sequence}.\nCode:\n\`\`\`python\ndef solve():\n    return ${sequence}\n\`\`\`\nComplexity: O(n).`;
@@ -505,13 +506,47 @@ test("G2 force does not admit missing, superseded or retired Screen sources", as
     if (invalidation === "missing") h.f.ledger.clear();
     if (invalidation === "revision") h.currentRef.current = { ...h.f.unit, revision: 2 };
     if (invalidation === "parent") h.context.activeMeetingTask!.parent.id = "replacement-parent";
-    if (invalidation === "epoch") h.environment.runtimeEpochRef.current = 4;
+    if (invalidation === "epoch") h.environment.runtimeEpochRef.current = 2;
     if (invalidation === "session") h.context.sessionId = "replacement-session";
     await h.regenerate();
     assert.equal(execution.generated(), 0, invalidation);
     assert.equal(h.stableRef.current, stable, invalidation);
     assert.equal(h.events.at(-1).terminalDisposition, "stale", invalidation);
   }
+});
+
+test("PC4 Regenerate uses a retained Screen source with a new execution epoch", async () => {
+  const h = actionHarness();
+  h.environment.runtimeEpochRef.current = 4;
+  const before = h.stableRef.current;
+  const execution = withRegenerateExecution(h);
+  execution.control.beforeExecution = (job: any) => {
+    assert.equal(job.runtimeCommitToken.runtimeEpoch, 4);
+    assert.equal(job.logicalQuestionUnit.runtimeEpoch, 3);
+    assert.equal(job.logicalQuestionUnit.id, before.logicalQuestionUnitId);
+  };
+  await h.regenerate();
+  assert.equal(execution.generated(), 1);
+  assert.equal(h.events.at(-1).terminalDisposition, "completed");
+  assert.equal(h.stableRef.current.logicalQuestionUnitId, before.logicalQuestionUnitId);
+  assert.equal(h.stableRef.current.logicalQuestionRevision, before.logicalQuestionRevision);
+});
+
+test("PC4 resumed phase controls retain the Screen source through shared settlement and Plan", async () => {
+  const h = actionHarness();
+  h.environment.runtimeEpochRef.current = 4;
+  for (const action of ["next-phase", "next-phase", "previous-phase"] as const) {
+    await h.apply(action);
+    const plan = h.plans.at(-1)!;
+    assert.ok(plan);
+    assert.equal(plan.runtimeEpoch, 4);
+    assert.equal(plan.logicalQuestionUnitId, h.f.unit.id);
+    assert.equal(plan.logicalQuestionRevision, h.f.unit.revision);
+    assert.equal(plan.sourceHash, h.f.settlement.sourceHash);
+    assert.equal(plan.taskRelation, "new-parent");
+  }
+  assert.equal(h.plans.length, 3);
+  assert.equal(h.f.ledger.list()[0].runtimeEpoch, 3);
 });
 
 test("G2 real executor rejects an epoch or job-owner change after factory handoff", async () => {

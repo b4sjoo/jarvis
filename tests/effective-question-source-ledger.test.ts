@@ -644,6 +644,69 @@ test("finds one exact committed Voice source for later Screen linkage", () => {
   );
 });
 
+test("PC4 ledger lookup uses the execution ceiling and preserves latest source identity", () => {
+  const ledger = new EffectiveQuestionSourceLedger();
+  const first = record({ recordId: "first" });
+  const latest = record({ recordId: "latest", logicalQuestionRevision: 2, sourceHash: "hash-latest" });
+  ledger.upsert(first);
+  ledger.upsert(latest);
+  const history = ledger.listHistory();
+  const input = { sessionId: latest.sessionId, logicalQuestionUnitId: latest.logicalQuestionUnitId,
+    logicalQuestionRevision: latest.logicalQuestionRevision };
+  for (const runtimeEpoch of [3, 4, 5]) {
+    assert.deepEqual(ledger.findLogicalQuestion({ ...input, runtimeEpoch }), history[1]);
+    assert.equal(ledger.findLogicalQuestion({ ...input, runtimeEpoch, logicalQuestionRevision: 1 }), undefined);
+  }
+  assert.equal(ledger.findLogicalQuestion({ ...input, runtimeEpoch: 2 }), undefined);
+  assert.equal(ledger.findLogicalQuestion({ ...input, runtimeEpoch: 5, sessionId: "new-session" }), undefined);
+  assert.deepEqual(ledger.listHistory(), history);
+  ledger.clear();
+  assert.equal(ledger.findLogicalQuestion({ ...input, runtimeEpoch: 5 }), undefined);
+});
+
+test("PC3 Relation retains historical parent and child revisions without widening branch scope", () => {
+  const parent = record({ recordId: "parent", logicalQuestionUnitId: "parent-origin", sourceTurnIds: ["turn-parent-root"],
+    text: "Design a RAG system.", owner: { kind: "parent-mainline", parentId: "parent-rag" } });
+  const child = record({ recordId: "child-r1", logicalQuestionUnitId: "child-origin", sourceTurnIds: ["turn-child-root"],
+    text: "Explain HNSW.", owner: { kind: "active-child", parentId: "parent-rag", childId: "child-hnsw" } });
+  const revisedChild = { ...child, recordId: "child-r2", logicalQuestionRevision: 2, text: "Explain HNSW recall." };
+  const current = { ...unit("current", "current-turn", "What would you monitor?", 100), runtimeEpoch: 5 };
+  const activeTask = task();
+  const input = { records: [parent, child, revisedChild], currentLogicalQuestionUnit: current, activeMeetingTask: activeTask,
+    transcriptTurns: [turn("turn-parent-root", parent.text, 1), turn("turn-child-root", child.text, 2)] };
+  const selected = selectOwnerScopedRelationEvidence(input);
+  assert.deepEqual(selected.recentParentEvidence.map((source) => source.text), [parent.text]);
+  assert.deepEqual(selected.recentBranchEvidence.map((source) => source.text), [revisedChild.text]);
+  assert.equal(selected.diagnostics.rawSupplementCount, 0);
+  const resumed = selectOwnerScopedRelationEvidence({ ...input, activeMeetingTask: { ...activeTask, child: undefined } });
+  assert.deepEqual(resumed.recentParentEvidence.map((source) => source.text), [parent.text]);
+  assert.deepEqual(resumed.recentBranchEvidence, []);
+  assert.equal(resumed.diagnostics.rawSupplementCount, 0);
+});
+
+test("PC5 rejected historical Relation winners and removed source IDs cannot return as raw", () => {
+  const base = record({ owner: { kind: "parent-mainline", parentId: "parent-rag" } });
+  const current = { ...unit("current", "current-turn", "What would you monitor?", 100), runtimeEpoch: 5 };
+  for (const patch of [
+    { owner: { kind: "parent-mainline" as const, parentId: "retired-parent" } },
+    { owner: { kind: "active-child" as const, parentId: "parent-rag", childId: "retired-child" } },
+    { sourceTurnIds: ["replacement"] },
+  ]) {
+    const latest = { ...base, ...patch, recordId: "latest", logicalQuestionRevision: 2 };
+    const selection = selectOwnerScopedRelationEvidence({ records: [base, latest], currentLogicalQuestionUnit: current,
+      activeMeetingTask: task(), transcriptTurns: [turn("turn-parent-root", "Parent.", 0), turn("turn-shared", "Forbidden old raw.", 10)] });
+    assert.equal(selection.diagnostics.rawSupplementCount, 0);
+    assert.doesNotMatch(JSON.stringify(selection), /Forbidden old raw/);
+    assert.ok([...selection.recentParentEvidence, ...selection.recentBranchEvidence].every((source) => source.sourceId === latest.recordId));
+  }
+  for (const patch of [{ runtimeEpoch: 6 }, { sessionId: "new-session" }]) {
+    const selection = selectOwnerScopedRelationEvidence({ records: [{ ...base, ...patch }], currentLogicalQuestionUnit: current,
+      activeMeetingTask: task(), transcriptTurns: [turn("turn-shared", "Forbidden raw.", 10)] });
+    assert.deepEqual(selection.recentParentEvidence, []);
+    assert.equal(selection.diagnostics.rawSupplementCount, 0);
+  }
+});
+
 test("keeps append-only history while product selectors expose only the latest revision", () => {
   const ledger = new EffectiveQuestionSourceLedger();
   const revisionOne: EffectiveQuestionSourceRecord = {

@@ -195,6 +195,19 @@ test("grants answer authority to converged non-parent-mutating relations", () =>
   }
 });
 
+test("PC5 retained Type evidence grants only fresh execution authority", () => {
+  const source = buildTypeAdjudicationSettlement();
+  const old = createRuntimeTypeAdjudicationOutputAuthority({ operationId: "old", settlement: source, manualCorrectionRevision: 1 });
+  const fresh = createRuntimeTypeAdjudicationOutputAuthority({ operationId: "fresh", settlement: source, manualCorrectionRevision: 1,
+    executionRuntimeEpoch: 5 });
+  assert.ok(old && fresh);
+  const snapshot = { settlementId: source.settlementId, sessionId: source.sessionId, runtimeEpoch: 5,
+    logicalQuestionUnitId: source.logicalQuestionUnitId, logicalQuestionRevision: source.revision, manualCorrectionRevision: 1 };
+  assert.equal(authorizeRuntimeTypeAdjudicationOutputAuthority(fresh, snapshot).authorized, true);
+  assert.equal(authorizeRuntimeTypeAdjudicationOutputAuthority(old, snapshot).reason, "runtime-epoch-mismatch");
+  assert.equal(source.runtimeEpoch, 4);
+});
+
 test("rejects stale type-adjudication output authority and broader mutation", () => {
   const authority = createRuntimeTypeAdjudicationOutputAuthority({
     operationId: "type-operation-a",

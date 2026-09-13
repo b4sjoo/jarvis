@@ -97,6 +97,28 @@ function activeTask(
   };
 }
 
+test("PC4 a resumed job builds a new work-epoch plan without changing source identity", () => {
+  const source = settlement({ parentMutationAuthorized: false, relation: "followup-parent" });
+  const task = activeTask();
+  const common = { settlement: source, activeMeetingTask: task, taskBoundaryCommitted: false,
+    childOwnsResponse: false, providerSnapshot: providers, memoryUseCase: "meeting_assistant" as const,
+    askFrame: "hypothetical-design" as const, topicDomain: "unknown" as const };
+  const oldPlan = buildSettledAdvisorExecutionPlan(common);
+  const nextPlan = buildSettledAdvisorExecutionPlan({ ...common, executionRuntimeEpoch: 5 });
+  assert.equal(nextPlan.runtimeEpoch, 5);
+  assert.equal(source.runtimeEpoch, 4);
+  assert.equal(nextPlan.sourceHash, source.sourceHash);
+  assert.equal(nextPlan.logicalQuestionRevision, source.revision);
+  assert.equal(nextPlan.settlementId, source.settlementId);
+  assert.notEqual(nextPlan.id, oldPlan.id);
+  const current = { currentSettlement: source, currentSessionId: source.sessionId,
+    currentRuntimeEpoch: 5, currentLogicalQuestionUnitId: source.logicalQuestionUnitId,
+    currentLogicalQuestionRevision: source.revision, currentSourceHash: source.sourceHash,
+    currentActiveMeetingTask: task };
+  assert.equal(authorizeSettledAdvisorExecutionPlan({ ...current, plan: nextPlan }).authorized, true);
+  assert.equal(authorizeSettledAdvisorExecutionPlan({ ...current, plan: oldPlan }).authorized, false);
+});
+
 function playbook(
   questionType: "coding" | "general-system-design" = "coding"
 ): SelectedInterviewPlaybook {

@@ -34,7 +34,7 @@ export function indexAuthorizedEffectiveSourceRecords(input: {
   const knownSourceTurnIds = new Set<string>();
   for (const record of input.effectiveRecords ?? []) {
     for (const id of recordSourceIds(record)) knownSourceTurnIds.add(id);
-    if (record.sessionId !== input.sessionId || record.runtimeEpoch !== input.runtimeEpoch) continue;
+    if (record.sessionId !== input.sessionId || record.runtimeEpoch > input.runtimeEpoch) continue;
     const previous = latestByLogicalQuestionUnitId.get(record.logicalQuestionUnitId);
     if (!previous || compareRevision(previous, record) < 0) {
       latestByLogicalQuestionUnitId.set(record.logicalQuestionUnitId, record);
@@ -278,8 +278,10 @@ function currentSourceIds(unit: LogicalQuestionUnit) {
 function selectCurrentUnit(input: { logicalQuestionUnit?: LogicalQuestionUnit; sessionId: string; runtimeEpoch: number }, index: AuthorizedEffectiveSourceRecordIndex) {
   const unit = input.logicalQuestionUnit;
   const latest = unit && index.latestByLogicalQuestionUnitId.get(unit.id);
-  return unit && unit.sessionId === input.sessionId && unit.runtimeEpoch === input.runtimeEpoch &&
-    (!latest || unit.revision >= latest.logicalQuestionRevision) ? unit : undefined;
+  // Execution can advance while source identity and its owner remain unchanged.
+  return unit && unit.sessionId === input.sessionId && unit.runtimeEpoch <= input.runtimeEpoch &&
+    (!latest || (unit.runtimeEpoch === latest.runtimeEpoch &&
+      unit.revision >= latest.logicalQuestionRevision)) ? unit : undefined;
 }
 
 function currentProjectionForIndex(unit: LogicalQuestionUnit, index: AuthorizedEffectiveSourceRecordIndex) {

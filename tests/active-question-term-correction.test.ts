@@ -197,6 +197,20 @@ test("authorizes only the current manual correction revision", () => {
   );
 });
 
+test("PC4 term correction accepts a retained source but rejects execution cancelled by Pause", () => {
+  const result = applyActiveQuestionTermCorrection({
+    correction: makeCorrection("HNSW"), logicalQuestionUnit: makeLogicalQuestion("Explain H and SW."),
+    correctionTraceId: "trace-resumed", manualCorrectionRevision: 5,
+  });
+  const executionEpoch = result.logicalQuestionUnit.runtimeEpoch + 1;
+  const request = { transaction: result.transaction, currentLogicalQuestionUnit: result.logicalQuestionUnit,
+    currentSessionId: result.logicalQuestionUnit.sessionId, expectedExecutionEpoch: executionEpoch,
+    currentManualCorrectionRevision: 5 };
+  assert.equal(authorizeActiveQuestionTermCorrection({ ...request, currentRuntimeEpoch: executionEpoch }).authorized, true);
+  assert.equal(authorizeActiveQuestionTermCorrection({ ...request, currentRuntimeEpoch: executionEpoch + 1 }).reason,
+    "logical-question-runtime-mismatch");
+});
+
 test("does not regenerate after a rejected term-correction relation", () => {
   const source = readFileSync("src/hooks/useMeetingAssistant.ts", "utf8");
   const correction = source.slice(

@@ -31,6 +31,46 @@ test("projects one corrected semantic source while preserving raw source identit
   );
 });
 
+test("PC1 historical effective spans and current correction project at a later execution epoch", () => {
+  const corrected = correct(unit("Design a ride-sharing system for delivery."));
+  const record = modelRecord(corrected);
+  const originalRecord = structuredClone(record);
+  const originalUnit = structuredClone(corrected);
+  for (const logicalQuestionUnit of [undefined, corrected]) {
+    for (const runtimeEpoch of [2, 3]) {
+      const input = { effectiveRecords: [record], logicalQuestionUnit, sessionId: "session-1", runtimeEpoch };
+      const single = projectEffectiveTextForSourceTurn({ ...input, turnId: "turn-1", text: corrected.sources[0].text });
+      const batch = projectEffectiveSourceTurnGroup({ ...input, sources: [{ turnId: "turn-1", text: corrected.sources[0].text }] });
+      const transcript = projectAdvisorTranscriptForLogicalQuestion({ ...input, turns: [turn("turn-1", "them", corrected.sources[0].text, 1)] });
+      assert.match(single.text, /RAG/);
+      assert.equal(single.logicalQuestionRevision, corrected.revision);
+      assert.equal(batch.sources[0].text, single.text);
+      assert.match(transcript.transcript, /RAG/);
+      assert.doesNotMatch(transcript.transcript, /ride-sharing/);
+    }
+  }
+  assert.deepEqual(record, originalRecord);
+  assert.deepEqual(corrected, originalUnit);
+});
+
+test("PC5 historical projection selects latest revision before correction eligibility", () => {
+  const corrected = correct(unit("Design a ride-sharing system for delivery."));
+  const old = modelRecord(corrected);
+  const latest = { ...old, logicalQuestionRevision: old.logicalQuestionRevision + 1,
+    correctionIds: [], updatedAt: old.updatedAt + 1 };
+  const input = { sources: [{ turnId: "turn-1", text: "Latest uncorrected source." }],
+    effectiveRecords: [old, latest], sessionId: "session-1", runtimeEpoch: 3 };
+  const result = projectEffectiveSourceTurnGroup(input);
+  assert.deepEqual(result.sources, input.sources);
+  assert.deepEqual(result.correctionIds, []);
+  for (const patch of [{ runtimeEpoch: 4 }, { sessionId: "other-session" }]) {
+    const rejected = projectEffectiveSourceTurnGroup({ ...input, effectiveRecords: [{ ...old, ...patch }],
+      logicalQuestionUnit: { ...corrected, ...patch } });
+    assert.deepEqual(rejected.sources, input.sources);
+    assert.equal(rejected.replaced, false);
+  }
+});
+
 test("uses the corrected projection for taxonomy and response opportunity", () => {
   const corrected = correct(unit("Design a ride-sharing system for delivery."));
   const taxonomy = projectLogicalQuestionForAdjudication(corrected);

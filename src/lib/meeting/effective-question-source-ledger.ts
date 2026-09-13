@@ -179,6 +179,7 @@ export class EffectiveQuestionSourceLedger {
 
   findLogicalQuestion(input: {
     sessionId: string;
+    // Current execution ceiling; the returned record keeps its source birth epoch.
     runtimeEpoch: number;
     logicalQuestionUnitId: string;
     logicalQuestionRevision: number;
@@ -186,7 +187,7 @@ export class EffectiveQuestionSourceLedger {
     const matchingRecords = this.records.filter(
       (candidate) =>
         candidate.sessionId === input.sessionId &&
-        candidate.runtimeEpoch === input.runtimeEpoch &&
+        candidate.runtimeEpoch <= input.runtimeEpoch &&
         candidate.logicalQuestionUnitId === input.logicalQuestionUnitId
     );
     const latestRevision = matchingRecords.reduce(
@@ -372,7 +373,7 @@ export function selectOwnerScopedRelationEvidence(input: {
   const ownedRecords = latestRecords.filter(
     (record) =>
       record.sessionId === currentLogicalQuestionUnit.sessionId &&
-      record.runtimeEpoch === currentLogicalQuestionUnit.runtimeEpoch &&
+      record.runtimeEpoch <= currentLogicalQuestionUnit.runtimeEpoch &&
       record.logicalQuestionUnitId !== currentLogicalQuestionUnit.id &&
       record.owner.parentId === parentId
   );
@@ -406,7 +407,8 @@ export function selectOwnerScopedRelationEvidence(input: {
     [
       ...recentBranchEvidence.flatMap((item) => item.sourceTurnIds),
       ...recentParentEvidence.flatMap((item) => item.sourceTurnIds),
-      ...ownedRecords.flatMap((record) => record.sourceTurnIds),
+      // Known rejected and superseded sources cannot return as raw supplements.
+      ...input.records.flatMap((record) => record.sourceTurnIds),
       ...(activeMeetingTask.parent.canonicalQuestionSourceTurnIds ?? []),
       activeMeetingTask.parent.startTurnId,
       activeMeetingTask.parent.promptTranscriptStartTurnId,

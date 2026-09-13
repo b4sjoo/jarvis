@@ -79,7 +79,7 @@ export function selectPreviousLogicalQuestionContext(input: {
   if (previous.sessionId !== current.sessionId) {
     return { sourceTurnIds: [], reason: "session-mismatch" };
   }
-  if (previous.runtimeEpoch !== current.runtimeEpoch) {
+  if (previous.runtimeEpoch > current.runtimeEpoch) {
     return { sourceTurnIds: [], reason: "runtime-epoch-mismatch" };
   }
   if (input.explicitBoundary) {
@@ -191,7 +191,7 @@ export function appendSourceOwnedSetupCandidate(
   if (
     !current ||
     current.sessionId !== next.sessionId ||
-    current.runtimeEpoch !== next.runtimeEpoch ||
+    current.runtimeEpoch > next.runtimeEpoch ||
     current.parentId !== next.parentId ||
     next.startedAt < current.endedAt ||
     next.startedAt - current.endedAt > SOURCE_OWNED_SETUP_MAX_AGE_MS
@@ -236,7 +236,7 @@ export function selectSourceOwnedSemanticContext(input: {
   if (candidate.sessionId !== input.sessionId) {
     return { reason: "session-mismatch", consumeCandidate: true };
   }
-  if (candidate.runtimeEpoch !== input.runtimeEpoch) {
+  if (candidate.runtimeEpoch > input.runtimeEpoch) {
     return { reason: "runtime-epoch-mismatch", consumeCandidate: true };
   }
   const parent = input.activeMeetingTask?.parent;

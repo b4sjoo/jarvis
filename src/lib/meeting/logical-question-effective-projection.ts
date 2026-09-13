@@ -405,7 +405,7 @@ function selectLatestModelContextProjections(input: {
     .filter(
       (record) =>
         (!sessionId || record.sessionId === sessionId) &&
-        (runtimeEpoch === undefined || record.runtimeEpoch === runtimeEpoch)
+        (runtimeEpoch === undefined || record.runtimeEpoch <= runtimeEpoch)
     )
     .map((record) => ({
       streamKey: modelContextRevisionStreamKey(record),
@@ -429,7 +429,7 @@ function selectLatestModelContextProjections(input: {
     logicalQuestionUnit &&
     (!sessionId || logicalQuestionUnit.sessionId === sessionId) &&
     (runtimeEpoch === undefined ||
-      logicalQuestionUnit.runtimeEpoch === runtimeEpoch)
+      logicalQuestionUnit.runtimeEpoch <= runtimeEpoch)
   ) {
     const projection =
       input.logicalQuestionProjection ??

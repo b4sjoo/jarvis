@@ -75,6 +75,25 @@ function unit(source: TranscriptTurn): LogicalQuestionUnit {
   };
 }
 
+test("PC1 Pause execution epochs do not change the existing recent-source window", () => {
+  const setup = turn("setup", "The key tradeoff is consistency and availability during partial failures.", 100, 200);
+  const ask = turn("ask", "How would you reason about it?", 300, 400);
+  const candidate = createSourceOwnedSetupCandidate({ turn: setup, sessionId: "session-a", runtimeEpoch: 3, activeMeetingTask: task() });
+  assert.ok(candidate);
+  const selection = selectSourceOwnedSemanticContext({ candidate, sessionId: "session-a", runtimeEpoch: 4,
+    logicalQuestionUnit: { ...unit(ask), runtimeEpoch: 4 }, activeMeetingTask: task(), transcriptTurns: [setup, ask] });
+  assert.ok(selection.context);
+  assert.equal(candidate.runtimeEpoch, 3);
+  const previous = { ...unit(turn("previous", "How would you design replication?", 100, 200)), id: "previous" };
+  assert.deepEqual(selectPreviousLogicalQuestionContext({ previousLogicalQuestionUnit: previous,
+    currentLogicalQuestionUnit: { ...unit(ask), runtimeEpoch: 4 } }).sourceTurnIds, ["previous"]);
+  assert.equal(selectSourceOwnedSemanticContext({ candidate, sessionId: "session-a", runtimeEpoch: 4,
+    logicalQuestionUnit: { ...unit(ask), runtimeEpoch: 4, startedAt: 46_000 },
+    activeMeetingTask: task(), transcriptTurns: [setup, ask] }).reason, "candidate-expired");
+  assert.equal(selectSourceOwnedSemanticContext({ candidate, sessionId: "session-a", runtimeEpoch: 2,
+    logicalQuestionUnit: unit(ask), activeMeetingTask: task(), transcriptTurns: [setup, ask] }).reason, "runtime-epoch-mismatch");
+});
+
 test("selects one adjacent same-parent non-acknowledgement setup turn", () => {
   const setup = turn(
     "turn-setup",

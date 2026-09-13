@@ -339,7 +339,7 @@ export function selectVisualRecoveryOpportunity(input: {
           : fact.ownerBranchId === input.topology.currentLogicalQuestionUnitId;
     if (
       fact.sessionId !== input.sessionId ||
-      fact.runtimeEpoch !== input.runtimeEpoch ||
+      fact.runtimeEpoch > input.runtimeEpoch ||
       fact.manualCorrectionRevision !== input.manualCorrectionRevision ||
       now > fact.expiresAt ||
       !ownerStillExists

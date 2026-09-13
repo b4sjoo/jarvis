@@ -47,6 +47,12 @@ flowchart LR
   task snapshots remain unchanged for commands and historical recording. The
   96-entry ledger cap and raw-window policy are unchanged; missing sources do not
   authorize stale revisions, archive reads or generated text as source evidence.
+  Pause cancels work and advances its execution epoch without resetting accepted
+  context. Source birth identities remain unchanged; shared readers retain their
+  session, latest-revision and owner scope checks. Resumed manual actions build new
+  jobs/plans with the current execution epoch. Old work remains invalid, and Clear
+  or new-session boundaries still reset sources. A source's continued readability
+  never revives an old execution lease.
 - `src/lib/preparation/` owns Interview Preparation Workspace services and the
   immutable snapshot context consumed by meeting runtime adapters.
 - `src/lib/memory/` owns local retrieval and KMB boundaries. Generated answers

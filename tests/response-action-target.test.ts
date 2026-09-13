@@ -2,7 +2,7 @@ import type { MeetingContextState } from "../src/lib/meeting/meeting-context-con
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { resolveVisibleAnswerResponseActionTarget } from "../src/lib/meeting/response-action-target.js";
+import { resolveResponseActionLogicalQuestionUnit, resolveVisibleAnswerResponseActionTarget } from "../src/lib/meeting/response-action-target.js";
 import { getLogicalQuestionAnswerFocusText } from "../src/lib/meeting/logical-question-unit.js";
 import {
   projectAdvisorTranscriptForLogicalQuestion,
@@ -188,6 +188,107 @@ test("reconstructs Enhance target from the visible Answer owner", () => {
   );
   assert.equal(decision.sourceHash, voiceSourceHash);
   assert.equal(decision.settlementSnapshot, frozenSettlement);
+});
+
+for (const sourceKind of ["voice", "screen", "mixed"] as const) {
+  test(`PC4 historical ${sourceKind} visible target preserves birth epoch, hash and provenance`, () => {
+    const sourceObservationIds = sourceKind === "voice" ? [] : ["screen-observation"];
+    const sourceHash = createProvisionalCurrentQuestion({ logicalQuestionUnit: voiceLogicalQuestion,
+      sourceKind, sourceObservationIds }).sourceHash;
+    const record = { ...effectiveVoiceRecord(), sourceKind, sourceObservationIds, sourceHash };
+    const settlement = { ...frozenSettlement, sourceKind, sourceObservationIds, sourceHash };
+    const original = structuredClone(record);
+    for (const currentLogicalQuestionUnit of [undefined, voiceLogicalQuestion]) {
+      // A regenerated answer can have a newer execution epoch than its source.
+      for (const answerEpoch of [3, 4]) {
+        const decision = resolveVisibleAnswerResponseActionTarget({
+          stableAnswer: { ...stable, runtimeEpoch: answerEpoch, questionSourceHash: sourceHash, settlementSnapshot: settlement },
+          currentLogicalQuestionUnit, effectiveQuestionSources: [record], meetingContext: context(), runtimeEpoch: 5,
+        });
+        assert.equal(decision.authorized, true, decision.reason);
+        assert.equal(decision.logicalQuestionUnit?.runtimeEpoch, 3);
+        assert.equal(decision.logicalQuestionUnit?.revision, 2);
+        assert.equal(decision.logicalQuestionUnit?.id, voiceLogicalQuestion.id);
+        assert.equal(decision.sourceRecordId, record.recordId);
+        assert.equal(decision.sourceHash, sourceHash);
+        assert.equal(decision.sourceKind, sourceKind);
+        assert.deepEqual(decision.sourceObservationIds, sourceObservationIds);
+        assert.equal(decision.settlementSnapshot, settlement);
+        assert.equal(createProvisionalCurrentQuestion({ logicalQuestionUnit: decision.logicalQuestionUnit!,
+          sourceKind, sourceObservationIds }).sourceHash, sourceHash);
+      }
+    }
+    assert.deepEqual(record, original);
+  });
+}
+
+test("PC4 retained exact parentless Voice target remains available after Pause", () => {
+  const meetingContext = { ...context(), activeMeetingTask: undefined };
+  const stableAnswer = { ...stable, taskId: null };
+  const input = { stableAnswer, currentLogicalQuestionUnit: voiceLogicalQuestion,
+    effectiveQuestionSources: [], meetingContext, runtimeEpoch: 5 };
+  const decision = resolveVisibleAnswerResponseActionTarget(input);
+  assert.equal(decision.authorized, true);
+  assert.equal(decision.logicalQuestionUnit, voiceLogicalQuestion);
+  assert.equal(decision.logicalQuestionUnit.runtimeEpoch, 3);
+  for (const currentLogicalQuestionUnit of [
+    { ...voiceLogicalQuestion, runtimeEpoch: 6 },
+    { ...voiceLogicalQuestion, runtimeEpoch: 4 },
+    { ...voiceLogicalQuestion, sessionId: "new-session" },
+    { ...voiceLogicalQuestion, revision: 3 },
+    { ...voiceLogicalQuestion, normalizedText: "A different source." },
+  ]) {
+    assert.equal(resolveVisibleAnswerResponseActionTarget({ ...input, currentLogicalQuestionUnit }).authorized, false);
+  }
+  assert.equal(resolveVisibleAnswerResponseActionTarget({ ...input, stableAnswer: { ...stableAnswer,
+    settlementSnapshot: { ...frozenSettlement, sourceKind: "screen" } } }).authorized, false);
+  assert.equal(resolveVisibleAnswerResponseActionTarget({ ...input, stableAnswer: { ...stableAnswer,
+    taskId: "retired-parent" } }).authorized, false);
+});
+
+test("PC4 Correction and phase source selection preserve historical source identity", () => {
+  const input = { currentLogicalQuestionUnit: voiceLogicalQuestion, effectiveQuestionSources: [effectiveVoiceRecord()],
+    meetingContext: context(), runtimeEpoch: 5, preferScreen: false };
+  assert.equal(resolveResponseActionLogicalQuestionUnit(input), voiceLogicalQuestion);
+  for (const currentLogicalQuestionUnit of [undefined, voiceLogicalQuestion]) {
+    const phaseTarget = resolveResponseActionLogicalQuestionUnit({ ...input, currentLogicalQuestionUnit,
+      phaseOwner: { kind: "parent", id: "parent-a" } });
+    assert.equal(phaseTarget?.runtimeEpoch, 3);
+    assert.equal(phaseTarget?.id, voiceLogicalQuestion.id);
+    assert.equal(phaseTarget?.revision, voiceLogicalQuestion.revision);
+    assert.equal(createProvisionalCurrentQuestion({ logicalQuestionUnit: phaseTarget!, sourceKind: "voice" }).sourceHash, voiceSourceHash);
+  }
+  assert.equal(resolveResponseActionLogicalQuestionUnit({ ...input, phaseOwner: { kind: "parent", id: "retired" } }), undefined);
+  assert.equal(resolveResponseActionLogicalQuestionUnit({ ...input, phaseOwner: { kind: "parent", id: "parent-a" },
+    currentLogicalQuestionUnit: { ...voiceLogicalQuestion, revision: 3 } }), undefined);
+});
+
+test("PC5 historical manual targets reject future, foreign, superseded and retired sources", () => {
+  const record = effectiveVoiceRecord();
+  const input = { stableAnswer: stable, currentLogicalQuestionUnit: voiceLogicalQuestion,
+    effectiveQuestionSources: [record], meetingContext: context(), runtimeEpoch: 5 };
+  const futureStable = resolveVisibleAnswerResponseActionTarget({ ...input, stableAnswer: { ...stable, runtimeEpoch: 6 } });
+  assert.equal(futureStable.reason, "visible-answer-runtime-epoch-mismatch");
+  for (const patch of [
+    { runtimeEpoch: 6 }, { runtimeEpoch: 4 }, { sessionId: "other-session" },
+    { sourceHash: "different-hash" }, { logicalQuestionRevision: 3 },
+    { owner: { kind: "parent-mainline" as const, parentId: "retired-parent" } },
+    { owner: { kind: "active-child" as const, parentId: "parent-a", childId: "retired-child" } },
+  ]) {
+    const invalidRecord = { ...record, ...patch };
+    assert.equal(resolveVisibleAnswerResponseActionTarget({ ...input, effectiveQuestionSources: [invalidRecord] }).authorized, false,
+      JSON.stringify(patch));
+    if (!("sourceHash" in patch)) {
+      assert.equal(resolveResponseActionLogicalQuestionUnit({ ...input, effectiveQuestionSources: [invalidRecord], preferScreen: false }), undefined,
+        JSON.stringify(patch));
+    }
+  }
+  const superseding = { ...record, recordId: "later-owner", settledAt: record.settledAt + 1,
+    owner: { kind: "active-child" as const, parentId: "parent-a", childId: "retired-child" } };
+  assert.equal(resolveVisibleAnswerResponseActionTarget({ ...input, effectiveQuestionSources: [record, superseding] }).authorized, false);
+  assert.equal(resolveResponseActionLogicalQuestionUnit({ ...input, effectiveQuestionSources: [record, superseding], preferScreen: false }), undefined);
+  assert.equal(resolveVisibleAnswerResponseActionTarget({ ...input, effectiveQuestionSources: [] }).authorized, false);
+  assert.equal(resolveVisibleAnswerResponseActionTarget({ ...input, meetingContext: { ...context(), activeMeetingTask: undefined } }).authorized, false);
 });
 
 test("preserves term-correction provenance through visible-source reconstruction and rewrite", () => {

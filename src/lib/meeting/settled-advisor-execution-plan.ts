@@ -625,6 +625,8 @@ function isRevisionStableParentOrigin(
 
 export function buildSettledAdvisorExecutionPlan(input: {
   settlement: CurrentQuestionSettlementDecision;
+  // Source identity survives Pause; this plan authorizes a newly scheduled job.
+  executionRuntimeEpoch?: number;
   activeMeetingTask?: ActiveMeetingTask;
   preBoundaryQuestionType?: unknown;
   taskBoundaryCommitted: boolean;
@@ -899,6 +901,7 @@ export function buildSettledAdvisorExecutionPlan(input: {
         responseOwner.questionType
       );
   const planId = createExecutionPlanId({
+    runtimeEpoch: input.executionRuntimeEpoch ?? input.settlement.runtimeEpoch,
     settlementId: input.settlement.settlementId,
     responseOwner,
     modelRoute,
@@ -960,7 +963,7 @@ export function buildSettledAdvisorExecutionPlan(input: {
     id: planId,
     settlementId: input.settlement.settlementId,
     sessionId: input.settlement.sessionId,
-    runtimeEpoch: input.settlement.runtimeEpoch,
+    runtimeEpoch: input.executionRuntimeEpoch ?? input.settlement.runtimeEpoch,
     logicalQuestionUnitId:
       input.settlement.logicalQuestionUnitId,
     logicalQuestionRevision: input.settlement.revision,
@@ -1080,6 +1083,7 @@ export function rebaseSettledAdvisorExecutionPlanAfterOwnedParentMutation(
   return deepFreeze({
     ...rebased,
     id: createExecutionPlanId({
+      runtimeEpoch: rebased.runtimeEpoch,
       settlementId: rebased.settlementId,
       responseOwner: rebased.responseOwner,
       modelRoute: rebased.modelRoute,
@@ -1528,6 +1532,7 @@ function deepFreeze<T>(value: T): T {
 }
 
 function createExecutionPlanId(input: {
+  runtimeEpoch: number;
   settlementId: string;
   responseOwner: MeetingResponseOwnerResolution;
   modelRoute: MeetingModelRouteResolution;
@@ -1554,6 +1559,7 @@ function createExecutionPlanId(input: {
 }) {
   return `advisor_plan_${hashStableText(
     [
+      input.runtimeEpoch,
       input.settlementId,
       input.responseOwner.questionType,
       input.responseOwner.source,

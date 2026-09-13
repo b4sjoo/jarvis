@@ -5964,9 +5964,8 @@ export function useMeetingAssistant() {
     []
   );
 
-  const advanceRuntimeEpoch = useCallback((reason: string) => {
+  const invalidateRuntimeWork = useCallback((reason: string) => {
     const previousEpoch = runtimeEpochRef.current;
-    settleAwaitingVisualEvidenceRecovery("cancelled", reason);
     pendingAnswerResolutionCommitByTraceRef.current.clear();
     runtimeEpochRef.current += 1;
     screenOperationCoordinatorRef.current.reset();
@@ -5984,6 +5983,20 @@ export function useMeetingAssistant() {
     sourceLinkageAdjudicationRuntimeRef.current?.cancelAll("superseded");
     whiteboardSyntaxRepairRuntimeRef.current?.cancelAll("superseded");
     whiteboardSyntaxRepairAttemptKeysRef.current.clear();
+    taskBoundaryCandidateRef.current = undefined;
+    settledAdvisorExecutionPlanRef.current = undefined;
+    advisorResponseChallengeCoordinatorRef.current.reset();
+    manualCorrectionOperationCoordinatorRef.current.reset();
+    return {
+      runtimeInvalidationReason: reason,
+      previousRuntimeEpoch: previousEpoch,
+      runtimeEpoch: runtimeEpochRef.current,
+    };
+  }, []);
+
+  const advanceRuntimeEpoch = useCallback((reason: string) => {
+    const invalidation = invalidateRuntimeWork(reason);
+    settleAwaitingVisualEvidenceRecovery("cancelled", reason);
     manualCorrectionRevisionRef.current = 0;
     adjacentQuestionScopeRef.current = null;
     logicalQuestionUnitRef.current = undefined;
@@ -5994,21 +6007,13 @@ export function useMeetingAssistant() {
     pendingInterviewSectionHintRef.current = undefined;
     pendingInterviewTaskBoundaryRef.current = undefined;
     cancelledAdvisorTurnIdsRef.current.clear();
-    taskBoundaryCandidateRef.current = undefined;
     currentQuestionSettlementRef.current = undefined;
     latestSourceOwnedSetupRef.current = undefined;
     effectiveQuestionSourceLedgerRef.current.clear();
-    settledAdvisorExecutionPlanRef.current = undefined;
     advisorResponseFingerprintCacheRef.current.reset();
-    advisorResponseChallengeCoordinatorRef.current.reset();
     advisorResponseFingerprintContextByTraceRef.current.clear();
-    manualCorrectionOperationCoordinatorRef.current.reset();
-    return {
-      runtimeInvalidationReason: reason,
-      previousRuntimeEpoch: previousEpoch,
-      runtimeEpoch: runtimeEpochRef.current,
-    };
-  }, [settleAwaitingVisualEvidenceRecovery]);
+    return invalidation;
+  }, [invalidateRuntimeWork, settleAwaitingVisualEvidenceRecovery]);
 
   const recordCommittedPlaybookPhaseTransition = useCallback(
     (input: {
@@ -13228,6 +13233,7 @@ export function useMeetingAssistant() {
           contextManagerRef.current.getState().activeMeetingTask ??
           effectiveAdvisorActiveMeetingTask;
         settledExecutionPlan = buildSettledAdvisorExecutionPlan({
+          executionRuntimeEpoch: advisorJob.runtimeCommitToken.runtimeEpoch,
           settlement:
             effectiveAdvisorSettlementView.effectiveSettlement ??
             currentQuestionSettlement,
@@ -21678,6 +21684,7 @@ export function useMeetingAssistant() {
         const runtimeTypeAdjudicationOutputAuthority =
           releaseEligible && settlement && settlementOperationId
             ? createRuntimeTypeAdjudicationOutputAuthority({
+                executionRuntimeEpoch: runtimeEpochRef.current,
                 operationId: settlementOperationId,
                 settlement,
                 manualCorrectionRevision:
@@ -25618,7 +25625,7 @@ export function useMeetingAssistant() {
       if (!coordinator.authorize(lifecycleOperation, "commit-pause-state")) {
         return;
       }
-      advanceRuntimeEpoch("meeting-assistant-paused");
+      invalidateRuntimeWork("meeting-assistant-paused");
       activeRef.current = false;
       runtimeActiveRef.current = false;
       invalidateAudioProcessingSession();
@@ -25629,16 +25636,10 @@ export function useMeetingAssistant() {
         partialSuggestion: "",
         error: null,
         audioStatus,
-        currentQuestionLineage: previous.currentQuestionLineage
-          ? {
-              ...previous.currentQuestionLineage,
-              runtimeEpoch: runtimeEpochRef.current,
-            }
-          : undefined,
       }));
     });
   }, [
-    advanceRuntimeEpoch,
+    invalidateRuntimeWork,
     cancelNativeAudioFaultTraces,
     cancelActiveAdvisorJob,
     drainSystemAudioQueueForNativeStop,
@@ -28989,6 +28990,7 @@ export function useMeetingAssistant() {
             : undefined);
         screenExecutionPlan = buildSettledAdvisorExecutionPlan({
           settlement: screenCurrentQuestionSettlement,
+          executionRuntimeEpoch: screenRuntimeToken.runtimeEpoch,
           activeMeetingTask: screenPlanContext.activeMeetingTask,
           preBoundaryQuestionType:
             preflightContextState.activeMeetingTask?.parent.questionType,
@@ -31144,7 +31146,7 @@ export function useMeetingAssistant() {
         latestCanonicalTarget &&
           latestCanonicalTarget.logicalQuestionUnit.sessionId ===
             contextState.sessionId &&
-          latestCanonicalTarget.logicalQuestionUnit.runtimeEpoch ===
+          latestCanonicalTarget.logicalQuestionUnit.runtimeEpoch <=
             runtimeEpochRef.current
       );
       const canonicalTargetAuthorization =
@@ -32242,6 +32244,7 @@ export function useMeetingAssistant() {
             return;
           }
           correctionExecutionPlan = buildSettledAdvisorExecutionPlan({
+            executionRuntimeEpoch: runtimeEpochRef.current,
             settlement: correctionCurrentQuestionSettlement,
             activeMeetingTask: projectedTask,
             expectedActiveMeetingTask: activeTask,
@@ -33341,7 +33344,7 @@ export function useMeetingAssistant() {
         ? logicalQuestionUnitRef.current
         : target.logicalQuestionUnit.sessionId ===
               activeContextState.sessionId &&
-            target.logicalQuestionUnit.runtimeEpoch ===
+            target.logicalQuestionUnit.runtimeEpoch <=
               runtimeEpochRef.current
           ? target.logicalQuestionUnit
           : undefined
@@ -34807,6 +34810,7 @@ export function useMeetingAssistant() {
 
       let correction = parsedCorrection;
       const requestedAt = Date.now();
+      const correctionExecutionEpoch = runtimeEpochRef.current;
       if (!targetLogicalQuestionUnit) {
         const futureBias: ActiveQuestionTermCorrection = {
           correctionId: correction.id,
@@ -35619,6 +35623,7 @@ export function useMeetingAssistant() {
             if (projectedActiveMeetingTask && settledCorrection) {
               const proposedExecutionPlan =
                 buildSettledAdvisorExecutionPlan({
+                  executionRuntimeEpoch: correctionExecutionEpoch,
                   settlement: settledCorrection,
                   activeMeetingTask: projectedActiveMeetingTask,
                   expectedActiveMeetingTask: latestTask,
@@ -35957,6 +35962,7 @@ export function useMeetingAssistant() {
         .find((candidate) => candidate.id === repairTrace.id);
       const authorization = authorizeActiveQuestionTermCorrection({
         transaction: activeCorrection,
+        expectedExecutionEpoch: correctionExecutionEpoch,
         currentLogicalQuestionUnit: logicalQuestionUnitRef.current,
         currentSessionId:
           contextManagerRef.current.getState().sessionId,

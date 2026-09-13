@@ -4,7 +4,7 @@ import { MeetingContextManager } from "../src/lib/meeting/context-manager.js";
 import { composeLogicalQuestionUnit, type LogicalQuestionUnit } from "../src/lib/meeting/logical-question-unit.js";
 import { applyActiveQuestionTermCorrection } from "../src/lib/meeting/active-question-term-correction.js";
 import { createProvisionalCurrentQuestion } from "../src/lib/meeting/current-question-settlement.js";
-import { EffectiveQuestionSourceLedger, type EffectiveQuestionSourceRecord } from "../src/lib/meeting/effective-question-source-ledger.js";
+import { EffectiveQuestionSourceLedger, selectOwnerScopedRelationEvidence, type EffectiveQuestionSourceRecord } from "../src/lib/meeting/effective-question-source-ledger.js";
 import { projectEffectiveLogicalQuestionSources } from "../src/lib/meeting/logical-question-effective-projection.js";
 import { compileSettledAdvisorPromptContext } from "../src/lib/meeting/settled-advisor-context.js";
 import { buildAdvisorUserMessage } from "../src/lib/meeting/advisor-prompt.js";
@@ -17,11 +17,11 @@ function turn(id: string, text: string, at: number): TranscriptTurn {
   return { id, text, speaker: "them", source: "system-audio", startedAt: at, endedAt: at + 100, isFinal: true };
 }
 
-function fixture() {
+function fixture(rootText = "Design a multi-tenant RAC service with document ingestion, retrieval, and per-tenant access control.") {
   const manager = new MeetingContextManager();
   const ledger = new EffectiveQuestionSourceLedger();
   const unit = (source: TranscriptTurn) => composeLogicalQuestionUnit({ currentTurn: source, sessionId: manager.getState().sessionId, runtimeEpoch: 1, now: source.endedAt });
-  const root = turn("root", "Design a multi-tenant RAC service with document ingestion, retrieval, and per-tenant access control.", 1_000);
+  const root = turn("root", rootText, 1_000);
   manager.addTranscriptTurn(root);
   const original = unit(root);
   const corrected = applyActiveQuestionTermCorrection({ logicalQuestionUnit: original,
@@ -114,6 +114,127 @@ test("EC2 wrong session/epoch and Clear do not restore known raw sources", () =>
   setTestTaskRuntime(f.manager, { parent: null });
   assert.equal(read(f, [f.root.id]).transcriptProjection.transcript, "");
   assert.deepEqual(read(f, [f.root.id]).rejectedSourceTurnIds, [f.root.id]);
+});
+
+test("PC2 a new execution epoch reads the same corrected task origin through the final prompt", () => {
+  const f = fixture();
+  const followup = turn("after-pause", "How would you enforce tenant isolation?", 160_000);
+  f.manager.addTranscriptTurn(followup);
+  const current = { ...f.unit(followup), runtimeEpoch: 2 };
+  const history = f.ledger.listHistory();
+  const taskBefore = f.manager.getState().taskRuntime;
+  const compiled = compileSettledAdvisorPromptContext({
+    baseContext: f.manager.buildAdvisorPromptContext(), contextReadScope: "active-parent-read",
+    logicalQuestionUnit: current, transcriptTurns: f.manager.getState().transcriptTurns,
+    effectiveRecords: history, sessionId: current.sessionId, runtimeEpoch: 2,
+  });
+  assert.match(buildAdvisorUserMessage(compiled.context), /multi-tenant RAG service with document ingestion/);
+  assert.doesNotMatch(compiled.context.transcript, /RAC/);
+  assert.deepEqual(compiled.selectedSourceTurnIds, [f.root.id, followup.id]);
+  assert.deepEqual(f.ledger.listHistory(), history);
+  assert.deepEqual(f.manager.getState().taskRuntime, taskBefore);
+});
+
+test("PC1 retained current LQU and correction stay readable without source rebasing", () => {
+  const f = fixture();
+  const history = f.ledger.listHistory();
+  const state = f.manager.getState();
+  const before = read(f, [f.root.id], f.corrected);
+  for (const runtimeEpoch of [2, 3, 4]) {
+    const result = resolveAuthorizedEffectiveSourceContext({
+      selectedSourceTurnIds: [f.root.id], logicalQuestionUnit: f.corrected,
+      transcriptTurns: f.manager.getState().transcriptTurns, effectiveRecords: f.ledger.listHistory(),
+      sessionId: f.corrected.sessionId, runtimeEpoch, activeMeetingTask: f.manager.getState().activeMeetingTask,
+    });
+    assert.match(result.transcriptProjection.transcript, /multi-tenant RAG/);
+    assert.deepEqual(result.selectedSourceTurnIds, [f.root.id]);
+    assert.deepEqual(result, before);
+  }
+  assert.deepEqual(f.ledger.listHistory(), history);
+  assert.deepEqual(f.manager.getState(), state);
+  assert.equal(f.corrected.runtimeEpoch, 1);
+  assert.equal(f.corrected.revision, 2);
+});
+
+test("PC2 process/thread origin reaches Relation and Advisor after an execution advance", () => {
+  const f = fixture("What is the difference between a process and a thread?");
+  f.ledger.clear();
+  const root = f.root;
+  f.remember(f.original);
+  const followup = turn("memory-isolation", "How does memory isolation work?", 160_000);
+  f.manager.addTranscriptTurn(followup);
+  const current = { ...f.unit(followup), runtimeEpoch: 2 };
+  const compiled = compileSettledAdvisorPromptContext({
+    baseContext: f.manager.buildAdvisorPromptContext(), contextReadScope: "active-parent-read",
+    logicalQuestionUnit: current, transcriptTurns: f.manager.getState().transcriptTurns,
+    effectiveRecords: f.ledger.listHistory(), sessionId: current.sessionId, runtimeEpoch: 2,
+  });
+  assert.match(buildAdvisorUserMessage(compiled.context), /difference between a process and a thread/);
+  assert.doesNotMatch(buildAdvisorUserMessage(compiled.context), /tenant|RAC|RAG/);
+  assert.deepEqual(compiled.selectedSourceTurnIds, [root.id, followup.id]);
+  assert.equal(projectEffectiveLogicalQuestionSources(current).effectiveText, followup.text);
+  const relation = selectOwnerScopedRelationEvidence({ records: f.ledger.listHistory(), currentLogicalQuestionUnit: current,
+    activeMeetingTask: f.manager.getState().activeMeetingTask!, transcriptTurns: f.manager.getState().transcriptTurns });
+  assert.deepEqual(relation.recentParentEvidence.map((source) => source.text), [root.text]);
+  assert.equal(relation.diagnostics.rawSupplementCount, 0);
+});
+
+test("PC3 parent and corrected child retain their separate scopes across execution epochs", () => {
+  const f = fixture();
+  const child = turn("child", "Implement a RAC index filter.", 20_000);
+  f.manager.addTranscriptTurn(child);
+  const childOriginal = f.unit(child);
+  const childCorrected = applyActiveQuestionTermCorrection({ logicalQuestionUnit: childOriginal,
+    correction: { id: "child-RAC-RAG", input: "RAG not RAC", term: "RAG", from: "RAC", to: "RAG", createdAt: 21_000, appliedCount: 0 },
+    correctionTraceId: "child-correction", manualCorrectionRevision: 1, now: 21_000 }).logicalQuestionUnit;
+  const owner = { kind: "active-child" as const, parentId: f.parent.id, childId: child.id };
+  f.remember(childOriginal, { owner, relation: "child-probe" });
+  f.remember(childCorrected, { owner, relation: "child-probe" });
+  setTestTaskRuntime(f.manager, { parent: { ...f.parent, revisions: 2, child: { id: child.id, questionType: "coding", relation: "child-probe",
+    intent: "implementation-probe", question: child.text, basedOnTurnIds: [child.id], basedOnObservationIds: [], createdAt: child.startedAt, updatedAt: child.endedAt } } });
+  const followup = turn("after-pause", "How would you test it?", 160_000);
+  f.manager.addTranscriptTurn(followup);
+  const current = { ...f.unit(followup), runtimeEpoch: 3 };
+  const history = f.ledger.listHistory();
+  const compile = (contextReadScope: "active-parent-read" | "active-child-read" | "current-only") => compileSettledAdvisorPromptContext({
+    baseContext: f.manager.buildAdvisorPromptContext(), contextReadScope, logicalQuestionUnit: current,
+    transcriptTurns: f.manager.getState().transcriptTurns, effectiveRecords: history, sessionId: current.sessionId, runtimeEpoch: 3,
+  });
+  const childContext = compile("active-child-read");
+  assert.match(childContext.context.transcript, /multi-tenant RAG[\s\S]*Implement a RAG index filter/);
+  assert.doesNotMatch(childContext.context.transcript, /RAC/);
+  assert.deepEqual(childContext.selectedSourceTurnIds, [f.root.id, child.id, followup.id]);
+  assert.doesNotMatch(compile("active-parent-read").context.transcript, /index filter/);
+  assert.equal(compile("current-only").context.transcript, `Them: ${followup.text}`);
+  setTestTaskRuntime(f.manager, { parent: { ...f.parent, revisions: 3 } });
+  assert.match(compile("active-parent-read").context.transcript, /multi-tenant RAG/);
+  const retiredChild = resolveAuthorizedEffectiveSourceContext({ selectedSourceTurnIds: [child.id],
+    transcriptTurns: [child], effectiveRecords: history, sessionId: current.sessionId, runtimeEpoch: 3,
+    activeMeetingTask: f.manager.getState().activeMeetingTask });
+  assert.equal(retiredChild.transcriptProjection.transcript, "");
+  assert.deepEqual(retiredChild.rejectedSourceTurnIds, [child.id]);
+  assert.deepEqual(f.ledger.listHistory(), history);
+});
+
+test("PC5 historical sources reject exited owners, replaced revisions and changed sessions", () => {
+  for (const invalidation of ["owner", "claim", "session", "future", "clear", "revision"] as const) {
+    const f = fixture();
+    let sessionId = f.corrected.sessionId;
+    const runtimeEpoch = invalidation === "future" ? 0 : 3;
+    if (invalidation === "session") sessionId = "new-session";
+    if (invalidation === "clear") setTestTaskRuntime(f.manager, { parent: null });
+    if (invalidation === "owner" || invalidation === "claim") f.remember({ ...f.corrected,
+      id: invalidation === "claim" ? "new-owner-lqu" : f.corrected.id, updatedAt: 200_000 },
+      { owner: { kind: "parent-mainline", parentId: "retired" }, settledAt: 200_000 });
+    if (invalidation === "revision") f.remember({ ...f.corrected, revision: 3 },
+      { sourceTurnIds: ["replacement"], effectiveSourceTexts: [{ turnId: "replacement", text: "Replacement." }] });
+    const result = resolveAuthorizedEffectiveSourceContext({ selectedSourceTurnIds: [f.root.id],
+      logicalQuestionUnit: ["session", "future", "revision"].includes(invalidation) ? f.corrected : undefined,
+      transcriptTurns: [f.root], effectiveRecords: f.ledger.listHistory(), sessionId, runtimeEpoch,
+      activeMeetingTask: f.manager.getState().activeMeetingTask });
+    assert.equal(result.transcriptProjection.transcript, "", invalidation);
+    assert.deepEqual(result.rejectedSourceTurnIds, [f.root.id], invalidation);
+  }
 });
 
 test("EC2 explicit origin cannot bypass a newer rejected competing source claim", () => {
@@ -348,14 +469,18 @@ test("EC7 known task origin never falls back to surviving raw after high-churn l
 test("EC2 current source authority cannot infer old parent ownership after a known owner transfer", () => {
   const f = fixture();
   f.remember(f.corrected, { owner: { kind: "parent-mainline", parentId: "exited" } });
-  const input = { effectiveRecords: f.ledger.listHistory(), sessionId: f.original.sessionId, runtimeEpoch: 1,
-    activeMeetingTask: f.manager.getState().activeMeetingTask, logicalQuestionUnit: f.corrected };
-  const recordIndex = indexAuthorizedEffectiveSourceRecords(input);
-  const result = readAuthorizedEffectiveSourceText({ ...input, recordIndex, logicalQuestionUnitId: f.original.id,
-    sourceTurnIds: [f.root.id], owner: { kind: "parent-mainline", parentId: f.parent.id } });
-  assert.equal(result.text, undefined);
-  assert.deepEqual(result.rejectedSourceTurnIds, [f.root.id]);
-  assert.match(read(f, [f.root.id], f.corrected).transcriptProjection.transcript, /multi-tenant RAG/);
+  for (const runtimeEpoch of [1, 3]) {
+    const input = { effectiveRecords: f.ledger.listHistory(), sessionId: f.original.sessionId, runtimeEpoch,
+      activeMeetingTask: f.manager.getState().activeMeetingTask, logicalQuestionUnit: f.corrected };
+    const recordIndex = indexAuthorizedEffectiveSourceRecords(input);
+    const result = readAuthorizedEffectiveSourceText({ ...input, recordIndex, logicalQuestionUnitId: f.original.id,
+      sourceTurnIds: [f.root.id], owner: { kind: "parent-mainline", parentId: f.parent.id } });
+    assert.equal(result.text, undefined);
+    assert.deepEqual(result.rejectedSourceTurnIds, [f.root.id]);
+    const currentOnly = resolveAuthorizedEffectiveSourceContext({ ...input, recordIndex,
+      selectedSourceTurnIds: [f.root.id], transcriptTurns: [f.root] });
+    assert.match(currentOnly.transcriptProjection.transcript, /multi-tenant RAG/);
+  }
 });
 
 test("shared span output feeds handoff scale/requirements with existing turn metadata only", () => {

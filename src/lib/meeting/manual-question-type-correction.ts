@@ -341,7 +341,7 @@ export function resolveManualCorrectionTarget(input: {
   const canonicalLogicalQuestion =
     input.canonicalLogicalQuestion?.logicalQuestionUnit.sessionId ===
       input.sessionId &&
-    input.canonicalLogicalQuestion.logicalQuestionUnit.runtimeEpoch ===
+    input.canonicalLogicalQuestion.logicalQuestionUnit.runtimeEpoch <=
       input.runtimeEpoch &&
     input.canonicalLogicalQuestion.lineage.questionInstanceId ===
       `lqu:${input.canonicalLogicalQuestion.logicalQuestionUnit.id}` &&

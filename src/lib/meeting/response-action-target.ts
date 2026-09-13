@@ -6,6 +6,7 @@ import {
 } from "./effective-question-source-ledger.js";
 import type { MeetingPhaseOwner } from "./meeting-task-runtime-transition.js";
 import type { StableAnswerRevision } from "./stable-answer.js";
+import { indexAuthorizedEffectiveSourceRecords } from "./authorized-effective-source-context.js";
 
 import {
   createProvisionalCurrentQuestion,
@@ -50,10 +51,19 @@ export function resolveResponseActionLogicalQuestionUnit(input: {
   preferScreen: boolean;
   phaseOwner?: MeetingPhaseOwner;
 }): LogicalQuestionUnit | undefined {
-  const current = input.currentLogicalQuestionUnit;
-  const currentIsValid =
-    current?.sessionId === input.meetingContext.sessionId &&
-    current.runtimeEpoch === input.runtimeEpoch;
+  const index = indexAuthorizedEffectiveSourceRecords({
+    effectiveRecords: input.effectiveQuestionSources,
+    logicalQuestionUnit: input.currentLogicalQuestionUnit,
+    sessionId: input.meetingContext.sessionId,
+    runtimeEpoch: input.runtimeEpoch,
+    activeMeetingTask: input.meetingContext.activeMeetingTask,
+  });
+  const current = index.currentLogicalQuestionUnit;
+  const currentRecord = current && index.byLogicalQuestionUnitId.get(current.id);
+  const currentIsValid = current &&
+    (!index.latestByLogicalQuestionUnitId.has(current.id) || currentRecord) &&
+    current.sourceTurnIds.every((id) => !index.knownSourceTurnIds.has(id) ||
+      index.bySourceTurnId.get(id)?.logicalQuestionUnitId === current.id);
   // Correction retains its current-question target; phase actions select the branch.
   if (!input.phaseOwner && currentIsValid) return current;
   if (!input.phaseOwner && !input.preferScreen) return undefined;
@@ -75,7 +85,7 @@ export function resolveResponseActionLogicalQuestionUnit(input: {
   )
     .filter((candidate) =>
       candidate.sessionId === input.meetingContext.sessionId &&
-      candidate.runtimeEpoch === input.runtimeEpoch &&
+      candidate.runtimeEpoch <= input.runtimeEpoch &&
       candidate.owner.parentId === task.parent.id &&
       (owner.kind === "child"
         ? candidate.owner.kind === "active-child" &&
@@ -127,7 +137,7 @@ export function resolveVisibleAnswerResponseActionTarget(input: {
   }
   if (
     stable.runtimeEpoch !== undefined &&
-    stable.runtimeEpoch !== input.runtimeEpoch
+    stable.runtimeEpoch > input.runtimeEpoch
   ) {
     return reject("visible-answer-runtime-epoch-mismatch", "runtime-epoch");
   }
@@ -145,13 +155,15 @@ export function resolveVisibleAnswerResponseActionTarget(input: {
     return reject("visible-answer-parent-changed", "parent");
   }
 
+  // The visible answer's execution epoch is not the source's birth epoch.
+  // Preserve provenance from its effective record or exact current LQU below.
   const sourceRecords = selectLatestEffectiveQuestionSourceRecords(
     input.effectiveQuestionSources ?? []
   );
   const matchingSourceRecords = sourceRecords.filter(
     (record) =>
       record.sessionId === input.meetingContext.sessionId &&
-      record.runtimeEpoch === input.runtimeEpoch &&
+      record.runtimeEpoch <= input.runtimeEpoch &&
       record.logicalQuestionUnitId === stable.logicalQuestionUnitId &&
       record.logicalQuestionRevision === stable.logicalQuestionRevision
   );
@@ -161,7 +173,7 @@ export function resolveVisibleAnswerResponseActionTarget(input: {
   const current = input.currentLogicalQuestionUnit;
   if (
     current?.sessionId === input.meetingContext.sessionId &&
-    current.runtimeEpoch === input.runtimeEpoch &&
+    current.runtimeEpoch <= input.runtimeEpoch &&
     current.id === stable.logicalQuestionUnitId &&
     current.revision > stable.logicalQuestionRevision
   ) {
@@ -172,7 +184,7 @@ export function resolveVisibleAnswerResponseActionTarget(input: {
   }
   const currentMatchesVisibleAnswer =
     current?.sessionId === input.meetingContext.sessionId &&
-    current.runtimeEpoch === input.runtimeEpoch &&
+    current.runtimeEpoch <= input.runtimeEpoch &&
     current.id === stable.logicalQuestionUnitId &&
     current.revision === stable.logicalQuestionRevision;
   const settlementSnapshot = readSettlementSnapshot(stable);
@@ -183,7 +195,6 @@ export function resolveVisibleAnswerResponseActionTarget(input: {
     settlementSnapshot?.sourceKind === "voice" &&
     !sourceRecords.some((record) =>
       record.sessionId === input.meetingContext.sessionId &&
-      record.runtimeEpoch === input.runtimeEpoch &&
       record.logicalQuestionUnitId === stable.logicalQuestionUnitId
     )
   );
@@ -208,8 +219,14 @@ export function resolveVisibleAnswerResponseActionTarget(input: {
     }
   }
   if (currentMatchesVisibleAnswer) {
+    if (sourceRecord && sourceRecord.runtimeEpoch !== current.runtimeEpoch) {
+      return reject("visible-answer-effective-source-mismatch", "source-birth-epoch");
+    }
     const currentSource = sourceRecord ??
       (unboundCurrentVoice ? settlementSnapshot : undefined);
+    if (!currentSource && current.runtimeEpoch < input.runtimeEpoch) {
+      return reject("visible-answer-effective-source-missing", "effective-source");
+    }
     if (
       currentSource && createProvisionalCurrentQuestion({
         logicalQuestionUnit: current,

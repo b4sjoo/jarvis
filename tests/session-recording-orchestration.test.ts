@@ -30,6 +30,12 @@ import {
   buildPreparationSnapshotArtifactManifest,
 } from "../src/lib/preparation/snapshot-artifact-manifest.js";
 import type { InterviewPreparationSnapshot } from "../src/lib/preparation/snapshot-types.js";
+import { CaptureLifecycleCoordinator } from "../src/lib/meeting/capture-lifecycle.js";
+import { EffectiveQuestionSourceLedger } from "../src/lib/meeting/effective-question-source-ledger.js";
+import { createProvisionalCurrentQuestion } from "../src/lib/meeting/current-question-settlement.js";
+import { compileSettledAdvisorPromptContext } from "../src/lib/meeting/settled-advisor-context.js";
+import { buildAdvisorUserMessage } from "../src/lib/meeting/advisor-prompt.js";
+import { authorizeRuntimeCommit, buildRuntimeCommitSnapshot, createRuntimeCommitToken } from "../src/lib/meeting/runtime-commit-authorization.js";
 
 // Execute the production callbacks, as in the existing publication callback
 // tests. The reset, epoch boundary, pin loader and both managers remain real.
@@ -40,7 +46,9 @@ const source = process.env.JARVIS_RECORDING_START_BASELINE === "1"
 const parsed = ts.createSourceFile("hook.ts", source, ts.ScriptTarget.Latest, true);
 const callbacks = [
   "pinPreparationRuntimeForSession",
+  "invalidateRuntimeWork",
   "advanceRuntimeEpoch",
+  "pause",
   "resetMeetingRuntimeForNewSession",
   "startSessionRecording",
   "stopSessionRecording",
@@ -169,7 +177,7 @@ function harness() {
     vm.runInContext(code, sandbox);
   }
   return {
-    manager, context, calls, cancellations, states, globals, screenController,
+    manager, context, unit, calls, cancellations, states, globals, screenController,
     ui: () => ui,
     setIo: (next: typeof io) => { io = next; },
     setSelection: (next: typeof selection) => { selection = next; },
@@ -181,6 +189,61 @@ function harness() {
     },
   };
 }
+
+test("PC1/PC2/PC5 real Pause preserves context while rejecting old execution tokens", async () => {
+  const h = harness();
+  const g = h.globals;
+  const ledger = new EffectiveQuestionSourceLedger();
+  const source = createProvisionalCurrentQuestion({ logicalQuestionUnit: h.unit, sourceKind: "voice" });
+  const task = h.context.getState().activeMeetingTask!;
+  ledger.upsert({ recordId: "source-before-pause", sessionId: source.sessionId, runtimeEpoch: source.runtimeEpoch,
+    logicalQuestionUnitId: h.unit.id, logicalQuestionRevision: h.unit.revision, sourceHash: source.sourceHash,
+    sourceKind: "voice", currentTurnId: h.unit.currentTurnId, sourceTurnIds: [...h.unit.sourceTurnIds],
+    text: h.unit.normalizedText, effectiveSourceTexts: [{ turnId: h.unit.currentTurnId, text: h.unit.normalizedText }],
+    startedAt: h.unit.startedAt, updatedAt: h.unit.updatedAt, settledAt: h.unit.updatedAt,
+    speechAct: "question", disposition: "answer-primary-ask", relation: "new-parent",
+    owner: { kind: "parent-mainline", parentId: task.parent.id } });
+  const before = h.context.getState();
+  const token = createRuntimeCommitToken({ operationId: "old-answer", pipeline: "advisor",
+    snapshot: buildRuntimeCommitSnapshot({ contextState: before, runtimeEpoch: 7 }) });
+  const latestManualTarget = { logicalQuestionUnit: h.unit };
+  Object.assign(g, {
+    effectiveQuestionSourceLedgerRef: { current: ledger }, logicalQuestionUnitRef: { current: h.unit },
+    latestManualCorrectionTargetRef: { current: latestManualTarget }, manualCorrectionRevisionRef: { current: 2 },
+    captureLifecycleCoordinatorRef: { current: new CaptureLifecycleCoordinator() },
+    readNativeCaptureLease: () => undefined, openAudioDrainAuthorization: () => {},
+    cancelNativeAudioFaultTraces: () => {},
+    stopNativeMeetingCapture: async () => ({ status: { active: false } }),
+    drainSystemAudioQueueForNativeStop: async () => {}, invalidateAudioProcessingSession: () => {},
+  });
+  const history = ledger.listHistory();
+  for (const epoch of [8, 9]) {
+    await g.pause();
+    assert.equal(g.runtimeEpochRef.current, epoch);
+    assert.deepEqual(h.context.getState(), before);
+    assert.deepEqual(ledger.listHistory(), history);
+    assert.equal(g.logicalQuestionUnitRef.current, h.unit);
+    assert.equal(g.latestManualCorrectionTargetRef.current, latestManualTarget);
+    assert.equal(g.manualCorrectionRevisionRef.current, 2);
+    assert.equal(h.ui().status, "paused");
+    const snapshot = buildRuntimeCommitSnapshot({ contextState: h.context.getState(), runtimeEpoch: epoch });
+    assert.equal(authorizeRuntimeCommit({ token, current: snapshot, currentOperationId: token.operationId }).authorized, false);
+    const fresh = createRuntimeCommitToken({ operationId: `resumed-${epoch}`, pipeline: "advisor", snapshot });
+    assert.equal(authorizeRuntimeCommit({ token: fresh, current: snapshot, currentOperationId: fresh.operationId }).authorized, true);
+    const compiled = compileSettledAdvisorPromptContext({ baseContext: h.context.buildAdvisorPromptContext(),
+      contextReadScope: "active-parent-read", logicalQuestionUnit: h.unit,
+      transcriptTurns: before.transcriptTurns, effectiveRecords: ledger.listHistory(),
+      sessionId: source.sessionId, runtimeEpoch: epoch });
+    assert.match(buildAdvisorUserMessage(compiled.context), /Implement a cache/);
+    assert.deepEqual(compiled.selectedSourceTurnIds, [h.unit.currentTurnId]);
+  }
+  assert.ok(h.cancellations.includes("advisor"));
+  assert.ok(!h.cancellations.includes("visual-recovery"));
+  g.advanceRuntimeEpoch("active-task-cleared");
+  assert.equal(ledger.listHistory().length, 0);
+  assert.equal(g.logicalQuestionUnitRef.current, undefined);
+  assert.ok(h.cancellations.includes("visual-recovery"));
+});
 
 for (const failure of ["folder", "manifest.json", "settings/meeting-assistant-settings.json", "settings/interview-brief.json", "settings/provider-summary.json", "preparation/runtime-context.latest.json", "preparation"] as const) {
   test(`RS1: real recording start preserves ongoing Meeting through ${failure} failure`, async () => {

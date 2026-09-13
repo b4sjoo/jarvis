@@ -769,10 +769,12 @@ test("keeps current question lineage authoritative even when a parent is active"
       currentQuestionLineage: lineage,
       latestSuggestion,
       sessionId: "session_1",
-      runtimeEpoch: 3,
+      runtimeEpoch: 1,
     }).source,
     "none"
   );
+  assert.equal(resolveManualCorrectionTarget({ currentQuestionLineage: lineage,
+    latestSuggestion, sessionId: "session_1", runtimeEpoch: 3 }).source, "provisional-question");
 });
 
 test("prefers a canonical logical question over stale suggestion lineage", () => {
@@ -854,6 +856,27 @@ test("prefers a canonical logical question over stale suggestion lineage", () =>
       logicalQuestionUnit,
     }
   );
+});
+
+test("PC4 canonical correction target retains its source birth epoch after Pause", () => {
+  const logicalQuestionUnit = makeLogicalQuestion("historical-question", "turn-historical", "Design a RAG system.");
+  const lineage = { ...makeLineage(logicalQuestionUnit.currentTurnId),
+    questionInstanceId: `lqu:${logicalQuestionUnit.id}`, sessionId: logicalQuestionUnit.sessionId,
+    runtimeEpoch: logicalQuestionUnit.runtimeEpoch };
+  const input = { canonicalLogicalQuestion: { logicalQuestionUnit, lineage }, latestSuggestion: undefined,
+    sessionId: logicalQuestionUnit.sessionId, runtimeEpoch: 3 };
+  for (const activeTask of [undefined, makeActiveTask({ questionType: "general-system-design" })]) {
+    const target = resolveManualCorrectionTarget({ ...input, activeTask });
+    assert.notEqual(target.source, "none");
+    if (target.source === "none") continue;
+    assert.equal(target.logicalQuestionUnit, logicalQuestionUnit);
+    assert.equal(target.logicalQuestionUnit?.runtimeEpoch, 1);
+    assert.equal(target.lineage, lineage);
+  }
+  for (const patch of [{ runtimeEpoch: 4 }, { sessionId: "new-session" }, { id: "different-question" }, { currentTurnId: "different-turn" }]) {
+    assert.equal(resolveManualCorrectionTarget({ ...input,
+      canonicalLogicalQuestion: { logicalQuestionUnit: { ...logicalQuestionUnit, ...patch }, lineage } }).source, "none");
+  }
 });
 
 test("keeps a same-origin system-design correction on the existing parent", () => {

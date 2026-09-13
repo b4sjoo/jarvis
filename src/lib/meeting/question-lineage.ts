@@ -81,7 +81,7 @@ export function isCurrentQuestionLineage(input: {
   if (lineage.sessionId && lineage.sessionId !== input.sessionId) return false;
   if (
     lineage.runtimeEpoch !== undefined &&
-    lineage.runtimeEpoch !== input.runtimeEpoch
+    lineage.runtimeEpoch > input.runtimeEpoch
   ) {
     return false;
   }
