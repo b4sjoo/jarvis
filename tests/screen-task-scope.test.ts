@@ -905,29 +905,34 @@ test("gives exact visual recovery continuity authority", () => {
   });
 });
 
-test("wires only the task-bound visual recovery fact into Screen binding", () => {
+test("keeps a recovery capsule as a candidate until Screen comparison", () => {
+  const candidate = {
+    logicalQuestionUnitId: "question-current",
+    logicalQuestionRevision: 2,
+    text: "Explain lines 35 through 38.",
+    sourceTurnIds: ["turn-35"],
+  };
+  const binding = decideManualScreenVoiceQuestionBinding({
+    candidate,
+    visibleAnswer: candidate,
+  });
+  assert.equal(binding.disposition, "use-screen");
+  assert.equal(binding.candidate, candidate);
+  // Full ingress execution and final packet/branch decisions are covered by
+  // source-linkage-screen-entry.test.mjs. This guards against premature wiring.
   const hook = readFileSync("src/hooks/useMeetingAssistant.ts", "utf8");
   const capture = hook.slice(
     hook.indexOf("  const captureScreenContext = useCallback"),
     hook.indexOf("  const correctActiveQuestionType = useCallback")
   );
 
-  assert.equal(
-    capture.match(
-      /awaitingVisualEvidenceTarget: selectedVisualRecovery\.fact/g
-    )?.length,
-    2
-  );
+  assert.doesNotMatch(capture, /awaitingVisualEvidenceTarget:/);
   assert.doesNotMatch(capture, /unresolvedManualCorrectionTarget/);
-  assert.doesNotMatch(capture, /explicitRecoveryTarget:/);
-  assert.match(
-    capture,
-    /screenVoiceQuestionBinding\.disposition === "bind-voice"[\s\S]{0,300}applyBoundVisualRecovery\(/
-  );
-  assert.match(
-    capture,
-    /effectiveDecision === "bind-voice"[\s\S]{0,300}applyBoundVisualRecovery\(/
-  );
+  const comparison = capture.indexOf("await sourceLinkageOutcomePromise");
+  const packet = capture.indexOf("const candidateScreenSourcePacket");
+  assert.ok(comparison >= 0 && packet > comparison);
+  assert.match(capture.slice(comparison, packet), /readCurrentVisualRecoveryFact\(recoveryVoiceFact\)/);
+  assert.match(capture.slice(comparison, packet), /applyBoundVisualRecovery\(/);
 });
 
 test("keeps project and correction continuity matches non-authoritative", () => {

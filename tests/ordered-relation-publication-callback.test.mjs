@@ -1178,6 +1178,7 @@ test("ends an owned Screen after post-model Preparation staleness", { concurrenc
       },
     },
     screenGenerationLease: generationLease,
+    boundVisualRecoveryFact: undefined,
     runtimeEpochRef: { current: 1 },
     visibleAnswerRevisionRef: { current: 1 },
     manualCorrectionRevisionRef: { current: 0 },
