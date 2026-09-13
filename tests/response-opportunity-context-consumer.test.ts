@@ -129,11 +129,12 @@ for (const change of ["context-revision", "context-scope", "lqu-revision", "epoc
     if (change === "lqu-revision") latest = { ...latest, revision: latest.revision + 1 };
     if (change === "epoch") f.epoch.current += 1;
     const environment = vm.createContext({
-      settlement: { job: { lease } }, contextManagerRef: { current: f.manager },
+      settlement: { job: { lease }, disposition: "completed" }, contextManagerRef: { current: f.manager },
       logicalQuestionUnitRef: { current: latest }, logicalQuestionUnit: f.unit,
       readResponseOpportunitySources: f.read, buildResponseOpportunityRequest,
       readResponseOpportunityContextCapsule: () => undefined,
       authorizeResponseOpportunityLease, runtimeEpochRef: f.epoch,
+      runtimeActiveRef: { current: true },
       responseOpportunityRuntimeRef: { current: { getCurrentOperationId: () => lease.operationId } },
       manualCorrectionRevisionRef: { current: 0 },
     });

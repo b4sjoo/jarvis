@@ -17553,7 +17553,7 @@ export function useMeetingAssistant() {
             contextCapsule:
               readResponseOpportunityContextCapsule(),
           });
-          const authorization = authorizeResponseOpportunityLease(
+          const leaseAuthorization = authorizeResponseOpportunityLease(
             settlement.job.lease,
             {
               currentOperationId:
@@ -17567,11 +17567,24 @@ export function useMeetingAssistant() {
               logicalUnitClosed: false,
             }
           );
+          const authorization = !leaseAuthorization.authorized
+            ? leaseAuthorization
+            : settlement.disposition === "superseded" ||
+                settlement.disposition === "disposed" ||
+                settlement.disposition === "operation-mismatch"
+              ? { authorized: false as const, reason: settlement.disposition }
+              : !runtimeActiveRef.current
+                ? {
+                    authorized: false as const,
+                    reason: "meeting-not-active-at-release",
+                  }
+                : leaseAuthorization;
           const result = settlement.result;
           const parsed = result?.parsed;
           const parsedValue = parsed?.ok ? parsed.value : undefined;
           const targetedLogicalQuestionUnit =
             authorization.authorized &&
+            settlement.disposition === "completed" &&
             parsedValue &&
             parsedValue.decision !== "unclear"
               ? applyResponseOpportunityDecisionTarget({
@@ -17581,6 +17594,8 @@ export function useMeetingAssistant() {
                 })
               : latestLogicalQuestionUnit;
           if (
+            authoritative &&
+            authorization.authorized &&
             targetedLogicalQuestionUnit.responseOpportunityTarget &&
             latestForceAdviseTargetRef.current?.logicalQuestionUnit.id ===
               targetedLogicalQuestionUnit.id &&
@@ -17675,12 +17690,14 @@ export function useMeetingAssistant() {
             ? releaseDecision.advisorDecision
             : undefined;
           const fallbackAppliedDecision =
-            speculative && releaseUnresolved
+            localAuthorityPreserved
               ? originalDecision
               : undefined;
           const effectiveAppliedDecision =
             validAppliedDecision ?? fallbackAppliedDecision;
-          const decisionApplied = Boolean(effectiveAppliedDecision);
+          const decisionApplied = Boolean(
+            authoritative && effectiveAppliedDecision
+          );
           const rawOutput = result?.rawOutput ?? "";
           const recordingActive =
             sessionRecordingManagerRef.current?.getState().active ?? false;
@@ -17845,6 +17862,21 @@ export function useMeetingAssistant() {
 
           if (!authoritative) {
             refreshRecordedCompletedTrace(traceId);
+            return;
+          }
+
+          if (!authorization.authorized) {
+            traceStoreRef.current.updateMetadata(traceId, {
+              provisionalLogicalQuestionReleased: false,
+              provisionalLogicalQuestionReleaseReason: authorization.reason,
+              provisionalTurnGenerationInvalidationBlocked: true,
+              logicalQuestionPublicationStage: "release-cancelled",
+            });
+            traceStoreRef.current.finishTrace(
+              traceId,
+              "cancelled",
+              authorization.reason
+            );
             return;
           }
 

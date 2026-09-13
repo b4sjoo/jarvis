@@ -153,12 +153,12 @@ export class RuntimeInferenceOperationRuntime<
 
   cancelAll(reason: "disposed" | "superseded" = "disposed") {
     this.disposed = reason === "disposed";
+    this.currentOperationId = undefined;
     this.clearPending(reason);
     if (this.active) {
       this.active.superseded = reason === "superseded";
       this.active.controller.abort(reason);
     }
-    this.currentOperationId = undefined;
   }
 
   private clearPending(disposition: "disposed" | "superseded") {
