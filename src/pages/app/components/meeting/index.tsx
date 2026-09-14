@@ -3352,7 +3352,7 @@ const FocusModePanel = ({
               <TranscriptLineageWindow
                 currentText={latestTurnText}
                 history={[]}
-                className="max-h-24 overflow-y-auto pr-1"
+                className="min-h-[80px] max-h-24 overflow-y-auto pr-1"
                 currentClassName="text-[11px] leading-4 text-muted-foreground"
                 historyClassName="text-[10px] leading-4 text-muted-foreground/60"
               />
@@ -3564,7 +3564,7 @@ const SpeechCorrectionControl = ({
         </Button>
       </div>
       {corrections.length ? (
-        <div className="mt-2 flex min-w-0 flex-wrap gap-1">
+        <div className="mt-2 flex max-h-16 min-w-0 flex-wrap gap-1 overflow-y-auto">
           {corrections.slice(-4).map((correction) => (
             <Badge
               key={correction.id}

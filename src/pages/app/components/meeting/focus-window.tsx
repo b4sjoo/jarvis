@@ -500,7 +500,7 @@ function MeetingFocusControlsWindow({
         </div>
 
         <div className="mt-2 flex min-h-0 flex-1 flex-col gap-2">
-          <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-md border border-border/50 bg-muted/20 px-3 py-2">
+          <div className="flex min-h-[130px] min-w-0 flex-1 flex-col overflow-hidden rounded-md border border-border/50 bg-muted/20 px-3 py-2">
             <div className="mb-1 flex min-w-0 items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
               <MessageSquareTextIcon className="h-3.5 w-3.5 shrink-0" />
               <span className="truncate">Latest transcript</span>
@@ -536,7 +536,7 @@ function MeetingFocusControlsWindow({
                     : "Advise"}
               </Button>
             </div>
-            <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+            <div className="min-h-[80px] flex-1 overflow-y-auto pr-1">
               <p
                 className={cn(
                   WRAP_TEXT_CLASS,
@@ -548,7 +548,7 @@ function MeetingFocusControlsWindow({
             </div>
           </div>
 
-          <div className="mt-auto min-w-0 shrink-0">
+          <div className="mt-auto min-h-[36px] min-w-0 shrink overflow-y-auto">
             <div className="mb-1 text-[11px] font-medium text-muted-foreground">
               Correction
             </div>
@@ -579,7 +579,7 @@ function MeetingFocusControlsWindow({
             </div>
 
             {snapshot.speechCorrections.length ? (
-              <div className="mt-1.5 grid h-6 min-w-0 grid-cols-2 gap-1 overflow-hidden">
+              <div className="mt-1.5 grid h-6 min-w-0 grid-cols-2 gap-1 overflow-x-hidden overflow-y-auto">
                 {snapshot.speechCorrections.slice(-2).map((item) => (
                   <Badge
                     key={item.id}

@@ -56,7 +56,7 @@ test("focus controls keep short transcripts at the compact base geometry", () =>
     }),
     {
       preferredWidth: 920,
-      preferredHeight: 230,
+      preferredHeight: 280,
       measuredTranscriptHeight: 60,
       estimatedTranscriptHeight: 60,
       reservedAuxiliaryHeight: 0,
@@ -71,7 +71,7 @@ test("focus controls expand width before consuming vertical space", () => {
   });
 
   assert.equal(decision.preferredWidth, 1_080);
-  assert.ok(decision.preferredHeight > 230);
+  assert.ok(decision.preferredHeight > 280);
   assert.equal(decision.transcriptScrollRequired, false);
 });
 
@@ -81,7 +81,7 @@ test("focus controls cap very long transcripts and require local scrolling", () 
   });
 
   assert.equal(decision.preferredWidth, 1_280);
-  assert.equal(decision.preferredHeight, 410);
+  assert.equal(decision.preferredHeight, 440);
   assert.equal(decision.transcriptScrollRequired, true);
 });
 
@@ -92,7 +92,7 @@ test("focus controls reserve correction history without shrinking transcript", (
   });
 
   assert.equal(decision.preferredWidth, 1_280);
-  assert.equal(decision.preferredHeight, 434);
+  assert.equal(decision.preferredHeight, 440);
   assert.equal(decision.reservedAuxiliaryHeight, 24);
   assert.equal(decision.transcriptScrollRequired, true);
 });

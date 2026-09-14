@@ -63,7 +63,7 @@ export function resolveFocusControlsGeometry(input: {
   const maximumVisibleTranscriptHeight = 220;
   const visibleTranscriptHeight = Math.min(
     maximumVisibleTranscriptHeight,
-    Math.max(60, estimatedTranscriptHeight)
+    Math.max(80, estimatedTranscriptHeight)
   );
   const reservedAuxiliaryHeight = Math.max(
     0,
@@ -71,8 +71,8 @@ export function resolveFocusControlsGeometry(input: {
   );
   const preferredHeight = Math.min(
     440,
-    230 +
-      Math.max(0, visibleTranscriptHeight - 60) +
+    280 +
+      Math.max(0, visibleTranscriptHeight - 80) +
       reservedAuxiliaryHeight +
       (measuredLines > 10 ? 20 : 0)
   );

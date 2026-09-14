@@ -17,14 +17,17 @@ const INTERVIEW_WINDOW_LABELS: [&str; 3] = [
 ];
 const FOCUS_ANSWER_WIDTH: f64 = 920.0;
 const FOCUS_ANSWER_HEIGHT: f64 = 540.0;
-const FOCUS_ANSWER_MIN_HEIGHT: f64 = 360.0;
+const FOCUS_ANSWER_MIN_HEIGHT: f64 = 300.0;
 const FOCUS_CONTROLS_WIDTH: f64 = 920.0;
-const FOCUS_CONTROLS_HEIGHT: f64 = 230.0;
+const FOCUS_CONTROLS_HEIGHT: f64 = 280.0;
 const FOCUS_CONTROLS_MAX_WIDTH: f64 = 1280.0;
 const FOCUS_CONTROLS_MAX_HEIGHT: f64 = 440.0;
 const FOCUS_TOP_MARGIN: i32 = 12;
 const FOCUS_BOTTOM_MARGIN: i32 = 56;
 const FOCUS_WINDOW_GAP: i32 = 12;
+
+static FOCUS_CONTROLS_PREFERENCE: std::sync::Mutex<Option<(f64, f64, f64, bool)>> =
+    std::sync::Mutex::new(None);
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -276,13 +279,17 @@ pub fn show_meeting_focus_windows(app: tauri::AppHandle) -> Result<(), String> {
         FOCUS_CONTROLS_HEIGHT,
     )?;
 
+    let preferred = FOCUS_CONTROLS_PREFERENCE
+        .lock()
+        .map_err(|_| "Focus geometry preference is unavailable".to_string())?
+        .unwrap_or((FOCUS_CONTROLS_WIDTH, FOCUS_CONTROLS_HEIGHT, 80.0, false));
     set_meeting_focus_controls_geometry(
         app.clone(),
         0,
-        FOCUS_CONTROLS_WIDTH,
-        FOCUS_CONTROLS_HEIGHT,
-        60.0,
-        false,
+        preferred.0,
+        preferred.1,
+        preferred.2,
+        preferred.3,
     )?;
 
     answer
@@ -339,19 +346,15 @@ pub fn set_meeting_focus_controls_geometry(
             .map_err(|error| format!("Failed to get primary monitor: {}", error))?,
     }
     .ok_or_else(|| "No monitor found for Focus Mode".to_string())?;
-    let scale_factor = controls
-        .scale_factor()
-        .map_err(|error| format!("Failed to get Focus Mode scale factor: {}", error))?
-        .max(1.0);
+    let scale_factor = monitor.scale_factor().max(1.0);
     let monitor_size = monitor.size();
     let logical_monitor_width = monitor_size.width as f64 / scale_factor;
     let maximum_width = FOCUS_CONTROLS_MAX_WIDTH
         .min((logical_monitor_width - WINDOW_SIDE_MARGIN).max(MIN_WINDOW_WIDTH));
     let reserved_vertical_space =
         (FOCUS_TOP_MARGIN + FOCUS_BOTTOM_MARGIN + FOCUS_WINDOW_GAP) as f64;
-    let available_height =
-        ((monitor_size.height as f64 - reserved_vertical_space).max(scale_factor) / scale_factor)
-            .max(FOCUS_CONTROLS_HEIGHT + 1.0);
+    let available_height = (monitor_size.height as f64 / scale_factor - reserved_vertical_space)
+        .max(FOCUS_CONTROLS_HEIGHT + 1.0);
     let (answer_height, controls_height) =
         resolve_focus_window_vertical_layout(available_height, preferred_height);
     let (applied_width, applied_height) = clamp_focus_controls_geometry(
@@ -363,17 +366,54 @@ pub fn set_meeting_focus_controls_geometry(
 
     let answer_width =
         FOCUS_ANSWER_WIDTH.min((logical_monitor_width - WINDOW_SIDE_MARGIN).max(MIN_WINDOW_WIDTH));
+    let origin = tauri::LogicalPosition::new(
+        monitor.position().x as f64 / scale_factor,
+        monitor.position().y as f64 / scale_factor,
+    );
+    let extent = LogicalSize::new(
+        logical_monitor_width,
+        monitor_size.height as f64 / scale_factor,
+    );
+    let answer_position = focus_target_position(
+        origin,
+        extent,
+        LogicalSize::new(answer_width, answer_height),
+        FocusWindowPlacement::Top,
+    );
+    let controls_position = focus_target_position(
+        origin,
+        extent,
+        LogicalSize::new(applied_width, applied_height),
+        FocusWindowPlacement::Bottom,
+    );
     answer
-        .set_size(Size::Logical(LogicalSize::new(answer_width, answer_height)))
+        .set_size(Size::Physical(
+            LogicalSize::new(answer_width, answer_height).to_physical::<u32>(scale_factor),
+        ))
         .map_err(|error| format!("Failed to resize Focus answer window: {}", error))?;
     controls
-        .set_size(Size::Logical(LogicalSize::new(
-            applied_width,
-            applied_height,
-        )))
+        .set_size(Size::Physical(
+            LogicalSize::new(applied_width, applied_height).to_physical::<u32>(scale_factor),
+        ))
         .map_err(|error| format!("Failed to resize Focus controls window: {}", error))?;
-    position_focus_window(&app, &answer, FocusWindowPlacement::Top)?;
-    position_focus_window(&app, &controls, FocusWindowPlacement::Bottom)?;
+    answer
+        .set_position(tauri::Position::Physical(
+            answer_position.to_physical::<i32>(scale_factor),
+        ))
+        .map_err(|error| format!("Failed to position Focus answer: {}", error))?;
+    controls
+        .set_position(tauri::Position::Physical(
+            controls_position.to_physical::<i32>(scale_factor),
+        ))
+        .map_err(|error| format!("Failed to position Focus controls: {}", error))?;
+    *FOCUS_CONTROLS_PREFERENCE
+        .lock()
+        .map_err(|_| "Focus geometry preference is unavailable".to_string())? = Some((
+        preferred_width,
+        preferred_height,
+        measured_transcript_height,
+        transcript_scroll_required,
+    ));
 
     Ok(FocusControlsGeometryResult {
         snapshot_revision,
@@ -495,48 +535,20 @@ fn ensure_focus_window<R: Runtime>(
     Ok(window)
 }
 
-fn position_focus_window<R: Runtime>(
-    app: &AppHandle<R>,
-    window: &WebviewWindow<R>,
+fn focus_target_position(
+    origin: tauri::LogicalPosition<f64>,
+    monitor_size: tauri::LogicalSize<f64>,
+    window_size: tauri::LogicalSize<f64>,
     placement: FocusWindowPlacement,
-) -> Result<(), String> {
-    let reference_window = app
-        .get_webview_window("main")
-        .or_else(|| app.webview_windows().values().next().cloned())
-        .ok_or_else(|| "No reference window found for Focus Mode".to_string())?;
-    let monitor = match reference_window
-        .current_monitor()
-        .map_err(|e| format!("Failed to get current monitor: {}", e))?
-    {
-        Some(monitor) => Some(monitor),
-        None => reference_window
-            .primary_monitor()
-            .map_err(|e| format!("Failed to get primary monitor: {}", e))?,
-    }
-    .ok_or_else(|| "No monitor found for Focus Mode".to_string())?;
-    let monitor_size = monitor.size();
-    let monitor_position = monitor.position();
-    let window_size = window
-        .outer_size()
-        .map_err(|e| format!("Failed to get focus window size: {}", e))?;
-    let x = monitor_position.x + (monitor_size.width as i32 - window_size.width as i32) / 2;
+) -> tauri::LogicalPosition<f64> {
+    let x = origin.x + (monitor_size.width - window_size.width) / 2.0;
     let y = match placement {
-        FocusWindowPlacement::Top => monitor_position.y + FOCUS_TOP_MARGIN,
+        FocusWindowPlacement::Top => origin.y + FOCUS_TOP_MARGIN as f64,
         FocusWindowPlacement::Bottom => {
-            monitor_position.y + monitor_size.height as i32
-                - window_size.height as i32
-                - FOCUS_BOTTOM_MARGIN
+            origin.y + monitor_size.height - window_size.height - FOCUS_BOTTOM_MARGIN as f64
         }
     };
-
-    window
-        .set_position(tauri::Position::Physical(tauri::PhysicalPosition {
-            x,
-            y: y.max(monitor_position.y),
-        }))
-        .map_err(|e| format!("Failed to position focus window: {}", e))?;
-
-    Ok(())
+    tauri::LogicalPosition::new(x, y.max(origin.y))
 }
 
 fn setup_focus_close_handler<R: Runtime>(window: &WebviewWindow<R>) {
@@ -593,10 +605,10 @@ pub fn show_dashboard_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), Strin
 #[cfg(test)]
 mod tests {
     use super::{
-        clamp_focus_controls_geometry, resolve_focus_window_vertical_layout,
-        FOCUS_ANSWER_WINDOW_LABEL, FOCUS_CONTROLS_HEIGHT, FOCUS_CONTROLS_MAX_HEIGHT,
-        FOCUS_CONTROLS_MAX_WIDTH, FOCUS_CONTROLS_WIDTH, FOCUS_CONTROLS_WINDOW_LABEL,
-        INTERVIEW_WINDOW_LABELS, MAIN_WINDOW_LABEL,
+        clamp_focus_controls_geometry, focus_target_position, resolve_focus_window_vertical_layout,
+        FocusWindowPlacement, FOCUS_ANSWER_WINDOW_LABEL, FOCUS_CONTROLS_HEIGHT,
+        FOCUS_CONTROLS_MAX_HEIGHT, FOCUS_CONTROLS_MAX_WIDTH, FOCUS_CONTROLS_WIDTH,
+        FOCUS_CONTROLS_WINDOW_LABEL, INTERVIEW_WINDOW_LABELS, MAIN_WINDOW_LABEL,
     };
 
     #[test]
@@ -628,7 +640,7 @@ mod tests {
     fn focus_controls_geometry_respects_monitor_and_answer_window_limits() {
         assert_eq!(
             clamp_focus_controls_geometry(1280.0, 350.0, 1100.0, 250.0),
-            (1100.0, 250.0)
+            (1100.0, 280.0)
         );
     }
 
@@ -636,7 +648,7 @@ mod tests {
     fn focus_answer_window_fills_the_space_above_compact_controls() {
         assert_eq!(
             resolve_focus_window_vertical_layout(1000.0, FOCUS_CONTROLS_HEIGHT),
-            (770.0, 230.0)
+            (720.0, 280.0)
         );
     }
 
@@ -644,7 +656,7 @@ mod tests {
     fn focus_controls_growth_preserves_the_answer_minimum_when_space_allows() {
         assert_eq!(
             resolve_focus_window_vertical_layout(600.0, FOCUS_CONTROLS_MAX_HEIGHT),
-            (360.0, 240.0)
+            (300.0, 300.0)
         );
     }
 
@@ -653,7 +665,28 @@ mod tests {
         let (answer_height, controls_height) =
             resolve_focus_window_vertical_layout(480.0, FOCUS_CONTROLS_MAX_HEIGHT);
 
-        assert_eq!((answer_height, controls_height), (250.0, 230.0));
+        assert_eq!((answer_height, controls_height), (200.0, 280.0));
         assert_eq!(answer_height + controls_height, 480.0);
+    }
+
+    #[test]
+    fn focus_positions_use_target_size_and_monitor_origin_without_current_window_reads() {
+        let origin = tauri::LogicalPosition::new(-1920.0, 100.0);
+        let extent = tauri::LogicalSize::new(1920.0, 1080.0);
+        let target = tauri::LogicalSize::new(1280.0, 440.0);
+        let position = focus_target_position(origin, extent, target, FocusWindowPlacement::Bottom);
+        assert_eq!(position.x, -1600.0);
+        assert_eq!(position.y, 684.0);
+        assert_eq!(
+            position.x + target.width / 2.0,
+            origin.x + extent.width / 2.0
+        );
+        let top = focus_target_position(origin, extent, target, FocusWindowPlacement::Top);
+        assert_eq!(top.y, 112.0);
+        // Conversion uses the target monitor, never the old window's scale.
+        let physical = position.to_physical::<i32>(2.0);
+        assert_eq!((physical.x, physical.y), (-3200, 1368));
+        let size = target.to_physical::<u32>(2.0);
+        assert_eq!((size.width, size.height), (2560, 880));
     }
 }
