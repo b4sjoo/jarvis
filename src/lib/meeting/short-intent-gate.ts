@@ -45,7 +45,7 @@ export {
   type ResponseOpportunitySemanticPayload,
   type ResponseOpportunityDecisionSpan,
 };
-export const RESPONSE_OPPORTUNITY_SESSION_START_LIMIT = 120;
+export const RESPONSE_OPPORTUNITY_SESSION_START_LIMIT = 600;
 export const RESPONSE_OPPORTUNITY_RELEASE_MIN_CONFIDENCE = 0.85;
 export const RESPONSE_OPPORTUNITY_PROPOSAL_TTL_MS = 30_000;
 

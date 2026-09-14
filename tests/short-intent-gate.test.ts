@@ -717,6 +717,20 @@ test("creates a bounded proposal and enforces per-session dedupe", () => {
   );
 });
 
+test("RO-B60 permits 600 distinct revisions across one hour without refunding or double charging keys", () => {
+  assert.equal(RESPONSE_OPPORTUNITY_SESSION_START_LIMIT, 600);
+  const budget = new ResponseOpportunitySessionBudget();
+  for (let minute = 0; minute < 60; minute++) {
+    for (let item = 0; item < 10; item++) {
+      const key = `lqu-${minute}:${item + 1}:hash-${item}`;
+      assert.equal(budget.authorize("hour", key).authorized, true);
+      assert.equal(budget.authorize("hour", key).reason, "duplicate-operation");
+    }
+  }
+  assert.equal(budget.authorize("hour", "next").reason, "session-limit-exhausted");
+  assert.equal(budget.authorize("next-session", "next").startsAfter, 1);
+});
+
 test("makes a substantive current request outrank polite framing in the RO prompt", () => {
   const request = buildResponseOpportunityRequest({
     logicalQuestionUnit: logicalQuestionUnit(
