@@ -315,8 +315,8 @@ export function parseAnswerRecoveryAdjudicationOutput(
         decoded.decision === "unclear";
   if (!decisionValid) return parseFailure("invalid-decision", "schema");
   if (
-    !isEvidenceSpanArray(decoded.questionEvidenceSpans) ||
-    !isEvidenceSpanArray(decoded[evidenceField])
+    !isEvidenceSpanArray(decoded.questionEvidenceSpans, request.operationKind) ||
+    !isEvidenceSpanArray(decoded[evidenceField], request.operationKind)
   ) {
     return parseFailure("invalid-evidence-spans", "schema");
   }
@@ -550,7 +550,7 @@ function parseFailure(
   return { ok: false, reason, errorKind, evidenceSpansValid: false };
 }
 
-function isEvidenceSpanArray(value: unknown): value is string[] {
+function isEvidenceSpanArray(value: unknown, operationKind: AnswerRecoveryOperationKind): value is string[] {
   return (
     Array.isArray(value) &&
     value.length <= 1 &&
@@ -558,7 +558,7 @@ function isEvidenceSpanArray(value: unknown): value is string[] {
       (span) =>
         typeof span === "string" &&
         Boolean(span.trim()) &&
-        span.trim().length <= ANSWER_RECOVERY_MAX_EVIDENCE_SPAN_CHARS
+        (operationKind === "answer-resolution" || span.trim().length <= ANSWER_RECOVERY_MAX_EVIDENCE_SPAN_CHARS)
     )
   );
 }

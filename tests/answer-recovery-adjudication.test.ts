@@ -17,6 +17,22 @@ const question = "Could you please explain lines 46 through 49?";
 const answer =
   "I don't have those lines visible. Please paste or read out lines 46 through 49.";
 
+test("AR1/AR2 exact long quotes remain evidence without weakening other operations", () => {
+  for (const length of [173, 183, 210, 343]) {
+    const quote = "A".repeat(length);
+    const request = buildAnswerRecoveryAdjudicationRequest({ operationKind: "answer-resolution", logicalQuestionUnitId: "q", logicalQuestionUnitRevision: 1, answerRevision: 1, questionText: question, answerText: quote })!;
+    const output = { schemaVersion: 2, decision: "resolved", questionEvidenceSpans: [question], answerEvidenceSpans: [quote] };
+    const result = parseAnswerRecoveryAdjudicationOutput(JSON.stringify(output), request);
+    assert.equal(result.ok, true);
+    if (result.ok && "answerEvidenceSpans" in result.value) assert.equal(result.value.answerEvidenceSpans[0], quote);
+    assert.equal(parseAnswerRecoveryAdjudicationOutput(JSON.stringify({ ...output, answerEvidenceSpans: [quote + "not in source"] }), request).ok, false);
+    assert.equal(parseAnswerRecoveryAdjudicationOutput(JSON.stringify({ ...output, questionEvidenceSpans: [quote], answerEvidenceSpans: [question] }), request).ok, false);
+    assert.equal(parseAnswerRecoveryAdjudicationOutput(JSON.stringify({ ...output, answerEvidenceSpans: [quote, quote] }), request).ok, false);
+    const visual = buildVisualEvidenceCheckRequest({ logicalQuestionUnitId: "q", logicalQuestionUnitRevision: 1, questionSourceHash: "h", questionText: quote })!;
+    assert.equal(parseAnswerRecoveryAdjudicationOutput(JSON.stringify({ schemaVersion: 2, decision: "visual-missing", questionEvidenceSpans: [quote], visualEvidenceSpans: [] }), visual).ok, false);
+  }
+});
+
 test("runs the question-only visual lease for automatic and manual recovery sources", () => {
   for (const source of [
     "live-turn",
