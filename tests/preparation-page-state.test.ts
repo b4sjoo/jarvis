@@ -64,6 +64,10 @@ function fixture() {
     subscribe: (listener: () => void) => { selectionListener = listener; return () => { selectionListener = () => {}; }; },
   };
   const executions: { input: any; result: ReturnType<typeof deferred> }[] = [];
+  let executionSnapshot: any;
+  let currentExecution: (typeof executions)[number] | undefined;
+  const executionListeners = new Set<() => void>();
+  const publishExecution = (snapshot: any) => { executionSnapshot = snapshot; executionListeners.forEach((listener) => listener()); };
   const preparation = {
     interviewPreparationService: api.process,
     interviewPreparationMaterialService: api.material,
@@ -73,8 +77,24 @@ function fixture() {
     interviewPreparationCompositionService: api.composition,
     interviewPreparationSnapshotService: api.snapshot,
     interviewPreparationConversationExecutionService: {
+      getSnapshot: () => executionSnapshot,
+      subscribe: (listener: () => void) => { executionListeners.add(listener); return () => executionListeners.delete(listener); },
+      cancel: () => {
+        currentExecution?.input.controller.abort();
+        publishExecution({ ...executionSnapshot, status: "cancelled" });
+        currentExecution?.result.reject(new Error("cancelled"));
+      },
       resolveRoute: () => ({ status: "ready" }), execute: (input: any) => {
-        const result = deferred(); executions.push({ input, result }); return result.promise;
+        const result = deferred(), controller = new AbortController();
+        const item = { input: { ...input, controller, signal: controller.signal, onDelta: (partial: string) => {
+          if (currentExecution === item && !controller.signal.aborted) publishExecution({ ...executionSnapshot, partial });
+        } }, result };
+        currentExecution = item; executions.push(item);
+        publishExecution({ processId: input.processId, conversationId: input.conversationId, status: "running", partial: "" });
+        return result.promise.then((value: any) => {
+          if (currentExecution === item) publishExecution({ ...executionSnapshot, status: value.status });
+          return value;
+        });
       },
     },
     interviewPreparationStatementProposalService: { resolveRoute: () => ({ status: "ready" }) },
@@ -304,6 +324,8 @@ test("P169-3 actual send consumer: old stream delta/error/finally cannot clear a
   h.executions[0].input.onDelta("first partial"); await h.flush();
   h.data.selectConversation("a2"); await h.flush();
   h.data.selectConversation("a1"); await h.flush();
+  assert.equal(h.executions[0].input.signal.aborted, false, "navigation alone keeps the conversation-owned request");
+  by(chat, (n) => n.type === "Button" && n.props.title === "Cancel response").onClick(); await h.flush();
   assert.equal(h.executions[0].input.signal.aborted, true);
   by(chat, (n) => n.type === "Textarea").onChange({ target: { value: "second" } }); await h.flush();
   by(chat, (n) => n.type === "Button" && n.props.title === "Send").onClick(); await h.flush();

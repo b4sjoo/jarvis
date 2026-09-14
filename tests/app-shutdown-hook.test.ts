@@ -105,6 +105,7 @@ async function harness(owner: "meeting" | "system" = "meeting") {
   Object.assign(globals, {
     console: { info: noop, warn: noop }, Date, Promise, Set, Map, Error, exports: {}, importMeta: { env: { DEV: false } },
     latestTraces: [], timer: undefined, previousObservationTracesRef: { current: [] }, selectAffectedEvaluationTraces,
+    interviewPreparationConversationExecutionService: { cancelAndWait: async () => {} },
     window: { setTimeout: (callback: () => void, delay: number) => {
       if (!delay) { void Promise.resolve().then(callback); return 0; }
       const id = ++timerId; timers.set(id, callback); return id;

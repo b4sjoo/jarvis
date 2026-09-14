@@ -64,6 +64,7 @@ import {
 } from "@/lib/memory";
 import {
   interviewPreparationSnapshotService,
+  interviewPreparationConversationExecutionService,
   subscribeToPreparationSnapshotSelectionChanges,
 } from "@/lib/preparation";
 import {
@@ -37199,6 +37200,7 @@ export function useMeetingAssistant() {
   useApplicationShutdown({
     freezeNewWork: async () => {
       shutdownRequestedRef.current = true;
+      const preparationStop = interviewPreparationConversationExecutionService.cancelAndWait();
       cancelActiveAdvisorJob("application-shutdown");
       screenAnalysisAbortRef.current?.abort();
       screenAnalysisAbortRef.current = null;
@@ -37224,6 +37226,7 @@ export function useMeetingAssistant() {
       }
       setState((previous) => ({ ...previous, error: null }));
       if (microphoneVad.listening) await microphoneVad.pause();
+      await preparationStop;
       return "settled";
     },
     drainRuntimeAndCapture: async () => {

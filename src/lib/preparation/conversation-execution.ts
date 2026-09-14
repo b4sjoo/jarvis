@@ -129,14 +129,31 @@ interface PreparationRecoveryTarget {
   pages?: number[];
 }
 
+export interface PreparationConversationOperationSnapshot {
+  processId: string;
+  conversationId: string;
+  operationId?: string;
+  status: "running" | "committed" | "cancelled" | "stale" | "failed";
+  partial: string;
+  error?: string;
+  warning?: string;
+}
+
 export function createPreparationConversationExecutionService(
   dependencies: PreparationConversationExecutionDependencies
 ) {
   const fetchResponse = dependencies.fetchResponse;
   const now = dependencies.now ?? Date.now;
   const createId = dependencies.createId ?? (() => crypto.randomUUID());
+  let snapshot: PreparationConversationOperationSnapshot | undefined;
+  let active: { controller: AbortController; promise?: Promise<unknown> } | undefined;
+  const listeners = new Set<() => void>();
+  const publish = (next: PreparationConversationOperationSnapshot) => {
+    snapshot = next;
+    for (const listener of listeners) listener();
+  };
 
-  return {
+  const execution = {
     resolveRoute(input: {
       providers: TYPE_PROVIDER[];
       selectedProvider: SelectedAiProviderConfig;
@@ -581,7 +598,56 @@ export function createPreparationConversationExecutionService(
     },
   };
 
+  return {
+    resolveRoute: execution.resolveRoute,
+    getSnapshot: () => snapshot,
+    subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    cancel: (conversationId?: string) => {
+      if (conversationId && snapshot?.conversationId !== conversationId) return;
+      active?.controller.abort();
+    },
+    async cancelAndWait() {
+      const pending = active;
+      pending?.controller.abort();
+      await pending?.promise?.catch(() => undefined);
+    },
+    execute(input: Parameters<typeof execution.execute>[0]) {
+      if (active) return Promise.reject(new Error("A preparation conversation is still generating. Stop it before starting another response."));
+      const run = { controller: new AbortController(), promise: undefined as Promise<unknown> | undefined };
+      active = run;
+      const abort = () => run.controller.abort();
+      input.signal?.addEventListener("abort", abort, { once: true });
+      if (input.signal?.aborted) abort();
+      publish({ processId: input.processId, conversationId: input.conversationId, status: "running", partial: "" });
+      const promise = execution.execute({
+        ...input,
+        route: { ...input.route, selectedProvider: { ...input.route.selectedProvider, variables: { ...input.route.selectedProvider.variables } } },
+        signal: run.controller.signal,
+        onDelta: (partial) => {
+          if (active !== run || run.controller.signal.aborted) return;
+          publish({ ...snapshot!, partial });
+          input.onDelta?.(partial);
+        },
+      }).then((result) => {
+        if (active === run) publish({ ...snapshot!, status: result.status, warning: result.status === "committed" ? result.postCommitWarning : undefined });
+        return result;
+      }).catch((error: unknown) => {
+        if (active === run) publish({ ...snapshot!, status: run.controller.signal.aborted ? "cancelled" : "failed", error: run.controller.signal.aborted ? undefined : errorMessage(error) });
+        throw error;
+      }).finally(() => {
+        input.signal?.removeEventListener("abort", abort);
+        if (active === run) active = undefined;
+      });
+      run.promise = promise;
+      return promise;
+    },
+  };
+
   function emit(event: PreparationConversationExecutionEvent) {
+    if (snapshot?.status === "running" && snapshot.processId === event.processId &&
+      snapshot.conversationId === event.conversationId && event.operationId && !snapshot.operationId) {
+      publish({ ...snapshot, operationId: event.operationId });
+    }
     dependencies.onEvent?.(event);
   }
 }

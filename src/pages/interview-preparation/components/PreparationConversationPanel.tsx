@@ -46,6 +46,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import type { PreparationData } from "../usePreparationData";
 import { usePageOperation } from "../page-resource";
@@ -74,20 +75,23 @@ export const PreparationConversationPanel = ({
   const { selectedSessionId, selectConversation: setSelectedSessionId } = data;
   const isLoading = data.sessions.loading;
   const streamOperation = usePageOperation(JSON.stringify([detail.process.id, selectedSessionId]));
+  const operation = useSyncExternalStore(interviewPreparationConversationExecutionService.subscribe, interviewPreparationConversationExecutionService.getSnapshot);
+  const selectedOperation = operation?.processId === detail.process.id && operation.conversationId === selectedSessionId ? operation : undefined;
   const [pendingTurn, setPendingTurn] = useState<{ message: PreparationMessage; editing?: PreparationMessage }>();
   const conversation = useMemo(() => {
     const current = data.conversation.data;
     if (!current || !pendingTurn || pendingTurn.message.conversationId !== selectedSessionId) return current;
+    if (selectedOperation?.operationId && current.messages.some((message) => message.role === "user" && message.operationId === selectedOperation.operationId)) return current;
     const targetIndex = pendingTurn.editing
       ? current.messages.findIndex((message) => message.id === pendingTurn.editing?.id) : -1;
     return { ...current, messages: [
       ...(pendingTurn.editing ? current.messages.slice(0, Math.max(0, targetIndex)) : current.messages),
       pendingTurn.message,
     ] };
-  }, [data.conversation.data, pendingTurn, selectedSessionId]);
-  const [isSending, setIsSending] = useState(false);
+  }, [data.conversation.data, pendingTurn, selectedSessionId, selectedOperation?.operationId]);
+  const isSending = selectedOperation?.status === "running";
   const [draft, setDraft] = useState("");
-  const [streamingResponse, setStreamingResponse] = useState("");
+  const streamingResponse = isSending ? selectedOperation.partial : "";
   const [fileDialogOpen, setFileDialogOpen] = useState(false);
   const [fileDialogSelection, setFileDialogSelection] = useState<string[]>([]);
   const [pendingRecoveryMaterialIds, setPendingRecoveryMaterialIds] = useState<
@@ -102,7 +106,6 @@ export const PreparationConversationPanel = ({
   const [isDeletingSession, setIsDeletingSession] = useState(false);
   const sessionOperation = usePageOperation(JSON.stringify([detail.process.id, selectedSessionId, sessionDialogMode]));
   const deleteOperation = usePageOperation(JSON.stringify([detail.process.id, deleteTarget?.id]));
-  const abortRef = useRef<AbortController | undefined>(undefined);
   const endRef = useRef<HTMLDivElement>(null);
   const readOnly = detail.process.status !== "active";
   const selectedSession = sessions.find(
@@ -156,15 +159,11 @@ export const PreparationConversationPanel = ({
       : undefined;
 
   useEffect(() => {
-    abortRef.current?.abort();
-    abortRef.current = undefined;
-    setIsSending(false);
     setPendingTurn(undefined);
     setPendingRecoveryMaterialIds([]);
     setFileDialogSelection([]);
     setFileDialogOpen(false);
     setEditingMessage(undefined);
-    setStreamingResponse("");
     setDraft("");
   }, [detail.process.id, selectedSessionId]);
 
@@ -179,12 +178,12 @@ export const PreparationConversationPanel = ({
     endRef.current?.scrollIntoView({ block: "end" });
   }, [conversation?.messages.length, streamingResponse]);
 
-  useEffect(
-    () => () => {
-      abortRef.current?.abort();
-    },
-    []
-  );
+  useEffect(() => {
+    if (!selectedOperation) return;
+    if (selectedOperation.operationId || selectedOperation.status !== "running") void data.refreshConversation(selectedSessionId);
+    if (selectedOperation.error) onError(selectedOperation.error);
+    if (selectedOperation.warning) onNotice(selectedOperation.warning);
+  }, [selectedOperation?.operationId, selectedOperation?.status, selectedSessionId, data.refreshConversation]);
 
   const openCreateDialog = () => {
     setSessionDialogMode("create");
@@ -329,11 +328,7 @@ export const PreparationConversationPanel = ({
       return;
     }
 
-    const controller = new AbortController();
     const owns = streamOperation.begin();
-    abortRef.current = controller;
-    setIsSending(true);
-    setStreamingResponse("");
     onError("");
     const editing = editingMessage;
     const optimistic: PreparationMessage = {
@@ -361,10 +356,6 @@ export const PreparationConversationPanel = ({
             ? { materialIds: pendingRecoveryMaterialIds }
             : undefined,
           editMessageId: editing?.id,
-          signal: controller.signal,
-          onDelta: (response) => {
-            if (owns() && !controller.signal.aborted) setStreamingResponse(response);
-          },
         });
       if (result.status === "committed") await onMaterialsChanged();
       if (!owns()) return;
@@ -379,7 +370,7 @@ export const PreparationConversationPanel = ({
         setPendingRecoveryMaterialIds([]);
       }
     } catch (reason) {
-      if (owns() && !controller.signal.aborted) {
+      if (owns() && interviewPreparationConversationExecutionService.getSnapshot()?.status !== "cancelled") {
         onError(errorMessage(reason));
         setDraft(content);
         setEditingMessage(editing);
@@ -387,10 +378,7 @@ export const PreparationConversationPanel = ({
     } finally {
       await data.refreshConversation(selectedSessionId);
       if (owns()) {
-        setStreamingResponse("");
-        setIsSending(false);
         setPendingTurn(undefined);
-        if (abortRef.current === controller) abortRef.current = undefined;
       }
     }
   };
@@ -557,7 +545,7 @@ export const PreparationConversationPanel = ({
                   size="icon"
                   variant="outline"
                   title="Cancel response"
-                  onClick={() => abortRef.current?.abort()}
+                  onClick={() => interviewPreparationConversationExecutionService.cancel(selectedSessionId)}
                 >
                   <Square className="size-4 fill-current" />
                 </Button>

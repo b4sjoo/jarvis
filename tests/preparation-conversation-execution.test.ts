@@ -2,6 +2,50 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createPreparationConversationExecutionService } from "../src/lib/preparation/conversation-execution.js";
 
+test("PREP-G1/G2 detaching a view retains the same request and returning sees partial then one commit", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let started!: () => void;
+  const first = new Promise<void>((resolve) => { started = resolve; });
+  let requests = 0, commits = 0, oldNotifications = 0;
+  const service = createService({
+    async *fetchResponse(input) {
+      requests++; yield "First"; started(); await gate;
+      assert.equal(input.signal?.aborted, false); yield " complete answer";
+    },
+    async commitAssistant(input) { commits++; return { committed: true, assistantMessage: { id: "answer", content: input.content } }; },
+  });
+  const detach = service.subscribe(() => { oldNotifications++; });
+  const request = service.execute({ processId: "process-1", conversationId: "conversation-1", content: "Prepare", route: readyRoute() });
+  await first; detach();
+  const count = oldNotifications;
+  assert.equal(service.getSnapshot()?.partial, "First");
+  await assert.rejects(service.execute({ processId: "process-1", conversationId: "another", content: "Other", route: readyRoute() }), /still generating/);
+  release(); await request;
+  assert.equal(service.getSnapshot()?.status, "committed");
+  assert.equal(service.getSnapshot()?.partial, "First complete answer");
+  assert.equal(oldNotifications, count);
+  assert.equal(requests, 1); assert.equal(commits, 1);
+});
+
+test("PREP-G3 explicit Stop aborts the original request without committing partial output", async () => {
+  let started!: () => void;
+  const first = new Promise<void>((resolve) => { started = resolve; });
+  let commits = 0;
+  const service = createService({
+    async *fetchResponse(input) {
+      yield "Partial"; started();
+      await new Promise<void>((_resolve, reject) => input.signal?.addEventListener("abort", () => reject(new Error("cancelled")), { once: true }));
+    },
+    async commitAssistant() { commits++; return { committed: true }; },
+  });
+  const request = service.execute({ processId: "process-1", conversationId: "conversation-1", content: "Prepare", route: readyRoute() });
+  const rejected = assert.rejects(request, /cancelled/);
+  await first; service.cancel("unrelated"); assert.equal(service.getSnapshot()?.status, "running");
+  await service.cancelAndWait(); await rejected;
+  assert.equal(service.getSnapshot()?.status, "cancelled"); assert.equal(commits, 0);
+});
+
 test("streams a preparation preview but commits only the complete response", async () => {
   let commitCount = 0;
   const deltas: string[] = [];
@@ -443,6 +487,7 @@ test("rejects a whole-document replacement for a bounded PDF page recovery", asy
 
 function createService(overrides: {
   fetchResponse: (input: {
+    signal?: AbortSignal;
     systemPrompt?: string;
     userMessage: string;
     imagesBase64?: Array<{ base64: string; mediaType: string }>;
