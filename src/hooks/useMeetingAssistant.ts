@@ -167,8 +167,10 @@ import {
   buildHumanEvaluationAttemptEvidenceIndexV2,
   buildHumanEvaluationAttemptEvidenceV2,
   materializeHumanEvaluationAttemptProjectionV2,
+  selectAffectedEvaluationTraces,
   type HumanEvaluationAttemptEvidenceIndexV2,
 } from "@/lib/meeting/human-evaluation-attempt-projection";
+import type { MeetingTraceChange } from "@/lib/meeting/trace";
 import { validateHumanEvaluationAttemptSubjectV2, resolveHumanEvaluationAttemptIdentityV2 } from "@/lib/meeting/human-evaluation-attempt";
 import { toHumanEvaluationCollectionProvenance } from "@/lib/meeting/session-evaluation-provenance";
 import {
@@ -3810,7 +3812,7 @@ export function useMeetingAssistant() {
 
   const refreshRecordedCompletedTrace = useCallback((traceId?: string) => {
     if (!traceId) return;
-    const traces = traceStoreRef.current.getTraces();
+    const traces = traceStoreRef.current.getObserverSnapshot();
     const completedTrace = traces.find(
       (candidate) =>
         candidate.id === traceId && candidate.status !== "running"
@@ -9192,9 +9194,14 @@ export function useMeetingAssistant() {
     []
   );
 
-  const recordCompletedTracesForSession = useCallback((traces: MeetingTrace[]) => {
+  const previousObservationTracesRef = useRef<MeetingTrace[]>([]);
+  const recordCompletedTracesForSession = useCallback((traces: MeetingTrace[], change?: MeetingTraceChange) => {
+    const affected = change ? selectAffectedEvaluationTraces({
+      traces, previousTraces: previousObservationTracesRef.current, ...change,
+    }) : traces;
+    previousObservationTracesRef.current = traces;
     const traceIndex = buildHumanEvaluationAttemptEvidenceIndexV2(traces);
-    for (const trace of traces) {
+    for (const trace of change?.changed ?? traces) {
       if (trace.status !== "running") {
         const manager = sessionRecordingManagerRef.current;
         if (
@@ -9205,6 +9212,8 @@ export function useMeetingAssistant() {
           manager.recordTrace(trace, getAutoExportTrigger(trace));
         }
       }
+    }
+    for (const trace of affected) {
       refreshHumanEvaluationObservedProjectionForTrace(
         trace,
         traces,
@@ -36437,25 +36446,31 @@ export function useMeetingAssistant() {
   }, [scheduleTraceMetricsPersistence]);
 
   useEffect(() => {
-    traceStoreRef.current.subscribe((traces) => {
-      refreshCriticalMomentCandidates(
-        contextManagerRef.current.getState(),
-        traces
-      );
+    let latestTraces: MeetingTrace[] = [];
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const publishDisplay = () => {
+      timer = undefined;
       setState((previous) => ({
         ...previous,
-        traces,
+        traces: latestTraces,
       }));
-      scheduleTraceMetricsPersistence();
-      recordCompletedTracesForSession(traces);
+    };
+    const unsubscribe = traceStoreRef.current.subscribe((traces, change) => {
+      latestTraces = traces;
+      refreshCriticalMomentCandidates(contextManagerRef.current.getState(), traces);
+      recordCompletedTracesForSession(traces, change);
       shutdownTraceWaitRef.current?.accept(traces);
-      maybeAutoExportTraces(traces);
+      maybeAutoExportTraces(change.changed);
+      if (change.reset) {
+        if (timer !== undefined) clearTimeout(timer);
+        publishDisplay();
+      } else if (timer === undefined) timer = setTimeout(publishDisplay, 250);
     });
+    return () => { unsubscribe(); if (timer !== undefined) clearTimeout(timer); };
   }, [
     maybeAutoExportTraces,
     recordCompletedTracesForSession,
     refreshCriticalMomentCandidates,
-    scheduleTraceMetricsPersistence,
   ]);
 
   useEffect(() => {

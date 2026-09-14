@@ -4,7 +4,7 @@ import test from "node:test";
 
 const hookSource = readFileSync("src/hooks/useMeetingAssistant.ts", "utf8");
 
-test("reuses one emitted trace snapshot across evaluation projection refreshes", () => {
+test("reuses observer snapshots and selects only affected evaluation attempts", () => {
   const refreshStart = hookSource.indexOf(
     "const refreshHumanEvaluationObservedProjectionForTrace"
   );
@@ -39,6 +39,8 @@ test("reuses one emitted trace snapshot across evaluation projection refreshes",
     subscriberBlock,
     /const traceIndex = buildHumanEvaluationAttemptEvidenceIndexV2\(traces\);/
   );
+  assert.match(subscriberBlock, /selectAffectedEvaluationTraces/);
+  assert.match(subscriberBlock, /for \(const trace of affected\)/);
   assert.match(
     subscriberBlock,
     /refreshHumanEvaluationObservedProjectionForTrace\([\s\S]*trace,[\s\S]*traces,[\s\S]*traceIndex[\s\S]*\)/
@@ -56,7 +58,7 @@ test("reuses one emitted trace snapshot across evaluation projection refreshes",
     lateRefreshEnd
   );
   assert.equal(
-    lateRefreshBlock.match(/traceStoreRef\.current\.getTraces\(\)/g)?.length,
+    lateRefreshBlock.match(/traceStoreRef\.current\.getObserverSnapshot\(\)/g)?.length,
     1
   );
   assert.match(

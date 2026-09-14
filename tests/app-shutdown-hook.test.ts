@@ -6,6 +6,7 @@ import ts from "typescript";
 import { CaptureLifecycleCoordinator } from "../src/lib/meeting/capture-lifecycle.js";
 import { SessionRecordingManager } from "../src/lib/meeting/session-recording.js";
 import { MeetingTraceStore, serializeMeetingTraceMetrics } from "../src/lib/meeting/trace.js";
+import { selectAffectedEvaluationTraces } from "../src/lib/meeting/human-evaluation-attempt-projection.js";
 import { authorizeNativeAudioLifecycleEvent, buildNativeAudioLifecycleTraceMetadata } from "../src/lib/meeting/native-audio-lifecycle.js";
 import { assertShutdownQueueDrained, createNativeStopTerminalWait, createAcceptedTraceTerminalWait, stopShutdownEvaluationCapture } from "../src/lib/meeting/shutdown-drain.js";
 import { ApplicationShutdownCoordinator, connectApplicationShutdownOwner, requestApplicationShutdown, type ShutdownTransport, type ApplicationShutdownOwner } from "../src/lib/app-shutdown.js";
@@ -21,6 +22,7 @@ const names = ["stop", "stopNativeMeetingCapture", "stopSessionRecording", "drai
   "startCapture", "startRuntimeRegressionRun", "startSessionRecording", "captureScreenContext", "runAdvisor", "enqueueMicrophoneSpeech"];
 const nodes = new Map<string, ts.Node>();
 function visit(node: ts.Node) {
+  if (ts.isVariableDeclaration(node) && node.name.getText(source) === "publishDisplay" && node.initializer && ts.isArrowFunction(node.initializer)) nodes.set("publishDisplay", node.initializer);
   if (ts.isVariableDeclaration(node) && names.includes(node.name.getText(source))) {
     assert.ok(node.initializer && ts.isCallExpression(node.initializer));
     nodes.set(node.name.getText(source), node.initializer.arguments[0]!);
@@ -102,6 +104,7 @@ async function harness(owner: "meeting" | "system" = "meeting") {
   let ui: any = { presentationArtifactResetRevision: 0, status: "listening" };
   Object.assign(globals, {
     console: { info: noop, warn: noop }, Date, Promise, Set, Map, Error, exports: {}, importMeta: { env: { DEV: false } },
+    latestTraces: [], timer: undefined, previousObservationTracesRef: { current: [] }, selectAffectedEvaluationTraces,
     window: { setTimeout: (callback: () => void, delay: number) => {
       if (!delay) { void Promise.resolve().then(callback); return 0; }
       const id = ++timerId; timers.set(id, callback); return id;
@@ -165,6 +168,8 @@ async function harness(owner: "meeting" | "system" = "meeting") {
       return { disposition: "stopped", status };
     },
   });
+  globals.setTimeout = globals.window.setTimeout;
+  globals.clearTimeout = globals.window.clearTimeout;
   const sandbox = vm.createContext(globals);
   for (const code of compiled.values()) vm.runInContext(code, sandbox);
   traces.subscribe(globals.onTraces);

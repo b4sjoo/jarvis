@@ -18,19 +18,27 @@ export const PERSISTED_TRACE_METRICS_BYTE_BUDGET = Math.floor(
   1.75 * 1024 * 1024
 );
 
+export interface MeetingTraceChange {
+  changed: MeetingTrace[];
+  removedTraceIds: string[];
+  reset: boolean;
+}
+
 export class MeetingTraceStore {
   private traces: MeetingTrace[] = [];
   private currentProcessTraceIds = new Set<string>();
-  private onChange?: (traces: MeetingTrace[]) => void;
+  private onChange?: (traces: MeetingTrace[], change: MeetingTraceChange) => void;
+  private snapshots = new WeakMap<MeetingTrace, MeetingTrace>();
   private debugEnabled = false;
 
   constructor(debugEnabled = false) {
     this.debugEnabled = debugEnabled;
   }
 
-  subscribe(onChange: (traces: MeetingTrace[]) => void) {
+  subscribe(onChange: (traces: MeetingTrace[], change: MeetingTraceChange) => void) {
     this.onChange = onChange;
-    onChange(this.getTraces());
+    this.emit(this.traces, [], true);
+    return () => { if (this.onChange === onChange) this.onChange = undefined; };
   }
 
   setDebugEnabled(debugEnabled: boolean) {
@@ -45,7 +53,17 @@ export class MeetingTraceStore {
     return this.traces.map(cloneTrace);
   }
 
+  getTrace(traceId: string) {
+    const trace = this.traces.find((item) => item.id === traceId);
+    return trace ? cloneTrace(trace) : undefined;
+  }
+
+  getObserverSnapshot() {
+    return this.traces.map((trace) => this.snapshot(trace));
+  }
+
   hydrate(traces: MeetingTrace[]) {
+    const previousIds = this.traces.map((trace) => trace.id);
     const mergedById = new Map<string, MeetingTrace>();
     for (const trace of traces.map(sanitizeTraceForPersistence)) {
       mergedById.set(trace.id, trace);
@@ -70,7 +88,8 @@ export class MeetingTraceStore {
     ]
       .sort(compareTracesNewestFirst)
       .slice(0, MAX_TRACE_ITEMS);
-    this.emit();
+    const retainedIds = new Set(this.traces.map((trace) => trace.id));
+    this.emit(this.traces, previousIds.filter((id) => !retainedIds.has(id)), true);
   }
 
   getPersistableTraces() {
@@ -78,10 +97,11 @@ export class MeetingTraceStore {
   }
 
   clear() {
+    const removedIds = this.traces.map((trace) => trace.id);
     this.traces = [];
     this.currentProcessTraceIds.clear();
     this.log("traces-cleared");
-    this.emit();
+    this.emit([], removedIds, true);
   }
 
   startTrace(
@@ -101,13 +121,14 @@ export class MeetingTraceStore {
     };
 
     this.currentProcessTraceIds.add(trace.id);
+    const removed = this.traces.slice(MAX_TRACE_ITEMS - 1);
     this.traces = [trace, ...this.traces].slice(0, MAX_TRACE_ITEMS);
     this.log("trace-started", {
       id: trace.id,
       kind: trace.kind,
       metadata: trace.metadata,
     });
-    this.emit();
+    this.emit([trace], removed.map((item) => item.id));
     return cloneTrace(trace);
   }
 
@@ -248,19 +269,34 @@ export class MeetingTraceStore {
   }
 
   private updateTrace(traceId: string, update: (trace: MeetingTrace) => void) {
+    let changed: MeetingTrace | undefined;
     this.traces = this.traces.map((trace) => {
       if (trace.id !== traceId) return trace;
 
       const nextTrace = cloneTrace(trace);
       update(nextTrace);
+      changed = nextTrace;
       return nextTrace;
     });
 
-    this.emit();
+    if (changed) this.emit([changed]);
   }
 
-  private emit() {
-    this.onChange?.(this.getTraces());
+  private snapshot(trace: MeetingTrace) {
+    let snapshot = this.snapshots.get(trace);
+    if (!snapshot) {
+      snapshot = cloneTrace(trace);
+      this.snapshots.set(trace, snapshot);
+    }
+    return snapshot;
+  }
+
+  private emit(changed: MeetingTrace[], removedTraceIds: string[] = [], reset = false) {
+    if (!this.onChange) return;
+    // Stable observer snapshots reuse unchanged records; public reads remain isolated copies.
+    this.onChange(this.getObserverSnapshot(), {
+      changed: changed.map((trace) => this.snapshot(trace)), removedTraceIds, reset,
+    });
   }
 
   private log(

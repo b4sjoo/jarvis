@@ -3,7 +3,7 @@ import {
   buildHumanEvaluationProjectionMaterializationRevisionV2,
 } from "./human-evaluation-projection-materialization.js";
 import {
-  buildHumanEvaluationObservedSnapshotV2,
+  projectHumanEvaluationObservedFieldsV2,
   buildHumanGroundTruthSubjectV2,
   deriveHumanEvaluationProjectionV2,
   projectObservedPrimaryAskTargetV2,
@@ -60,53 +60,45 @@ export function buildHumanEvaluationAttemptEvidenceV2(input: {
   traces?: MeetingTrace[];
   traceIndex?: HumanEvaluationAttemptEvidenceIndexV2;
 }) {
-  const observed = rehashHumanEvaluationObservedSnapshotV2({
-    ...buildHumanEvaluationObservedSnapshotV2(input.trace),
+  const observed = {
+    ...projectHumanEvaluationObservedFieldsV2(input.trace),
     ...projectAttemptPrimaryAskTargetV2(input),
-  });
-  if (
-    input.trace.metadata?.settledExecutionPlanTaskMutationCommand !==
-    "replace-parent"
-  ) {
-    return {
-      observed,
-      traceIds: [input.trace.id],
-    } as const;
+  };
+  const traceIds = [input.trace.id];
+  if (input.trace.metadata?.settledExecutionPlanTaskMutationCommand === "replace-parent" &&
+    readString(input.trace.metadata?.parentCorrectionTraceId)) {
+    const correctionTrace = resolveLinkedCorrectionLifecycleTrace({
+      trace: input.trace, traces: input.traces ?? [], traceIndex: input.traceIndex,
+    });
+    observed.parentAction = correctionTrace
+      ? projectHumanEvaluationObservedFieldsV2(correctionTrace).parentAction : undefined;
+    if (correctionTrace) traceIds.unshift(correctionTrace.id);
   }
-
-  const correctionTraceId = readString(
-    input.trace.metadata?.parentCorrectionTraceId
-  );
-  if (!correctionTraceId) {
-    return {
-      observed,
-      traceIds: [input.trace.id],
-    } as const;
-  }
-  const correctionTrace = resolveLinkedCorrectionLifecycleTrace({
-    trace: input.trace,
-    traces: input.traces ?? [],
-    traceIndex: input.traceIndex,
-  });
-  if (!correctionTrace) {
-    return {
-      observed: rehashHumanEvaluationObservedSnapshotV2({
-        ...observed,
-        parentAction: undefined,
-      }),
-      traceIds: [input.trace.id],
-    } as const;
-  }
-
-  const lifecycleObserved =
-    buildHumanEvaluationObservedSnapshotV2(correctionTrace);
   return {
-    observed: rehashHumanEvaluationObservedSnapshotV2({
-      ...observed,
-      parentAction: lifecycleObserved.parentAction,
-    }),
-    traceIds: [correctionTrace.id, input.trace.id],
+    observed: rehashHumanEvaluationObservedSnapshotV2(observed),
+    traceIds,
   } as const;
+}
+
+export function selectAffectedEvaluationTraces(input: {
+  traces: MeetingTrace[];
+  previousTraces: MeetingTrace[];
+  changed: MeetingTrace[];
+  removedTraceIds: string[];
+  reset?: boolean;
+}) {
+  if (input.reset) return input.traces;
+  const changedIds = new Set([...input.changed.map((trace) => trace.id), ...input.removedTraceIds]);
+  const identities = new Set<string>();
+  for (const trace of [...input.previousTraces.filter((trace) => changedIds.has(trace.id)), ...input.changed]) {
+    const identity = readLogicalQuestionIdentity(trace.metadata ?? {});
+    if (identity) identities.add(primaryAskJoinIdentityKey(identity));
+  }
+  return input.traces.filter((trace) => {
+    if (changedIds.has(trace.id) || changedIds.has(readString(trace.metadata?.parentCorrectionTraceId) ?? "")) return true;
+    const identity = readLogicalQuestionIdentity(trace.metadata ?? {});
+    return Boolean(identity && identities.has(primaryAskJoinIdentityKey(identity)));
+  });
 }
 
 function projectAttemptPrimaryAskTargetV2(input: {

@@ -660,6 +660,12 @@ export function deriveHumanEvaluationProjectionV2(input: {
 export function buildHumanEvaluationObservedSnapshotV2(
   trace: MeetingTrace
 ): HumanEvaluationObservedSnapshotV2 {
+  return rehashHumanEvaluationObservedSnapshotV2(projectHumanEvaluationObservedFieldsV2(trace));
+}
+
+export function projectHumanEvaluationObservedFieldsV2(
+  trace: MeetingTrace
+): Omit<HumanEvaluationObservedSnapshotV2, "traceHash"> {
   const metadata = trace.metadata ?? {};
   const questionTypeObservation = projectQuestionTypeObservation({ metadata });
   const questionType =
@@ -839,7 +845,7 @@ export function buildHumanEvaluationObservedSnapshotV2(
       : undefined,
     ...questionTypeObservation,
   };
-  return rehashHumanEvaluationObservedSnapshotV2(traceEvidence);
+  return traceEvidence;
 }
 
 export function rehashHumanEvaluationObservedSnapshotV2(

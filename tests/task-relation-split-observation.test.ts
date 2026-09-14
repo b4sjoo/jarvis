@@ -246,6 +246,7 @@ async function harness(options: { mode?: Mode; child?: boolean; source?: string;
         trace.recordInput(...args);
       },
       getTraces: () => trace.getTraces(),
+      getObserverSnapshot: () => trace.getObserverSnapshot(),
       startStep: (...args: Parameters<MeetingTraceStore["startStep"]>) => {
         effects.push(["start", ...args]);
         const id = trace.startStep(...args);
