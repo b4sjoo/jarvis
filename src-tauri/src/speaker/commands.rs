@@ -2651,14 +2651,6 @@ pub fn get_audio_sample_rate(_app: AppHandle) -> Result<u32, String> {
 }
 
 #[tauri::command]
-pub fn get_input_devices() -> Result<Vec<AudioDevice>, String> {
-    crate::speaker::list_input_devices().map_err(|e| {
-        error!("Failed to get input devices: {}", e);
-        format!("Failed to get input devices: {}", e)
-    })
-}
-
-#[tauri::command]
 pub fn get_output_devices() -> Result<Vec<AudioDevice>, String> {
     crate::speaker::list_output_devices().map_err(|e| {
         error!("Failed to get output devices: {}", e);

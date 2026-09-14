@@ -501,7 +501,6 @@ pub fn run() {
             speaker::check_system_audio_access,
             speaker::get_capture_status,
             speaker::get_audio_sample_rate,
-            speaker::get_input_devices,
             speaker::get_output_devices,
         ])
         .setup(|app| {
