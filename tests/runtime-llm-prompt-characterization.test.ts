@@ -181,7 +181,7 @@ test("keeps envelope fields out of every runtime LLM prompt", () => {
   };
   const answerRecovery: AnswerRecoveryAdjudicationRequest = {
     schemaVersion: 2,
-    promptVersion: "answer-resolution-adjudication-v1",
+    promptVersion: "answer-resolution-adjudication-v2-request-specific",
     operationKind: "answer-resolution",
     logicalQuestionUnitId: "question-current",
     logicalQuestionUnitRevision: 2,

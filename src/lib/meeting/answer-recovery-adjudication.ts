@@ -7,7 +7,7 @@ import {
 
 export const ANSWER_RECOVERY_ADJUDICATION_SCHEMA_VERSION = 2;
 export const ANSWER_RESOLUTION_PROMPT_VERSION =
-  "answer-resolution-adjudication-v1";
+  "answer-resolution-adjudication-v2-request-specific";
 export const EVIDENCE_REQUIREMENT_PROMPT_VERSION =
   "visual-evidence-check-v3-existing-artifact";
 export const ANSWER_RECOVERY_MAX_OUTPUT_CHARS = 2_048;
@@ -239,9 +239,12 @@ export function buildAnswerRecoveryAdjudicationPrompts(
           "Decide one thing only: whether answerText resolves the substantive request in questionText.",
           "Use only questionText and answerText.",
           "Use resolved when the requested substance is actually provided.",
+          "Judge the exact requested object and deliverable, not whether the answer is useful or topically related.",
+          "An illustrative replacement, guessed code region, or standard implementation does not resolve a request about a specific artifact that the answer says is unavailable.",
+          "Read the whole answer for remaining deferrals or requests to confirm the object; a relevant explanatory passage does not override missing evidence needed for the original request.",
           "Use unresolved when the answer explicitly defers the substance, lacks required information, or asks for evidence before it can answer.",
           "A correct admission that evidence is missing is unresolved, not a failed answer.",
-          "For a definite decision, return exactly one question evidence span and one answer evidence span, each no longer than 160 characters.",
+          "For a definite decision, return exactly one question evidence span and one answer evidence span. Prefer the shortest decisive quotes, targeting at most 160 characters each.",
           "Schema: {schemaVersion:2,decision:'resolved'|'unresolved'|'unclear',questionEvidenceSpans:string[],answerEvidenceSpans:string[],ambiguityReason?:string}.",
           ...shared,
         ].join(" "),

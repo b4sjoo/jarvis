@@ -33,6 +33,15 @@ test("AR1/AR2 exact long quotes remain evidence without weakening other operatio
   }
 });
 
+test("AR3 prompt distinguishes the requested object from a useful hypothetical replacement", () => {
+  const request = buildAnswerRecoveryAdjudicationRequest({ operationKind: "answer-resolution", logicalQuestionUnitId: "q", logicalQuestionUnitRevision: 1, answerRevision: 1, questionText: question, answerText: answer })!;
+  const prompt = buildAnswerRecoveryAdjudicationPrompts(request);
+  assert.match(prompt.systemPrompt, /exact requested object and deliverable/);
+  assert.match(prompt.systemPrompt, /illustrative replacement/);
+  assert.match(prompt.systemPrompt, /whole answer/);
+  assert.deepEqual(JSON.parse(prompt.userMessage), { questionText: question, answerText: answer });
+});
+
 test("runs the question-only visual lease for automatic and manual recovery sources", () => {
   for (const source of [
     "live-turn",
