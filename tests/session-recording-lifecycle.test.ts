@@ -1282,14 +1282,7 @@ test("session aggregates retain synthetic evidence without counting it as produc
     "manual"
   );
 
-  await waitFor(
-    () =>
-      native.calls.filter(
-        (call) =>
-          call.command === "write_meeting_session_recording_text" &&
-          stringArg(call, "relativePath") === "metrics/session-summary.json"
-      ).length >= 2
-  );
+  await manager.flushAggregates();
   const summaryCalls = native.calls.filter(
     (call) =>
       call.command === "write_meeting_session_recording_text" &&
@@ -1485,6 +1478,7 @@ test("session summaries retain answer delivery and artifact stability evidence",
   );
   assert.equal(compact.shortIntentGateAppliedAction, "answer");
 
+  await manager.flushAggregates();
   const sessionSummaryCalls = native.calls.filter(
     (call) =>
       call.command === "write_meeting_session_recording_text" &&
@@ -1525,14 +1519,7 @@ test("session summaries retain answer delivery and artifact stability evidence",
       ],
     },
   ]);
-  await waitFor(
-    () =>
-      native.calls.filter(
-        (call) =>
-          call.command === "write_meeting_session_recording_text" &&
-          stringArg(call, "relativePath") === "metrics/session-summary.json"
-      ).length > sessionSummaryCalls.length
-  );
+  await manager.flushAggregates();
   const refreshedSummaryCalls = native.calls.filter(
     (call) =>
       call.command === "write_meeting_session_recording_text" &&
@@ -3126,6 +3113,7 @@ test("records compact current-question settlement and execution-plan evidence", 
     observedContentHash: "def67890",
     completionSignal: "openai-done",
   });
+  await manager.flushAggregates();
   const sessionSummaryWrite = native.calls
     .filter(
       (call) =>
@@ -3647,6 +3635,38 @@ test("rejects an artifact receipt that has no recorded snapshot lineage", async 
         "preparation/artifact-use-receipts.jsonl"
   );
   assert.equal(receiptWrites.length, 0);
+});
+
+test("OP5/OP7: per-trace writes stay incremental and checkpoint includes late accepted evidence", async () => {
+  const native = new ControlledRecordingInvoke();
+  const manager = new SessionRecordingManager(undefined, native.invoke);
+  await manager.start(START_OPTIONS);
+  await settle();
+  const start = native.calls.length;
+  for (let n = 0; n < 100; n++) manager.recordTrace(buildCompletedTrace(`op-${n}`, Date.now()), "manual");
+  await settle();
+  const delta = native.calls.slice(start);
+  assert.equal(delta.filter((call) => stringArg(call, "relativePath").endsWith("/summary.json")).length, 100);
+  assert.equal(delta.some((call) => /trace-summaries.latest|session-summary|projections-v2.json$|review-index/.test(stringArg(call, "relativePath"))), false);
+  const checkpoint = native.blockNext((call) => stringArg(call, "relativePath") === "metrics/trace-summaries.latest.json");
+  const closing = manager.stop();
+  await checkpoint.started;
+  manager.recordTrace(buildCompletedTrace("op-late", Date.now()), "manual");
+  checkpoint.release();
+  await closing;
+  const final = native.calls.filter((call) => stringArg(call, "relativePath") === "metrics/trace-summaries.latest.json").at(-1)!;
+  assert.equal((parsePayload(final).traces as { traceId: string }[]).length, 101);
+  assert.ok((parsePayload(final).traces as { traceId: string }[]).some((trace) => trace.traceId === "op-late"));
+});
+
+test("OP6: manual aggregate export surfaces write failure without sealing the recording", async () => {
+  const native = new ControlledRecordingInvoke();
+  const manager = new SessionRecordingManager(undefined, native.invoke);
+  await manager.start(START_OPTIONS);
+  native.failNext((call) => stringArg(call, "relativePath") === "metrics/trace-summaries.latest.json", new Error("checkpoint unavailable"));
+  await assert.rejects(manager.flushAggregates(), /checkpoint unavailable/);
+  assert.equal(manager.getState().lifecycle, "active");
+  await manager.stop();
 });
 
 const START_OPTIONS = {

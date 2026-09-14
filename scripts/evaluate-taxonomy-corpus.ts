@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
+import { latestRecordedProjections } from "./lib/session-aggregate-evidence.js";
 import {
   evaluateTaxonomyCorpus,
   importPrivateTaxonomySessionCorpus,
@@ -297,12 +298,12 @@ async function readProjectionSnapshot(sessionDirectory: string) {
     });
   const projectionMaterialization =
     summarizeHumanEvaluationProjectionMaterializationV2({
-      currentProjections: snapshot?.projections ?? [],
+      currentProjections: history.length ? latestRecordedProjections(history) : snapshot?.projections ?? [],
       history,
       groundTruthEventCount: groundTruthEvents.length,
       recorded: snapshot?.materialization,
     });
-  if (snapshot) {
+  if (snapshot && !history.length) {
     return {
       payload: snapshot,
       projections: (snapshot.projections ?? []).map(rematerialize),

@@ -9183,6 +9183,7 @@ export function useMeetingAssistant() {
         exportedAt: Date.now(),
       };
       sessionRecordingManagerRef.current?.recordTrace(trace, trigger);
+      if (trigger === "manual") await sessionRecordingManagerRef.current?.flushAggregates();
 
       setState((previous) => ({
         ...previous,

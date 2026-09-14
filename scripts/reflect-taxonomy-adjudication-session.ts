@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
+import { readRecordedTraceSummaries } from "./lib/session-aggregate-evidence.js";
 import {
   buildTaxonomyAdjudicationReflectionReport,
   renderTaxonomyAdjudicationReflectionMarkdown,
@@ -49,11 +50,8 @@ async function main() {
       : await readOptionalJsonLines<TaxonomyAdjudicationRecordedDecision>(
           path.join(sessionDirectory, "taxonomy", "llm-adjudications.jsonl")
         );
-    const tracePayload = await readOptionalJson<{
-      traces?: TaxonomyAdjudicationCompactTrace[];
-    }>(path.join(sessionDirectory, "metrics", "trace-summaries.latest.json"), {
-      traces: [],
-    });
+    const tracePayload = await readRecordedTraceSummaries<TaxonomyAdjudicationCompactTrace>(sessionDirectory);
+    for (const warning of tracePayload.warnings) console.warn(warning);
     const evaluationView =
       await loadSessionHumanEvaluationConsumerView(sessionDirectory);
     const relationDecisions =

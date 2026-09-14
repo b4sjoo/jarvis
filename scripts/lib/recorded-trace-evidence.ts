@@ -37,7 +37,13 @@ export async function missingAdjudicationEvidenceFiles(directory: string) {
   for (const filename of ["taxonomy/question-type-adjudications.jsonl", "taxonomy/question-type-adjudication-outcomes.jsonl", "runtime-inference/task-relation-decisions.jsonl", "human-evaluation/ground-truth-v2.jsonl", "human-evaluation/projections-v2.json", "traces"]) {
     try { await access(path.join(directory, filename)); }
     catch (error) {
-      if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") missing.push(filename);
+      if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+        if (filename === "human-evaluation/projections-v2.json") {
+          try { await access(path.join(directory, "human-evaluation/projections-v2.jsonl")); continue; }
+          catch (journalError) { if (!(journalError && typeof journalError === "object" && "code" in journalError && journalError.code === "ENOENT")) throw journalError; }
+        }
+        missing.push(filename);
+      }
       else throw error;
     }
   }

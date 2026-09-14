@@ -1,6 +1,7 @@
 import { access, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
+import { readRecordedTraceSummaries } from "./lib/session-aggregate-evidence.js";
 import {
   buildSessionLongitudinalEvaluationReport,
   evaluateLongitudinalSessionEvidenceScope,
@@ -129,10 +130,7 @@ async function readSession(
       readJsonLines<LongitudinalTranscriptTurn>(
         transcriptPath
       ),
-      readOptionalJson<{ traces?: LongitudinalTraceSummary[] }>(
-        path.join(directory, "metrics", "trace-summaries.latest.json"),
-        { traces: [] }
-      ),
+      readRecordedTraceSummaries<LongitudinalTraceSummary>(directory),
       readOptionalJson<{
         candidates?: LongitudinalCriticalMomentCandidate[];
       }>(
@@ -155,6 +153,7 @@ async function readSession(
       ),
       readRuntimeTraceEvidence(path.join(directory, "traces")),
     ]);
+  for (const warning of tracePayload.warnings) console.warn(`${directory}: ${warning}`);
   const evaluationView =
     await loadSessionHumanEvaluationConsumerView(directory);
   const missingInputs = await missingAdjudicationEvidenceFiles(directory);
@@ -525,8 +524,12 @@ async function hasTraceEvidence(directory: string) {
     return true;
   }
   try {
-    const filenames = await readdir(path.join(directory, "traces"));
-    return filenames.some((filename) => filename.endsWith(".json"));
+    const entries = await readdir(path.join(directory, "traces"), { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isFile() && entry.name.endsWith(".json")) return true;
+      if (entry.isDirectory() && await fileExists(path.join(directory, "traces", entry.name, "summary.json"))) return true;
+    }
+    return false;
   } catch (error) {
     if (isMissingFile(error)) return false;
     throw error;

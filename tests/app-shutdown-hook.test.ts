@@ -51,7 +51,7 @@ function deferred() {
   const promise = new Promise<void>((done) => { resolve = done; });
   return { promise, resolve };
 }
-async function settle() { for (let n = 0; n < 100; n++) await Promise.resolve(); }
+async function settle() { await new Promise<void>((resolve) => setImmediate(resolve)); }
 
 async function harness(owner: "meeting" | "system" = "meeting") {
   const calls: string[] = [];

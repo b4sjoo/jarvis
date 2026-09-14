@@ -1791,46 +1791,7 @@ export class SessionRecordingManager {
       this.recordEvent("session-stopped", { reason, endedAt });
 
       try {
-        await this.drainStable(session);
-        const projectionMaterialization =
-          buildHumanEvaluationProjectionMaterializationStatsV2(session);
-        if (session.humanEvaluationProjectionsV2.size > 0) {
-          await this.tryFinalizationWrite(session, () =>
-            this.writeJson(
-              session,
-              "human-evaluation/projections-v2.json",
-              buildHumanEvaluationProjectionSnapshotV2(session)
-            )
-          );
-        }
-        const evaluationView =
-          projectHumanEvaluationsForLegacyConsumers({
-            evaluations: Array.from(
-              session.questionHumanEvaluations.values()
-            ),
-            projections: Array.from(
-              session.humanEvaluationProjectionsV2.values()
-            ),
-          });
-        const finalReviewIndex = buildSessionTaskReviewIndex(
-          session.sessionId,
-          Array.from(session.traceSummaries.values()),
-          evaluationView.evaluations,
-          Array.from(session.humanEvaluationProjectionsV2.values())
-        );
-        await this.tryFinalizationWrite(
-          session,
-          () =>
-            this.writeJson(
-              session,
-              "human-evaluation/compatibility-v2.json",
-              evaluationView.report
-            )
-        );
-        await this.tryFinalizationWrite(session, () =>
-          this.writeTaskReviewIndex(session, finalReviewIndex)
-        );
-        await this.drainStable(session);
+        const { evaluationView, projectionMaterialization } = await this.materializeAggregates(session);
         session.phase = "sealed";
         await Promise.resolve();
         const queueDrained = session.pendingWrites === 0;
@@ -2568,6 +2529,16 @@ export class SessionRecordingManager {
     );
   }
 
+  async flushAggregates() {
+    const session = this.getWritableSession();
+    if (!session) return;
+    const failuresBefore = session.failedWriteCount;
+    await this.materializeAggregates(session);
+    if (session.failedWriteCount > failuresBefore) {
+      throw new Error(session.lastError || "Recording aggregate export failed.");
+    }
+  }
+
   recordHumanEvaluations(evaluations: TraceHumanEvaluation[]) {
     const session = this.getWritableSession();
     if (!session) return;
@@ -2593,11 +2564,6 @@ export class SessionRecordingManager {
       sessionId: session.sessionId,
       evaluations: sessionEvaluations,
     });
-    const sessionSummary = buildSessionMetricsSummary(
-      session.sessionId,
-      Array.from(session.traceSummaries.values()),
-      Array.from(session.traceHumanEvaluations.values())
-    );
     this.enqueue(session, async () => {
       await this.writeText(
         session,
@@ -2609,11 +2575,6 @@ export class SessionRecordingManager {
         "human-evaluation/evaluations.jsonl",
         `${compactPayload}\n`,
         true
-      );
-      await this.writeJson(
-        session,
-        "metrics/session-summary.json",
-        sessionSummary
       );
     });
     this.recordEvent("human-evaluation", {
@@ -2655,18 +2616,6 @@ export class SessionRecordingManager {
     for (const evaluation of sessionEvaluations) {
       session.questionHumanEvaluations.set(evaluation.questionId, evaluation);
     }
-    const evaluationView = projectHumanEvaluationsForLegacyConsumers({
-      evaluations: Array.from(session.questionHumanEvaluations.values()),
-      projections: Array.from(
-        session.humanEvaluationProjectionsV2.values()
-      ),
-    });
-    const reviewIndex = buildSessionTaskReviewIndex(
-      session.sessionId,
-      Array.from(session.traceSummaries.values()),
-      evaluationView.evaluations,
-      Array.from(session.humanEvaluationProjectionsV2.values())
-    );
     this.enqueue(session, async () => {
       await this.writeText(
         session,
@@ -2679,12 +2628,6 @@ export class SessionRecordingManager {
         `${compactPayload}\n`,
         true
       );
-      await this.writeJson(
-        session,
-        "human-evaluation/compatibility-v2.json",
-        evaluationView.report
-      );
-      await this.writeTaskReviewIndex(session, reviewIndex);
     });
     this.recordEvent(
       "question-human-evaluation",
@@ -2781,25 +2724,7 @@ export class SessionRecordingManager {
     );
     const snapshotPath = "human-evaluation/projections-v2.json";
     const historyPath = "human-evaluation/projections-v2.jsonl";
-    const snapshot = JSON.stringify(
-      buildHumanEvaluationProjectionSnapshotV2(session),
-      null,
-      2
-    );
-    const evaluationView = projectHumanEvaluationsForLegacyConsumers({
-      evaluations: Array.from(session.questionHumanEvaluations.values()),
-      projections: Array.from(
-        session.humanEvaluationProjectionsV2.values()
-      ),
-    });
-    const reviewIndex = buildSessionTaskReviewIndex(
-      session.sessionId,
-      Array.from(session.traceSummaries.values()),
-      evaluationView.evaluations,
-      Array.from(session.humanEvaluationProjectionsV2.values())
-    );
     this.enqueue(session, async () => {
-      await this.writeText(session, snapshotPath, snapshot);
       await this.writeText(
         session,
         historyPath,
@@ -2809,12 +2734,6 @@ export class SessionRecordingManager {
         })}\n`,
         true
       );
-      await this.writeJson(
-        session,
-        "human-evaluation/compatibility-v2.json",
-        evaluationView.report
-      );
-      await this.writeTaskReviewIndex(session, reviewIndex);
     });
     this.recordEvent(
       "human-evaluation-projection-v2",
@@ -3205,14 +3124,6 @@ export class SessionRecordingManager {
         `traces/${sanitizeFilePart(traceId)}/summary.json`,
         updated
       );
-      await this.writeJson(session, "metrics/trace-summaries.latest.json", {
-        version: SESSION_TRACE_SUMMARY_SCHEMA_VERSION,
-        savedAt: Date.now(),
-        sessionId: session.sessionId,
-        traces: Array.from(session.traceSummaries.values()).sort(
-          (left, right) => left.startedAt - right.startedAt
-        ),
-      });
     });
   }
 
@@ -3265,14 +3176,6 @@ export class SessionRecordingManager {
         `traces/${sanitizeFilePart(traceId)}/summary.json`,
         updated
       );
-      await this.writeJson(session, "metrics/trace-summaries.latest.json", {
-        version: SESSION_TRACE_SUMMARY_SCHEMA_VERSION,
-        savedAt: Date.now(),
-        sessionId: session.sessionId,
-        traces: Array.from(session.traceSummaries.values()).sort(
-          (left, right) => left.startedAt - right.startedAt
-        ),
-      });
     });
   }
 
@@ -3325,14 +3228,6 @@ export class SessionRecordingManager {
         `traces/${sanitizeFilePart(traceId)}/summary.json`,
         updated
       );
-      await this.writeJson(session, "metrics/trace-summaries.latest.json", {
-        version: SESSION_TRACE_SUMMARY_SCHEMA_VERSION,
-        savedAt: Date.now(),
-        sessionId: session.sessionId,
-        traces: Array.from(session.traceSummaries.values()).sort(
-          (left, right) => left.startedAt - right.startedAt
-        ),
-      });
     });
   }
 
@@ -3400,14 +3295,6 @@ export class SessionRecordingManager {
         `traces/${sanitizeFilePart(traceId)}/summary.json`,
         updated
       );
-      await this.writeJson(session, "metrics/trace-summaries.latest.json", {
-        version: SESSION_TRACE_SUMMARY_SCHEMA_VERSION,
-        savedAt: Date.now(),
-        sessionId: session.sessionId,
-        traces: Array.from(session.traceSummaries.values()).sort(
-          (left, right) => left.startedAt - right.startedAt
-        ),
-      });
     });
   }
 
@@ -3584,14 +3471,6 @@ export class SessionRecordingManager {
         `traces/${sanitizeFilePart(traceId)}/summary.json`,
         updated
       );
-      await this.writeJson(session, "metrics/trace-summaries.latest.json", {
-        version: SESSION_TRACE_SUMMARY_SCHEMA_VERSION,
-        savedAt: Date.now(),
-        sessionId: session.sessionId,
-        traces: Array.from(session.traceSummaries.values()).sort(
-          (left, right) => left.startedAt - right.startedAt
-        ),
-      });
     });
   }
 
@@ -3678,14 +3557,6 @@ export class SessionRecordingManager {
         `traces/${sanitizeFilePart(traceId)}/summary.json`,
         updated
       );
-      await this.writeJson(session, "metrics/trace-summaries.latest.json", {
-        version: SESSION_TRACE_SUMMARY_SCHEMA_VERSION,
-        savedAt: Date.now(),
-        sessionId: session.sessionId,
-        traces: Array.from(session.traceSummaries.values()).sort(
-          (left, right) => left.startedAt - right.startedAt
-        ),
-      });
     });
   }
 
@@ -4233,12 +4104,6 @@ export class SessionRecordingManager {
         `${JSON.stringify(nextEntry)}\n`,
         true
       );
-      await this.writeJson(session, "metrics/trace-session-index.latest.json", {
-        version: SESSION_TRACE_INDEX_SCHEMA_VERSION,
-        savedAt: Date.now(),
-        sessionId: session.sessionId,
-        traces: Array.from(session.traceSessionIndex.values()),
-      });
     });
   }
 
@@ -4283,27 +4148,6 @@ export class SessionRecordingManager {
     });
     session.traceSummaries.set(trace.id, summary);
 
-    const summaries = Array.from(session.traceSummaries.values()).sort(
-      (left, right) => left.startedAt - right.startedAt
-    );
-    const sessionSummary = buildSessionMetricsSummary(
-      session.sessionId,
-      summaries,
-      Array.from(session.traceHumanEvaluations.values())
-    );
-    const evaluationView = projectHumanEvaluationsForLegacyConsumers({
-      evaluations: Array.from(session.questionHumanEvaluations.values()),
-      projections: Array.from(
-        session.humanEvaluationProjectionsV2.values()
-      ),
-    });
-    const reviewIndex = buildSessionTaskReviewIndex(
-      session.sessionId,
-      summaries,
-      evaluationView.evaluations,
-      Array.from(session.humanEvaluationProjectionsV2.values())
-    );
-
     this.enqueue(session, async () => {
       if (!existing) {
         await this.writeText(
@@ -4313,25 +4157,35 @@ export class SessionRecordingManager {
           true
         );
       }
-      await this.writeJson(session, "metrics/trace-summaries.latest.json", {
-        version: SESSION_TRACE_SUMMARY_SCHEMA_VERSION,
-        savedAt: Date.now(),
-        sessionId: session.sessionId,
-        traces: summaries,
-      });
       await this.writeJson(session, summaryPath, summary);
-      await this.writeJson(
-        session,
-        "metrics/session-summary.json",
-        sessionSummary
-      );
-      await this.writeJson(
-        session,
-        "human-evaluation/compatibility-v2.json",
-        evaluationView.report
-      );
-      await this.writeTaskReviewIndex(session, reviewIndex);
     });
+  }
+
+  private async materializeAggregates(session: ActiveSessionRecording) {
+    // Legal late writes during checkpoint I/O require one final view of the same owner.
+    while (true) {
+      await this.drainStable(session);
+      const version = session.enqueueVersion;
+      const summaries = Array.from(session.traceSummaries.values()).sort((a, b) => a.startedAt - b.startedAt);
+      const evaluationView = projectHumanEvaluationsForLegacyConsumers({
+        evaluations: Array.from(session.questionHumanEvaluations.values()),
+        projections: Array.from(session.humanEvaluationProjectionsV2.values()),
+      });
+      const reviewIndex = buildSessionTaskReviewIndex(session.sessionId, summaries,
+        evaluationView.evaluations, Array.from(session.humanEvaluationProjectionsV2.values()));
+      const projectionMaterialization = buildHumanEvaluationProjectionMaterializationStatsV2(session);
+      const files: Array<[string, unknown]> = [
+        ["metrics/trace-session-index.latest.json", { version: SESSION_TRACE_INDEX_SCHEMA_VERSION, savedAt: Date.now(), sessionId: session.sessionId, traces: Array.from(session.traceSessionIndex.values()) }],
+        ["metrics/trace-summaries.latest.json", { version: SESSION_TRACE_SUMMARY_SCHEMA_VERSION, savedAt: Date.now(), sessionId: session.sessionId, traces: summaries }],
+        ["metrics/session-summary.json", buildSessionMetricsSummary(session.sessionId, summaries, Array.from(session.traceHumanEvaluations.values()))],
+        ["human-evaluation/compatibility-v2.json", evaluationView.report],
+        ["human-evaluation/projections-v2.json", buildHumanEvaluationProjectionSnapshotV2(session)],
+      ];
+      for (const [path, value] of files) await this.tryFinalizationWrite(session, () => this.writeJson(session, path, value));
+      await this.tryFinalizationWrite(session, () => this.writeTaskReviewIndex(session, reviewIndex));
+      await this.drainStable(session);
+      if (version === session.enqueueVersion) return { evaluationView, projectionMaterialization };
+    }
   }
 
   private writeSessionEvaluationProvenance(

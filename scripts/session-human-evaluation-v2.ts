@@ -19,6 +19,7 @@ import {
 } from "../src/lib/meeting/human-ground-truth-v2.js";
 import type { QuestionHumanEvaluation } from "../src/lib/meeting/types.js";
 import { readEffectiveSessionEvaluationProvenance } from "./lib/session-evaluation-provenance.js";
+import { readRecordedJsonLines, readRecordedProjectionSnapshot } from "./lib/session-aggregate-evidence.js";
 
 export async function loadSessionHumanEvaluationConsumerView(
   sessionDirectory: string
@@ -26,7 +27,6 @@ export async function loadSessionHumanEvaluationConsumerView(
   const [
     v1Payload,
     v2Payload,
-    projectionHistory,
     groundTruthEvents,
     evaluationProvenance,
   ] =
@@ -39,27 +39,8 @@ export async function loadSessionHumanEvaluationConsumerView(
         ),
         { evaluations: [] }
       ),
-      readOptionalJson<{
-        projections?: HumanEvaluationProjectionV2[];
-        materialization?: HumanEvaluationProjectionMaterializationStatsV2;
-      }>(
-        path.join(
-          sessionDirectory,
-          "human-evaluation",
-          "projections-v2.json"
-        ),
-        { projections: [] }
-      ),
-      readOptionalJsonLines<
-        HumanEvaluationProjectionMaterializationRecordV2<HumanEvaluationProjectionV2>
-      >(
-        path.join(
-          sessionDirectory,
-          "human-evaluation",
-          "projections-v2.jsonl"
-        )
-      ),
-      readOptionalJsonLines<HumanGroundTruthEventV2>(
+      readRecordedProjectionSnapshot(sessionDirectory),
+      readRecordedJsonLines<HumanGroundTruthEventV2>(
         path.join(
           sessionDirectory,
           "human-evaluation",
@@ -68,7 +49,8 @@ export async function loadSessionHumanEvaluationConsumerView(
       ),
       readEffectiveSessionEvaluationProvenance(sessionDirectory),
     ]);
-  const recordedProjections = v2Payload.projections ?? [];
+  const projectionHistory = v2Payload.history;
+  const recordedProjections = v2Payload.projections;
   const effectiveEvents =
     evaluationProvenance.source === "default"
       ? groundTruthEvents
@@ -207,18 +189,6 @@ async function readOptionalJson<T>(filePath: string, fallback: T) {
     return JSON.parse(await readFile(filePath, "utf8")) as T;
   } catch (error) {
     if (isMissingFile(error)) return fallback;
-    throw error;
-  }
-}
-
-async function readOptionalJsonLines<T>(filePath: string): Promise<T[]> {
-  try {
-    return (await readFile(filePath, "utf8"))
-      .split(/\r?\n/)
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as T);
-  } catch (error) {
-    if (isMissingFile(error)) return [];
     throw error;
   }
 }

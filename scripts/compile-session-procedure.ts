@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
+import { readRecordedProjectionSnapshot, readRecordedTraceSummaries } from "./lib/session-aggregate-evidence.js";
 import type { HumanEvaluationProjectionV2 } from "../src/lib/meeting/human-ground-truth-v2.js";
 import type { ManualRuntimeActionEventV1 } from "../src/lib/meeting/manual-runtime-action.js";
 import type { RuntimeRegressionStepEventV1 } from "../src/lib/meeting/runtime-regression.js";
@@ -80,8 +81,11 @@ async function main() {
     readOptionalText(sourcePaths.transcripts),
     readOptionalText(sourcePaths.manualActions),
     readOptionalText(sourcePaths.runtimeSteps),
-    readOptionalText(sourcePaths.projections),
-    readOptionalText(sourcePaths.traceSummaries),
+    readRecordedProjectionSnapshot(sessionDirectory).then((view) => JSON.stringify(view)),
+    readRecordedTraceSummaries<SessionProcedureTraceSummary>(sessionDirectory).then((view) => {
+      for (const warning of view.warnings) console.warn(warning);
+      return JSON.stringify({ traces: view.traces });
+    }),
   ]);
   const [termCorrectionRecords, typeCorrectionRecords] = await Promise.all([
     readSpecializedRecords(
