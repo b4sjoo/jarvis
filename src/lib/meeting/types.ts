@@ -1156,7 +1156,8 @@ export interface QuestionInstanceLineage {
 export type MeetingSetupWarningCode =
   | "stt-provider-missing"
   | "ai-provider-missing"
-  | "vision-provider-missing";
+  | "vision-provider-missing"
+  | "microphone-input-unavailable";
 
 export interface MeetingSetupWarning {
   code: MeetingSetupWarningCode;

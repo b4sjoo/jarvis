@@ -37290,7 +37290,9 @@ export function useMeetingAssistant() {
   return {
     ...state,
     meetingSessionId: contextManagerRef.current.getState().sessionId,
-    setupWarnings,
+    setupWarnings: microphoneVad.errored && state.settings.microphoneContextEnabled
+      ? [...setupWarnings, { code: "microphone-input-unavailable" as const, severity: "warning" as const, message: `Microphone input unavailable: ${microphoneVad.errored}. Re-select a browser microphone and restart Jarvis to initialize it.` }]
+      : setupWarnings,
     setActiveScreenTaskTimeoutMinutes,
     setInterviewSessionBrief,
     clearInterviewSessionBrief,

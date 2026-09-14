@@ -7,7 +7,7 @@ import {
   Button,
 } from "@/components";
 import { MicIcon, RefreshCwIcon, HeadphonesIcon } from "lucide-react";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useApp } from "@/contexts";
 import { STORAGE_KEYS } from "@/config/constants";
 import { safeLocalStorage } from "@/lib/storage";
@@ -15,8 +15,12 @@ import { invoke } from "@tauri-apps/api/core";
 
 export const AudioSelection = () => {
   const { selectedAudioDevices, setSelectedAudioDevices } = useApp();
+  const loadRef = useRef<object | undefined>(undefined);
+  const selectedRef = useRef(selectedAudioDevices);
+  selectedRef.current = selectedAudioDevices;
 
   const [isLoadingDevices, setIsLoadingDevices] = useState(false);
+  const [deviceError, setDeviceError] = useState("");
   const [showSuccess, setShowSuccess] = useState<{
     input: boolean;
     output: boolean;
@@ -41,17 +45,28 @@ export const AudioSelection = () => {
   };
 
   // Load all audio devices (input and output)
-  const loadAudioDevices = async () => {
+  const loadAudioDevices = async (requestPermission = false) => {
+    const request = {};
+    loadRef.current = request;
     setIsLoadingDevices(true);
+    setDeviceError("");
     try {
+      if (requestPermission) {
+        const permissionStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        permissionStream.getTracks().forEach((track) => track.stop());
+      }
+      if (loadRef.current !== request) return;
       const [inputDevices, outputDevices] = await Promise.all([
-        invoke<{ id: string; name: string; is_default: boolean }[]>(
-          "get_input_devices"
-        ),
+        navigator.mediaDevices.enumerateDevices().then((items) => [
+          { id: "default", name: "System default microphone", is_default: true },
+          ...items.filter((item) => item.kind === "audioinput" && item.deviceId && item.deviceId !== "default").map((item, index) => ({ id: item.deviceId, name: item.label || `Microphone ${index + 1}`, is_default: false })),
+        ]),
         invoke<{ id: string; name: string; is_default: boolean }[]>(
           "get_output_devices"
         ),
       ]);
+      if (loadRef.current !== request) return;
+      const selectedAudioDevices = selectedRef.current;
 
       setDevices({
         input:
@@ -76,17 +91,14 @@ export const AudioSelection = () => {
         (d) => d.id === selectedAudioDevices.output.id
       );
 
-      if (!currentInputExists || !currentOutputExists) {
-        const defaultInput = inputDevices?.find((d) => d?.is_default);
+      if (!currentInputExists && selectedAudioDevices.input.id) {
+        setDeviceError("The saved microphone cannot be verified. Refresh microphone access and select a device or System default.");
+      }
+      if (!currentOutputExists) {
         const defaultOutput = outputDevices?.find((d) => d?.is_default);
 
         const newDevices = {
-          input: currentInputExists
-            ? selectedAudioDevices.input
-            : {
-                id: defaultInput?.id || inputDevices[0]?.id || "",
-                name: defaultInput?.name || inputDevices[0]?.name || "",
-              },
+          input: selectedAudioDevices.input,
           output: currentOutputExists
             ? selectedAudioDevices.output
             : {
@@ -99,14 +111,17 @@ export const AudioSelection = () => {
         saveToStorage(newDevices);
       }
     } catch (error) {
+      if (loadRef.current !== request) return;
       console.error("Error loading audio devices:", error);
+      setDeviceError(error instanceof Error ? error.message : "Unable to read microphone devices.");
     } finally {
-      setIsLoadingDevices(false);
+      if (loadRef.current === request) setIsLoadingDevices(false);
     }
   };
 
   useEffect(() => {
     loadAudioDevices();
+    return () => { loadRef.current = undefined; };
   }, []);
 
   // Handle device selection changes
@@ -122,6 +137,7 @@ export const AudioSelection = () => {
     };
 
     setSelectedAudioDevices(newDevices);
+    setDeviceError("");
     saveToStorage(newDevices);
 
     setShowSuccess((prev) => ({ ...prev, [type]: true }));
@@ -132,6 +148,7 @@ export const AudioSelection = () => {
 
   return (
     <div id="audio" className="space-y-1 flex flex-col gap-4">
+      {deviceError ? <div role="alert" className="text-sm text-destructive">{deviceError}</div> : null}
       {/* Microphone Input Section */}
       <div className="space-y-3">
         <Header
@@ -184,7 +201,7 @@ export const AudioSelection = () => {
               <Button
                 size="icon"
                 variant="outline"
-                onClick={loadAudioDevices}
+                onClick={() => void loadAudioDevices(true)}
                 disabled={isLoadingDevices}
                 className="h-11 w-11 shrink-0"
                 title="Refresh microphone list"
@@ -221,9 +238,8 @@ export const AudioSelection = () => {
         <div className="text-xs text-muted-foreground/70">
           <p>
             💡 <strong>Tip:</strong> When you select a microphone, the app will
-            immediately switch to that device. You can verify by hovering over
-            the microphone button in the main interface - it will show the
-            active device name.
+            use it for newly initialized microphone capture. An already initialized
+            Meeting microphone may require restarting Jarvis.
           </p>
         </div>
       </div>
@@ -283,7 +299,7 @@ export const AudioSelection = () => {
               <Button
                 size="icon"
                 variant="outline"
-                onClick={loadAudioDevices}
+                onClick={() => void loadAudioDevices()}
                 disabled={isLoadingDevices}
                 className="h-11 w-11 shrink-0"
                 title="Refresh output device list"
