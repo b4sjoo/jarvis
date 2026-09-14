@@ -238,6 +238,7 @@ const View = () => {
           <div className="flex-1 relative">
             {completion.isRecording ? (
               <AudioRecorder
+                onError={(error) => completion.setState((previous) => ({ ...previous, error }))}
                 onTranscriptionComplete={(text) => {
                   completion.setIsRecording(false);
                   completion.submit(text);

@@ -58,12 +58,13 @@ class FixtureRecorder {
   state = "inactive";
   mimeType: string;
   ondataavailable?: (event: any) => void;
+  onstop?: () => void;
   constructor(_stream: any, options: any) { this.mimeType = options.mimeType; }
   start() {
     this.state = "recording";
     this.ondataavailable?.({ data: new Blob(["fixture audio"], { type: this.mimeType }) });
   }
-  stop() { this.state = "inactive"; }
+  stop() { this.state = "inactive"; queueMicrotask(() => this.onstop?.()); }
 }
 (window as any).MediaRecorder = FixtureRecorder;
 (window as any).AudioContext = class {

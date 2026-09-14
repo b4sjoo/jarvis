@@ -2,7 +2,7 @@ import { fetchSTT } from "@/lib";
 import { UseCompletionReturn } from "@/types";
 import { useMicVAD } from "@ricky0123/vad-react";
 import { LoaderCircleIcon, MicIcon, MicOffIcon } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components";
 import { useApp } from "@/contexts";
 import { floatArrayToWav } from "@/lib/utils";
@@ -22,6 +22,12 @@ const AutoSpeechVADInternal = ({
   microphoneDeviceId,
 }: AutoSpeechVADProps) => {
   const [isTranscribing, setIsTranscribing] = useState(false);
+  const activeRef = useRef(true);
+  const pendingRef = useRef(new Set<AbortController>());
+  useEffect(() => {
+    activeRef.current = true;
+    return () => { activeRef.current = false; for (const controller of pendingRef.current) controller.abort(); pendingRef.current.clear(); };
+  }, []);
   const { selectedSttProvider, allSttProviders } = useApp();
 
   const audioConstraints: MediaTrackConstraints =
@@ -34,6 +40,9 @@ const AutoSpeechVADInternal = ({
     startOnLoad: true,
     additionalAudioConstraints: audioConstraints,
     onSpeechEnd: async (audio) => {
+      if (!activeRef.current) return;
+      const controller = new AbortController();
+      pendingRef.current.add(controller);
       try {
         // convert float32array to blob
         const audioBlob = floatArrayToWav(audio, 16000, "wav");
@@ -73,12 +82,14 @@ const AutoSpeechVADInternal = ({
           provider: useManagedApi ? undefined : providerConfig,
           selectedProvider: selectedSttProvider,
           audio: audioBlob,
+          signal: controller.signal,
         });
 
-        if (transcription) {
+        if (transcription && activeRef.current && !controller.signal.aborted) {
           submit(transcription);
         }
       } catch (error) {
+        if (!activeRef.current || controller.signal.aborted) return;
         console.error("Failed to transcribe audio:", error);
         setState((prev: any) => ({
           ...prev,
@@ -86,10 +97,17 @@ const AutoSpeechVADInternal = ({
             error instanceof Error ? error.message : "Transcription failed",
         }));
       } finally {
-        setIsTranscribing(false);
+        pendingRef.current.delete(controller);
+        if (activeRef.current) setIsTranscribing(false);
       }
     },
   });
+
+  useEffect(() => {
+    if (!vad.errored) return;
+    setState((previous: Record<string, unknown>) => ({ ...previous, error: `Microphone initialization failed: ${vad.errored}` }));
+    setEnableVAD(false);
+  }, [vad.errored, setState, setEnableVAD]);
 
   return (
     <>
@@ -97,9 +115,12 @@ const AutoSpeechVADInternal = ({
         size="icon"
         onClick={() => {
           if (vad.listening) {
+            activeRef.current = false;
+            for (const controller of pendingRef.current) controller.abort();
             vad.pause();
             setEnableVAD(false);
           } else {
+            activeRef.current = true;
             vad.start();
             setEnableVAD(true);
           }

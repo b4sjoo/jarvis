@@ -8,6 +8,7 @@ import { StopCircle, Send } from "lucide-react";
 interface AudioRecorderProps {
   onTranscriptionComplete: (text: string) => void;
   onCancel: () => void;
+  onError?: (message: string) => void;
 }
 
 const MAX_DURATION = 3 * 60 * 1000;
@@ -15,6 +16,7 @@ const MAX_DURATION = 3 * 60 * 1000;
 export const AudioRecorder = ({
   onTranscriptionComplete,
   onCancel,
+  onError,
 }: AudioRecorderProps) => {
   const { selectedSttProvider, allSttProviders, selectedAudioDevices } =
     useApp();
@@ -28,9 +30,15 @@ export const AudioRecorder = ({
   const durationIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const maxDurationTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const mountedRef = useRef(false);
+  const cancelledRef = useRef(false);
+  const sendingRef = useRef(false);
+  const transcriptionAbortRef = useRef<AbortController | undefined>(undefined);
+  const captureAttemptRef = useRef<object | undefined>(undefined);
 
   // Cleanup function - stops all tracks and clears refs
   const cleanup = useCallback(() => {
+    captureAttemptRef.current = undefined;
     // Clear timers
     if (durationIntervalRef.current) {
       clearInterval(durationIntervalRef.current);
@@ -72,15 +80,22 @@ export const AudioRecorder = ({
   }, [audioStream]);
 
   useEffect(() => {
+    mountedRef.current = true;
+    cancelledRef.current = false;
     startRecording();
 
     // Cleanup on unmount
     return () => {
+      mountedRef.current = false;
+      cancelledRef.current = true;
+      transcriptionAbortRef.current?.abort();
       cleanup();
     };
   }, []);
 
   const startRecording = async () => {
+    const attempt = {};
+    captureAttemptRef.current = attempt;
     try {
       const deviceId = selectedAudioDevices?.input?.id;
 
@@ -92,6 +107,10 @@ export const AudioRecorder = ({
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: audioConstraints,
       });
+      if (!mountedRef.current || cancelledRef.current || captureAttemptRef.current !== attempt) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
 
       // Store in both ref and state
       streamRef.current = stream;
@@ -107,6 +126,7 @@ export const AudioRecorder = ({
       startTimeRef.current = Date.now();
 
       recorder.ondataavailable = (e) => {
+        if (mediaRecorderRef.current !== recorder || cancelledRef.current) return;
         if (e.data.size > 0) {
           audioChunksRef.current.push(e.data);
         }
@@ -124,30 +144,44 @@ export const AudioRecorder = ({
         }
       }, MAX_DURATION);
     } catch (error) {
+      if (captureAttemptRef.current !== attempt) return;
       console.error("Failed to start recording:", error);
       cleanup();
+      if (!mountedRef.current || cancelledRef.current) return;
+      onError?.(error instanceof Error ? error.message : "Microphone capture failed. Check permission and device selection.");
       onCancel();
     }
   };
 
   const handleStop = () => {
+    cancelledRef.current = true;
+    transcriptionAbortRef.current?.abort();
     cleanup();
     onCancel();
   };
 
   const handleSend = async () => {
-    if (!mediaRecorderRef.current || isTranscribing) return;
+    if (!mediaRecorderRef.current || sendingRef.current || cancelledRef.current) return;
+    sendingRef.current = true;
 
     setIsTranscribing(true);
 
-    const mimeType = mediaRecorderRef.current.mimeType;
-    const chunks = [...audioChunksRef.current];
-
-    // Cleanup immediately after getting chunks
-    cleanup();
-
     try {
+      const recorder = mediaRecorderRef.current;
+      const mimeType = recorder.mimeType;
+      if (recorder.state !== "inactive") {
+        await new Promise<void>((resolve, reject) => {
+          recorder.onstop = () => resolve();
+          recorder.onerror = () => reject(new Error("Audio recorder failed while stopping."));
+          recorder.stop();
+        });
+      }
+      const chunks = [...audioChunksRef.current];
+      cleanup();
+      if (!mountedRef.current || cancelledRef.current) return;
       const audioBlob = new Blob(chunks, { type: mimeType });
+      const controller = new AbortController();
+      transcriptionAbortRef.current = controller;
 
       const useManagedApi = await shouldUseManagedAPI();
       const provider = allSttProviders.find(
@@ -158,11 +192,15 @@ export const AudioRecorder = ({
         provider: useManagedApi ? undefined : provider,
         selectedProvider: selectedSttProvider,
         audio: audioBlob,
+        signal: controller.signal,
       });
-
+      if (!mountedRef.current || cancelledRef.current || controller.signal.aborted) return;
       onTranscriptionComplete(text);
     } catch (error) {
       console.error("Transcription failed:", error);
+      cleanup();
+      if (!mountedRef.current || cancelledRef.current) return;
+      onError?.(error instanceof Error ? error.message : "Transcription failed.");
       onCancel();
     }
   };
