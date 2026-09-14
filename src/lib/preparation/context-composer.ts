@@ -149,10 +149,7 @@ export function createPreparationContextComposer(
             preferredMaterialIds,
             roundId: input.round?.id,
           });
-      const documentOverview = materials.sourceRefs.some(
-        (source) => source.sourceMethod === "document-overview"
-      );
-      const kmb = documentOverview || materialInventoryRequest
+      const kmb = materialInventoryRequest
         ? emptySelectedContext()
         : selectKmbContext(memoryResult);
       const truncationReasons = [
@@ -163,7 +160,6 @@ export function createPreparationContextComposer(
         ...(materialInventory.omittedCount
           ? ["material-inventory-budget"]
           : []),
-        ...(documentOverview ? ["kmb-skipped-document-overview"] : []),
         ...(materialInventoryRequest
           ? ["kmb-skipped-material-inventory"]
           : []),

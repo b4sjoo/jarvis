@@ -248,7 +248,7 @@ test("document overview keeps structural evidence after fragmented boilerplate",
   assert.equal(selected.sourceRefs[0]?.coveredChunks, 12);
 });
 
-test("document overview excludes unrelated KMB context", async () => {
+test("PREP-C1 document overview preserves eligible bounded KMB selected by retrieval", async () => {
   const composer = createPreparationContextComposer({
     materials: {
       async searchCandidates() {
@@ -318,16 +318,12 @@ test("document overview excludes unrelated KMB context", async () => {
     messages: [],
   });
 
-  assert.doesNotMatch(composition.systemContext, /curated_memory_evidence/);
+  assert.match(composition.systemContext, /curated_memory_evidence/);
   assert.deepEqual(
     composition.sourceRefs.map((source) => source.kind),
-    ["material"]
+    ["material", "kmb"]
   );
-  assert.ok(
-    composition.budget.truncationReasons.includes(
-      "kmb-skipped-document-overview"
-    )
-  );
+  assert.equal(composition.budget.truncationReasons.includes("kmb-skipped-document-overview"), false);
 });
 
 test("composes bounded recent history, recap, material, and KMB context", async () => {
@@ -462,6 +458,33 @@ function material(
     ...overrides,
   };
 }
+
+test("PREP-C5: each request independently selects at most three KMB entries", async () => {
+  let count = 0;
+  const composer = createPreparationContextComposer({
+    materials: { searchCandidates: async () => [] },
+    materialInventory: { list: async () => [] },
+    retrieveKmb: async (input) => {
+      assert.equal(input.maxEntries, 3); assert.equal(input.maxChars, 4000);
+      const batch = ++count, base = memoryResult();
+      return { ...base, eligibleCount: 4, entries: [1, 2, 3, 4].map((n) => ({ ...base.entries[0], entry: { ...base.entries[0].entry, id: `batch-${batch}-${n}` } })) };
+    },
+  });
+  for (const n of [1, 2]) {
+    const composition = await composer.compose({
+      process: { id: "p", workspaceId: "p", title: "Interview", status: "active", createdAt: 1, updatedAt: 1 },
+      lease: {
+        conversation: { id: "c", processId: "p", scope: { kind: "process" }, title: "Prepare", titleSource: "automatic", status: "active", revision: n, summaryRevision: 0, createdAt: 1, updatedAt: 1 },
+        userMessage: { id: `m-${n}`, conversationId: "c", logicalTurnId: `t-${n}`, role: "user", content: `Explain my project experience ${n}`, materialRefs: [], sourceRefs: [], createdAt: n },
+        operationId: `o-${n}`, logicalTurnId: `t-${n}`, expectedRevision: n,
+      }, messages: [],
+    });
+    assert.equal(composition.budget.selectedKmbEntries, 3);
+    assert.deepEqual(composition.sourceRefs.filter((ref) => ref.kind === "kmb").map((ref) => ref.id), [1, 2, 3].map((id) => `batch-${n}-${id}`));
+    if (n === 2) assert.doesNotMatch(composition.systemContext, /batch-1-/);
+  }
+  assert.equal(count, 2);
+});
 
 function memoryResult(): MemoryRetrievalResult {
   return {
