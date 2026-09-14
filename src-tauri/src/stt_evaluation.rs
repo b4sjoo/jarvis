@@ -116,7 +116,18 @@ pub struct SttEvaluationSubmittedAudioMetadata {
     pub native_segment_sequence: Option<u64>,
     pub native_captured_at_ms: Option<u64>,
     pub native_sample_rate: Option<u32>,
+    pub native_speech_started_at_ms: Option<u64>,
+    pub native_speech_ended_at_ms: Option<u64>,
+    pub native_segment_emitted_at_ms: Option<u64>,
+    pub native_sample_start: Option<u64>,
+    pub native_sample_end: Option<u64>,
+    pub native_duration_ms: Option<u64>,
+    pub native_segment_end_reason: Option<String>,
+    pub native_rollover_family_id: Option<String>,
+    pub native_overlap_sample_count: Option<u64>,
+    pub native_overlap_duration_ms: Option<u64>,
     pub queued_at: u64,
+    pub dequeued_at: Option<u64>,
     pub submitted_at: u64,
     pub media_type: String,
     pub audio_bytes: u64,
@@ -1067,6 +1078,30 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn submitted_audio_preserves_source_and_queue_clocks_and_accepts_old_records() {
+        let old = serde_json::json!({
+            "utteranceId":"u", "traceId":"t", "audioSessionId":"s", "audioSegmentSequence":1,
+            "queuedAt":20, "submittedAt":40, "mediaType":"audio/wav", "audioBytes":100
+        });
+        let parsed: SttEvaluationSubmittedAudioMetadata =
+            serde_json::from_value(old.clone()).unwrap();
+        assert_eq!(parsed.dequeued_at, None);
+        assert_eq!(parsed.native_segment_emitted_at_ms, None);
+        let mut full = old;
+        let fields = serde_json::json!({"dequeuedAt":30,"nativeSpeechStartedAtMs":1,"nativeSpeechEndedAtMs":10,
+            "nativeSegmentEmittedAtMs":15,"nativeSampleStart":0,"nativeSampleEnd":480,"nativeDurationMs":10,
+            "nativeSegmentEndReason":"silence","nativeRolloverFamilyId":"r","nativeOverlapSampleCount":48,"nativeOverlapDurationMs":1});
+        for (key, value) in fields.as_object().unwrap() {
+            full[key] = value.clone();
+        }
+        let parsed: SttEvaluationSubmittedAudioMetadata = serde_json::from_value(full).unwrap();
+        let serialized = serde_json::to_value(parsed).unwrap();
+        for (key, value) in fields.as_object().unwrap() {
+            assert_eq!(&serialized[key], value);
+        }
+    }
 
     #[test]
     fn sanitizes_artifact_identity() {

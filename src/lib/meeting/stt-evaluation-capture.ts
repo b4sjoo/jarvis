@@ -28,6 +28,7 @@ export interface SttEvaluationSubmittedAudio {
   nativeOverlapSampleCount?: number;
   nativeOverlapDurationMs?: number;
   queuedAt: number;
+  dequeuedAt?: number;
   submittedAt: number;
   mediaType: string;
   audioBytes: number;
@@ -226,6 +227,7 @@ export class SttEvaluationCaptureManager {
           nativeOverlapSampleCount: input.nativeOverlapSampleCount,
           nativeOverlapDurationMs: input.nativeOverlapDurationMs,
           queuedAt: input.queuedAt,
+          dequeuedAt: input.dequeuedAt,
           submittedAt: input.submittedAt,
           mediaType: input.mediaType,
           audioBytes: input.audioBytes,

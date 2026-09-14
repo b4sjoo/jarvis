@@ -23693,6 +23693,7 @@ export function useMeetingAssistant() {
             nativeOverlapSampleCount: segment.nativeOverlapSampleCount,
             nativeOverlapDurationMs: segment.nativeOverlapDurationMs,
             queuedAt: segment.queuedAt,
+            dequeuedAt: segment.dequeuedAt,
             submittedAt: Date.now(),
             mediaType: audio.type || "audio/wav",
             audioBytes: audio.size,

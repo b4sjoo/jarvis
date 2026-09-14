@@ -26,7 +26,11 @@ test("captures system submitted audio and transcript stages in one session", asy
       audioSessionId: "audio_session",
       audioSegmentSequence: 1,
       queuedAt: 10,
+      dequeuedAt: 15,
       submittedAt: 20,
+      nativeSpeechStartedAtMs: 1,
+      nativeSpeechEndedAtMs: 8,
+      nativeSegmentEmittedAtMs: 9,
       mediaType: "audio/wav",
       audioBytes: 4,
       base64Payload: "UklGRg==",
@@ -87,6 +91,12 @@ test("captures system submitted audio and transcript stages in one session", asy
     ).length,
     1
   );
+  const submitted = native.calls.find((call) => call.command === "record_stt_evaluation_submitted_audio")!;
+  const metadata = submitted.args.metadata as Record<string, unknown>;
+  assert.equal(metadata.dequeuedAt, 15);
+  assert.equal(metadata.nativeSpeechStartedAtMs, 1);
+  assert.equal(metadata.nativeSpeechEndedAtMs, 8);
+  assert.equal(metadata.nativeSegmentEmittedAtMs, 9);
   assert.deepEqual(
     native.calls
       .filter(
