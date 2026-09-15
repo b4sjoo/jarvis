@@ -22,7 +22,7 @@ import { createPreparationContextComposer } from "./context-composer";
 import { createPreparationConversationExecutionService } from "./conversation-execution";
 import { tauriPreparationMaterialImage } from "./material-image-tauri";
 import { invoke } from "@tauri-apps/api/core";
-import { fetchAIResponse } from "../functions/ai-response.function";
+import { fetchAIResponse, fetchAIResponseEvents } from "../functions/ai-response.function";
 import { retrieveMemoryContext } from "../memory/retrieval";
 import { createPreparationStatementService } from "./statement-service";
 import { createPreparationStatementProposalService } from "./statement-proposal-service";
@@ -83,6 +83,7 @@ export const interviewPreparationConversationExecutionService =
     materialExtraction: interviewPreparationMaterialExtractionService,
     imageGateway: tauriPreparationMaterialImage,
     fetchResponse: fetchAIResponse,
+    fetchQueryResponseEvents: fetchAIResponseEvents,
     onEvent: (event) => {
       void invoke("write_preparation_trace_log", {
         message: JSON.stringify(event),

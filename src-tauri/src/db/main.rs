@@ -147,5 +147,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("migrations/human-evaluation.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 22,
+            description: "preparation_material_retrieval_purpose",
+            sql: include_str!("migrations/preparation-material-purpose.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

@@ -90,6 +90,7 @@ export function loadPreparationModules(preparation: any, timers: Map<number, { c
         if (module === "react/jsx-runtime") return { jsx, jsxs: jsx, Fragment: "Fragment" };
         if (module === "@/components" || module === "lucide-react") return namedComponents;
         if (module === "@/contexts") return { useApp: () => ({ allAiProviders: [], selectedPreparationAIProvider: { provider: "fixture" } }) };
+        if (module === "./MaterialPurposeSelect") return load("components/MaterialPurposeSelect.tsx");
         if (module.includes("page-resource")) return load("page-resource.ts");
         if (module.includes("usePreparationData")) return load("usePreparationData.ts");
         if (module.includes("snapshot-selection-events")) return { subscribeToPreparationSnapshotSelectionChanges: preparation.subscribe };

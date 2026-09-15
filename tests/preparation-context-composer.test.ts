@@ -195,7 +195,7 @@ test("material selection enforces six chunks and three chunks per material", () 
   assert.ok(selected.selectedChars <= 8_000);
 });
 
-test("explicit document overview samples beyond the normal three-chunk cap", () => {
+test("explicit document overview samples across the document within the chunk cap", () => {
   const candidates = Array.from({ length: 12 }, (_, index) =>
     candidate({
       chunkId: `behavior-${index}`,
@@ -214,11 +214,11 @@ test("explicit document overview samples beyond the normal three-chunk cap", () 
     roundId: "round-1",
   });
 
-  assert.equal(selected.selectedCount, 12);
+  assert.equal(selected.selectedCount, 3);
   assert.match(selected.text, /Leadership Principle 1/);
   assert.match(selected.text, /Leadership Principle 12/);
   assert.equal(selected.sourceRefs[0]?.availableChunks, 12);
-  assert.equal(selected.sourceRefs[0]?.coveredChunks, 12);
+  assert.equal(selected.sourceRefs[0]?.coveredChunks, 3);
   assert.ok(selected.selectedChars <= 8_000);
 });
 
@@ -245,7 +245,7 @@ test("document overview keeps structural evidence after fragmented boilerplate",
   });
 
   assert.match(selected.text, /STRIVE TO BE EARTH'S BEST EMPLOYER/);
-  assert.equal(selected.sourceRefs[0]?.coveredChunks, 12);
+  assert.equal(selected.sourceRefs[0]?.coveredChunks, 3);
 });
 
 test("PREP-C1 document overview preserves eligible bounded KMB selected by retrieval", async () => {
@@ -263,7 +263,7 @@ test("PREP-C1 document overview preserves eligible bounded KMB selected by retri
     },
     materialInventory: {
       async list() {
-        return [];
+        return [material({ id: "behavior-material", purpose: "guidance" })];
       },
     },
     retrieveKmb: async () => memoryResult() as never,
@@ -362,7 +362,7 @@ test("composes bounded recent history, recap, material, and KMB context", async 
     },
     materialInventory: {
       async list() {
-        return [];
+        return [material({ id: "material-1", purpose: "personal-context" })];
       },
     },
     retrieveKmb: async () => memoryResult() as never,
@@ -466,6 +466,7 @@ test("PREP-C5: each request independently selects at most three KMB entries", as
     materialInventory: { list: async () => [] },
     retrieveKmb: async (input) => {
       assert.equal(input.maxEntries, 3); assert.equal(input.maxChars, 4000);
+      if (input.preparationPurpose === "guidance") return { ...memoryResult(), entries: [], eligibleCount: 0 };
       const batch = ++count, base = memoryResult();
       return { ...base, eligibleCount: 4, entries: [1, 2, 3, 4].map((n) => ({ ...base.entries[0], entry: { ...base.entries[0].entry, id: `batch-${batch}-${n}` } })) };
     },

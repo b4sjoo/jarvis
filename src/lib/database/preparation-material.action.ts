@@ -3,10 +3,12 @@ import type {
   PreparationMaterialRepository,
   PreparationMaterialScope,
   PreparationMaterialStatus,
+  PreparationRetrievalPurpose,
 } from "@/lib/preparation/types";
 import { getDatabase } from "./config";
 
 interface PreparationMaterialRow {
+  purpose: PreparationRetrievalPurpose | null;
   id: string;
   workspace_id: string;
   scope_kind: "workspace" | "round";
@@ -26,7 +28,7 @@ interface PreparationMaterialRow {
 
 const MATERIAL_SELECT = `
   SELECT
-    m.id, m.workspace_id, m.scope_kind, m.scope_id, m.display_name,
+    m.id, m.workspace_id, m.scope_kind, m.scope_id, m.display_name, m.purpose,
     m.original_file_name, m.mime_type, m.extension, m.size_bytes,
     m.checksum_sha256, m.storage_relative_path,
     CASE
@@ -49,14 +51,25 @@ const MATERIAL_SELECT = `
   FROM preparation_materials m`;
 
 export const preparationMaterialRepository: PreparationMaterialRepository = {
+  async updatePurpose(input) {
+    const db = await getDatabase();
+    const result = await db.execute(
+      `UPDATE preparation_materials SET purpose = ?
+       WHERE id = ? AND workspace_id = ? AND status <> 'deleted' AND deleted_at IS NULL
+         AND EXISTS (SELECT 1 FROM preparation_workspaces w
+                     WHERE w.id = workspace_id AND w.status = 'active')`,
+      [input.purpose ?? null, input.id, input.workspaceId]
+    );
+    if (!result.rowsAffected) throw new Error("Preparation material is no longer writable.");
+  },
   async insert({ material, revision, sourceRef }) {
     const db = await getDatabase();
     await db.execute(
       `INSERT INTO preparation_materials
         (id, workspace_id, scope_kind, scope_id, display_name,
          original_file_name, mime_type, extension, size_bytes, checksum_sha256,
-         storage_relative_path, status, created_at, updated_at, deleted_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         storage_relative_path, status, created_at, updated_at, deleted_at, purpose)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         material.id,
         material.workspaceId,
@@ -73,6 +86,7 @@ export const preparationMaterialRepository: PreparationMaterialRepository = {
         material.createdAt,
         material.updatedAt,
         material.deletedAt ?? null,
+        material.purpose ?? null,
       ]
     );
 
@@ -193,6 +207,7 @@ export const preparationMaterialRepository: PreparationMaterialRepository = {
 
 function mapMaterialRow(row: PreparationMaterialRow): PreparationMaterial {
   return {
+    purpose: row.purpose ?? undefined,
     id: row.id,
     workspaceId: row.workspace_id,
     scope: mapScope(row.scope_kind, row.scope_id),

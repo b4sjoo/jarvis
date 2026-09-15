@@ -318,6 +318,11 @@ function createHarness(
   };
 
   const materialRepository: PreparationMaterialRepository = {
+    async updatePurpose(input) {
+      const material = materials.get(input.id);
+      if (!material || material.workspaceId !== input.workspaceId) throw new Error("not found");
+      materials.set(input.id, { ...material, purpose: input.purpose });
+    },
     async insert(input) {
       if (options.failInsert) throw new Error("database insert failed");
       inserted.push(input);

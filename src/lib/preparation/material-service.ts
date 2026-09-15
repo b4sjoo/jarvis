@@ -4,6 +4,7 @@ import type {
 } from "./interview-types.js";
 import type {
   PreparationMaterial,
+  PreparationRetrievalPurpose,
   PreparationMaterialRepository,
   PreparationMaterialScope,
   PreparationMaterialStorageGateway,
@@ -36,6 +37,18 @@ export function createPreparationMaterialService(
   const createId = dependencies.createId ?? (() => crypto.randomUUID());
 
   return {
+    async updatePurpose(workspaceId: string, materialId: string, purpose?: PreparationRetrievalPurpose) {
+      if (purpose !== undefined && purpose !== "guidance" && purpose !== "personal-context") {
+        throw new Error("Invalid preparation material purpose.");
+      }
+      await requireWritableInterviewWorkspace(dependencies, workspaceId);
+      const material = await dependencies.materials.get(materialId);
+      if (!material || material.workspaceId !== workspaceId || material.status === "deleted") {
+        throw new Error("Preparation material not found.");
+      }
+      await dependencies.materials.updatePurpose({ id: materialId, workspaceId, purpose });
+      return { ...material, purpose };
+    },
     list(workspaceId: string) {
       return dependencies.materials.list(workspaceId);
     },

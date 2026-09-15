@@ -41,6 +41,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import type { PreparationData } from "../usePreparationData";
 import { usePageOperation } from "../page-resource";
+import { MaterialPurposeSelect } from "./MaterialPurposeSelect";
 
 const PROCESS_SCOPE = "workspace";
 
@@ -363,6 +364,7 @@ export const MaterialPanel = ({
                     <span>·</span>
                     <span>{formatExtractionStatus(material.status)}</span>
                   </div>
+                  <MaterialPurposeSelect material={material} readOnly={readOnly} onChanged={onChanged} onError={onError} />
                 </div>
                 <Button
                   size="icon"

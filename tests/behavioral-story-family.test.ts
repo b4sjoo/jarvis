@@ -7,6 +7,7 @@ import {
   shouldAdmitBehavioralFamilyLinkedStory,
 } from "../src/lib/memory/behavioral-story-family.js";
 import type { MemoryEntry } from "../src/lib/memory/types.js";
+import { preparationPurposeFixture } from "./helpers/preparation-purpose-fixture.js";
 
 test("selects one family and its only reviewed personal story", () => {
   const costStory = entry({
@@ -276,12 +277,79 @@ test("wires Answer Focus and active story continuity into production retrieval",
   );
   assert.match(
     retrieval,
-    /const selected = \[\.\.\.behavioralFamilyEntries, \.\.\.ordinaryEntries\]/
-  );
-  assert.match(
-    retrieval,
     /questionType === "behavioral" &&\s*entry\.type === "personal_story"/
   );
+});
+
+test("production retrieval preserves uncapped Meeting family authority and caps only explicit Preparation requests", async () => {
+  const fixture = await preparationPurposeFixture();
+  try {
+    const conflictStory = entry({
+      id: "story-conflict",
+      type: "personal_story",
+      title: "Conflict influence",
+      content: "Reviewed conflict experience.",
+    });
+    const costStory = entry({
+      id: "story-cost",
+      type: "personal_story",
+      title: "Cost efficiency",
+      content: "Reviewed cost experience.",
+    });
+    const guides = [1, 2, 3].map((index) => entry({
+      id: `always-guidance-${index}`,
+      type: "interview_framework",
+      title: `Conflict guidance ${index}`,
+      content: "General interview guidance, not personal evidence.",
+      priority: "pinned",
+      injectionMode: "always",
+    }));
+    fixture.memory.push(
+      family({ id: "family-conflict", title: "Conflict influence", keywords: ["disagreement"],
+        content: "Conflict expression template.", evidenceEntryIds: [conflictStory.id] }),
+      family({ id: "family-cost", title: "Cost efficiency", keywords: ["cost"],
+        content: "Cost expression template.", evidenceEntryIds: [costStory.id] }),
+      conflictStory,
+      costStory,
+      entry({ id: "unlinked-story", type: "personal_story", title: "Conflict disagreement",
+        content: "Another story must not bypass the family selector.", priority: "pinned", injectionMode: "always" }),
+      ...guides
+    );
+    const request = {
+      query: "Tell me about a conflict and disagreement.",
+      useCase: "meeting_assistant" as const,
+      questionType: "behavioral" as const,
+      maxEntries: 1,
+      maxChars: 20_000,
+    };
+    const meeting = await fixture.retrieveKmb(request);
+    const explicitUndefined = await fixture.retrieveKmb({ ...request, preparationPurpose: undefined });
+    assert.deepEqual(meeting.entries, explicitUndefined.entries);
+    assert.equal(meeting.contextText, explicitUndefined.contextText);
+    assert.deepEqual(meeting.rejectSummary, explicitUndefined.rejectSummary);
+    assert.deepEqual(meeting.behavioralStoryFamilySelection, explicitUndefined.behavioralStoryFamilySelection);
+    assert.deepEqual(meeting.entries.map((item) => item.entry.id), [
+      conflictStory.id, "family-conflict", ...guides.map((guide) => guide.id),
+    ]);
+    assert.equal(meeting.behavioralStoryFamilySelection?.selectedStoryId, conflictStory.id);
+    assert.equal(meeting.behavioralStoryFamilySelection?.runnerUpFamilyId, "family-cost");
+    assert.equal(meeting.entries[0].runtimeRole?.anchorEligible, true);
+    assert.equal(meeting.entries[1].runtimeRole?.role, "template");
+    assert.equal(meeting.entries[1].runtimeRole?.anchorEligible, false);
+
+    const preparation = await fixture.retrieveKmb({
+      query: request.query,
+      useCase: "general_chat",
+      maxEntries: 1,
+      maxChars: request.maxChars,
+      preparationPurpose: "guidance",
+    });
+    assert.deepEqual(preparation.entries.map((item) => item.entry.id), [guides[0].id]);
+    assert.ok(preparation.rejectSummary.some((reason) => reason.reason === "budget-truncated"));
+    assert.equal(preparation.entries[0].runtimeRole?.anchorEligible, false);
+  } finally {
+    fixture.close();
+  }
 });
 
 function family(input: Partial<MemoryEntry> & Pick<MemoryEntry, "id" | "title">) {

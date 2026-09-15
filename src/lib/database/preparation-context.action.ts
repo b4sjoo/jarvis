@@ -5,6 +5,7 @@ import type {
 import { getDatabase } from "./config";
 
 interface PreparationContextChunkRow {
+  purpose: PreparationMaterialContextCandidate["purpose"] | null;
   chunk_id: string;
   process_id: string;
   material_id: string;
@@ -38,6 +39,11 @@ export const preparationMaterialContextRepository: PreparationMaterialContextRep
         : []),
     ];
     if (!searchConditions.length) return [];
+    if (input.purpose && input.purposeMaterialIds?.length === 0) return [];
+    // IDs come from the request's label snapshot, never from model output.
+    const purposeClause = !input.purpose ? "" : input.purposeMaterialIds
+      ? "AND m.id IN (SELECT value FROM json_each(?))"
+      : "AND m.purpose = ?";
 
     const searchValues = [
       ...queryTokens.flatMap((token) => {
@@ -61,6 +67,7 @@ export const preparationMaterialContextRepository: PreparationMaterialContextRep
          c.id AS chunk_id,
          m.workspace_id AS process_id,
          m.id AS material_id,
+         m.purpose,
          c.material_revision_id,
          m.display_name AS material_name,
          CASE
@@ -103,6 +110,7 @@ export const preparationMaterialContextRepository: PreparationMaterialContextRep
            OR (m.scope_kind = 'round' AND m.scope_id = ?)
          )
          AND (${searchConditions.join(" OR ")})
+         ${purposeClause}
        ORDER BY
          CASE WHEN m.scope_kind = 'round' THEN 0 ELSE 1 END,
          m.updated_at DESC,
@@ -114,10 +122,11 @@ export const preparationMaterialContextRepository: PreparationMaterialContextRep
         ...preferredMaterialIds,
         input.roundId ?? "",
         ...searchValues,
+        ...(input.purpose ? [input.purposeMaterialIds ? JSON.stringify(input.purposeMaterialIds) : input.purpose] : []),
         input.limit,
       ]
     );
-    return rows.map(mapCandidate);
+    return rows.map((row) => ({ ...mapCandidate(row), purpose: input.purpose ?? row.purpose ?? undefined }));
   },
 };
 
@@ -126,6 +135,7 @@ function mapCandidate(
 ): PreparationMaterialContextCandidate {
   const metadata = parseExtractionMetadata(row.extraction_metadata);
   return {
+    purpose: row.purpose ?? undefined,
     chunkId: row.chunk_id,
     processId: row.process_id,
     materialId: row.material_id,

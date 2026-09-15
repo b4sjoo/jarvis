@@ -1,4 +1,5 @@
 export type MemoryScope = "global" | "project";
+export type PreparationRetrievalPurpose = "guidance" | "personal-context";
 
 export type MemoryCollection =
   | "profiles"
@@ -245,6 +246,7 @@ export interface MemoryImportSummary {
 }
 
 export interface MemoryRetrievalRequest {
+  preparationPurpose?: PreparationRetrievalPurpose;
   sessionId?: string;
   query: string;
   currentQuestionQuery?: string;
@@ -276,6 +278,7 @@ export interface MemoryRetrievalPolicy {
 }
 
 export type MemoryRejectReason =
+  | "preparation-purpose-mismatch"
   | "disabled"
   | "manual-or-never"
   | "uncurated"

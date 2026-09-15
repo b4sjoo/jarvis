@@ -728,6 +728,7 @@ function createService(overrides: {
       },
     },
     fetchResponse: overrides.fetchResponse as never,
+    async *fetchQueryResponseEvents() { throw new Error("Stub composer should not rewrite queries."); },
     onEvent: overrides.onEvent as never,
     now: (() => {
       let timestamp = 100;

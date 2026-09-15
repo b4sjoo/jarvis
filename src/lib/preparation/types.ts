@@ -1,3 +1,6 @@
+import type { PreparationRetrievalPurpose } from "../memory/types.js";
+export type { PreparationRetrievalPurpose } from "../memory/types.js";
+
 export type PreparationWorkspaceKind = "interview" | "case";
 export type PreparationWorkspaceStatus = "active" | "archived" | "deleting";
 
@@ -61,6 +64,7 @@ export type PreparationMaterialStatus =
   | "deleted";
 
 export interface PreparationMaterial {
+  purpose?: PreparationRetrievalPurpose;
   id: string;
   workspaceId: string;
   scope: PreparationMaterialScope;
@@ -139,6 +143,11 @@ export interface PreparationMaterialRevision {
 }
 
 export interface PreparationMaterialRepository {
+  updatePurpose(input: {
+    id: string;
+    workspaceId: string;
+    purpose?: PreparationRetrievalPurpose;
+  }): Promise<void>;
   insert(input: {
     material: PreparationMaterial;
     revision: PreparationMaterialRevision;

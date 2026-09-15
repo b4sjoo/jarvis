@@ -1,4 +1,32 @@
 import type { PreparationMaterialStatus } from "./types.js";
+import type { MemoryRejectSummary, PreparationRetrievalPurpose } from "../memory/types.js";
+import type { AIResponseTokenUsage } from "../functions/ai-response-events.js";
+
+export type PreparationPurposeQueries = Record<PreparationRetrievalPurpose, string>;
+
+export interface PreparationQueryTrace {
+  originalQuery: string;
+  queries: PreparationPurposeQueries;
+  historyMessageIds: string[];
+  disposition: "rewritten" | "fallback" | "no-history" | "manual" | "inventory";
+  failure?: string;
+  durationMs: number;
+  outputChars: number;
+  timeoutMs?: number;
+  maxOutputTokens?: number;
+  tokenUsage?: AIResponseTokenUsage;
+}
+
+export interface PreparationRetrievalTrace extends PreparationQueryTrace {
+  pools: Array<{
+    purpose: PreparationRetrievalPurpose;
+    materialCandidateCount: number;
+    selectedMaterialChunks: number;
+    selectedKmbEntries: number;
+    kmbUnavailable: boolean;
+    kmbRejectSummary: MemoryRejectSummary[];
+  }>;
+}
 
 export type PreparationConversationScope =
   | { kind: "process" }
@@ -30,6 +58,7 @@ export interface PreparationConversation {
 }
 
 export interface PreparationContextSourceRef {
+  purpose?: PreparationRetrievalPurpose;
   kmbEntryRevision?: number;
   kind: "material" | "kmb";
   id: string;
@@ -69,6 +98,7 @@ export interface PreparationContextBudget {
 }
 
 export interface PreparationMessageContextSnapshot {
+  retrieval?: PreparationRetrievalTrace;
   providerId: string;
   operationId: string;
   conversationRevision: number;

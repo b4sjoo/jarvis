@@ -46,6 +46,7 @@ import {
   resolveProjectScopedFactMemoryEligibility,
 } from "./general-eligibility.js";
 import { scoreCurrentQuestionRelevance } from "./current-question-ranking.js";
+import { preparationMemoryPurpose } from "./preparation-purpose.js";
 import {
   selectBehavioralStoryFamily,
   shouldAdmitBehavioralFamilyLinkedStory,
@@ -68,6 +69,7 @@ export interface MemoryRetrievalRuntimeCallbacks {
 }
 
 export async function retrieveMemoryContext({
+  preparationPurpose,
   sessionId,
   query,
   currentQuestionQuery,
@@ -158,6 +160,10 @@ callbacks: MemoryRetrievalRuntimeCallbacks = {}): Promise<MemoryRetrievalResult>
   let interviewFamilyEvaluationMs = 0;
 
   for (const entry of entries) {
+    if (preparationPurpose && preparationMemoryPurpose(entry) !== preparationPurpose) {
+      rejectRecorder.record("preparation-purpose-mismatch", entry);
+      continue;
+    }
     const diagramRejection = diagramOverlayRejections.get(entry.id);
     if (diagramRejection) {
       rejectRecorder.record(diagramRejection.reason, entry);
@@ -359,7 +365,15 @@ callbacks: MemoryRetrievalRuntimeCallbacks = {}): Promise<MemoryRetrievalResult>
         )
     )
     .sort((left, right) => right.score - left.score);
-  const selected = [...behavioralFamilyEntries, ...ordinaryEntries];
+  const ranked = [...behavioralFamilyEntries, ...ordinaryEntries];
+  const selected = preparationPurpose
+    ? ranked.slice(0, memoryPolicy?.maxEntries ?? maxEntries)
+    : ranked;
+  if (preparationPurpose) {
+    for (const item of ranked.slice(selected.length)) {
+      rejectRecorder.record("budget-truncated", item.entry);
+    }
+  }
   const policyScoringMs = elapsedMs(policyScoringStartedAt);
   const budgetFormattingStartedAt = monotonicNow();
   const budgeted = applyMemoryBudget(
