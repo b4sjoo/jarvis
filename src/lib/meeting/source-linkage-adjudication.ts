@@ -11,7 +11,7 @@ import {
 
 export const SOURCE_LINKAGE_ADJUDICATION_SCHEMA_VERSION = 1;
 export const SOURCE_LINKAGE_ADJUDICATION_PROMPT_VERSION =
-  "source-linkage-adjudication-v1";
+  "source-linkage-adjudication-v2";
 export const SOURCE_LINKAGE_MAX_OUTPUT_CHARS = 2_048;
 export const SOURCE_LINKAGE_MAX_TEXT_CHARS = 1_200;
 
@@ -140,11 +140,14 @@ export function buildSourceLinkageAdjudicationPrompts(
       : {}),
   };
   const systemPrompt = [
-      "Decide one thing only: whether the deliberate screen capture primarily supplies evidence requested by the unresolved voice question or presents an independent current screen question.",
+      "Decide one thing only: whether the deliberate screen capture reasonably points to the object referenced by the unresolved voice question and warrants an image-evidence recovery attempt, or positively indicates an unrelated object or different current request.",
       "Return one JSON object only. Do not answer either question.",
-      "Use bind-voice only when both voice and screen evidence show that the screen directly supplies what the voice question requested.",
-      "Use use-screen when the screen presents an independently answerable current task or the evidence does not connect it to the voice request.",
-      "Use unclear when bounded evidence cannot support either conclusion.",
+      "Use bind-voice when voice and screen evidence reasonably connect the focused object to the pending request, so the Advisor can attempt recovery using the image.",
+      "A cursor or selection pointing inside part of the requested region is affirmative relevance evidence, even when the summary contains only one line or a method signature. Complete method-body or requested-range coverage is not required.",
+      "Binding authorizes an attempt, not proof that all requested evidence is visible or that the question is resolved. The Advisor must limit claims to visible evidence and acknowledge unseen or uncertain portions.",
+      "Use use-screen only with positive evidence of an unrelated object or a different current request, including an explicitly incompatible task even if line numbers or question types coincide.",
+      "A standing problem title, its independent answerability, different wording, or an incomplete summary alone cannot justify use-screen. Compare the focused evidence with the voice request, not just the question titles.",
+      "Use unclear when bounded evidence cannot establish reasonable relevance or positive unrelatedness. Partial visibility without enough identifying evidence is uncertainty, not rejection; partial visibility with a relevant focus can still support bind-voice.",
       "Time proximity, topic overlap, compatible question types, and the active parent alone are not linkage evidence.",
       "Every evidence span must be an exact verbatim substring from the matching input field.",
       "Do not classify question type, task relation, parent action, playbook phase, memory, or artifact intent.",

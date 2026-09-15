@@ -1,11 +1,102 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import vm from "node:vm";
+import ts from "typescript";
 import { resolveScreenPreflightQuestionTypeAuthority } from "../src/lib/meeting/task-taxonomy.js";
 import {
   SCREEN_FOCUSED_CODE_EXPLANATION_INSTRUCTION,
   SCREEN_TASK_SYSTEM_PROMPT,
 } from "../src/lib/meeting/screen-task-system-prompt.js";
+
+function preflightPromptBuilders() {
+  const source = ts.createSourceFile(
+    "screen-observation.service.ts",
+    readFileSync("src/lib/meeting/screen-observation.service.ts", "utf8"),
+    ts.ScriptTarget.Latest,
+    true
+  );
+  const names = [
+    "buildScreenPreflightUserMessage",
+    "buildScreenPreflightImageInputs",
+    "formatCaptureTargetForPrompt",
+    "formatCursorFocusForPrompt",
+    "formatImageOrderForPrompt",
+  ];
+  const declarations = names.map((name) => {
+    const declaration = source.statements.find(
+      (node) => ts.isFunctionDeclaration(node) && node.name?.text === name
+    );
+    assert.ok(declaration, `production function ${name}`);
+    return declaration.getText(source);
+  });
+  // Evaluate only the pure production builders; no capture or provider functions.
+  return vm.runInNewContext(ts.transpileModule([
+    ...declarations,
+    "({ buildScreenPreflightUserMessage, buildScreenPreflightImageInputs })",
+  ].join("\n"), {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
+  }).outputText) as {
+    buildScreenPreflightUserMessage: (input: {
+      observation: unknown;
+      recentTranscript?: string;
+    }) => string;
+    buildScreenPreflightImageInputs: (observation: unknown) => unknown[];
+  };
+}
+
+test("SL-E1/E6 preflight prompt requests actual focus location and bounded literal evidence, not full-code coverage", () => {
+  const { buildScreenPreflightUserMessage } = preflightPromptBuilders();
+  const prompt = buildScreenPreflightUserMessage({ observation: {} });
+  const instruction = prompt.split("\n").find((line) => line.startsWith("focusedEvidenceSummary:"));
+  assert.ok(instruction);
+  assert.match(instruction, /at most 800 characters/);
+  assert.match(instruction, /actual cursor\/current-line location/);
+  assert.match(instruction, /visibly highlighted or selected range and the object it points to/);
+  assert.match(instruction, /distinguish a current-line highlight from a multi-line selection/);
+  assert.match(instruction, /visible identifiers, line numbers\/ranges/);
+  assert.match(instruction, /error\/diagram\/UI labels/);
+  assert.match(instruction, /focus band for location and the supplied full screenshot for visible nearby context/);
+  assert.match(instruction, /cropped or unreadable portions as unknown; do not infer unseen content/);
+  assert.match(instruction, /single localized signature or partial block is useful/);
+  assert.match(instruction, /do not require full-code coverage/);
+  assert.match(instruction, /Return null when no such focused evidence is visible/);
+  assert.match(prompt, /question: the active visible interview\/software-engineering question near the cursor, or null\./);
+  assert.match(prompt, /questionType: classify the question\./);
+  assert.match(prompt, /Return JSON only, with no Markdown fences\./);
+});
+
+test("SL-E6 preflight builders keep focus/full image order and omit Voice history", () => {
+  const { buildScreenPreflightUserMessage, buildScreenPreflightImageInputs } = preflightPromptBuilders();
+  const observation = {
+    imageBase64: "full-image-fixture",
+    imageMediaType: "image/png",
+    focusImageBase64: "focus-image-fixture",
+    focusImageMediaType: "image/jpeg",
+    captureTarget: {
+      targetType: "active-window", title: "Editor", width: 1200, height: 900, x: 0, y: 0,
+      cursor: { globalX: 500, globalY: 400, targetX: 500, targetY: 400, insideTarget: true },
+      focusRegion: { imageWidth: 1200, imageHeight: 160, width: 1200, height: 160, x: 0, y: 320, cursorX: 500, cursorY: 80 },
+    },
+  };
+  const prompt = buildScreenPreflightUserMessage({
+    observation,
+    recentTranscript: "PRIVATE VOICE HISTORY: Explain lines 31-37",
+  });
+  assert.match(prompt, /Image 1: cursor-centered horizontal focus band/);
+  assert.match(prompt, /Image 2: full active-window screenshot/);
+  assert.match(prompt, /Transcript content is intentionally omitted/);
+  assert.doesNotMatch(prompt, /PRIVATE VOICE HISTORY|Explain lines 31-37/);
+  assert.deepEqual(JSON.parse(JSON.stringify(buildScreenPreflightImageInputs(observation))), [
+    { base64: "focus-image-fixture", mediaType: "image/jpeg" },
+    { base64: "full-image-fixture", mediaType: "image/png" },
+  ]);
+  const fullOnly = { imageBase64: observation.imageBase64, imageMediaType: observation.imageMediaType };
+  assert.match(buildScreenPreflightUserMessage({ observation: fullOnly }), /No cursor-centered horizontal focus band was included/);
+  assert.deepEqual(JSON.parse(JSON.stringify(buildScreenPreflightImageInputs(fullOnly))), [
+    { base64: "full-image-fixture", mediaType: "image/png" },
+  ]);
+});
 
 test("keeps Screen Coding output subordinate to the committed phase", () => {
   assert.match(

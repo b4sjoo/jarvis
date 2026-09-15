@@ -78,7 +78,7 @@ function harness(options = {}) {
   const now = Date.now();
   const unit = {
     id: "voice-original", revision: 3, sessionId: "session", runtimeEpoch: 4,
-    normalizedText: "Explain lines 35 through 38.", sourceTurnIds: ["turn-original"],
+    normalizedText: options.voiceQuestion ?? "Explain lines 35 through 38.", sourceTurnIds: ["turn-original"],
   };
   const context = {
     sessionId: "session", screenObservations: [], transcriptTurns: [],
@@ -108,7 +108,7 @@ function harness(options = {}) {
   const settlements = [];
   let serial = 0;
   const observation = { id: "screen-1", source: "full-screen", capturedAt: now, changed: true, imageBase64: "image", captureTarget: { title: "Editor" } };
-  const preflight = { question: options.question ?? "Explain this API implementation.", focusedEvidenceSummary: "API code, lines 35 through 38.", questionType: options.screenType ?? "coding", confidence: 0.99 };
+  const preflight = { question: options.question ?? "Explain this API implementation.", focusedEvidenceSummary: options.focusedEvidenceSummary ?? "API code, lines 35 through 38.", questionType: options.screenType ?? "coding", confidence: 0.99 };
   const admissions = [];
   const runtime = new modules.RuntimeInferenceOperationRuntime("source-linkage-adjudication", {
     run: async (input) => { admissions.push(input); return input.execute(); },
@@ -177,10 +177,10 @@ function harness(options = {}) {
       return {
         providerDisposition: options.providerDisposition ?? "completed-with-content",
         providerOutcome: options.providerOutcome,
-        rawOutput: options.invalid ? "invalid" : JSON.stringify({
+        rawOutput: options.rawOutput ?? (options.invalid ? "invalid" : JSON.stringify({
           schemaVersion: 1, decision: options.decision ?? "bind-voice",
-          voiceEvidenceSpans: [unit.normalizedText], screenEvidenceSpans: [preflight.question],
-        }),
+          voiceEvidenceSpans: [unit.normalizedText], screenEvidenceSpans: options.screenEvidenceSpans ?? [preflight.question],
+        })),
         completedAt: Date.now(),
       };
     },
@@ -218,6 +218,91 @@ function harness(options = {}) {
       evaluate(`(${solveProperty("recentTranscript")})`, env)].join("\n");
   };
   return h;
+}
+
+// Frozen dca83w sparse input. These tests inject outputs to check composition;
+// revised-prompt model quality, real Preflight, and final answer quality remain pending.
+const sparseRecovery = {
+  voiceQuestion: "Explain lines 31-37",
+  question: "Implement LRU cache",
+  focusedEvidenceSummary: "Line 31: def get(self, key: int) -> int: in class LRUCache",
+};
+
+test("SL-E5 historical wrong use-screen remains parser-valid and overrides same-type fallback", async () => {
+  const historicalDecision = {
+    schemaVersion: 1,
+    decision: "use-screen",
+    voiceEvidenceSpans: [],
+    screenEvidenceSpans: ["Implement LRU cache"],
+    ambiguityReason: "The screen presents an independent instruction to implement an LRU cache, while the voice question asks to explain lines 31-37, which do not match.",
+  };
+  const h = harness({ ...sparseRecovery, rawOutput: JSON.stringify(historicalDecision) });
+  await h.run();
+  assert.deepEqual(JSON.parse(h.providerCalls[0].userMessage), {
+    voiceQuestion: "Explain lines 31-37",
+    screenQuestion: "Implement LRU cache",
+    screenEvidenceSummary: "Line 31: def get(self, key: int) -> int: in class LRUCache Implement LRU cache",
+  });
+  const parsed = modules.parseSourceLinkageAdjudicationOutput(JSON.stringify(historicalDecision), h.calls[0].request);
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.value.decision, "use-screen");
+  assert.equal(modules.resolveSourceLinkageFallback({ voiceQuestionType: "coding", screenQuestionType: "coding" }), "bind-voice");
+  assert.equal(h.traces[0].metadata.sourceLinkageDecision, "use-screen");
+  assert.equal(h.traces[0].metadata.sourceLinkageEffectiveDecision, "use-screen");
+  assert.equal(h.traces[0].metadata.sourceLinkageDecisionSource, "model");
+  assert.equal(h.packets[0].screenPrimaryAskEvidenceText, "Implement LRU cache");
+  assert.doesNotMatch(h.advisorInput(), /Explain lines 31-37/);
+  assert.equal(h.settlements[0].reason, "source-linkage-use-screen");
+});
+
+for (const [name, focusedEvidenceSummary] of [
+  ["raw sparse signature", sparseRecovery.focusedEvidenceSummary],
+  ["partial relevant focus", "Cursor/current-line highlight at line 31: def get(self, key: int) -> int: in LRUCache. The remaining body is cropped and unknown."],
+]) test(`SL-E1/E2 supplied bind for ${name} preserves the exact ask without fulfilling recovery`, async () => {
+  const h = harness({ ...sparseRecovery, focusedEvidenceSummary, screenEvidenceSpans: [focusedEvidenceSummary] });
+  await h.run();
+  assert.equal(h.providerCalls.length, 1);
+  assert.deepEqual({ ...h.providerCalls[0].requestOptions }, { timeoutMs: 2000, maxOutputTokens: 256 });
+  assert.equal(h.traces[0].metadata.sourceLinkageDecision, "bind-voice");
+  assert.equal(h.traces[0].metadata.sourceLinkageEffectiveDecision, "bind-voice");
+  assert.equal(h.traces[0].metadata.sourceLinkageDecisionSource, "model");
+  assert.equal(h.packets[0].screenRelationLogicalQuestionUnit.id, h.unit.id);
+  assert.equal(h.packets[0].screenRelationLogicalQuestionUnit.revision, h.unit.revision);
+  assert.equal(h.packets[0].screenPrimaryAskEvidenceText, "Explain lines 31-37");
+  assert.equal(h.boundRelation().relation, "followup-parent");
+  assert.match(h.advisorInput(), /Explain lines 31-37/);
+  assert.equal(h.settlements.length, 0);
+  assert.equal(h.facts.size, 1);
+});
+
+for (const [name, screenType, question, focusedEvidenceSummary] of [
+  ["same-type new task", "coding", "Solve Two Sum", "New task: return indices of two numbers that sum to the target."],
+  ["different-type new task", "behavioral", "Tell me about a time you disagreed with a teammate.", "A behavioral interview question; no code is visible."],
+  ["coincident line numbers on an explicitly different object", "coding", "Explain lines 31-37 in mergeSort, not LRUCache", "Cursor at line 31: def mergeSort(nums). New request explicitly names mergeSort instead of LRUCache."],
+]) test(`SL-E3 supplied use-screen for ${name} excludes the old Voice request`, async () => {
+  const h = harness({ ...sparseRecovery, voiceQuestion: "Explain lines 31-37 in LRUCache", screenType, question, focusedEvidenceSummary, decision: "use-screen", screenEvidenceSpans: [focusedEvidenceSummary] });
+  await h.run();
+  assert.equal(h.traces[0].metadata.sourceLinkageDecision, "use-screen");
+  assert.equal(h.traces[0].metadata.sourceLinkageEffectiveDecision, "use-screen");
+  assert.equal(h.traces[0].metadata.sourceLinkageDecisionSource, "model");
+  assert.equal(h.packets[0].screenSourcePacket.primaryAsk.source, "screen-preflight");
+  assert.equal(h.packets[0].screenPrimaryAskEvidenceText, question);
+  assert.doesNotMatch(h.advisorInput(), /Explain lines 31-37 in LRUCache|turn-original/);
+});
+
+for (const [screenType, effectiveDecision] of [["coding", "bind-voice"], ["unknown", "bind-voice"], ["behavioral", "use-screen"]]) {
+  test(`SL-E3 partial unidentified evidence keeps raw unclear separate from ${screenType} fallback`, async () => {
+    const h = harness({
+      ...sparseRecovery, screenType, question: "Unidentified content",
+      focusedEvidenceSummary: "A cropped fragment is visible; object identifiers and focus location are unreadable.",
+      decision: "unclear",
+    });
+    await h.run();
+    assert.equal(h.traces[0].metadata.sourceLinkageDecision, "unclear");
+    assert.equal(h.traces[0].metadata.sourceLinkageEffectiveDecision, effectiveDecision);
+    assert.equal(h.traces[0].metadata.sourceLinkageDecisionSource, "type-fallback");
+    assert.equal(h.packets[0].screenSourcePacket.primaryAsk.source, effectiveDecision === "bind-voice" ? "voice-lqu" : "screen-preflight");
+  });
 }
 
 test("SL-C1/C6 actual Screen ingress compares once with debug and recording off before Voice packet binding", async () => {
