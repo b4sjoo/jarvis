@@ -37304,14 +37304,15 @@ export function useMeetingAssistant() {
     };
   }, []);
 
+  const presentationSessionId = contextManagerRef.current.getState().sessionId;
   return {
     ...state,
-    meetingSessionId: contextManagerRef.current.getState().sessionId,
+    meetingSessionId: presentationSessionId,
     phaseOutputNotice: buildBranchPhaseOutputNotice({
       parent: state.taskRuntime.parent,
       stable: stableAnswerRevisionRef.current,
       generation: generationResultLedgerRef.current.latestPhaseResult({
-        sessionId: contextManagerRef.current.getState().sessionId,
+        sessionId: presentationSessionId,
         runtimeEpoch: runtimeEpochRef.current,
         parentId: state.taskRuntime.parent?.id,
         childId: state.taskRuntime.parent?.child?.id,
