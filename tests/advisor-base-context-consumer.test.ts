@@ -1,4 +1,4 @@
-import type { AdvisorPromptContext } from "../src/lib/meeting/meeting-context-contracts.js";
+import type { AdvisorPromptContext, MeetingAssistantState } from "../src/lib/meeting/meeting-context-contracts.js";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
@@ -14,7 +14,7 @@ import {
 } from "../src/lib/meeting/response-opportunity-generation-gate.js";
 import { MeetingTraceStore } from "../src/lib/meeting/trace.js";
 import { composePhaseNavigationPromptContext } from "../src/lib/meeting/phase-navigation-prompt-context.js";
-import { selectInterviewPlaybookForCommittedType } from "../src/lib/meeting/interview-playbook.js";
+import { selectInterviewPlaybookForCommittedType, withInterviewPlaybookPhase } from "../src/lib/meeting/interview-playbook.js";
 import { setTestTaskRuntime } from "./helpers/meeting-task-runtime.js";
 import { createEffectiveAdvisorBaseBuilder } from "./helpers/advisor-base-context-hook.js";
 import { EffectiveQuestionSourceLedger } from "../src/lib/meeting/effective-question-source-ledger.js";
@@ -92,11 +92,42 @@ for (const name of ["phaseUpdatedContext", "transitionContextAfter", "projectBin
     const continuity = { current: continuityFor(manager) };
     const buildBase = createEffectiveAdvisorBaseBuilder(manager, new EffectiveQuestionSourceLedger(), { current: 1 }, undefined, continuity);
     const previous = buildBase();
+    previous.screenContext = "Existing screen evidence: tenant_id index.";
+    previous.advisorEvidencePacket = {
+      version: "advisor-evidence-v2",
+      currentQuestion: { text: sourceTurn().text, source: "voice-lqu", sourceTurnIds: ["source"] },
+      preparation: { interviewTypes: [], guidanceHints: [], activatedFactIds: [], rawGuidanceRejectedAsFactCount: 0 },
+      retrievalHints: [],
+    };
+    const previousPromptSnapshot = structuredClone(previous);
+    type UiState = Pick<MeetingAssistantState,
+      "taskRuntime" | "activeMeetingTask" | "latestSuggestion" | "latestReliableSuggestion" |
+      "partialSuggestion" | "transcriptTurns" | "screenObservations">;
+    const before = manager.getState();
+    const oldSuggestion: NonNullable<UiState["latestSuggestion"]> = {
+      id: "old-answer", kind: "answer", content: "Keep the existing tenant index answer.",
+      generationPhase: before.activeMeetingTask?.parent.playbookPhase,
+      createdAt: 1_200, basedOnTurnIds: ["source"], basedOnObservationIds: ["old-screen"], confidence: "high",
+    };
+    let uiState: UiState = {
+      taskRuntime: before.taskRuntime, activeMeetingTask: before.activeMeetingTask,
+      latestSuggestion: oldSuggestion, latestReliableSuggestion: oldSuggestion,
+      partialSuggestion: "Existing partial output",
+      transcriptTurns: before.transcriptTurns,
+      screenObservations: [{ id: "old-screen", capturedAt: 1_000, source: "hotkey", changed: true, ocrText: previous.screenContext }],
+    };
+    const previousUiState = uiState;
+    const previousUiSnapshot = structuredClone(uiState);
+    let stateUpdates = 0;
     const task = manager.getTaskRuntimeState().parent!;
     setTestTaskRuntime(manager, {
       parent: {
         ...task, revisions: task.revisions + 1, updatedAt: Date.now(),
-        supportedFactAnchors: name === "transitionContextAfter" ? task.supportedFactAnchors : ["Tenant isolation requirement"],
+        supportedFactAnchors: name === "projectBindingContextAfter" ? ["Tenant isolation requirement"] : task.supportedFactAnchors,
+        ...(name === "phaseUpdatedContext" ? {
+          playbookPhase: "design_framing" as const,
+          playbook: withInterviewPlaybookPhase(task.playbook, "design_framing"),
+        } : {}),
         ...(name === "transitionContextAfter" ? { child: {
           id: "attached-child", createdAt: Date.now(), updatedAt: Date.now(), questionType: "coding" as const,
           relation: "child-probe" as const, intent: "implementation-probe" as const, question: "Implement the tenant filter.",
@@ -113,13 +144,23 @@ for (const name of ["phaseUpdatedContext", "transitionContextAfter", "projectBin
     const block = statement.parent;
     assert.ok(ts.isBlock(block));
     const index = block.statements.indexOf(statement);
-    const next = block.statements[index + 1];
-    assert.ok(next);
+    const following = block.statements.slice(index + 1);
+    const promptAssignmentIndex = following.findIndex((node) =>
+      ts.isExpressionStatement(node) && ts.isBinaryExpression(node.expression) &&
+      node.expression.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+      ts.isIdentifier(node.expression.left) && node.expression.left.text === "promptContext"
+    );
+    assert.ok(promptAssignmentIndex >= 0, `missing promptContext assignment after ${name}`);
     const result = evaluate([
-      statement.getText(hook), next.getText(hook),
+      // Include intervening UI synchronization as well as the real prompt refresh.
+      statement.getText(hook), ...following.slice(0, promptAssignmentIndex + 1).map((node) => node.getText(hook)),
       "globalThis.result = promptContext;",
     ].join("\n"), {
       contextManagerRef: { current: manager }, promptContext: previous,
+      setState: (update: (state: UiState) => UiState) => {
+        stateUpdates += 1;
+        uiState = update(uiState);
+      },
       projectBoundedGeneratedContinuityForTask, recentAdvisorContinuityRef: continuity, runtimeEpochRef: { current: 1 },
     }).result as AdvisorPromptContext;
     assert.equal(count(), 0);
@@ -129,9 +170,33 @@ for (const name of ["phaseUpdatedContext", "transitionContextAfter", "projectBin
     assert.equal(result.transcript, originalTranscript);
     assert.deepEqual(result.advisorPromptSourceTurnIds, originalSourceIds);
     assert.equal(result.screenContext, previous.screenContext);
+    assert.equal(result.latestTurn, previous.latestTurn);
+    assert.equal(result.advisorEvidencePacket, previous.advisorEvidencePacket);
+    assert.deepEqual(result.advisorEvidencePacket, previousPromptSnapshot.advisorEvidencePacket);
+    assert.deepEqual(structuredClone(previous), previousPromptSnapshot);
     assert.equal(result.activeMeetingTask?.parent.latestUsefulAnswer, continuity.current.latestUsefulAnswer);
     assert.equal(result.activeMeetingTask?.parent.previousUsefulAnswer, continuity.current.previousUsefulAnswer);
     if (name === "transitionContextAfter") assert.equal(result.activeMeetingTask?.child?.id, "attached-child");
+    if (name === "phaseUpdatedContext") {
+      assert.equal(stateUpdates, 1);
+      assert.notEqual(previousUiState.activeMeetingTask?.parent.playbookPhase, "design_framing");
+      assert.deepEqual(uiState.taskRuntime, canonical.taskRuntime);
+      assert.deepEqual(uiState.activeMeetingTask, canonical.activeMeetingTask);
+      assert.equal(uiState.taskRuntime.parent?.playbookPhase, "design_framing");
+      assert.equal(uiState.activeMeetingTask?.parent.playbook?.phase, "design_framing");
+      assert.equal(result.interviewPlaybook?.phase, "design_framing");
+      assert.equal(uiState.latestSuggestion?.generationPhase, before.activeMeetingTask?.parent.playbookPhase);
+      assert.deepEqual({ ...uiState }, { ...previousUiState, taskRuntime: canonical.taskRuntime, activeMeetingTask: canonical.activeMeetingTask });
+    } else {
+      assert.equal(stateUpdates, 0);
+      assert.equal(uiState, previousUiState);
+    }
+    assert.equal(uiState.latestSuggestion, previousUiState.latestSuggestion);
+    assert.equal(uiState.latestReliableSuggestion, previousUiState.latestReliableSuggestion);
+    assert.equal(uiState.partialSuggestion, previousUiState.partialSuggestion);
+    assert.equal(uiState.transcriptTurns, previousUiState.transcriptTurns);
+    assert.equal(uiState.screenObservations, previousUiState.screenObservations);
+    assert.deepEqual(previousUiState, previousUiSnapshot);
     assert.equal(canonical.activeMeetingTask?.parent.latestUsefulAnswer, undefined);
     assert.equal(canonical.activeMeetingTask?.parent.previousUsefulAnswer, undefined);
     assert.deepEqual(manager.getState(), canonical);
