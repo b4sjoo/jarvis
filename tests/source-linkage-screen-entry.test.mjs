@@ -26,6 +26,7 @@ const evaluate = (text, env) => vm.runInNewContext(ts.transpileModule(text, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
 }).outputText, env);
 const load = (name) => import(pathToFileURL(path.resolve(output, `src/lib/meeting/${name}.js`)));
+const { recordedLinkageOutputs } = await import(pathToFileURL(path.resolve(output, "tests/helpers/source-linkage-recorded-outputs.js")));
 const modules = {};
 for (const name of [
   "screen-task-scope", "visual-evidence-recovery", "manual-screen-question-source",
@@ -103,6 +104,7 @@ function harness(options = {}) {
   }
   const facts = new Map(options.noOpportunity ? [] : [[fact.ownerBranchId, fact]]);
   const traces = [];
+  const recordedOutputs = [];
   const calls = [];
   const packets = [];
   const settlements = [];
@@ -143,7 +145,8 @@ function harness(options = {}) {
     traceStoreRef: { current: {
       startTrace: (_kind, metadata) => { const trace = { id: `trace-${++serial}`, metadata, status: "running", steps: [] }; traces.push(trace); return trace; },
       updateMetadata: (id, metadata) => Object.assign(traces.find((trace) => trace.id === id).metadata, metadata),
-      startStep: () => `step-${++serial}`, finishStep: () => {}, recordInput: () => {}, recordOutput: () => {},
+      startStep: () => `step-${++serial}`, finishStep: () => {}, recordInput: () => {},
+      recordOutput: (...args) => recordedOutputs.push(args),
       getTraces: () => traces,
       finishTrace: (id, status, error) => Object.assign(traces.find((trace) => trace.id === id), { status, error }),
     } },
@@ -198,7 +201,7 @@ function harness(options = {}) {
   env.requestSourceLinkageAdjudication = (input) => { calls.push(input); return adapter(input); };
   env.scheduleSourceLinkageAdjudication = evaluate(`(${callback("scheduleSourceLinkageAdjudication").getText(source)})`, env);
   const run = evaluate(`(${captureText})`, env);
-  const h = { env, context, fact, facts, traces, calls, packets, settlements, unit, observation, run, runtime, providerCalls, admissions };
+  const h = { env, context, fact, facts, traces, calls, packets, settlements, unit, observation, run, runtime, providerCalls, admissions, recordedOutputs };
   for (const name of ["normalizeParentQuestionType", "normalizeInterviewParentKind", "readMemoryQuestionType", "isTaskSwitchTranscript", "decideScreenTaskRelation"]) {
     env[name] = evaluate(`(${declaration(name).getText(source)})`, env);
   }
@@ -253,6 +256,53 @@ test("SL-E5 historical wrong use-screen remains parser-valid and overrides same-
   assert.equal(h.packets[0].screenPrimaryAskEvidenceText, "Implement LRU cache");
   assert.doesNotMatch(h.advisorInput(), /Explain lines 31-37/);
   assert.equal(h.settlements[0].reason, "source-linkage-use-screen");
+});
+
+for (const fixture of recordedLinkageOutputs) test(`SL-P4/P5/P6 recorded ${fixture.name} reaches the Advisor through the model decision`, async () => {
+  const h = harness({
+    voiceQuestion: fixture.voiceQuestion, question: fixture.screenQuestion,
+    focusedEvidenceSummary: fixture.screenEvidenceSummary.slice(0, -fixture.screenQuestion.length).trim(),
+    rawOutput: fixture.rawOutput,
+  });
+  await h.run();
+  assert.deepEqual(JSON.parse(h.providerCalls[0].userMessage), {
+    voiceQuestion: fixture.voiceQuestion, screenQuestion: fixture.screenQuestion,
+    screenEvidenceSummary: fixture.screenEvidenceSummary,
+  });
+  const metadata = h.traces[0].metadata;
+  assert.equal(metadata.sourceLinkageDecision, fixture.expectedDecision);
+  assert.equal(metadata.sourceLinkageEffectiveDecision, fixture.expectedDecision);
+  assert.equal(metadata.sourceLinkageDecisionSource, "model");
+  assert.equal(metadata.sourceLinkageAppliedToRuntime, true);
+  assert.equal(metadata.sourceLinkageParseValid, true);
+  assert.equal(h.recordedOutputs.find((entry) => entry[1] === "source linkage adjudication raw output")?.[2], fixture.rawOutput);
+  assert.equal(h.providerCalls.length, 1);
+  assert.deepEqual({ ...h.providerCalls[0].requestOptions }, { timeoutMs: 2000, maxOutputTokens: 256 });
+  const expectedAsk = fixture.expectedDecision === "bind-voice" ? fixture.voiceQuestion : fixture.screenQuestion;
+  assert.equal(h.packets[0].screenPrimaryAskEvidenceText, expectedAsk);
+  assert.ok(h.advisorInput().includes(expectedAsk));
+  assert.equal(h.advisorInput().includes("screenEvidenceSummary"), false);
+  if (fixture.expectedDecision === "use-screen") {
+    assert.equal(h.advisorInput().includes(fixture.voiceQuestion), false);
+    assert.equal(h.packets[0].screenSourcePacket.primaryAsk.source, "screen-preflight");
+  } else {
+    assert.equal(h.packets[0].screenRelationLogicalQuestionUnit.id, h.unit.id);
+    assert.equal(h.packets[0].screenRelationLogicalQuestionUnit.revision, h.unit.revision);
+  }
+});
+
+for (const revoke of [
+  (h) => { h.env.runtimeEpochRef.current += 1; },
+  (h) => h.runtime.cancelAll("superseded"),
+]) test(`SL-P4 valid extra-field output cannot restore revoked operation: ${revoke}`, async () => {
+  const fixture = recordedLinkageOutputs[0];
+  const h = harness({ voiceQuestion: fixture.voiceQuestion, question: fixture.screenQuestion,
+    focusedEvidenceSummary: fixture.screenEvidenceSummary, rawOutput: fixture.rawOutput,
+    duringModel: revoke });
+  await h.run();
+  assert.equal(h.packets.length, 0);
+  assert.equal(h.settlements.length, 0);
+  assert.equal(h.traces[0].metadata.sourceLinkageAppliedToRuntime, false);
 });
 
 for (const [name, focusedEvidenceSummary] of [

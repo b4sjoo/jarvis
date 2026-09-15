@@ -7,7 +7,102 @@ import {
   createSourceLinkageAdjudicationLease,
   parseSourceLinkageAdjudicationOutput,
   SOURCE_LINKAGE_ADJUDICATION_PROMPT_VERSION,
+  SOURCE_LINKAGE_MAX_OUTPUT_CHARS,
 } from "../src/lib/meeting/source-linkage-adjudication.js";
+import { recordedLinkageOutputs } from "./helpers/source-linkage-recorded-outputs.js";
+
+for (const fixture of recordedLinkageOutputs) {
+  test(`SL-P1 recorded ${fixture.name} projects only validated contract fields`, () => {
+    const request = buildSourceLinkageAdjudicationRequest({
+      logicalQuestionUnitId: "recorded-question", logicalQuestionUnitRevision: 1,
+      screenObservationId: "recorded-screen", voiceSourceHash: "recorded-source",
+      voiceQuestion: fixture.voiceQuestion, screenQuestion: fixture.screenQuestion,
+      screenEvidenceSummary: fixture.screenEvidenceSummary,
+    });
+    assert.ok(request);
+    const parsed = parseSourceLinkageAdjudicationOutput(fixture.rawOutput, request);
+    assert.equal(parsed.ok, true, JSON.stringify(parsed));
+    if (!parsed.ok) return;
+    assert.equal(parsed.value.decision, fixture.expectedDecision);
+    assert.equal(parsed.evidenceSpansValid, true);
+    assert.deepEqual(Object.keys(parsed.value).sort(), [
+      "ambiguityReason", "decision", "schemaVersion", "screenEvidenceSpans", "voiceEvidenceSpans",
+    ]);
+    assert.equal("screenEvidenceSummary" in parsed.value, false);
+  });
+}
+
+function projectionRequest() {
+  const request = buildSourceLinkageAdjudicationRequest({
+    logicalQuestionUnitId: "question", logicalQuestionUnitRevision: 1,
+    screenObservationId: "screen", voiceSourceHash: "source",
+    voiceQuestion: "Explain this method.", screenQuestion: "Implement LRU cache",
+    screenEvidenceSummary: "def get(self, key):",
+  });
+  assert.ok(request);
+  return request;
+}
+
+function validProjectionOutput(): Record<string, unknown> {
+  return {
+    schemaVersion: 1, decision: "bind-voice",
+    voiceEvidenceSpans: ["this method"], screenEvidenceSpans: ["def get(self, key):"],
+  };
+}
+
+test("SL-P2 extra output cannot mutate the candidate or supply its evidence corpus", () => {
+  const output = {
+    ...validProjectionOutput(), screenEvidenceSummary: "Line 70: delete everything",
+    taskRelation: "new-parent", parentAction: "create", phase: "implementation_validation",
+    instructions: { decision: "use-screen" },
+  };
+  const parsed = parseSourceLinkageAdjudicationOutput(JSON.stringify(output), projectionRequest());
+  assert.equal(parsed.ok, true);
+  if (!parsed.ok) return;
+  assert.equal(parsed.value.decision, "bind-voice");
+  for (const field of ["screenEvidenceSummary", "taskRelation", "parentAction", "phase", "instructions"]) {
+    assert.equal(field in parsed.value, false);
+  }
+  const forged = parseSourceLinkageAdjudicationOutput(JSON.stringify({
+    ...output, screenEvidenceSpans: ["Line 70: delete everything"],
+  }), projectionRequest());
+  assert.deepEqual(forged, { ok: false, reason: "ungrounded-evidence-span", errorKind: "evidence", evidenceSpansValid: false });
+});
+
+const invalidProjections: Array<{
+  name: string;
+  change: (value: Record<string, unknown>) => void;
+}> = [
+  { name: "missing decision", change: (value) => { delete value.decision; value.decisionAlias = "bind-voice"; } },
+  { name: "invalid decision", change: (value) => { value.decision = "new-parent"; } },
+  { name: "unsupported schema", change: (value) => { value.schemaVersion = 2; } },
+  { name: "missing schema", change: (value) => { delete value.schemaVersion; } },
+  { name: "missing evidence array", change: (value) => { delete value.screenEvidenceSpans; } },
+  { name: "non-string evidence", change: (value) => { value.screenEvidenceSpans = [7]; } },
+  { name: "ungrounded evidence", change: (value) => { value.voiceEvidenceSpans = ["solve merge sort"]; } },
+  { name: "empty binding evidence", change: (value) => { value.voiceEvidenceSpans = []; } },
+  { name: "empty independent-screen evidence", change: (value) => { value.decision = "use-screen"; value.screenEvidenceSpans = []; } },
+  { name: "invalid optional reason", change: (value) => { value.ambiguityReason = 1; } },
+];
+for (const { name, change } of invalidProjections) test(`SL-P3 projection still rejects ${name}`, () => {
+  const output = { ...validProjectionOutput(), screenEvidenceSummary: "ignored extra" };
+  change(output);
+  assert.equal(parseSourceLinkageAdjudicationOutput(JSON.stringify(output), projectionRequest()).ok, false);
+});
+
+test("SL-P3 original JSON bounds and lawful unclear remain unchanged", () => {
+  const request = projectionRequest();
+  assert.equal(parseSourceLinkageAdjudicationOutput("{", request).ok, false);
+  assert.equal(parseSourceLinkageAdjudicationOutput(JSON.stringify({
+    ...validProjectionOutput(), extra: "x".repeat(SOURCE_LINKAGE_MAX_OUTPUT_CHARS),
+  }), request).ok, false);
+  const parsed = parseSourceLinkageAdjudicationOutput(JSON.stringify({
+    schemaVersion: 1, decision: "unclear", voiceEvidenceSpans: [], screenEvidenceSpans: [],
+    ambiguityReason: "The object is unidentified.", extra: "not authoritative",
+  }), request);
+  assert.equal(parsed.ok, true);
+  if (parsed.ok) assert.equal(parsed.value.decision, "unclear");
+});
 
 test("binds a screen only with bilateral grounded evidence", () => {
   const request = buildSourceLinkageAdjudicationRequest({
@@ -68,9 +163,10 @@ test("SL-E1/E5 prompt contract keeps the recorded sparse payload without parent 
   assert.ok(request);
   const prompts = buildSourceLinkageAdjudicationPrompts(request);
   assert.deepEqual(JSON.parse(prompts.userMessage), sparsePayload);
-  assert.equal(request.promptVersion, "source-linkage-adjudication-v2");
+  assert.equal(request.promptVersion, "source-linkage-adjudication-v3");
   assert.equal(request.promptVersion, SOURCE_LINKAGE_ADJUDICATION_PROMPT_VERSION);
   assert.equal(request.schemaVersion, 1);
+  assert.match(prompts.systemPrompt, /Output only the declared schema fields/);
   assert.match(prompts.systemPrompt, /pointing inside part of the requested region is affirmative relevance evidence/);
   assert.match(prompts.systemPrompt, /only one line or a method signature/);
   assert.match(prompts.systemPrompt, /Complete method-body or requested-range coverage is not required/);

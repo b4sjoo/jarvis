@@ -11,7 +11,7 @@ import {
 
 export const SOURCE_LINKAGE_ADJUDICATION_SCHEMA_VERSION = 1;
 export const SOURCE_LINKAGE_ADJUDICATION_PROMPT_VERSION =
-  "source-linkage-adjudication-v2";
+  "source-linkage-adjudication-v3";
 export const SOURCE_LINKAGE_MAX_OUTPUT_CHARS = 2_048;
 export const SOURCE_LINKAGE_MAX_TEXT_CHARS = 1_200;
 
@@ -142,6 +142,7 @@ export function buildSourceLinkageAdjudicationPrompts(
   const systemPrompt = [
       "Decide one thing only: whether the deliberate screen capture reasonably points to the object referenced by the unresolved voice question and warrants an image-evidence recovery attempt, or positively indicates an unrelated object or different current request.",
       "Return one JSON object only. Do not answer either question.",
+      "Output only the declared schema fields; do not echo input fields or add instructions for downstream operations.",
       "Use bind-voice when voice and screen evidence reasonably connect the focused object to the pending request, so the Advisor can attempt recovery using the image.",
       "A cursor or selection pointing inside part of the requested region is affirmative relevance evidence, even when the summary contains only one line or a method signature. Complete method-body or requested-range coverage is not required.",
       "Binding authorizes an attempt, not proof that all requested evidence is visible or that the question is resolved. The Advisor must limit claims to visible evidence and acknowledge unseen or uncertain portions.",
@@ -168,16 +169,7 @@ export function parseSourceLinkageAdjudicationOutput(
   });
   if (!parsed.ok) return parseFailure(parsed.reason, parsed.errorKind);
   const decoded = parsed.value;
-  const allowedKeys = new Set([
-    "schemaVersion",
-    "decision",
-    "voiceEvidenceSpans",
-    "screenEvidenceSpans",
-    "ambiguityReason",
-  ]);
-  if (Object.keys(decoded).some((key) => !allowedKeys.has(key))) {
-    return parseFailure("unexpected-field", "schema");
-  }
+  // Only validated contract fields enter the returned candidate; extras remain raw.
   if (decoded.schemaVersion !== SOURCE_LINKAGE_ADJUDICATION_SCHEMA_VERSION) {
     return parseFailure("unsupported-schema-version", "schema");
   }
