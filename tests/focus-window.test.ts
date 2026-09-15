@@ -1,10 +1,31 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { createMeetingFocusDisplayModel, readMeetingFocusDisplay } from "../src/lib/meeting/focus-display.js";
 import {
   EMPTY_MEETING_FOCUS_SNAPSHOT,
   resolveFocusControlsGeometry,
 } from "../src/lib/meeting/focus-window.js";
+
+test("phase output notice crosses Focus as optional plain display text only", () => {
+  const phaseOutputNotice = "Implementation validation: Code not ready for this phase.";
+  const display = createMeetingFocusDisplayModel({ ...EMPTY_MEETING_FOCUS_SNAPSHOT, phaseOutputNotice });
+  assert.equal(readMeetingFocusDisplay(JSON.parse(JSON.stringify(display))).phaseOutputNotice, phaseOutputNotice);
+  assert.equal(createMeetingFocusDisplayModel(EMPTY_MEETING_FOCUS_SNAPSHOT).phaseOutputNotice, undefined);
+  assert.throws(() => readMeetingFocusDisplay({ ...EMPTY_MEETING_FOCUS_SNAPSHOT, phaseOutputNotice: { phase: "implementation_validation" } }), /Invalid Focus text field/);
+});
+
+test("Normal and inline/native Focus read the shared notice only in answer areas", () => {
+  const normal = readFileSync("src/pages/app/components/meeting/index.tsx", "utf8");
+  const native = readFileSync("src/pages/app/components/meeting/focus-window.tsx", "utf8");
+  assert.match(normal, /phaseOutputNotice: meeting\.phaseOutputNotice/);
+  assert.match(normal, /phaseOutputNotice=\{focusSnapshot\.phaseOutputNotice\}/);
+  assert.equal((normal.match(/<PhaseOutputNotice notice=\{focusSnapshot\.phaseOutputNotice\}/g) ?? []).length, 2);
+  assert.match(normal, /<PhaseOutputNotice notice=\{phaseOutputNotice\}/);
+  const controlsStart = native.indexOf("function MeetingFocusControlsWindow");
+  assert.match(native.slice(0, controlsStart), /<PhaseOutputNotice notice=\{snapshot\.phaseOutputNotice\}/);
+  assert.doesNotMatch(native.slice(controlsStart), /PhaseOutputNotice/);
+});
 
 
 test("focus snapshot excludes historical transcripts", () => {

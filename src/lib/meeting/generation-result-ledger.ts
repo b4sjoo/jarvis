@@ -6,6 +6,13 @@ import type {
 } from "./meeting-presentation-contracts.js";
 
 import type { AIResponseTerminalOutcome } from "../functions/ai-response-events.js";
+import type { EffectiveQuestionSourceOwner } from "./effective-question-source-ledger.js";
+import type { InterviewPlaybookPhase } from "./types.js";
+
+export interface GenerationPhaseContext {
+  owner: EffectiveQuestionSourceOwner;
+  phase: InterviewPlaybookPhase;
+}
 
 export interface GenerationResultLease {
   id: string;
@@ -74,6 +81,7 @@ export interface GenerationResultLedgerEntry {
   generationLeaseId: string;
   taskId: string | null;
   modelRoute: string;
+  phaseContext?: GenerationPhaseContext;
   traceId?: string;
   providerAttempts: GenerationResultProviderAttempt[];
   terminalOutcome?: GenerationResultProviderAttempt;
@@ -145,6 +153,7 @@ export interface GenerationDerivedCommitResult<T> {
 interface BeginGenerationInput {
   lease: GenerationResultLease;
   traceId?: string;
+  phaseContext?: GenerationPhaseContext;
   now?: number;
 }
 
@@ -220,6 +229,9 @@ export class GenerationResultLedger {
       generationLeaseId: input.lease.id,
       taskId: input.lease.taskId,
       modelRoute: input.lease.modelRoute,
+      ...(input.phaseContext ? { phaseContext: {
+        owner: { ...input.phaseContext.owner }, phase: input.phaseContext.phase,
+      } } : {}),
       traceId: input.traceId,
       providerAttempts: [],
       candidateValidation: "not-evaluated",
@@ -376,6 +388,25 @@ export class GenerationResultLedger {
 
   clear() {
     this.entries.length = 0;
+  }
+
+  latestPhaseResult(input: {
+    sessionId: string;
+    runtimeEpoch: number;
+    parentId?: string;
+    childId?: string;
+  }): (GenerationPhaseContext & { status: GenerationCommitDisposition }) | undefined {
+    if (!input.parentId) return undefined;
+    for (let index = this.entries.length - 1; index >= 0; index--) {
+      const entry = this.entries[index];
+      const context = entry.phaseContext;
+      if (!context || entry.key.sessionId !== input.sessionId ||
+          entry.key.runtimeEpoch !== input.runtimeEpoch || context.owner.parentId !== input.parentId) continue;
+      const childId = context.owner.kind === "active-child" ? context.owner.childId : undefined;
+      if (childId !== input.childId) continue;
+      return { owner: { ...context.owner }, phase: context.phase, status: entry.commitDisposition };
+    }
+    return undefined;
   }
 
   private ensure(lease: GenerationResultLease, now: number) {
@@ -778,6 +809,8 @@ export function formatGenerationResultLedgerForTrace(
       ? serializeLedgerKey(entry.key)
       : undefined,
     generationResultAttemptCount: entry?.providerAttempts.length,
+    generationOutputPhase: entry?.phaseContext?.phase,
+    generationOutputOwner: entry?.phaseContext?.owner,
     generationResultProviderAttempts: entry?.providerAttempts.map(
       (attempt) => ({
         requestId: attempt.requestId,
@@ -948,6 +981,9 @@ function cloneEntry(
 ): GenerationResultLedgerEntry {
   return {
     ...entry,
+    ...(entry.phaseContext ? { phaseContext: {
+      owner: { ...entry.phaseContext.owner }, phase: entry.phaseContext.phase,
+    } } : {}),
     key: { ...entry.key },
     providerAttempts: entry.providerAttempts.map((attempt) => ({
       ...attempt,

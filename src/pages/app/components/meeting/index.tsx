@@ -151,6 +151,7 @@ import {
 import { WhiteboardViewer } from "./whiteboard-viewer";
 import { createMeetingFocusPublisher } from "@/lib/meeting/focus-window-protocol";
 import { FactGuardrailNotice } from "./fact-guardrail-notice";
+import { PhaseOutputNotice } from "./phase-output-notice";
 import { createMeetingFocusDisplayModel } from "@/lib/meeting/focus-display";
 import { formatChineseThinkingText } from "@/lib/meeting/meeting-display-text";
 import { MeetingMarkdownText } from "./meeting-markdown-text";
@@ -963,6 +964,7 @@ export const MeetingAssistant = ({
       statusLabel: meetingStatusLabel,
       error: meeting.error,
       factGuardrailNotice,
+      phaseOutputNotice: meeting.phaseOutputNotice,
       isBusy,
       audioControl: audioPauseResumeControl,
       showClarifyingQuestion,
@@ -1023,6 +1025,7 @@ export const MeetingAssistant = ({
       editableBriefForFocus.interviewTypes,
       focusModeActive,
       factGuardrailNotice,
+      meeting.phaseOutputNotice,
       isBusy,
       isTaskSwitchClarifyingQuestion,
       latestReliableAnswerPreview,
@@ -1754,6 +1757,7 @@ export const MeetingAssistant = ({
               hasCorrectableQuestion={focusSnapshot.hasCorrectableQuestion}
               effectiveQuestionType={focusSnapshot.effectiveQuestionType}
               factGuardrailNotice={focusSnapshot.factGuardrailNotice}
+              phaseOutputNotice={focusSnapshot.phaseOutputNotice}
               transientPersonalStatusLabel={
                 focusSnapshot.transientPersonalStatusLabel
               }
@@ -2133,6 +2137,7 @@ export const MeetingAssistant = ({
                       />
                     </div>
                     <FactGuardrailNotice notice={focusSnapshot.factGuardrailNotice} />
+                    <PhaseOutputNotice notice={focusSnapshot.phaseOutputNotice} />
                     <MeetingMarkdownText
                       className={cn(
                         WRAP_TEXT_CLASS,
@@ -2227,6 +2232,7 @@ export const MeetingAssistant = ({
                       />
                     </div>
                     <FactGuardrailNotice notice={focusSnapshot.factGuardrailNotice} />
+                    <PhaseOutputNotice notice={focusSnapshot.phaseOutputNotice} />
                     <MeetingMarkdownText
                       className={cn(
                         WRAP_TEXT_CLASS,
@@ -3014,6 +3020,7 @@ const FocusModePanel = ({
   hasCorrectableQuestion,
   effectiveQuestionType,
   factGuardrailNotice,
+  phaseOutputNotice,
   transientPersonalStatusLabel,
   answerDeliveryState,
   manualQuestionTypeCorrection,
@@ -3056,6 +3063,7 @@ const FocusModePanel = ({
   hasCorrectableQuestion: boolean;
   effectiveQuestionType?: CanonicalQuestionType;
   factGuardrailNotice?: AdvisorSuggestion["factGuardrailNotice"];
+  phaseOutputNotice?: string;
   transientPersonalStatusLabel?: string;
   answerDeliveryState: AnswerDeliveryPresentation["state"];
   manualQuestionTypeCorrection?: MeetingFocusSnapshot["manualQuestionTypeCorrection"];
@@ -3141,6 +3149,7 @@ const FocusModePanel = ({
                 <AnswerDeliveryBadge state={answerDeliveryState} />
               </div>
               <FactGuardrailNotice notice={factGuardrailNotice} />
+              <PhaseOutputNotice notice={phaseOutputNotice} />
               <MeetingMarkdownText
                 className={cn(
                   WRAP_TEXT_CLASS,

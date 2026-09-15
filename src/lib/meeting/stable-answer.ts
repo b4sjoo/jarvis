@@ -9,11 +9,12 @@ import {
 import type { EffectiveQuestionSourceOwner } from "./effective-question-source-ledger.js";
 import { parseMeetingAnswer, serializeMeetingAnswer } from "./meeting-answer.js";
 import { calculateWordEquivalent } from "./transcript-fusion.js";
-import type { AdvisorSuggestion, ParsedMeetingAnswer, TranscriptTurn } from "./types.js";
+import type { AdvisorSuggestion, InterviewPlaybookPhase, ParsedMeetingAnswer, TranscriptTurn } from "./types.js";
 
 export interface StableAnswerSectionRevision {
   revision: number;
   owner: EffectiveQuestionSourceOwner | null;
+  phase?: InterviewPlaybookPhase;
   sourceSuggestionId: string;
   updatedAt: number;
 }
@@ -249,8 +250,18 @@ export function commitStableAnswerRevision(input: {
             : null,
           sourceSuggestionId: input.candidate.id,
           updatedAt: now,
+          ...(published && input.candidate.generationPhase
+            ? { phase: input.candidate.generationPhase }
+            : {}),
         }
-      : previous ?? {
+      : published && previous && input.candidate.generationPhase
+        ? {
+            ...previous,
+            phase: input.candidate.generationPhase,
+            sourceSuggestionId: input.candidate.id,
+            updatedAt: now,
+          }
+        : previous ?? {
           revision: 0,
           owner: null,
           sourceSuggestionId: input.candidate.id,
@@ -396,7 +407,11 @@ export function commitStableArtifactOnlyRevision(input: {
     (artifact): artifact is ArtifactOnlyAnswerSection =>
       artifact !== "answer"
   );
-  if (mutatedArtifacts.length === 0) {
+  const phaseProvenanceChanged = authorizedArtifacts.some(
+    (section) => stable.sections[section].phase !== undefined &&
+      stable.sections[section].phase !== current.sections[section].phase
+  );
+  if (mutatedArtifacts.length === 0 && !phaseProvenanceChanged) {
     return reject("artifact-candidate-no-change");
   }
   return {

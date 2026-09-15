@@ -1118,6 +1118,7 @@ export interface AdvisorSuggestion {
   content: string;
   meetingAnswer?: ParsedMeetingAnswer;
   answerProfile?: MeetingAnswerProfile;
+  generationPhase?: InterviewPlaybookPhase;
   createdAt: number;
   taskId?: string;
   parentTaskId?: string;

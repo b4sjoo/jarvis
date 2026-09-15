@@ -158,6 +158,7 @@ import {
   formatPostModelContinuityAuthorityForTrace,
   resolvePostModelContinuityAuthority,
 } from "@/lib/meeting/post-model-continuity-authority";
+import { buildBranchPhaseOutputNotice } from "@/lib/meeting/phase-output-presentation";
 import {
   applyActiveBranchPhase,
   detectCommittedBranchPhaseTransition,
@@ -4742,6 +4743,10 @@ export function useMeetingAssistant() {
         codeSectionRevision: stable.sections.code.revision,
         complexitySectionRevision: stable.sections.complexity.revision,
         whiteboardSectionRevision: stable.sections.whiteboard.revision,
+        answerSectionPhase: stable.sections.answer.phase,
+        codeSectionPhase: stable.sections.code.phase,
+        complexitySectionPhase: stable.sections.complexity.phase,
+        whiteboardSectionPhase: stable.sections.whiteboard.phase,
         pendingAnswerDisposition:
           options.pendingDisposition ??
           (pending ? "superseded-by-visible-commit" : undefined),
@@ -12628,6 +12633,11 @@ export function useMeetingAssistant() {
         }
         const phaseUpdatedContext =
           contextManagerRef.current.getState();
+        setState((previous) => ({
+          ...previous,
+          taskRuntime: phaseUpdatedContext.taskRuntime,
+          activeMeetingTask: phaseUpdatedContext.activeMeetingTask,
+        }));
         promptContext = {
           ...promptContext,
           taskRuntime: phaseUpdatedContext.taskRuntime,
@@ -13779,6 +13789,15 @@ export function useMeetingAssistant() {
     generationResultLedgerRef.current.begin({
       lease: answerGenerationLease,
       traceId,
+      phaseContext: settledExecutionPlan?.playbookPhase && generationContextState.activeMeetingTask
+        ? {
+            owner: resolveStableAnswerSectionOwner({
+              activeMeetingTask: generationContextState.activeMeetingTask,
+              artifactRegenerationTarget: options.artifactRegenerationTarget,
+            })!,
+            phase: settledExecutionPlan.playbookPhase,
+          }
+        : undefined,
     });
     activeAdvisorGenerationLeaseRef.current = {
       advisorJobId: advisorJob.id,
@@ -15924,6 +15943,7 @@ export function useMeetingAssistant() {
           generatedTaskMetadata,
           parsedMeetingAnswer
         ),
+        generationPhase: settledExecutionPlan?.playbookPhase,
         questionType:
           options.artifactRegenerationTarget?.questionType ??
           responseOwner.questionType,
@@ -29338,6 +29358,12 @@ export function useMeetingAssistant() {
         generationResultLedgerRef.current.begin({
           lease: screenGenerationLease,
           traceId: trace.id,
+          phaseContext: screenExecutionPlan.playbookPhase && screenGenerationContext.activeMeetingTask
+            ? {
+                owner: resolveStableAnswerSectionOwner({ activeMeetingTask: screenGenerationContext.activeMeetingTask })!,
+                phase: screenExecutionPlan.playbookPhase,
+              }
+            : undefined,
         });
         publishGenerationResultProjection(
           screenGenerationLease,
@@ -30492,6 +30518,7 @@ export function useMeetingAssistant() {
               content: committedScreenTaskContent.trim(),
               meetingAnswer: parsedScreenMeetingAnswer,
               answerProfile: parsedScreenMeetingAnswer.profile,
+              generationPhase: screenExecutionPlan.playbookPhase,
               createdAt: Date.now(),
               ...(screenTaskContextCommitted ||
               screenGenerationContinuity?.task
@@ -37292,6 +37319,16 @@ export function useMeetingAssistant() {
   return {
     ...state,
     meetingSessionId: contextManagerRef.current.getState().sessionId,
+    phaseOutputNotice: buildBranchPhaseOutputNotice({
+      parent: state.taskRuntime.parent,
+      stable: stableAnswerRevisionRef.current,
+      generation: generationResultLedgerRef.current.latestPhaseResult({
+        sessionId: contextManagerRef.current.getState().sessionId,
+        runtimeEpoch: runtimeEpochRef.current,
+        parentId: state.taskRuntime.parent?.id,
+        childId: state.taskRuntime.parent?.child?.id,
+      }),
+    }),
     setupWarnings: microphoneVad.errored && state.settings.microphoneContextEnabled
       ? [...setupWarnings, { code: "microphone-input-unavailable" as const, severity: "warning" as const, message: `Microphone input unavailable: ${microphoneVad.errored}. Re-select a browser microphone and restart Jarvis to initialize it.` }]
       : setupWarnings,

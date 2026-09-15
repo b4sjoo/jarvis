@@ -48,6 +48,7 @@ const readDisplay = object({
   statusLabel: string,
   error: (value) => value === null ? null : string(value),
   factGuardrailNotice: optional(object({ kind: string, message: string })),
+  phaseOutputNotice: text,
   isBusy: boolean,
   audioControl: object({
     action: string, label: string, title: string, disabled: boolean, urgent: boolean, busy: boolean,

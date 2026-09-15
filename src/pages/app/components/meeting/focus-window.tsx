@@ -50,6 +50,7 @@ import {
 import { WhiteboardViewer } from "./whiteboard-viewer";
 import { createMeetingFocusConsumer } from "@/lib/meeting/focus-window-protocol";
 import { FactGuardrailNotice } from "./fact-guardrail-notice";
+import { PhaseOutputNotice } from "./phase-output-notice";
 import { formatChineseThinkingText } from "@/lib/meeting/meeting-display-text";
 import { MeetingMarkdownText } from "./meeting-markdown-text";
 
@@ -155,6 +156,7 @@ function MeetingFocusAnswerWindow({
                 ) : null}
               </div>
               <FactGuardrailNotice notice={snapshot.factGuardrailNotice} />
+              <PhaseOutputNotice notice={snapshot.phaseOutputNotice} />
               <MeetingMarkdownText
                 className={cn(WRAP_TEXT_CLASS, "min-h-20 text-sm leading-6")}
                 value={focusAnswer || "Waiting for answer."}

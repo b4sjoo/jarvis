@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import test from "node:test";
+import ts from "typescript";
 import { build } from "esbuild";
 import { compile } from "@tailwindcss/node";
 import { Scanner } from "@tailwindcss/oxide";
@@ -15,6 +16,17 @@ test("Task170 production React receivers, shared renderer and embedded Focus wit
   skip: !playwright && "Set JARVIS_PLAYWRIGHT_MODULE to run the real React browser test",
 }, async (t) => {
   const mainSource = readFileSync("src/pages/app/components/meeting/index.tsx", "utf8");
+  const mainAst = ts.createSourceFile("meeting.tsx", mainSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const normalAnswerSections = [];
+  const visit = (node) => {
+    if (ts.isJsxElement(node) && node.openingElement.tagName.getText(mainAst) === "section" &&
+      node.children.some(child => ts.isJsxSelfClosingElement(child) && child.tagName.getText(mainAst) === "PhaseOutputNotice" && child.getText(mainAst).includes("focusSnapshot.phaseOutputNotice"))) {
+      normalAnswerSections.push(node.getText(mainAst));
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(mainAst);
+  assert.equal(normalAnswerSections.length, 2, "both production Normal Answer layouts");
   const mocks = {
     "@/hooks": "export const useMeetingAssistant = () => {}; export const useShortcuts = () => {}; export const useWindowResize = () => {};",
     "@/lib": "export const extractVariables = () => []; export const safeLocalStorage = { getItem: () => null };",
@@ -32,10 +44,11 @@ test("Task170 production React receivers, shared renderer and embedded Focus wit
     import React from 'react';
     import { createRoot } from 'react-dom/client';
     import { MeetingFocusWindow } from './src/pages/app/components/meeting/focus-window';
-    import { FocusModePanel } from './src/pages/app/components/meeting/index';
+    import { FocusModePanel, NormalAnswerFixture } from './src/pages/app/components/meeting/index';
     import { EMPTY_MEETING_FOCUS_SNAPSHOT as empty } from './src/lib/meeting/focus-window';
     import { createMeetingFocusPublisher } from './src/lib/meeting/focus-window-protocol';
     import { createMeetingFocusDisplayModel } from './src/lib/meeting/focus-display';
+    import { createPhaseOutputUiFixture } from './tests/helpers/phase-output-ui-fixture';
     const handlers = new Map(), releases = [], sent = [], actions = [], invokes = [], errors = [];
     let delayed = true, source = empty;
     const bus = {
@@ -54,13 +67,15 @@ test("Task170 production React receivers, shared renderer and embedded Focus wit
     window.__focusBus = bus; window.__focusInvokes = invokes;
     const publisherEndpoint = {subscribe:receive=>bus.listen('meeting-focus-action',receive),send:payload=>bus.emit('meeting-focus-snapshot',payload)};
     let publisher = createMeetingFocusPublisher({transport:publisherEndpoint, publisherInstanceId:'A', onAction:action=>actions.push(action), onError:error=>errors.push(error.message)});
-    const roots = Object.fromEntries(['answer','controls','embedded'].map(id=>[id,createRoot(document.getElementById(id))]));
+    const roots = Object.fromEntries(['answer','controls','embedded','normal-technical','normal-general'].map(id=>[id,createRoot(document.getElementById(id))]));
     roots.answer.render(<MeetingFocusWindow kind='answer'/>); roots.controls.render(<MeetingFocusWindow kind='controls'/>);
     function renderEmbedded(d) {
       const noop = () => {};
+      roots['normal-technical'].render(<NormalAnswerFixture focusSnapshot={d} technical={true}/>);
+      roots['normal-general'].render(<NormalAnswerFixture focusSnapshot={d} technical={false}/>);
       roots.embedded.render(<FocusModePanel suggestionSections={d.sections} codingArtifactCached={false} whiteboardArtifactCached={false}
         whiteboardViewKey={d.sections.whiteboardViewKey} hasCorrectableQuestion={d.hasCorrectableQuestion} effectiveQuestionType={d.effectiveQuestionType}
-        factGuardrailNotice={d.factGuardrailNotice} answerDeliveryState={d.answerDelivery.state} manualQuestionTypeCorrection={d.manualQuestionTypeCorrection}
+        factGuardrailNotice={d.factGuardrailNotice} phaseOutputNotice={d.phaseOutputNotice} answerDeliveryState={d.answerDelivery.state} manualQuestionTypeCorrection={d.manualQuestionTypeCorrection}
         latestTurnText={d.latestTurnText} forceAdviseAvailable={d.forceAdviseAvailable} forceAdvisePending={d.forceAdvisePending} forceAdviseCompleted={d.forceAdviseCompleted}
         speechCorrectionInput='' speechCorrections={[]} status='listening' error={null} audioInputLiveness={null} isBusy={d.isBusy} audioControl={d.audioControl}
         showClarifyingQuestion={d.showClarifyingQuestion} clarifyingQuestion={d.clarifyingQuestion} clarifyingOptions={d.sections.clarifyingOptions}
@@ -73,6 +88,12 @@ test("Task170 production React receivers, shared renderer and embedded Focus wit
       release() { delayed = false; releases.splice(0).forEach(resolve=>resolve()); },
       registered() { return releases.length; },
       async publish(patch) { source = {...source,...patch, sections:{...source.sections,...patch.sections}}; const display = createMeetingFocusDisplayModel(source); renderEmbedded(display); await publisher.publish(display); },
+      display() { return createMeetingFocusDisplayModel(source); },
+      async publishPhase(input) {
+        const result = createPhaseOutputUiFixture(input);
+        await this.publish({phaseOutputNotice:result.notice, sections:result.sections});
+        return result;
+      },
       async restart() { publisher.dispose(); publisher = createMeetingFocusPublisher({transport:publisherEndpoint,publisherInstanceId:'B',onAction:action=>actions.push(action),onError:error=>errors.push(error.message)}); await publisher.start(); await publisher.publish(source); },
       inject(payload) { return bus.emit('meeting-focus-snapshot',payload); },
       ack(role) { return publisher.getLatestApplied(role); },
@@ -86,7 +107,13 @@ test("Task170 production React receivers, shared renderer and embedded Focus wit
     plugins: [{ name: "focus-native-io", setup(builder) {
       builder.onResolve({ filter: /.*/ }, (args) => Object.hasOwn(mocks, args.path) ? { path: args.path, namespace: "fixture" } : undefined);
       builder.onLoad({ filter: /.*/, namespace: "fixture" }, (args) => ({ contents: mocks[args.path], loader: "tsx", resolveDir: root }));
-      builder.onLoad({ filter: /meeting\/index\.tsx$/ }, (args) => ({ contents: readFileSync(args.path, "utf8") + "\nexport { FocusModePanel };", loader: "tsx", resolveDir: path.dirname(args.path) }));
+      builder.onLoad({ filter: /meeting\/index\.tsx$/ }, (args) => ({ contents: readFileSync(args.path, "utf8") + `
+        export { FocusModePanel };
+        export function NormalAnswerFixture({focusSnapshot, technical}: {focusSnapshot: MeetingFocusSnapshot; technical: boolean}) {
+          const transientPersonalStatusLabel = focusSnapshot.transientPersonalStatusLabel;
+          return technical ? (${normalAnswerSections[0]}) : (${normalAnswerSections[1]});
+        }
+      `, loader: "tsx", resolveDir: path.dirname(args.path) }));
     } }],
   });
   const css = await compile(readFileSync("src/global.css", "utf8"), { base: path.join(root, "src"), onDependency() {} });
@@ -96,7 +123,7 @@ test("Task170 production React receivers, shared renderer and embedded Focus wit
     const page = await browser.newPage({ viewport: { width: 1100, height: 900 } });
     page.setDefaultTimeout(5000);
     const errors = []; page.on("pageerror", (error) => { errors.push(error.message); t.diagnostic(error.message); });
-    await page.route("**/*", (route) => route.fulfill({ contentType: "text/html", body: '<div id="answer"></div><div id="controls"></div><div id="embedded" style="height:900px;display:flex"></div>' }));
+    await page.route("**/*", (route) => route.fulfill({ contentType: "text/html", body: '<div id="answer"></div><div id="controls"></div><div id="embedded" style="height:900px;display:flex"></div><div id="normal-technical"></div><div id="normal-general"></div>' }));
     await page.goto("https://focus.fixture/");
     await page.addStyleTag({ content: css.build(scanner.scan()) + "body{position:static;overflow:auto;height:auto}" });
     await page.addScriptTag({ content: bundle.outputFiles[0].text });
@@ -131,6 +158,100 @@ test("Task170 production React receivers, shared renderer and embedded Focus wit
       }
       await page.locator('#answer').getByRole('button',{name:'Postgres',exact:true}).click();
       assert.deepEqual(await page.evaluate(()=>window.__focus.actions.at(-1)),{type:'clarifying-answer',answer:'option',option:{label:'Postgres',value:'postgres'}});
+    });
+    await t.test("MR5 phase-output notice is shared by inline/native answer areas and absent from controls", async () => {
+      const notice = 'Implementation validation: Code, Complexity not ready for this phase. Generation cancelled. Previously published content remains available.';
+      await page.evaluate(phaseOutputNotice => window.__focus.publish({phaseOutputNotice}), notice);
+      for (const surface of ['answer', 'embedded']) {
+        await page.locator('#'+surface).getByRole('status').filter({hasText: notice}).waitFor();
+        await page.locator('#'+surface).getByText('Streaming answer B',{exact:true}).waitFor();
+      }
+      assert.equal(await page.locator('#controls').getByText(notice,{exact:true}).count(), 0);
+      for (const width of [1100, 375]) {
+        await page.setViewportSize({width, height:900});
+        assert.equal(await page.locator('#answer [role="status"], #embedded [role="status"]').evaluateAll(elements => elements.every(el => el.scrollWidth <= el.clientWidth && el.getBoundingClientRect().right <= innerWidth)), true);
+        await page.locator('#answer').screenshot({path:'/tmp/task153-phase-output-'+width+'.png'});
+      }
+      await page.setViewportSize({width:1100, height:900});
+      await page.evaluate(() => window.__focus.publish({phaseOutputNotice:undefined}));
+      for (const surface of ['answer', 'embedded']) {
+        await page.locator('#'+surface).getByText(notice,{exact:true}).waitFor({state:'detached'});
+        assert.equal(await page.locator('#'+surface).getByText(notice,{exact:true}).count(), 0);
+      }
+    });
+    await t.test("MR5/6 real publication and phase ledger drive all four Answer layouts with full source references", async () => {
+      const before = await page.evaluate(() => window.__focus.display());
+      const surfaces = ['answer', 'embedded', 'normal-technical', 'normal-general'];
+      for (const input of [
+        {},
+        {sourcePhase:'optimized_pseudocode',status:'failed'},
+        {sourcePhase:'optimized_pseudocode',status:'cancelled'},
+        {sourcePhase:'optimized_pseudocode',status:'pending'},
+        {sourcePhase:'optimized_pseudocode',restartAfterCancellation:true},
+        {sourcePhase:'optimized_pseudocode',repair:'answer'},
+        {sourcePhase:'optimized_pseudocode',withRetainedCode:true,repair:'artifacts'},
+        {sourcePhase:'implementation_validation',repair:'artifacts'},
+      ]) {
+        const result = await page.evaluate(input => window.__focus.publishPhase(input), input);
+        for (const surface of surfaces) {
+          const area = page.locator('#'+surface);
+          await area.getByText('Retained LRU explanation.',{exact:true}).waitFor();
+          if (result.notice) {
+            await area.getByRole('status').filter({hasText:result.notice}).waitFor();
+            assert.equal(await area.getByRole('status').textContent(), result.notice);
+          } else {
+            await area.getByRole('status').waitFor({state:'detached'});
+          }
+        }
+        assert.equal(await page.locator('#controls').getByText(result.notice ?? 'Source phase is unknown',{exact:true}).count(), 0);
+        for (const key of ['sessionId','runtimeEpoch','taskId','logicalQuestionUnitId','logicalQuestionRevision','questionSourceHash','settlementId']) {
+          assert.equal(result.stable[key], result.reference[key]);
+        }
+        assert.deepEqual(result.stable.suggestion.questionLineage, result.previousStable.suggestion.questionLineage);
+        assert.deepEqual(result.stable.suggestion.basedOnTurnIds, result.reference.sourceTurnIds);
+        assert.deepEqual(result.stable.suggestion.basedOnObservationIds, result.reference.sourceObservationIds);
+        const wire = await page.evaluate(() => window.__focus.sent.filter(item => item.event==='meeting-focus-snapshot').at(-1).payload.payload);
+        assert.equal(wire.phaseOutputNotice, result.notice);
+        assert.equal(JSON.stringify(wire).includes(result.reference.sourceTraceId), false);
+        assert.equal('parsedAnswer' in wire.sections, false);
+        if (!input.sourcePhase) {
+          assert.match(result.notice, /Source phase is unknown for Answer, Code, Complexity/);
+          assert.doesNotMatch(result.notice, /not ready|failed|cancelled|Generating/);
+          assert.equal(result.stable.sections.answer.phase, undefined);
+          for (const width of [1100,375]) {
+            await page.setViewportSize({width,height:900});
+            for (const surface of surfaces) {
+              assert.equal(await page.locator('#'+surface+' [role="status"]').evaluate(el => el.scrollWidth<=el.clientWidth && el.getBoundingClientRect().right<=innerWidth), true);
+            }
+            await page.locator('#normal-technical').screenshot({path:'/tmp/task153-legacy-phase-normal-'+width+'.png'});
+            await page.locator('#answer').screenshot({path:'/tmp/task153-legacy-phase-focus-'+width+'.png'});
+          }
+          await page.setViewportSize({width:1100,height:900});
+        }
+        if (input.restartAfterCancellation) {
+          assert.equal(result.generation.status, 'started');
+          assert.match(result.notice, /Generating/);
+          assert.doesNotMatch(result.notice, /cancelled/);
+        }
+        if (input.repair==='answer') assert.match(result.notice, /Code, Complexity not ready/);
+        if (input.repair==='artifacts') {
+          assert.deepEqual(result.stable.sections.answer, result.previousStable.sections.answer);
+          assert.deepEqual(result.artifactCommit.mutatedArtifacts, []);
+          assert.equal(result.stable.sections.code.revision, result.previousStable.sections.code.revision);
+          assert.equal(result.stable.suggestion.meetingAnswer.sections.code, result.previousStable.suggestion.meetingAnswer.sections.code);
+          if (input.sourcePhase==='implementation_validation') {
+            assert.equal(result.artifactCommit.reason, 'artifact-candidate-no-change');
+            assert.equal(result.notice, undefined);
+          } else {
+            assert.equal(result.artifactCommit.disposition, 'committed');
+            assert.equal(result.stable.sections.code.phase, 'implementation_validation');
+            assert.match(result.notice, /Answer not ready/);
+            assert.doesNotMatch(result.notice, /Code|Complexity/);
+          }
+        }
+      }
+      await page.evaluate(display => window.__focus.publish({...display,phaseOutputNotice:display.phaseOutputNotice}), before);
+      await page.locator('#answer').getByText('Streaming answer B',{exact:true}).waitFor();
     });
     await t.test("native correction draft survives snapshots and restart, controls dispatch original intents", async () => {
       const input=page.locator('#controls').getByPlaceholder('Correction: RAG not rec / Glean');

@@ -161,6 +161,7 @@ export type MeetingFocusSnapshot = FocusReadonly<{
   statusLabel: string;
   error: string | null;
   factGuardrailNotice?: FactGuardrailVisibleNotice;
+  phaseOutputNotice?: string;
   isBusy: boolean;
   audioControl: NativeAudioPauseResumeControlPresentation;
   showClarifyingQuestion: boolean;

@@ -61,6 +61,34 @@ function snapshot(
   };
 }
 
+test("phase presentation uses the latest started owner, not a late older cancellation", () => {
+  const ledger = new GenerationResultLedger();
+  const old = lease({ id: "older" });
+  const newest = lease({ id: "newest", startedAt: 200 });
+  const phaseContext = { owner: { kind: "parent-mainline" as const, parentId: "parent-1" }, phase: "implementation_validation" as const };
+  ledger.begin({ lease: old, phaseContext });
+  ledger.begin({ lease: newest, phaseContext });
+  ledger.recordCommitDisposition({ lease: old, disposition: "cancelled", reason: "superseded", now: 300 });
+  const read = () => ledger.latestPhaseResult({ sessionId: "session-1", runtimeEpoch: 2, parentId: "parent-1" });
+  assert.equal(read()?.status, "started");
+  const detached = read()!;
+  detached.owner.parentId = "tampered";
+  assert.equal(read()?.owner.parentId, "parent-1");
+  const returnedEntry = ledger.getEntry(newest.id)!;
+  returnedEntry.phaseContext!.owner.parentId = "tampered";
+  phaseContext.owner.parentId = "outside-change";
+  assert.equal(read()?.owner.parentId, "parent-1");
+  assert.equal(ledger.latestPhaseResult({ sessionId: "other", runtimeEpoch: 2, parentId: "parent-1" }), undefined);
+  assert.equal(ledger.latestPhaseResult({ sessionId: "session-1", runtimeEpoch: 3, parentId: "parent-1" }), undefined);
+  assert.equal(ledger.latestPhaseResult({ sessionId: "session-1", runtimeEpoch: 2, parentId: "parent-1", childId: "child" }), undefined);
+  const child = lease({ id: "child", startedAt: 400 });
+  ledger.begin({ lease: child, phaseContext: { owner: { kind: "active-child", parentId: "parent-1", childId: "child" }, phase: "implementation_validation" } });
+  ledger.recordCommitDisposition({ lease: child, disposition: "failed", reason: "provider", now: 450 });
+  assert.equal(read()?.status, "started");
+  assert.equal(ledger.latestPhaseResult({ sessionId: "session-1", runtimeEpoch: 2, parentId: "parent-1", childId: "child" })?.status, "failed");
+  assert.equal(formatGenerationResultLedgerForTrace(ledger.getEntry(child.id)).generationOutputPhase, "implementation_validation");
+});
+
 function outcome(
   overrides: Partial<AIResponseTerminalOutcome> = {}
 ): AIResponseTerminalOutcome {
