@@ -129,16 +129,19 @@ callbacks: MemoryRetrievalRuntimeCallbacks = {}): Promise<MemoryRetrievalResult>
     diagramDomainQuery === undefined ? query : diagramDomainQuery;
   const effectiveDiagramTopicDomain =
     diagramTopicDomain === undefined ? topicDomain : diagramTopicDomain;
-  const diagramOverlayGate = gateDiagramOverlayEntriesByDomain(entries, {
-    query: effectiveDiagramDomainQuery,
-    questionType,
-    topicDomain: effectiveDiagramTopicDomain,
-  });
+  const diagramOverlayGate = gateDiagramOverlayEntriesByDomain(
+    preparationPurpose ? [] : entries,
+    {
+      query: effectiveDiagramDomainQuery,
+      questionType,
+      topicDomain: effectiveDiagramTopicDomain,
+    }
+  );
   const diagramOverlayRejections = new Map(
     diagramOverlayGate.rejected.map((item) => [item.entryId, item])
   );
   const behavioralFamilyProposal =
-    questionType === "behavioral"
+    !preparationPurpose && questionType === "behavioral"
       ? selectBehavioralStoryFamily({
           entries,
           query:
@@ -160,10 +163,6 @@ callbacks: MemoryRetrievalRuntimeCallbacks = {}): Promise<MemoryRetrievalResult>
   let interviewFamilyEvaluationMs = 0;
 
   for (const entry of entries) {
-    if (preparationPurpose && preparationMemoryPurpose(entry) !== preparationPurpose) {
-      rejectRecorder.record("preparation-purpose-mismatch", entry);
-      continue;
-    }
     const diagramRejection = diagramOverlayRejections.get(entry.id);
     if (diagramRejection) {
       rejectRecorder.record(diagramRejection.reason, entry);
@@ -178,7 +177,8 @@ callbacks: MemoryRetrievalRuntimeCallbacks = {}): Promise<MemoryRetrievalResult>
       memoryPolicy,
       eligibilityQueryDecision.query,
       projectId,
-      projectAnchor
+      projectAnchor,
+      preparationPurpose
     );
     if (decision.familyGateDecision) {
       interviewFamilyRecorder.record(entry.id, decision.familyGateDecision);
@@ -264,6 +264,7 @@ callbacks: MemoryRetrievalRuntimeCallbacks = {}): Promise<MemoryRetrievalResult>
   const taggedEntries: MemoryEntry[] = [];
   for (const entry of eligibleEntries) {
     if (
+      preparationPurpose ||
       behavioralFamilySelectedIds.has(entry.id) ||
       hasRequiredTaggedHints(entry, query)
     ) {
@@ -297,6 +298,7 @@ callbacks: MemoryRetrievalRuntimeCallbacks = {}): Promise<MemoryRetrievalResult>
       (entry) =>
         !behavioralFamilyCatalogIds.has(entry.id) &&
         !(
+          !preparationPurpose &&
           questionType === "behavioral" && entry.type === "personal_story"
         ) &&
         entry.injectionMode === "retrieval" &&
@@ -360,6 +362,7 @@ callbacks: MemoryRetrievalRuntimeCallbacks = {}): Promise<MemoryRetrievalResult>
       (entry) =>
         !behavioralFamilyCatalogIds.has(entry.entry.id) &&
         !(
+          !preparationPurpose &&
           questionType === "behavioral" &&
           entry.entry.type === "personal_story"
         )
@@ -746,7 +749,8 @@ function getEntryEligibilityDecision(
   memoryPolicy: MemoryRetrievalPolicy | undefined,
   query: string,
   projectId: string | undefined,
-  projectAnchor: string | undefined
+  projectAnchor: string | undefined,
+  preparationPurpose: MemoryRetrievalRequest["preparationPurpose"]
 ) {
   if (!entry.enabled) return { eligible: false as const, reason: "disabled" as const };
   if (entry.injectionMode === "manual_only" || entry.injectionMode === "never") {
@@ -754,6 +758,12 @@ function getEntryEligibilityDecision(
   }
   if (entry.curationStatus !== "curated" && entry.curationStatus !== "verified") {
     return { eligible: false as const, reason: "uncurated" as const };
+  }
+  // Preparation discovers across projects; Meeting task gates start below this boundary.
+  if (preparationPurpose) {
+    return preparationMemoryPurpose(entry) === preparationPurpose
+      ? { eligible: true as const }
+      : { eligible: false as const, reason: "preparation-purpose-mismatch" as const };
   }
   const useCaseMatched =
     entry.useCases.includes(useCase) ||
