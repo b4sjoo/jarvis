@@ -7,6 +7,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  Header,
   Input,
   Select,
   SelectContent,
@@ -14,7 +15,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components";
-import { PageLayout } from "@/layouts";
 import {
   buildRoundTimeOptions,
   formatRoundStage,
@@ -188,23 +188,27 @@ const InterviewPreparation = () => {
   );
 
   return (
-    <PageLayout
-      title="Interview Preparation"
-      description="Processes, rounds, and reviewed preparation state"
-      rightSlot={
-        <Button size="sm" onClick={() => setCreateOpen(true)}>
-          <Plus className="size-4" />
-          New process
-        </Button>
-      }
-    >
+    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-hidden px-1 pb-4 pt-8" data-preparation-workspace>
+      <Header
+        isMainTitle
+        showBorder
+        className="shrink-0 gap-2 [&>div]:min-w-0"
+        title="Interview Preparation"
+        description="Processes, rounds, and reviewed preparation state"
+        rightSlot={
+          <Button size="sm" onClick={() => setCreateOpen(true)}>
+            <Plus className="size-4" />
+            New process
+          </Button>
+        }
+      />
       {error && (
-        <div className="border-destructive/30 bg-destructive/10 text-destructive border px-3 py-2 text-sm">
+        <div className="max-h-20 shrink-0 overflow-y-auto border-destructive/30 bg-destructive/10 text-destructive border px-3 py-2 text-sm">
           {error}
         </div>
       )}
       {notice && (
-        <div className="border bg-muted px-3 py-2 text-sm">{notice}</div>
+        <div className="max-h-20 shrink-0 overflow-y-auto border bg-muted px-3 py-2 text-sm">{notice}</div>
       )}
 
       {!expandedWorkspaceSurface && (
@@ -212,7 +216,7 @@ const InterviewPreparation = () => {
       )}
 
       <div
-        className={`grid min-h-[640px] overflow-hidden border ${
+        className={`grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)] overflow-hidden border ${
           expandedWorkspaceSurface
             ? "grid-cols-1"
             : "lg:grid-cols-[220px_minmax(0,1fr)] 2xl:grid-cols-[260px_minmax(0,1fr)_380px]"
@@ -222,10 +226,10 @@ const InterviewPreparation = () => {
           className={
             expandedWorkspaceSurface
               ? "hidden"
-              : `border-r ${mobilePanel === "processes" ? "block" : "hidden"} lg:block`
+              : `min-h-0 flex-col border-r ${mobilePanel === "processes" ? "flex" : "hidden"} lg:flex`
           }
         >
-          <div className="flex h-12 items-center justify-between border-b px-3">
+          <div className="flex h-12 shrink-0 items-center justify-between border-b px-3">
             <span className="text-sm font-semibold">Processes</span>
             <div className="flex border">
               <FilterButton
@@ -240,7 +244,7 @@ const InterviewPreparation = () => {
               />
             </div>
           </div>
-          <div className="max-h-[588px] overflow-y-auto">
+          <div className="min-h-0 flex-1 overflow-y-auto">
             {isLoading ? (
               <div className="flex justify-center py-10">
                 <Loader2 className="size-4 animate-spin" />
@@ -277,10 +281,10 @@ const InterviewPreparation = () => {
             expandedWorkspaceSurface === "review"
               ? "hidden"
               : expandedWorkspaceSurface === "conversation"
-                ? "block min-w-0"
+                ? "block min-h-0 min-w-0"
                 : mobilePanel === "review"
-                  ? "hidden min-w-0 2xl:block"
-                  : `${mobilePanel === "conversation" ? "block" : "hidden"} min-w-0 lg:block`
+                  ? "hidden min-h-0 min-w-0 2xl:block"
+                  : `${mobilePanel === "conversation" ? "block" : "hidden"} min-h-0 min-w-0 lg:block`
           }
         >
           {detail ? (
@@ -335,7 +339,7 @@ const InterviewPreparation = () => {
               onDelete={() => setDeleteOpen(true)}
             />
           ) : (
-            <div className="flex min-h-[640px] items-center justify-center px-6 text-sm text-muted-foreground">
+            <div className="flex h-full items-center justify-center px-6 text-sm text-muted-foreground">
               Select an interview process
             </div>
           )}
@@ -346,8 +350,8 @@ const InterviewPreparation = () => {
             expandedWorkspaceSurface === "conversation"
               ? "hidden"
               : expandedWorkspaceSurface === "review"
-                ? "block min-w-0"
-                : `${mobilePanel === "review" ? "block" : "hidden"} min-w-0 border-l 2xl:block`
+                ? "block min-h-0 min-w-0 overflow-y-auto"
+                : `${mobilePanel === "review" ? "block" : "hidden"} min-h-0 min-w-0 overflow-y-auto border-l 2xl:block`
           }
         >
           <ReviewedStatePanel
@@ -510,7 +514,7 @@ const InterviewPreparation = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </PageLayout>
+    </div>
   );
 };
 
@@ -553,9 +557,9 @@ const ProcessWorkspace = ({
   onReopen: () => Promise<void>;
   onDelete: () => void;
 }) => (
-  <div className="flex min-h-[640px] flex-col">
+  <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
     <div
-      className={`${conversationExpanded ? "hidden" : "flex"} min-h-20 items-start justify-between gap-3 border-b px-4 py-3`}
+      className={`${conversationExpanded ? "hidden" : "flex"} min-h-20 shrink-0 items-start justify-between gap-3 border-b px-4 py-3`}
     >
       <div className="min-w-0">
         <div className="flex items-center gap-2">
@@ -596,8 +600,8 @@ const ProcessWorkspace = ({
       </div>
     </div>
 
-    <div className={conversationExpanded ? "hidden" : "border-b"}>
-      <div className="flex h-11 items-center justify-between px-4">
+    <div className={conversationExpanded ? "hidden" : "flex min-h-0 max-h-[25%] shrink-0 flex-col border-b"}>
+      <div className="flex h-11 shrink-0 items-center justify-between px-4">
         <span className="text-sm font-semibold">Rounds</span>
         <Button
           size="sm"
@@ -608,7 +612,7 @@ const ProcessWorkspace = ({
           <Plus className="size-4" /> Round
         </Button>
       </div>
-      <div className="max-h-56 overflow-y-auto border-t">
+      <div className="min-h-0 overflow-y-auto border-t">
         {detail.rounds.map((round) => {
           const active = round.id === detail.process.activeRoundId;
           const current =
@@ -1352,7 +1356,7 @@ const MobilePanelSelector = ({
   onChange: (value: MobilePanel) => void;
 }) => (
   <>
-    <div className="grid grid-cols-3 border lg:hidden">
+    <div className="grid shrink-0 grid-cols-3 border lg:hidden">
       {([
         ["processes", "Processes"],
         ["conversation", "Workspace"],
@@ -1367,7 +1371,7 @@ const MobilePanelSelector = ({
         </button>
       ))}
     </div>
-    <div className="hidden grid-cols-2 border lg:grid 2xl:hidden">
+    <div className="hidden shrink-0 grid-cols-2 border lg:grid 2xl:hidden">
       <button
         className={`h-9 border-r text-xs ${value !== "review" ? "bg-primary text-primary-foreground" : "bg-background"}`}
         onClick={() => onChange("conversation")}

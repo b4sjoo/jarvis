@@ -43,6 +43,7 @@ import {
 import {
   type KeyboardEvent,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -106,7 +107,10 @@ export const PreparationConversationPanel = ({
   const [isDeletingSession, setIsDeletingSession] = useState(false);
   const sessionOperation = usePageOperation(JSON.stringify([detail.process.id, selectedSessionId, sessionDialogMode]));
   const deleteOperation = usePageOperation(JSON.stringify([detail.process.id, deleteTarget?.id]));
-  const endRef = useRef<HTMLDivElement>(null);
+  const messagesRef = useRef<HTMLDivElement>(null);
+  const messageContentRef = useRef<HTMLDivElement>(null);
+  const followBottomRef = useRef(true);
+  const lastScrollTopRef = useRef(0);
   const readOnly = detail.process.status !== "active";
   const selectedSession = sessions.find(
     (session) => session.id === selectedSessionId
@@ -174,9 +178,27 @@ export const PreparationConversationPanel = ({
     onDetailViewChange(Boolean(selectedSessionId));
   }, [onDetailViewChange, selectedSessionId]);
 
-  useEffect(() => {
-    endRef.current?.scrollIntoView({ block: "end" });
-  }, [conversation?.messages.length, streamingResponse]);
+  useLayoutEffect(() => {
+    followBottomRef.current = true;
+  }, [detail.process.id, selectedSessionId]);
+
+  useLayoutEffect(() => {
+    const messages = messagesRef.current;
+    const content = messageContentRef.current;
+    if (!messages || !content) return;
+    const followBottom = () => {
+      if (followBottomRef.current) {
+        messages.scrollTop = messages.scrollHeight;
+        lastScrollTopRef.current = messages.scrollTop;
+      }
+    };
+    // Markdown commits in a later transition; follow its rendered height.
+    const observer = new ResizeObserver(followBottom);
+    observer.observe(messages);
+    observer.observe(content);
+    followBottom();
+    return () => observer.disconnect();
+  }, [selectedSession?.id]);
 
   useEffect(() => {
     if (!selectedOperation) return;
@@ -391,10 +413,10 @@ export const PreparationConversationPanel = ({
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden" data-preparation-conversation>
       {selectedSession ? (
         <>
-          <div className="flex min-h-12 items-center justify-between gap-2 border-b px-4 py-2">
+          <div className="flex min-h-12 shrink-0 items-center justify-between gap-2 border-b px-4 py-2">
             <div className="flex min-w-0 items-center gap-2">
               <Button
                 size="icon"
@@ -409,7 +431,7 @@ export const PreparationConversationPanel = ({
                 <div className="truncate text-sm font-semibold">
                   {selectedSession.title}
                 </div>
-                <div className="text-xs text-muted-foreground">
+                <div className="truncate text-xs text-muted-foreground">
                   {scopeLabel(selectedSession.scope, detail)}
                 </div>
               </div>
@@ -432,89 +454,114 @@ export const PreparationConversationPanel = ({
             </div>
           </div>
 
-          <div className="min-h-0 flex-1 overflow-y-auto">
-            {conversation?.messages.length || streamingResponse ? (
-              <div>
-                {conversation?.messages.map((message) => (
-                  <PreparationMessageView
-                    key={message.id}
-                    message={message}
-                    canEdit={
-                      !readOnly &&
-                      !isSending &&
-                      message.role === "user" &&
-                      !message.requestMetadata?.image &&
-                      !message.requestMetadata?.recovery
-                    }
-                    onEdit={() => startEditingMessage(message)}
-                  />
-                ))}
-                {isSending && (
-                  <div className="border-b px-5 py-4">
-                    <div className="mb-2 flex items-center gap-2 text-xs font-medium text-muted-foreground">
-                      <Loader2 className="size-3.5 animate-spin" /> Jarvis
+          <div
+            ref={messagesRef}
+            data-preparation-messages
+            className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain [overflow-anchor:none] [overflow-wrap:anywhere]"
+            onScroll={(event) => {
+              const messages = event.currentTarget;
+              // A programmatic scroll event may arrive after the next chunk's layout.
+              if (messages.scrollTop === lastScrollTopRef.current) return;
+              lastScrollTopRef.current = messages.scrollTop;
+              followBottomRef.current =
+                messages.scrollHeight - messages.scrollTop - messages.clientHeight <= 24;
+            }}
+          >
+            <div ref={messageContentRef} className="min-h-full">
+              {conversation?.messages.length || streamingResponse ? (
+                <div>
+                  {conversation?.messages.map((message) => (
+                    <PreparationMessageView
+                      key={message.id}
+                      message={message}
+                      canEdit={
+                        !readOnly &&
+                        !isSending &&
+                        message.role === "user" &&
+                        !message.requestMetadata?.image &&
+                        !message.requestMetadata?.recovery
+                      }
+                      onEdit={() => startEditingMessage(message)}
+                    />
+                  ))}
+                  {isSending && (
+                    <div className="border-b px-5 py-4">
+                      <div className="mb-2 flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                        <Loader2 className="size-3.5 animate-spin" /> Jarvis
+                      </div>
+                      {streamingResponse ? (
+                        <div className="text-sm leading-6">
+                          <Markdown isStreaming>{streamingResponse}</Markdown>
+                        </div>
+                      ) : (
+                        <div className="text-sm text-muted-foreground">
+                          Reading bounded preparation context…
+                        </div>
+                      )}
                     </div>
-                    {streamingResponse ? (
-                      <div className="text-sm leading-6">
-                        <Markdown isStreaming>{streamingResponse}</Markdown>
-                      </div>
-                    ) : (
-                      <div className="text-sm text-muted-foreground">
-                        Reading bounded preparation context…
-                      </div>
-                    )}
-                  </div>
-                )}
-                <div ref={endRef} />
-              </div>
-            ) : (
-              <div className="flex h-full min-h-72 items-center justify-center px-6 text-sm text-muted-foreground">
-                Start this preparation conversation
-              </div>
-            )}
+                  )}
+                </div>
+              ) : (
+                <div className="flex h-full items-center justify-center px-6 text-sm text-muted-foreground">
+                  Start this preparation conversation
+                </div>
+              )}
+            </div>
           </div>
 
-          <div className="border-t p-3">
-            {editingMessage && (
-              <div className="mb-2 flex items-center gap-2 border px-2 py-1.5 text-xs">
-                <Pencil className="size-3.5 shrink-0" />
-                <span className="min-w-0 flex-1 truncate">
-                  Editing this message will replace the later visible conversation
-                </span>
-                <Button
-                  size="icon"
-                  variant="ghost"
-                  className="size-6"
-                  title="Cancel edit"
-                  onClick={cancelEditingMessage}
-                >
-                  <X className="size-3.5" />
-                </Button>
-              </div>
-            )}
-            {pendingRecoveryMaterials.length > 0 && (
-              <div className="mb-2 flex items-start gap-2 border px-2 py-1.5 text-xs">
-                <Files className="mt-0.5 size-3.5 shrink-0" />
-                <div className="min-w-0 flex-1">
-                  <div className="font-medium">File recovery</div>
-                  <div className="mt-0.5 truncate text-muted-foreground">
-                    {pendingRecoveryMaterials
-                      .map((material) => material.displayName)
-                      .join(", ")}
-                  </div>
+          <div className="flex max-h-[50%] shrink-0 flex-col border-t p-3" data-preparation-composer>
+            <div className="min-h-0 overflow-y-auto overscroll-contain [overflow-wrap:anywhere]">
+              {editingMessage && (
+                <div className="mb-2 flex items-center gap-2 border px-2 py-1.5 text-xs">
+                  <Pencil className="size-3.5 shrink-0" />
+                  <span className="min-w-0 flex-1 truncate">
+                    Editing this message will replace the later visible conversation
+                  </span>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="size-6"
+                    title="Cancel edit"
+                    onClick={cancelEditingMessage}
+                  >
+                    <X className="size-3.5" />
+                  </Button>
                 </div>
-                <Button
-                  size="icon"
-                  variant="ghost"
-                  className="size-6"
-                  title="Remove selected files"
-                  onClick={() => setPendingRecoveryMaterialIds([])}
-                >
-                  <X className="size-3.5" />
-                </Button>
-              </div>
-            )}
-            <div className="flex items-end gap-2">
+              )}
+              {pendingRecoveryMaterials.length > 0 && (
+                <div className="mb-2 flex items-start gap-2 border px-2 py-1.5 text-xs">
+                  <Files className="mt-0.5 size-3.5 shrink-0" />
+                  <div className="min-w-0 flex-1">
+                    <div className="font-medium">File recovery</div>
+                    <div className="mt-0.5 truncate text-muted-foreground">
+                      {pendingRecoveryMaterials
+                        .map((material) => material.displayName)
+                        .join(", ")}
+                    </div>
+                  </div>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="size-6"
+                    title="Remove selected files"
+                    onClick={() => setPendingRecoveryMaterialIds([])}
+                  >
+                    <X className="size-3.5" />
+                  </Button>
+                </div>
+              )}
+              {route.status !== "ready" && !readOnly && (
+                <div className="mb-2 text-xs text-destructive">
+                  {formatPreparationModelRouteError(route)}
+                </div>
+              )}
+              {fileDisabledReason && !readOnly && (
+                <div className="mb-2 text-xs text-muted-foreground">
+                  File recovery unavailable: {fileDisabledReason}
+                </div>
+              )}
+            </div>
+            <div className="flex shrink-0 items-end gap-2">
               <span title={fileDisabledReason}>
                 <Button
                   size="icon"
@@ -538,7 +585,7 @@ export const PreparationConversationPanel = ({
                       ? "Edit your message…"
                       : "Ask about this interview process…"
                 }
-                className="max-h-40 min-h-10 resize-y rounded-md"
+                className="max-h-[min(10rem,10dvh)] min-h-10 min-w-0 resize-none overflow-y-auto rounded-md"
               />
               {isSending ? (
                 <Button
@@ -560,21 +607,11 @@ export const PreparationConversationPanel = ({
                 </Button>
               )}
             </div>
-            {route.status !== "ready" && !readOnly && (
-              <div className="mt-2 text-xs text-destructive">
-                {formatPreparationModelRouteError(route)}
-              </div>
-            )}
-            {fileDisabledReason && !readOnly && (
-              <div className="mt-2 text-xs text-muted-foreground">
-                File recovery unavailable: {fileDisabledReason}
-              </div>
-            )}
           </div>
         </>
       ) : (
         <>
-          <div className="flex h-12 items-center justify-between border-b px-4">
+          <div className="flex h-12 shrink-0 items-center justify-between gap-2 border-b px-4">
             <div className="flex items-center gap-2 text-sm font-semibold">
               <MessageSquare className="size-4" /> Preparation Conversation
               <Badge variant="outline">{visibleSessions.length}</Badge>
@@ -659,8 +696,8 @@ export const PreparationConversationPanel = ({
         open={fileDialogOpen}
         onOpenChange={(open) => !isSending && setFileDialogOpen(open)}
       >
-        <DialogContent className="max-w-xl">
-          <DialogHeader>
+        <DialogContent className="flex max-h-[calc(100dvh-2rem)] flex-col sm:max-w-xl">
+          <DialogHeader className="shrink-0 pr-5">
             <DialogTitle>Select materials for recovery</DialogTitle>
             <DialogDescription>
               Select up to 6 files visible to this conversation. Model-recovered
@@ -668,7 +705,7 @@ export const PreparationConversationPanel = ({
               review it.
             </DialogDescription>
           </DialogHeader>
-          <div className="max-h-80 overflow-y-auto border">
+          <div className="min-h-0 max-h-80 overflow-y-auto border">
             {scopedMaterials.map((material) => {
               const selected = fileDialogSelection.includes(material.id);
               const disabled = !selected && fileDialogSelection.length >= 6;
@@ -711,7 +748,7 @@ export const PreparationConversationPanel = ({
               );
             })}
           </div>
-          <DialogFooter>
+          <DialogFooter className="shrink-0">
             <Button variant="outline" onClick={() => setFileDialogOpen(false)}>
               Cancel
             </Button>
