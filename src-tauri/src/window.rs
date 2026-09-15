@@ -324,7 +324,7 @@ pub fn set_meeting_focus_controls_geometry(
     measured_transcript_height: f64,
     transcript_scroll_required: bool,
 ) -> Result<FocusControlsGeometryResult, String> {
-    use tauri::{LogicalSize, Size};
+    use tauri::LogicalSize;
 
     let controls = app
         .get_webview_window(FOCUS_CONTROLS_WINDOW_LABEL)
@@ -386,25 +386,27 @@ pub fn set_meeting_focus_controls_geometry(
         LogicalSize::new(applied_width, applied_height),
         FocusWindowPlacement::Bottom,
     );
+    let (answer_size, answer_position) = focus_geometry_submission(
+        LogicalSize::new(answer_width, answer_height),
+        answer_position,
+        scale_factor,
+    );
+    let (controls_size, controls_position) = focus_geometry_submission(
+        LogicalSize::new(applied_width, applied_height),
+        controls_position,
+        scale_factor,
+    );
     answer
-        .set_size(Size::Physical(
-            LogicalSize::new(answer_width, answer_height).to_physical::<u32>(scale_factor),
-        ))
+        .set_size(answer_size)
         .map_err(|error| format!("Failed to resize Focus answer window: {}", error))?;
     controls
-        .set_size(Size::Physical(
-            LogicalSize::new(applied_width, applied_height).to_physical::<u32>(scale_factor),
-        ))
+        .set_size(controls_size)
         .map_err(|error| format!("Failed to resize Focus controls window: {}", error))?;
     answer
-        .set_position(tauri::Position::Physical(
-            answer_position.to_physical::<i32>(scale_factor),
-        ))
+        .set_position(answer_position)
         .map_err(|error| format!("Failed to position Focus answer: {}", error))?;
     controls
-        .set_position(tauri::Position::Physical(
-            controls_position.to_physical::<i32>(scale_factor),
-        ))
+        .set_position(controls_position)
         .map_err(|error| format!("Failed to position Focus controls: {}", error))?;
     *FOCUS_CONTROLS_PREFERENCE
         .lock()
@@ -442,6 +444,28 @@ pub fn hide_interview_windows_best_effort<R: Runtime>(app: &AppHandle<R>) {
 enum FocusWindowPlacement {
     Top,
     Bottom,
+}
+
+fn focus_geometry_submission(
+    size: tauri::LogicalSize<f64>,
+    position: tauri::LogicalPosition<f64>,
+    _target_scale: f64,
+) -> (tauri::Size, tauri::Position) {
+    // macOS converts Physical using the receiving window's old backing scale.
+    #[cfg(target_os = "macos")]
+    {
+        (
+            tauri::Size::Logical(size),
+            tauri::Position::Logical(position),
+        )
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        (
+            tauri::Size::Physical(size.to_physical::<u32>(_target_scale)),
+            tauri::Position::Physical(position.to_physical::<i32>(_target_scale)),
+        )
+    }
 }
 
 fn resolve_focus_window_vertical_layout(
@@ -605,10 +629,11 @@ pub fn show_dashboard_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), Strin
 #[cfg(test)]
 mod tests {
     use super::{
-        clamp_focus_controls_geometry, focus_target_position, resolve_focus_window_vertical_layout,
-        FocusWindowPlacement, FOCUS_ANSWER_WINDOW_LABEL, FOCUS_CONTROLS_HEIGHT,
-        FOCUS_CONTROLS_MAX_HEIGHT, FOCUS_CONTROLS_MAX_WIDTH, FOCUS_CONTROLS_WIDTH,
-        FOCUS_CONTROLS_WINDOW_LABEL, INTERVIEW_WINDOW_LABELS, MAIN_WINDOW_LABEL,
+        clamp_focus_controls_geometry, focus_geometry_submission, focus_target_position,
+        resolve_focus_window_vertical_layout, FocusWindowPlacement, FOCUS_ANSWER_WINDOW_LABEL,
+        FOCUS_CONTROLS_HEIGHT, FOCUS_CONTROLS_MAX_HEIGHT, FOCUS_CONTROLS_MAX_WIDTH,
+        FOCUS_CONTROLS_WIDTH, FOCUS_CONTROLS_WINDOW_LABEL, INTERVIEW_WINDOW_LABELS,
+        MAIN_WINDOW_LABEL,
     };
 
     #[test]
@@ -683,10 +708,84 @@ mod tests {
         );
         let top = focus_target_position(origin, extent, target, FocusWindowPlacement::Top);
         assert_eq!(top.y, 112.0);
-        // Conversion uses the target monitor, never the old window's scale.
+        // These are target physical coordinates, before platform submission.
         let physical = position.to_physical::<i32>(2.0);
         assert_eq!((physical.x, physical.y), (-3200, 1368));
         let size = target.to_physical::<u32>(2.0);
         assert_eq!((size.width, size.height), (2560, 880));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn focus_macos_submission_survives_each_windows_previous_backing_scale() {
+        use tauri::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize};
+
+        for target_scale in [1.0, 2.0] {
+            for (answer_previous_scale, controls_previous_scale) in
+                [(1.0, 1.0), (1.0, 2.0), (2.0, 1.0), (2.0, 2.0)]
+            {
+                for (x, y) in [(0.0, 0.0), (-1920.0, -1080.0), (1920.0, -240.0)] {
+                    let origin = PhysicalPosition::new(x * target_scale, y * target_scale)
+                        .to_logical::<f64>(target_scale);
+                    let extent = PhysicalSize::new(1920.0 * target_scale, 1080.0 * target_scale)
+                        .to_logical::<f64>(target_scale);
+                    for preferred_height in [FOCUS_CONTROLS_HEIGHT, FOCUS_CONTROLS_MAX_HEIGHT] {
+                        let (answer_height, controls_height) =
+                            resolve_focus_window_vertical_layout(1000.0, preferred_height);
+                        let (width, height) = clamp_focus_controls_geometry(
+                            1280.0,
+                            controls_height,
+                            1280.0,
+                            controls_height,
+                        );
+                        for (size, placement, previous_scale, expected_position) in [
+                            (
+                                LogicalSize::new(920.0, answer_height),
+                                FocusWindowPlacement::Top,
+                                answer_previous_scale,
+                                LogicalPosition::new(x + 500.0, y + 12.0),
+                            ),
+                            (
+                                LogicalSize::new(width, height),
+                                FocusWindowPlacement::Bottom,
+                                controls_previous_scale,
+                                LogicalPosition::new(x + 320.0, y + 1024.0 - height),
+                            ),
+                        ] {
+                            let position = focus_target_position(origin, extent, size, placement);
+                            let (submitted_size, submitted_position) =
+                                focus_geometry_submission(size, position, target_scale);
+                            assert!(matches!(submitted_size, tauri::Size::Logical(_)));
+                            assert!(matches!(submitted_position, tauri::Position::Logical(_)));
+                            // Same DPI conversion used by Tao's macOS setters before AppKit.
+                            assert_eq!(submitted_size.to_logical::<f64>(previous_scale), size);
+                            assert_eq!(
+                                submitted_position.to_logical::<f64>(previous_scale),
+                                expected_position
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn focus_non_macos_submission_retains_target_physical_geometry() {
+        let size = tauri::LogicalSize::new(920.0, 440.0);
+        let position = tauri::LogicalPosition::new(-1600.0, -396.0);
+        for scale in [1.0, 2.0] {
+            let (submitted_size, submitted_position) =
+                focus_geometry_submission(size, position, scale);
+            assert_eq!(
+                submitted_size,
+                tauri::Size::Physical(size.to_physical::<u32>(scale))
+            );
+            assert_eq!(
+                submitted_position,
+                tauri::Position::Physical(position.to_physical::<i32>(scale))
+            );
+        }
     }
 }
