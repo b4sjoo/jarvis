@@ -35,10 +35,13 @@ export const AudioRecorder = ({
   const sendingRef = useRef(false);
   const transcriptionAbortRef = useRef<AbortController | undefined>(undefined);
   const captureAttemptRef = useRef<object | undefined>(undefined);
+  const removeTrackListenersRef = useRef<(() => void) | undefined>(undefined);
 
   // Cleanup function - stops all tracks and clears refs
   const cleanup = useCallback(() => {
     captureAttemptRef.current = undefined;
+    removeTrackListenersRef.current?.();
+    removeTrackListenersRef.current = undefined;
     // Clear timers
     if (durationIntervalRef.current) {
       clearInterval(durationIntervalRef.current);
@@ -98,11 +101,13 @@ export const AudioRecorder = ({
     captureAttemptRef.current = attempt;
     try {
       const deviceId = selectedAudioDevices?.input?.id;
+      if (!deviceId) {
+        throw new Error("Select a microphone in settings, including Default to use the system default.");
+      }
 
-      const audioConstraints: MediaTrackConstraints =
-        deviceId && deviceId !== "default"
-          ? { deviceId: { exact: deviceId } }
-          : {};
+      const audioConstraints: MediaTrackConstraints = deviceId === "default"
+        ? {}
+        : { deviceId: { exact: deviceId } };
 
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: audioConstraints,
@@ -116,14 +121,34 @@ export const AudioRecorder = ({
       streamRef.current = stream;
       setAudioStream(stream);
 
-      const mimeType = MediaRecorder.isTypeSupported("audio/webm")
-        ? "audio/webm"
-        : "audio/ogg";
+      const mimeType = [
+        "audio/webm",
+        "audio/webm;codecs=opus",
+        "audio/ogg;codecs=opus",
+        "audio/ogg",
+        "audio/mp4",
+      ].find((candidate) => MediaRecorder.isTypeSupported(candidate));
+      if (!mimeType) {
+        throw new Error("This browser does not support an available audio recording format.");
+      }
 
       const recorder = new MediaRecorder(stream, { mimeType });
       mediaRecorderRef.current = recorder;
       audioChunksRef.current = [];
       startTimeRef.current = Date.now();
+
+      const failCapture = (message: string) => {
+        if (!mountedRef.current || cancelledRef.current || captureAttemptRef.current !== attempt) return;
+        cancelledRef.current = true;
+        transcriptionAbortRef.current?.abort();
+        cleanup();
+        onError?.(message);
+        onCancel();
+      };
+      const tracks = stream.getTracks();
+      tracks.forEach((track) => { track.onended = () => failCapture("Selected microphone was disconnected."); });
+      removeTrackListenersRef.current = () => { tracks.forEach((track) => { track.onended = null; }); };
+      recorder.onerror = () => failCapture("Audio recording failed.");
 
       recorder.ondataavailable = (e) => {
         if (mediaRecorderRef.current !== recorder || cancelledRef.current) return;

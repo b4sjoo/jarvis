@@ -109,7 +109,7 @@ export async function fetchSTT(params: STTParams): Promise<string> {
         type: audio.type,
       });
       throwIfAborted(signal);
-      form.append("file", freshBlob, "audio.wav");
+      form.append("file", freshBlob, audioUploadFilename(audio.type));
       const headerKeys = Object.keys(headers).map((k) =>
         k.toUpperCase().replace(/[-_]/g, "")
       );
@@ -226,6 +226,30 @@ export async function fetchSTT(params: STTParams): Promise<string> {
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(msg);
   }
+}
+
+function audioUploadFilename(mimeType: string): string {
+  const type = mimeType.split(";", 1)[0].trim().toLowerCase();
+  const extensions: Record<string, string> = {
+    "audio/wav": "wav",
+    "audio/wave": "wav",
+    "audio/x-wav": "wav",
+    "audio/vnd.wave": "wav",
+    "audio/webm": "webm",
+    "audio/ogg": "ogg",
+    "audio/mp4": "mp4",
+    "audio/mpeg": "mp3",
+    "audio/flac": "flac",
+    "audio/x-flac": "flac",
+    "audio/aac": "aac",
+  };
+  const extension = Object.prototype.hasOwnProperty.call(extensions, type)
+    ? extensions[type]
+    : undefined;
+  if (!extension) {
+    throw new Error(`Unsupported audio format: ${mimeType || "missing MIME type"}`);
+  }
+  return `audio.${extension}`;
 }
 
 function throwIfAborted(signal?: AbortSignal) {
