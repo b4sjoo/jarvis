@@ -15523,9 +15523,10 @@ export function useMeetingAssistant() {
           ),
           activeChild: Boolean(contextState.activeMeetingTask?.child),
           phaseOwnerKind: precommittedPhaseOwnerKind,
+          validatedPlan: settledExecutionPlan,
         });
       const existingInterviewTask =
-        postModelContinuityAuthority.lifecycleCommittedBeforeAdvisor
+        postModelContinuityAuthority.owner !== "settled-relation"
           ? contextState.taskRuntime.parent ?? promptInterviewTask
           : promptInterviewTask;
       const shouldCommitAdvisorParent =
@@ -15541,7 +15542,7 @@ export function useMeetingAssistant() {
         advisorTaskSignals.openingRoute?.commitParent !== false &&
         (effectiveAdvisorSettlementView.relation !== "new-parent" ||
           postModelContinuityAuthority.lifecycleCommittedBeforeAdvisor ||
-          revisionStableParentContinuation ||
+          postModelContinuityAuthority.owner !== "settled-relation" ||
           Boolean(
             responseOpportunityGenerationGateOperationId &&
               responseOpportunityGenerationAuthorized()
@@ -15555,6 +15556,7 @@ export function useMeetingAssistant() {
             ? "followup-parent"
             : advisorContinuityRelation;
       const outputPhaseDecision =
+        postModelContinuityAuthority.owner !== "settled-relation" ||
         taskBoundaryCommittedBeforeAdvisor ||
         sourceOwnedTransitionCommittedBeforeAdvisor ||
         settledExecutionPlan?.taskMutationCommittedBeforeAdvisor ||

@@ -14,6 +14,7 @@ import {
 import {
   buildActiveMeetingTask,
   reduceMeetingTaskRuntimeMutation,
+  equalTaskRuntimeValues,
 } from "../src/lib/meeting/active-meeting-task.js";
 import {
   createProvisionalCurrentQuestion,
@@ -32,7 +33,11 @@ import {
   authorizeSettledAdvisorExecutionPlan,
 } from "../src/lib/meeting/settled-advisor-execution-plan.js";
 import * as responseTargets from "../src/lib/meeting/response-action-target.js";
-import { selectInterviewPlaybook } from "../src/lib/meeting/interview-playbook.js";
+import { selectInterviewPlaybook, withInterviewPlaybookPhase } from "../src/lib/meeting/interview-playbook.js";
+import { resolvePostModelContinuityAuthority } from "../src/lib/meeting/post-model-continuity-authority.js";
+import { decideInterviewTaskContinuityBranch } from "../src/lib/meeting/interview-task-continuity.js";
+import { resolveLatestScreenObservationId } from "../src/lib/meeting/source-owned-transition-transaction.js";
+import { isWhiteboardRevisionAuthorized } from "../src/lib/meeting/whiteboard-artifact.js";
 import type { TranscriptTurn } from "../src/lib/meeting/types.js";
 import type { StableAnswerRevision } from "../src/lib/meeting/stable-answer.js";
 import {
@@ -187,6 +192,80 @@ function visible(f: ReturnType<typeof screenFixture>): StableAnswerRevision {
     suggestion: { id: "answer", kind: "answer", content: "Use a sliding window.", createdAt: 100, basedOnTurnIds: [], basedOnObservationIds: ["screen-origin"], confidence: "high" },
     sections: {} as StableAnswerRevision["sections"], committedAt: 100,
   };
+}
+
+for (const scope of ["current-only", "active-parent-read"] as const) {
+test(`MR1 origin ${scope} Plan reaches post-model consumer without recreating its owner`, () => {
+  const f = screenFixture();
+  const binding = resolveRevisionStableTopologyBinding({ records: f.ledger.list(), logicalQuestionUnit: f.unit, activeMeetingTask: f.task })!;
+  const consumed = consumeRevisionStableTopologyBinding({ settlement: f.effective, logicalQuestionUnit: f.unit, binding });
+  assert.equal(consumed.consumed, true);
+  const plan = buildSettledAdvisorExecutionPlan({
+    settlement: consumed.settlement, activeMeetingTask: f.task,
+    taskBoundaryCommitted: false, childOwnsResponse: false,
+    providerSnapshot: { providers: [], selectedProvider: { provider: "main", variables: {} }, codingProvider: { provider: "main", variables: {} } },
+    playbook: f.playbook, memoryUseCase: "meeting_assistant", sourceQuestion: f.unit.normalizedText,
+    askFrame: "hypothetical-design", topicDomain: "unknown",
+    contextReadScopeOverride: scope,
+  });
+  assert.equal(plan.taskRelation, "new-parent");
+  assert.equal(plan.taskMutationPolicy.kind, "update-parent-context");
+  assert.equal(plan.contextReadScope, scope);
+  const snapshot = {
+    plan, currentSettlement: consumed.settlement, currentSessionId: "session", currentRuntimeEpoch: 3,
+    currentLogicalQuestionUnitId: f.unit.id, currentLogicalQuestionRevision: f.unit.revision,
+    currentSourceHash: f.effective.sourceHash, currentActiveMeetingTask: f.task,
+  };
+  assert.equal(authorizeSettledAdvisorExecutionPlan(snapshot).authorized, true);
+  assert.equal(authorizeSettledAdvisorExecutionPlan({ ...snapshot, currentRuntimeEpoch: 4 }).authorized, false);
+  assert.equal(authorizeSettledAdvisorExecutionPlan({ ...snapshot, currentSourceHash: "changed" }).authorized, false);
+  assert.equal(authorizeSettledAdvisorExecutionPlan({ ...snapshot, currentActiveMeetingTask: undefined }).authorized, false);
+
+  const authorityNode = declaration("postModelContinuityAuthority") as ts.VariableDeclaration;
+  const authority = evaluate(`(${authorityNode.initializer!.getText(hook)})`, {
+    resolvePostModelContinuityAuthority, precommittedLifecycleCommand: undefined,
+    contextState: f.context, precommittedPhaseOwnerKind: undefined, settledExecutionPlan: plan,
+  });
+  assert.equal(authority.owner, "active-parent");
+  assert.equal(authority.lifecycleCommittedBeforeAdvisor, false);
+  const relationNode = declaration("continuityRelation") as ts.VariableDeclaration;
+  const relation = evaluate(`(${relationNode.initializer!.getText(hook)})`, {
+    postModelContinuityAuthority: authority, advisorContinuityRelation: "new-parent",
+  });
+  assert.equal(relation, "followup-parent");
+  assert.equal(plan.taskRelation, "new-parent");
+  const consume = evaluate(`(${declaration("updateInterviewTaskContinuityForAnswer").getText(hook)})`, {
+    decideInterviewTaskContinuityBranch, resolveLatestScreenObservationId, withInterviewPlaybookPhase,
+    isWhiteboardRevisionAuthorized, equalTaskRuntimeValues,
+    applyPlaybookPhaseDecisionToProgress: phaseDecisions.applyPlaybookPhaseDecisionToProgress,
+  });
+  const before = JSON.stringify(f.parent);
+  const parsed = parseMeetingAnswer("Answer: Explain the current question only.\nApproach: Keep its constraints.");
+  const result = consume({
+    existingTask: f.parent, source: "voice", questionType: "coding", relation,
+    finalContent: "Answer: Explain the current question only.", parsedAnswer: parsed,
+    playbook: f.parent.playbook, artifactAuthorization: { ...plan.artifactPolicy, allowParentContextMutation: false },
+    artifactIntent: "preserve",
+  });
+  assert.equal(result.startedNewParent, false);
+  assert.equal(JSON.stringify(f.parent), before);
+  const previous = commitStableAnswerRevision({
+    candidate: { ...visible(f).suggestion, content: "Answer: Previous.\nCode:\n```python\nold_code()\n```\nComplexity: O(n)",
+      meetingAnswer: parseMeetingAnswer("Answer: Previous.\nCode:\n```python\nold_code()\n```\nComplexity: O(n)") },
+    authorizedArtifacts: ["answer", "code", "complexity"], taskId: f.parent.id,
+    logicalQuestionUnitId: f.unit.id, logicalQuestionRevision: f.unit.revision,
+  });
+  const next = commitStableAnswerRevision({
+    current: previous, candidate: { ...visible(f).suggestion, id: "narrow-output", content: "Answer: Explain the current question only.", meetingAnswer: parsed },
+    authorizedArtifacts: plan.requestedArtifacts, taskId: f.parent.id,
+    logicalQuestionUnitId: f.unit.id, logicalQuestionRevision: f.unit.revision,
+  });
+  assert.ok(previous);
+  assert.ok(next);
+  assert.match(next.suggestion.content, /Explain the current question/);
+  assert.equal(next.sections.code.revision, previous.sections.code.revision);
+  assert.equal(next.suggestion.meetingAnswer?.sections.code, previous.suggestion.meetingAnswer?.sections.code);
+});
 }
 
 test("visible Screen owner rejects missing source even when the ambient LQU still matches", () => {

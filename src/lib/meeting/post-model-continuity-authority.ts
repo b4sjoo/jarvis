@@ -1,3 +1,5 @@
+import type { SettledAdvisorExecutionPlan } from "./settled-advisor-execution-plan.js";
+
 export type PostModelContinuityOwner =
   | "settled-relation"
   | "active-parent"
@@ -18,8 +20,23 @@ export function resolvePostModelContinuityAuthority(input: {
   lifecycleCommittedBeforeAdvisor: boolean;
   activeChild?: boolean;
   phaseOwnerKind?: "parent" | "child";
+  validatedPlan?: Pick<SettledAdvisorExecutionPlan,
+    "taskMutationPolicy" | "taskSnapshot" | "taskRelation">;
 }): PostModelContinuityAuthority {
   if (!input.lifecycleCommittedBeforeAdvisor || !input.command) {
+    // A previously committed owner does not need another lifecycle receipt.
+    // The caller has already authorized this Plan; read scope is independent.
+    const plan = input.validatedPlan;
+    if (plan?.taskMutationPolicy.kind === "update-parent-context" &&
+        plan.taskSnapshot?.parent &&
+        (plan.taskRelation !== "child-probe" || plan.taskSnapshot.child)) {
+      const child = plan.taskRelation === "child-probe";
+      return {
+        owner: child ? "active-child" : "active-parent",
+        lifecycleCommittedBeforeAdvisor: false,
+        reason: child ? "committed-child-owner" : "committed-parent-owner",
+      };
+    }
     return {
       owner: "settled-relation",
       lifecycleCommittedBeforeAdvisor: false,
