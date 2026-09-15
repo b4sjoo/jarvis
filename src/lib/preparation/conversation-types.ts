@@ -5,6 +5,8 @@ import type { AIResponseTerminalOutcome, AIResponseTokenUsage } from "../functio
 export type PreparationPurposeQueries = Record<PreparationRetrievalPurpose, string>;
 
 export interface PreparationQueryTrace {
+  requestedProviderId?: string;
+  requestedModelId?: string;
   originalQuery: string;
   queries: PreparationPurposeQueries;
   historyMessageIds: string[];

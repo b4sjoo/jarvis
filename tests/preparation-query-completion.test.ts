@@ -56,7 +56,7 @@ async function fixture(rewrite: PreparationFetchResponseEvents) {
   });
   return {
     ...h, service, answerRequests, rewriteCalls: () => rewriteCalls,
-    run: (signal?: AbortSignal) => service.execute({ processId: "p", conversationId: h.conversation.id, content: originalQuery, route, signal }),
+    run: (signal?: AbortSignal) => service.execute({ processId: "p", conversationId: h.conversation.id, content: originalQuery, route, queryRoute: route, signal }),
     async snapshot() {
       const detail = await h.conversations.load("p", h.conversation.id);
       const snapshot = detail.messages.at(-1)?.contextSnapshot;

@@ -71,7 +71,7 @@ export const PreparationConversationPanel = ({
   onMaterialsChanged: () => Promise<void>;
   onDetailViewChange: (open: boolean) => void;
 }) => {
-  const { allAiProviders, selectedPreparationAIProvider } = useApp();
+  const { allAiProviders, selectedAIProvider, selectedPreparationAIProvider } = useApp();
   const sessions = data.sessions.data ?? [];
   const { selectedSessionId, selectConversation: setSelectedSessionId } = data;
   const isLoading = data.sessions.loading;
@@ -155,6 +155,10 @@ export const PreparationConversationPanel = ({
     providers: allAiProviders,
     selectedProvider: selectedPreparationAIProvider,
     requiresVision: recoveryRequiresVision,
+  });
+  const queryRoute = interviewPreparationConversationExecutionService.resolveRoute({
+    providers: allAiProviders,
+    selectedProvider: selectedAIProvider,
   });
   const fileDisabledReason = readOnly
     ? "Archived processes are read-only"
@@ -374,6 +378,7 @@ export const PreparationConversationPanel = ({
           conversationId: selectedSessionId,
           content,
           route,
+          queryRoute,
           recovery: pendingRecoveryMaterialIds.length
             ? { materialIds: pendingRecoveryMaterialIds }
             : undefined,

@@ -44,6 +44,10 @@ export function createPreparationQueryRewriter(input: {
       }, PREPARATION_QUERY_TIMEOUT_MS);
     });
     const trace = {
+      requestedProviderId: input.route.provider?.id ?? input.route.selectedProvider.provider,
+      requestedModelId: input.route.selectedProvider.variables.MODEL ??
+        input.route.selectedProvider.variables.MODEL_ID ??
+        input.route.selectedProvider.variables.model ?? input.route.selectedProvider.variables.modelId,
       originalQuery: query.slice(0, 12_000), historyMessageIds,
       timeoutMs: PREPARATION_QUERY_TIMEOUT_MS,
       maxOutputTokens: PREPARATION_QUERY_OUTPUT_TOKENS,

@@ -31,6 +31,22 @@ test("PREP-U1..5: production preparation viewport and cancellation with controll
     import { MemoryRouter, Routes, Route, useNavigate } from 'react-router-dom';
     import InterviewPreparation, { ProcessWorkspace } from './src/pages/interview-preparation';
     import { usePreparationData } from './src/pages/interview-preparation/usePreparationData';
+    import { context, interviewPreparationConversationExecutionService as service } from '${backend}';
+    context.allAiProviders.push(
+      { id: 'main-advisor', curl: '{{TEXT}} {{API_KEY}} {{MODEL}}' },
+      { id: 'coding-override', curl: '{{TEXT}} {{API_KEY}} {{MODEL}}' });
+    context.selectedAIProvider = { provider: 'main-advisor', variables: { API_KEY: 'main-fixture-key', MODEL: 'main-fixture-model' } };
+    localStorage.setItem('meeting_assistant_settings', JSON.stringify({
+      codingModel: { provider: 'coding-override', variables: { API_KEY: 'coding-fixture-key', MODEL: 'coding-fixture-model' } }
+    }));
+    context.selectedPreparationAIProvider.variables = { API_KEY: 'writer-fixture-key', MODEL: 'writer-fixture-model' };
+    window.__prep.context = context;
+    window.__prep.executionInputs = [];
+    const execute = service.execute.bind(service);
+    service.execute = (input) => {
+      window.__prep.executionInputs.push(structuredClone({ route: input.route, queryRoute: input.queryRoute }));
+      return execute(input);
+    };
     const noop = () => {};
     function NormalWorkspace() {
       const data = usePreparationData('process-1');
@@ -221,6 +237,30 @@ test("PREP-U1..5: production preparation viewport and cancellation with controll
       await page.evaluate(() => { window.__prep.push('LATE QUIT OUTPUT'); window.__prep.finish(); });
       await page.waitForFunction(() => window.__prep.shutdownFinished);
       assert.equal(await page.evaluate(() => window.__prep.commits.length), 1);
+    });
+    await t.test('PQ-R1/R2: actual Send passes ordinary main Advisor separately from Preparation and Coding override', async () => {
+      const inputs = await page.evaluate(() => window.__prep.executionInputs);
+      assert.ok(inputs.length > 0);
+      for (const input of inputs) {
+        assert.equal(input.route.provider.id, 'fixture-model');
+        assert.deepEqual(input.route.selectedProvider, { provider: 'fixture-model', variables: { API_KEY: 'writer-fixture-key', MODEL: 'writer-fixture-model' } });
+        assert.equal(input.queryRoute.status, 'ready');
+        assert.equal(input.queryRoute.provider.id, 'main-advisor');
+        assert.deepEqual(input.queryRoute.selectedProvider, { provider: 'main-advisor', variables: { API_KEY: 'main-fixture-key', MODEL: 'main-fixture-model' } });
+      }
+      // Active rounds in this backend are Coding; changing its override must not alter query routing.
+      await page.evaluate(() => {
+        localStorage.setItem('meeting_assistant_settings', JSON.stringify({
+          codingModel: { provider: 'fixture-model', variables: { MODEL: 'changed-coding-model' } }
+        }));
+        window.__prep.navigate('/settings');
+      });
+      await page.getByText('Settings fixture boundary').waitFor();
+      await page.evaluate(() => window.__prep.navigate('/interview-preparation/process-1'));
+      await openConversation();
+      await start();
+      assert.deepEqual(await page.evaluate(() => window.__prep.executionInputs.at(-1)), inputs.at(-1));
+      await finishCancelled();
     });
     assert.deepEqual(errors, []);
     t.diagnostic(`Headless screenshots: ${evidence}. Settings/native Quit and retrieval I/O are controlled boundaries, not native acceptance.`);

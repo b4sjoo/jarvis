@@ -8,6 +8,7 @@ import { preparationMemoryPurpose } from "../src/lib/memory/preparation-purpose.
 import { classifyRuntimeMemoryRole } from "../src/lib/memory/runtime-role.js";
 import { AIResponseEventBuilder, type AIResponseTerminalInput } from "../src/lib/functions/ai-response-events.js";
 import type { PreparationMessageContextSnapshot } from "../src/lib/preparation/conversation-types.js";
+import type { PreparationModelRoute } from "../src/lib/preparation/model-route.js";
 
 function builder() {
   return new AIResponseEventBuilder("fixture", { requestId: "q", executionPlanId: "q", modelId: "fixture", sessionId: "fixture",
@@ -31,8 +32,10 @@ function execution(h: Awaited<ReturnType<typeof preparationPurposeFixture>>, opt
     fetchQueryResponseEvents: options.rewrite ?? (() => queryEvents()),
     fetchResponse: options.answer ?? (async function* () { yield "Answer from supplied sources."; }),
   });
+  const route: PreparationModelRoute = { status: "ready", selectedProvider: { provider: "fixture", variables: {} },
+    provider: { id: "fixture", curl: "unused" }, missingRequiredVariables: [], supportsVision: false };
   const run = (content = "Could another experience support this principle?") => service.execute({ processId: "p", conversationId: h.conversation.id, content,
-    route: { status: "ready", selectedProvider: { provider: "fixture", variables: {} }, provider: { id: "fixture", name: "Fixture", curl: "unused" } as never, missingRequiredVariables: [], supportsVision: false } });
+    route, queryRoute: route });
   return { service, run };
 }
 async function latestSnapshot(h: Awaited<ReturnType<typeof preparationPurposeFixture>>) {

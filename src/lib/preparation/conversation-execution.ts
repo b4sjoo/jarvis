@@ -155,6 +155,7 @@ export function createPreparationConversationExecutionService(
       conversationId: string;
       content: string;
       route: PreparationModelRoute;
+      queryRoute?: PreparationModelRoute;
       image?: { materialId: string; operation: PreparationImageOperation };
       recovery?: { materialIds: string[]; requestedPages?: number[] };
       editMessageId?: string;
@@ -313,7 +314,17 @@ export function createPreparationConversationExecutionService(
           messages: detail.messages,
           assertCurrent,
           rewriteQueries: !input.image && !input.recovery
-            ? createPreparationQueryRewriter({ fetchResponseEvents: dependencies.fetchQueryResponseEvents, route: input.route, signal: input.signal, assertCurrent })
+            ? async (queryInput) => {
+                const queryRoute = input.queryRoute;
+                if (!queryRoute || queryRoute.status !== "ready" || !queryRoute.provider) {
+                  const missing = queryRoute?.missingRequiredVariables ?? [];
+                  throw new Error(`Configure the main Advisor model for preparation query rewriting${missing.length ? `: missing ${missing.join(", ")}.` : "."}`);
+                }
+                return createPreparationQueryRewriter({
+                  fetchResponseEvents: dependencies.fetchQueryResponseEvents,
+                  route: queryRoute, signal: input.signal, assertCurrent,
+                })(queryInput);
+              }
             : undefined,
           preferredMaterialIds: uniqueStrings([
             ...(input.image ? [input.image.materialId] : []),
@@ -633,7 +644,8 @@ export function createPreparationConversationExecutionService(
       publish({ processId: input.processId, conversationId: input.conversationId, status: "running", partial: "" });
       const promise = execution.execute({
         ...input,
-        route: { ...input.route, selectedProvider: { ...input.route.selectedProvider, variables: { ...input.route.selectedProvider.variables } } },
+        route: snapshotModelRoute(input.route),
+        queryRoute: input.queryRoute ? snapshotModelRoute(input.queryRoute) : undefined,
         signal: run.controller.signal,
         onDelta: (partial) => {
           if (active !== run || run.controller.signal.aborted) return;
@@ -662,6 +674,15 @@ export function createPreparationConversationExecutionService(
     }
     dependencies.onEvent?.(event);
   }
+}
+
+function snapshotModelRoute(route: PreparationModelRoute): PreparationModelRoute {
+  return {
+    ...route,
+    provider: route.provider ? { ...route.provider } : undefined,
+    selectedProvider: { ...route.selectedProvider, variables: { ...route.selectedProvider.variables } },
+    missingRequiredVariables: [...route.missingRequiredVariables],
+  };
 }
 
 function requireReadyRoute(route: PreparationModelRoute) {
