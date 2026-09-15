@@ -156,6 +156,8 @@ function harness() {
     screenAnalysisAbortRef: { current: new AbortController() },
     scriptedValidationRef: { current: false },
     shutdownRequestedRef: { current: false },
+    microphoneVadDisposeRef: { current: async () => { cancellations.push("microphone-dispose"); } },
+    microphoneSpeakingRef: { current: true },
     cancelActiveAdvisorJob: () => cancellations.push("advisor"),
     abortActiveSttRequests: () => cancellations.push("stt"),
     clearPendingAnswerCommitTimer: () => cancellations.push("answer-timer"),
@@ -207,17 +209,25 @@ test("PC1/PC2/PC5 real Pause preserves context while rejecting old execution tok
   const token = createRuntimeCommitToken({ operationId: "old-answer", pipeline: "advisor",
     snapshot: buildRuntimeCommitSnapshot({ contextState: before, runtimeEpoch: 7 }) });
   const latestManualTarget = { logicalQuestionUnit: h.unit };
+  const audioOrder: string[] = [];
   Object.assign(g, {
     effectiveQuestionSourceLedgerRef: { current: ledger }, logicalQuestionUnitRef: { current: h.unit },
     latestManualCorrectionTargetRef: { current: latestManualTarget }, manualCorrectionRevisionRef: { current: 2 },
     captureLifecycleCoordinatorRef: { current: new CaptureLifecycleCoordinator() },
     readNativeCaptureLease: () => undefined, openAudioDrainAuthorization: () => {},
     cancelNativeAudioFaultTraces: () => {},
-    stopNativeMeetingCapture: async () => ({ status: { active: false } }),
-    drainSystemAudioQueueForNativeStop: async () => {}, invalidateAudioProcessingSession: () => {},
+    microphoneVadDisposeRef: { current: async () => { audioOrder.push("microphone-dispose"); } },
+    stopNativeMeetingCapture: async () => {
+      audioOrder.push("native-stop");
+      assert.equal(g.microphoneSpeakingRef.current, false);
+      return { status: { active: false } };
+    },
+    drainSystemAudioQueueForNativeStop: async () => { audioOrder.push("queue-drain"); },
+    invalidateAudioProcessingSession: () => {},
   });
   const history = ledger.listHistory();
   for (const epoch of [8, 9]) {
+    g.microphoneSpeakingRef.current = true;
     await g.pause();
     assert.equal(g.runtimeEpochRef.current, epoch);
     assert.deepEqual(h.context.getState(), before);
@@ -237,6 +247,10 @@ test("PC1/PC2/PC5 real Pause preserves context while rejecting old execution tok
     assert.match(buildAdvisorUserMessage(compiled.context), /Implement a cache/);
     assert.deepEqual(compiled.selectedSourceTurnIds, [h.unit.currentTurnId]);
   }
+  assert.deepEqual(audioOrder, [
+    "microphone-dispose", "native-stop", "queue-drain",
+    "microphone-dispose", "native-stop", "queue-drain",
+  ]);
   assert.ok(h.cancellations.includes("advisor"));
   assert.ok(!h.cancellations.includes("visual-recovery"));
   g.advanceRuntimeEpoch("active-task-cleared");

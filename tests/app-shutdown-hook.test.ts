@@ -101,6 +101,7 @@ async function harness(owner: "meeting" | "system" = "meeting") {
   const timers = new Map<number, () => void>();
   let timerId = 0;
   const traces = new MeetingTraceStore();
+  const disposeMicrophone = async () => { calls.push("mic-dispose"); };
   let ui: any = { presentationArtifactResetRevision: 0, status: "listening" };
   Object.assign(globals, {
     console: { info: noop, warn: noop }, Date, Promise, Set, Map, Error, exports: {}, importMeta: { env: { DEV: false } },
@@ -130,7 +131,9 @@ async function harness(owner: "meeting" | "system" = "meeting") {
       getState: () => ({ active: true, lastError: evaluationLastError }),
       stop: async () => { calls.push("eval-stop"); return { active: false, manifestFinalized: true }; },
     } },
-    microphoneVad: { listening: true, pause: async () => { calls.push("mic-pause"); } },
+    microphoneVad: { listening: true, dispose: disposeMicrophone },
+    microphoneVadDisposeRef: { current: disposeMicrophone },
+    microphoneSpeakingRef: { current: true },
     flushMemoryContextUsage: async () => ({ success: true }),
     clearPendingAnswerCommitTimer: noop, cancelActiveAdvisorJob: () => calls.push("advisor-cancelled"),
     cancelNativeAudioFaultTraces: noop, advanceRuntimeEpoch: noop,
@@ -242,6 +245,8 @@ for (const owner of ["meeting", "system"] as const) {
   test(`Q2 actual Hook ${owner} lease: native reply < accepted terminal < queue/evaluation < 127 seal`, async () => {
     const h = await harness(owner);
     await h.quit(); await h.nativeEntered.promise;
+    assert.ok(h.calls.indexOf("mic-dispose") >= 0);
+    assert.ok(h.calls.indexOf("mic-dispose") < h.calls.indexOf(h.nativeCommands[0].command));
     h.nativeReply.resolve(); await settle();
     assert.equal(h.calls.includes("queue-sealed"), false);
     assert.equal(h.calls.includes("127-terminal"), false);
@@ -306,6 +311,7 @@ test("normal Stop freezes A at invocation even if refs and native status become 
   await settle();
   h.globals.screenAnalysisAbortRef.current = { abort: () => h.calls.push("screen-cancelled") };
   const normal = h.globals.stop();
+  assert.equal(h.calls.includes("mic-dispose"), true, "Stop releases the browser microphone before waiting on capture");
   assert.equal(h.calls.includes("advisor-cancelled"), true, "Stop cancels Advisor before the capture queue becomes available");
   assert.equal(h.calls.includes("screen-cancelled"), true, "Stop cancels Screen before waiting on capture");
   h.replaceCapture("capture-B", 10);
@@ -457,7 +463,32 @@ test("Q2 frozen Hook rejects actual capture, recording, Replay, screen, Advisor 
   await h.globals.runAdvisor();
   h.globals.enqueueMicrophoneSpeech({}, 1, 2);
   assert.equal(h.files.length, before);
-  assert.deepEqual(h.calls, ["advisor-cancelled", "mic-pause"]);
+  assert.deepEqual(h.calls, ["advisor-cancelled", "mic-dispose"]);
+});
+
+test("Q2 actual shutdown freeze awaits microphone disposal even while not listening", async () => {
+  const h = await harness();
+  const released = deferred();
+  let settled = false;
+  h.globals.microphoneVad.listening = false;
+  h.globals.microphoneVad.loading = true;
+  h.globals.microphoneVad.dispose = async () => {
+    h.calls.push("mic-dispose-pending");
+    await released.promise;
+  };
+  const freeze = h.globals.shutdownOwner.freezeNewWork().then((result: string) => {
+    settled = true;
+    return result;
+  });
+  try {
+    await settle();
+    assert.equal(h.globals.shutdownRequestedRef.current, true);
+    assert.equal(h.calls.includes("mic-dispose-pending"), true);
+    assert.equal(settled, false, "freeze cannot settle before pending microphone disposal");
+    assert.equal(h.nativeCommands.length, 0);
+  } finally { released.resolve(); }
+  assert.equal(await freeze, "settled");
+  assert.equal(h.globals.microphoneSpeakingRef.current, false);
 });
 
 test("ordinary Stop retains its soft native/evaluation error contract outside Quit", async () => {

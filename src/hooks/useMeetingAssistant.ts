@@ -10,7 +10,7 @@ import {
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { useMicVAD } from "@ricky0123/vad-react";
+import { useBrowserMicrophoneVad } from "@/hooks/useBrowserMicrophoneVad";
 import {
   clearBoundedGeneratedContinuity,
   clearBoundedGeneratedSummaries,
@@ -3572,6 +3572,7 @@ export function useMeetingAssistant() {
     useRef<PendingGenerationAnswerRevision | null>(null);
   const pendingAnswerCommitTimerRef = useRef<number | null>(null);
   const microphoneSpeakingRef = useRef(false);
+  const microphoneVadDisposeRef = useRef<() => Promise<void>>(() => Promise.resolve());
   const screenOperationCoordinatorRef = useRef(
     new ScreenOperationCoordinator()
   );
@@ -9403,6 +9404,10 @@ export function useMeetingAssistant() {
   const setMicrophoneContextEnabled = useCallback(
     (microphoneContextEnabled: boolean) => {
       microphoneContextEnabledRef.current = microphoneContextEnabled;
+      if (!microphoneContextEnabled) {
+        void microphoneVadDisposeRef.current();
+        microphoneSpeakingRef.current = false;
+      }
       updateSettings((previous) => ({
         ...previous,
         microphoneContextEnabled,
@@ -10025,6 +10030,8 @@ export function useMeetingAssistant() {
       return;
     }
     const nativeLeaseAtInvocation = readNativeCaptureLease();
+    void microphoneVadDisposeRef.current();
+    microphoneSpeakingRef.current = false;
     const shutdownAtInvocation = shutdownRequestedRef.current;
     const unresolvedManualRecovery = nativeAudioManualRecoveryRef.current;
     if (unresolvedManualRecovery) {
@@ -25129,17 +25136,20 @@ export function useMeetingAssistant() {
     [processQueuedSpeechSegment]
   );
 
-  const microphoneAudioConstraints = useMemo<MediaTrackConstraints>(() => {
-    const inputDeviceId = selectedAudioDevices.input.id;
-    return inputDeviceId && inputDeviceId !== "default"
-      ? { deviceId: { exact: inputDeviceId } }
-      : {};
-  }, [selectedAudioDevices.input.id]);
-
-  const microphoneVad = useMicVAD({
+  const microphoneVadEnabled =
+    !shutdownRequestedRef.current && activeRef.current && state.settings.microphoneContextEnabled &&
+    (state.status === "listening" || state.status === "transcribing" || state.status === "thinking");
+  const microphoneVad = useBrowserMicrophoneVad({
+    deviceId: selectedAudioDevices.input.id,
+    enabled: microphoneVadEnabled,
+    sessionKey: audioSessionIdRef.current,
     userSpeakingThreshold: 0.6,
-    startOnLoad: false,
-    additionalAudioConstraints: microphoneAudioConstraints,
+    onObservation: ({ stage: vadStage, ...metadata }) => {
+      sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+        stage: "browser-microphone-vad", vadStage, source: "microphone", speaker: "me",
+        ...metadata, ...captureLifecycleCoordinatorRef.current?.getTraceMetadata(),
+      });
+    },
     onSpeechStart: () => {
       if (shutdownRequestedRef.current) return;
       microphoneSpeakingRef.current = true;
@@ -25161,6 +25171,8 @@ export function useMeetingAssistant() {
     },
   });
 
+  microphoneVadDisposeRef.current = microphoneVad.dispose;
+
   useEffect(() => {
     speechDetectedHandlerRef.current = (event: NativeSpeechDetectedEvent) => {
       enqueueSpeechDetected(event);
@@ -25171,33 +25183,6 @@ export function useMeetingAssistant() {
     microphoneContextEnabledRef.current =
       state.settings.microphoneContextEnabled;
   }, [state.settings.microphoneContextEnabled]);
-
-  useEffect(() => {
-    const shouldListen =
-      !shutdownRequestedRef.current &&
-      activeRef.current &&
-      state.settings.microphoneContextEnabled &&
-      (state.status === "listening" ||
-        state.status === "transcribing" ||
-        state.status === "thinking");
-
-    if (shouldListen) {
-      if (!microphoneVad.listening) {
-        microphoneVad.start();
-      }
-      return;
-    }
-
-    if (microphoneVad.listening) {
-      microphoneVad.pause();
-    }
-  }, [
-    microphoneVad.listening,
-    microphoneVad.pause,
-    microphoneVad.start,
-    state.settings.microphoneContextEnabled,
-    state.status,
-  ]);
 
   const startCapture = useCallback(
     async (
@@ -25669,6 +25654,8 @@ export function useMeetingAssistant() {
 
   const pause = useCallback(async () => {
     if (shutdownRequestedRef.current) return;
+    void microphoneVadDisposeRef.current();
+    microphoneSpeakingRef.current = false;
     const coordinator = captureLifecycleCoordinatorRef.current!;
     await coordinator.runCoalesced("pause", async (lifecycleOperation) => {
       const drainOperationId = `capture-pause:${lifecycleOperation.id}`;
@@ -37254,7 +37241,8 @@ export function useMeetingAssistant() {
         runtimeRegressionStepIdRef.current = undefined;
       }
       setState((previous) => ({ ...previous, error: null }));
-      if (microphoneVad.listening) await microphoneVad.pause();
+      await microphoneVad.dispose();
+      microphoneSpeakingRef.current = false;
       await preparationStop;
       return "settled";
     },

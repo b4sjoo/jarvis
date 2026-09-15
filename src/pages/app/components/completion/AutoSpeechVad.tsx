@@ -1,6 +1,6 @@
 import { fetchSTT } from "@/lib";
 import { UseCompletionReturn } from "@/types";
-import { useMicVAD } from "@ricky0123/vad-react";
+import { useBrowserMicrophoneVad } from "@/hooks/useBrowserMicrophoneVad";
 import { LoaderCircleIcon, MicIcon, MicOffIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components";
@@ -30,15 +30,10 @@ const AutoSpeechVADInternal = ({
   }, []);
   const { selectedSttProvider, allSttProviders } = useApp();
 
-  const audioConstraints: MediaTrackConstraints =
-    microphoneDeviceId && microphoneDeviceId !== "default"
-      ? { deviceId: { exact: microphoneDeviceId } }
-      : {};
-
-  const vad = useMicVAD({
+  const vad = useBrowserMicrophoneVad({
+    deviceId: microphoneDeviceId,
+    enabled: true,
     userSpeakingThreshold: 0.6,
-    startOnLoad: true,
-    additionalAudioConstraints: audioConstraints,
     onSpeechEnd: async (audio) => {
       if (!activeRef.current) return;
       const controller = new AbortController();
@@ -49,6 +44,7 @@ const AutoSpeechVADInternal = ({
 
         let transcription: string;
         const useManagedApi = await shouldUseManagedAPI();
+        if (!activeRef.current || controller.signal.aborted) return;
 
         // Check if we have a configured speech provider
         if (!selectedSttProvider.provider && !useManagedApi) {
@@ -98,13 +94,15 @@ const AutoSpeechVADInternal = ({
         }));
       } finally {
         pendingRef.current.delete(controller);
-        if (activeRef.current) setIsTranscribing(false);
+        if (activeRef.current) setIsTranscribing(pendingRef.current.size > 0);
       }
     },
   });
 
   useEffect(() => {
     if (!vad.errored) return;
+    activeRef.current = false;
+    for (const controller of pendingRef.current) controller.abort();
     setState((previous: Record<string, unknown>) => ({ ...previous, error: `Microphone initialization failed: ${vad.errored}` }));
     setEnableVAD(false);
   }, [vad.errored, setState, setEnableVAD]);
@@ -114,10 +112,10 @@ const AutoSpeechVADInternal = ({
       <Button
         size="icon"
         onClick={() => {
-          if (vad.listening) {
+          if (vad.listening || vad.loading) {
             activeRef.current = false;
             for (const controller of pendingRef.current) controller.abort();
-            vad.pause();
+            void vad.dispose();
             setEnableVAD(false);
           } else {
             activeRef.current = true;
