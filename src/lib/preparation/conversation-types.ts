@@ -1,6 +1,6 @@
 import type { PreparationMaterialStatus } from "./types.js";
 import type { MemoryRejectSummary, PreparationRetrievalPurpose } from "../memory/types.js";
-import type { AIResponseTokenUsage } from "../functions/ai-response-events.js";
+import type { AIResponseTerminalOutcome, AIResponseTokenUsage } from "../functions/ai-response-events.js";
 
 export type PreparationPurposeQueries = Record<PreparationRetrievalPurpose, string>;
 
@@ -15,6 +15,29 @@ export interface PreparationQueryTrace {
   timeoutMs?: number;
   maxOutputTokens?: number;
   tokenUsage?: AIResponseTokenUsage;
+  // Private diagnostics only. Never include rawOutput in history, queries or answer context.
+  completion?: {
+    requestStartedAt: number;
+    firstContentAt?: number;
+    lastContentAt?: number;
+    providerTerminalReceivedAt?: number;
+    finishedAt: number;
+    requestId?: string;
+    attemptId?: string;
+    timedOut: boolean;
+    rawOutput: string;
+    outputTruncated: boolean;
+    jsonValid: boolean;
+    queriesValid: boolean;
+    parseFailure?: string;
+    // The outer timestamps are consumer observations; these are transport observations.
+    providerTerminal?: Pick<AIResponseTerminalOutcome,
+      | "requestId" | "attemptId" | "providerId" | "modelId"
+      | "status" | "disposition" | "final" | "failureClass" | "completionSignal"
+      | "startedAt" | "firstContentAt" | "lastContentAt" | "finishedAt"
+      | "nativeFinishReason" | "statusCode"
+    >;
+  };
 }
 
 export interface PreparationRetrievalTrace extends PreparationQueryTrace {
