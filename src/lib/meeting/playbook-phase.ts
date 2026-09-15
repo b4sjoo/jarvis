@@ -786,31 +786,7 @@ export function decideManualNextPhaseTransitionForBranch(input: {
       )
     : undefined;
 
-  if (
-    input.ownerKind === "child" &&
-    questionType === "coding" &&
-    currentPhase === "implementation_validation"
-  ) {
-    return {
-      phase: currentPhase,
-      flags: [],
-      requiredArtifacts: resolvePlaybookRequiredArtifacts({
-        questionType,
-        playbookId: input.playbookId,
-        phase: currentPhase,
-      }),
-      action: "stay",
-      reason: "manual-next blocked because the active branch has no next phase",
-      source: "manual-next",
-      targetArtifact: "none",
-      guardStatus: "blocked-no-next-phase",
-      phaseFrom: currentPhase,
-      manualPhaseFrom: currentPhase,
-      manualPhaseTo: currentPhase,
-    };
-  }
-
-  return {
+  const decision: PlaybookPhaseDecision = {
     phase,
     flags,
     requiredArtifacts: resolvePlaybookRequiredArtifacts({
@@ -851,6 +827,37 @@ export function decideManualNextPhaseTransitionForBranch(input: {
       ? "manual-next-with-explicit-assumptions"
       : "manual-next",
   };
+
+  // Compare committed progress, not requested artifacts such as SD whiteboard.
+  const nextProgress = applyPlaybookPhaseDecisionToProgress(
+    phaseProgress,
+    decision,
+    currentPhase
+  );
+  if (
+    (input.ownerKind === "child" &&
+      questionType === "coding" &&
+      currentPhase === "implementation_validation") ||
+    (phase === currentPhase &&
+      Object.entries(nextProgress).every(
+        ([key, value]) => Boolean(value) === hasProgress(phaseProgress, key)
+      ))
+  ) {
+    return {
+      phase: currentPhase,
+      flags: [],
+      requiredArtifacts: decision.requiredArtifacts,
+      action: "stay",
+      reason: "manual-next blocked because the active branch has no next phase",
+      source: "manual-next",
+      targetArtifact: "none",
+      guardStatus: "blocked-no-next-phase",
+      phaseFrom: currentPhase,
+      manualPhaseFrom: currentPhase,
+      manualPhaseTo: currentPhase,
+    };
+  }
+  return decision;
 }
 
 export function applyPlaybookPhaseDecisionToProgress(

@@ -6,12 +6,29 @@ import {
   composeScreenPlaybookPhaseInput,
   decideInterviewerAssumptionAuthorization,
   decideManualNextPhaseTransition,
+  decideManualNextPhaseTransitionForBranch,
   decidePlaybookPhaseProgression,
   formatCodingPlaybookPhaseContract,
   formatPlaybookPhaseDecisionForPrompt,
   formatPlaybookPhaseDecisionForTrace,
   resolvePlaybookState,
 } from "../src/lib/meeting/playbook-phase.js";
+import {
+  applyActiveBranchPhase,
+  detectCommittedBranchPhaseTransition,
+  resolveEffectiveBranchPhase,
+  type EffectiveBranchPhaseView,
+} from "../src/lib/meeting/active-branch-phase.js";
+import { createCodingChildPhaseState } from "../src/lib/meeting/coding-child-phase.js";
+import { selectInterviewPlaybook } from "../src/lib/meeting/interview-playbook.js";
+import {
+  appendCommittedManualBackPhaseTransition,
+  appendCommittedManualNextPhaseTransition,
+  createPlaybookPhaseHistoryState,
+  decideManualPlaybookPhaseBack,
+  decideManualPlaybookPhaseNextRoundTrip,
+} from "../src/lib/meeting/playbook-phase-history.js";
+import type { ActiveInterviewParent } from "../src/lib/meeting/types.js";
 
 test("authorizes a source-owned assumption signal only at a design requirement boundary", () => {
   const authorized = decideInterviewerAssumptionAuthorization({
@@ -836,3 +853,333 @@ test("coding child probes preserve the parent coding phase", () => {
   assert.equal(decision.action, "child-probe");
   assert.deepEqual(decision.requiredArtifacts, ["answer", "complexity"]);
 });
+
+test("manual Next stops a Coding parent after the actual branch commits implementation progress", () => {
+  const baseline = makePhaseParent("coding");
+  const optimized = commitNextPhase(baseline);
+  assert.equal(optimized.playbookPhase, "optimized_pseudocode");
+  const implementation = commitNextPhase(optimized);
+  assert.equal(implementation.playbookPhase, "implementation_validation");
+  assert.equal(implementation.phaseProgress.implementation, true);
+  assert.equal(implementation.phaseProgress.edge_case_validation, true);
+  assertNoNextPhase(implementation);
+
+  const decision = decideManualNextPhaseTransition({
+    id: "task-terminal",
+    runtimeRevision: implementation.revisions,
+    source: "voice",
+    parent: {
+      ...implementation,
+      questionType: "coding",
+    },
+  });
+  assert.equal(decision.guardStatus, "blocked-no-next-phase");
+});
+
+test("manual Next preserves Coding child terminal semantics and leaves parent progress alone", () => {
+  const withChild = makeCodingChildParent();
+  const parent = { ...withChild, child: undefined };
+  assert.equal(nextPhaseForOwner(phaseOwner(parent)).guardStatus, "advanced");
+  assert.equal(phaseOwner(withChild).ownerKind, "child");
+  assertNoNextPhase(withChild);
+
+  assert.ok(withChild.child?.phaseState);
+  withChild.child.phaseState.phaseProgress = {
+    ...withChild.child.phaseState.phaseProgress,
+    implementation: true,
+    edge_case_validation: true,
+  };
+  assertNoNextPhase(withChild);
+  assert.deepEqual(withChild.phaseProgress, parent.phaseProgress);
+  assert.equal(withChild.playbookPhase, parent.playbookPhase);
+});
+
+test("manual Next advances a nonterminal Coding child without changing its parent phase", () => {
+  const initial = makeCodingChildParent();
+  const restored = applyActiveBranchPhase({
+    parent: initial,
+    owner: phaseOwner(initial),
+    targetPhase: "optimized_pseudocode",
+    phaseProgress: { optimized_pseudocode: true },
+    now: 30,
+  });
+  assert.ok(restored);
+  const completed = commitNextPhase(restored);
+  assert.equal(completed.child?.phaseState?.phase, "implementation_validation");
+  assert.equal(completed.child?.phaseState?.phaseProgress.implementation, true);
+  assert.equal(completed.child?.phaseState?.phaseProgress.edge_case_validation, true);
+  assert.equal(
+    completed.child?.phaseState?.revision,
+    restored.child!.phaseState!.revision + 1
+  );
+  assert.deepEqual(completed.playbook, initial.playbook);
+  assert.equal(completed.playbookPhase, initial.playbookPhase);
+  assert.deepEqual(completed.phaseProgress, initial.phaseProgress);
+  assertNoNextPhase(completed);
+});
+
+test("manual Next can complete missing Coding parent progress without adding another phase", () => {
+  const progressStates: Record<string, boolean>[] = [
+    {},
+    { implementation_validation: true },
+    {
+      implementation_validation: true,
+      implementation: true,
+      edge_case_validation: false,
+    },
+    {
+      implementation_validation: false,
+      implementation: true,
+      edge_case_validation: true,
+    },
+  ];
+  for (const progress of progressStates) {
+    const initial = makePhaseParent("coding");
+    const parent: ActiveInterviewParent = {
+      ...initial,
+      playbookPhase: "implementation_validation",
+      playbook: { ...initial.playbook!, phase: "implementation_validation" },
+      phaseProgress: progress,
+    };
+    const completed = commitNextPhase(parent);
+    assert.equal(completed.playbookPhase, parent.playbookPhase);
+    assert.equal(completed.phaseProgress.implementation_validation, true);
+    assert.equal(completed.phaseProgress.implementation, true);
+    assert.equal(completed.phaseProgress.edge_case_validation, true);
+    assertNoNextPhase(completed);
+  }
+});
+
+for (const questionType of [
+  "general-system-design",
+  "ai-ml-system-design",
+] as const) {
+  test(`manual Next commits same-phase ${questionType} progress and then stops despite uncompleted whiteboard`, () => {
+    const initial = makePhaseParent(questionType);
+    const design = commitNextPhase(initial);
+    assert.equal(design.playbookPhase, "design_framing");
+    const deepDive = commitNextPhase(design);
+    assert.equal(deepDive.playbookPhase, design.playbookPhase);
+    assert.equal(
+      deepDive.phaseProgress[
+        questionType === "general-system-design"
+          ? "deep_dive_subsystem"
+          : "evaluation_metrics"
+      ],
+      true
+    );
+    const wrapup = commitNextPhase(deepDive);
+    assert.equal(wrapup.playbookPhase, design.playbookPhase);
+    assert.equal(wrapup.phaseProgress.tradeoffs_wrapup, true);
+    assert.equal(wrapup.phaseProgress.whiteboard, undefined);
+    assert.equal(wrapup.phaseProgress.design_framing, undefined);
+    assertNoNextPhase(wrapup);
+    assertNoNextPhase({
+      ...wrapup,
+      phaseProgress: {
+        ...wrapup.phaseProgress,
+        whiteboard: false,
+        design_framing: false,
+      },
+    });
+  });
+}
+
+test("manual Next preserves Coding Back/Next history with already-completed progress", () => {
+  const optimized = commitNextPhase(makePhaseParent("coding"));
+  const implementation = commitNextPhase(optimized);
+  assertNoNextPhase(implementation);
+  const owner = {
+    kind: "parent" as const,
+    id: implementation.id,
+    parentId: implementation.id,
+  };
+  const history = appendCommittedManualNextPhaseTransition(
+    createPlaybookPhaseHistoryState(),
+    {
+      operationId: "next-implementation",
+      owner,
+      fromPhase: optimized.playbookPhase,
+      toPhase: implementation.playbookPhase,
+      taskRevision: implementation.revisions,
+      expectedPhaseRevision: 0,
+      committedAt: 30,
+    }
+  );
+  assert.equal(history.status, "appended");
+  const back = decideManualPlaybookPhaseBack({
+    history: history.state,
+    request: {
+      operationId: "back-optimized",
+      owner,
+      expectedTaskRevision: implementation.revisions,
+      expectedPhaseRevision: 1,
+      requestedAt: 40,
+    },
+    current: {
+      owner,
+      currentPhase: implementation.playbookPhase,
+      taskRevision: implementation.revisions,
+      phaseRevision: 1,
+    },
+  });
+  assert.equal(back.status, "ready");
+  if (back.status !== "ready") assert.fail("expected Back to be ready");
+  const restored = applyActiveBranchPhase({
+    parent: implementation,
+    owner: phaseOwner(implementation),
+    targetPhase: back.targetPhase,
+    phaseProgress: implementation.phaseProgress,
+    now: 40,
+  });
+  assert.ok(restored);
+  assert.deepEqual(restored.phaseProgress, implementation.phaseProgress);
+  const backHistory = appendCommittedManualBackPhaseTransition(history.state, {
+    operationId: back.operationId,
+    owner,
+    fromPhase: back.fromPhase,
+    toPhase: back.targetPhase,
+    taskRevision: restored.revisions,
+    expectedPhaseRevision: 1,
+    committedAt: 40,
+  });
+  assert.equal(backHistory.status, "appended");
+  const forward = decideManualPlaybookPhaseNextRoundTrip({
+    history: backHistory.state,
+    request: {
+      operationId: "next-restored",
+      owner,
+      expectedTaskRevision: restored.revisions,
+      expectedPhaseRevision: 2,
+      requestedAt: 50,
+    },
+    current: {
+      owner,
+      currentPhase: restored.playbookPhase,
+      taskRevision: restored.revisions,
+      phaseRevision: 2,
+    },
+  });
+  assert.equal(forward.status, "ready");
+  assert.equal(forward.targetPhase, "implementation_validation");
+  const reapplied = commitNextPhase(restored);
+  assert.equal(reapplied.playbookPhase, forward.targetPhase);
+  assert.deepEqual(reapplied.phaseProgress, implementation.phaseProgress);
+  assertNoNextPhase(reapplied);
+});
+
+function makePhaseParent(
+  questionType: ActiveInterviewParent["stableKind"]
+): ActiveInterviewParent {
+  const playbook = selectInterviewPlaybook({
+    questionType,
+    query: "Test phase navigation",
+  });
+  assert.ok(playbook);
+  return {
+    id: "parent-phase",
+    source: "voice",
+    stableKind: questionType,
+    topic: "Test phase navigation",
+    playbook,
+    playbookPhase: playbook.phase,
+    phaseProgress: {},
+    supportedFactAnchors: [],
+    createdAt: 1,
+    updatedAt: 1,
+    revisions: 1,
+  };
+}
+
+function makeCodingChildParent(): ActiveInterviewParent {
+  const phaseState = createCodingChildPhaseState({
+    questionType: "coding",
+    playbook: makePhaseParent("coding").playbook,
+  });
+  assert.ok(phaseState);
+  return {
+    ...makePhaseParent("general-system-design"),
+    child: {
+      id: "child-coding",
+      createdAt: 20,
+      updatedAt: 20,
+      questionType: "coding",
+      relation: "child-probe",
+      intent: "implementation-probe",
+      question: "Implement an LRU cache.",
+      basedOnTurnIds: ["turn-child"],
+      basedOnObservationIds: [],
+      phaseState,
+    },
+  };
+}
+
+function phaseOwner(parent: ActiveInterviewParent) {
+  const resolution = resolveEffectiveBranchPhase(parent);
+  assert.equal(resolution.status, "resolved");
+  if (resolution.status !== "resolved") assert.fail("expected a phase owner");
+  return resolution.view;
+}
+
+function nextPhaseForOwner(owner: EffectiveBranchPhaseView) {
+  return decideManualNextPhaseTransitionForBranch({
+    ownerKind: owner.ownerKind,
+    questionType: owner.questionType,
+    currentPhase: owner.phase,
+    phaseProgress: owner.phaseProgress,
+    playbookId: owner.playbook.id,
+  });
+}
+
+function commitNextPhase(parent: ActiveInterviewParent) {
+  const owner = phaseOwner(parent);
+  const snapshot = structuredClone(parent);
+  const decision = nextPhaseForOwner(owner);
+  assert.equal(decision.guardStatus, "advanced");
+  assert.equal(decision.action, "advance");
+  const updated = applyActiveBranchPhase({
+    parent,
+    owner,
+    targetPhase: decision.phase,
+    phaseProgress: applyPlaybookPhaseDecisionToProgress(
+      owner.phaseProgress,
+      decision,
+      owner.phase
+    ),
+    now: parent.updatedAt + 1,
+  });
+  assert.ok(updated);
+  assert.equal(updated.revisions, parent.revisions + 1);
+  assert.ok(
+    detectCommittedBranchPhaseTransition({ before: parent, after: updated })
+  );
+  assert.deepEqual(parent, snapshot);
+  return updated;
+}
+
+function assertNoNextPhase(parent: ActiveInterviewParent) {
+  const snapshot = structuredClone(parent);
+  const owner = phaseOwner(parent);
+  const decision = nextPhaseForOwner(owner);
+  assert.equal(decision.guardStatus, "blocked-no-next-phase");
+  assert.equal(decision.action, "stay");
+  assert.equal(decision.phase, owner.phase);
+  assert.equal(decision.targetArtifact, "none");
+  assert.deepEqual(decision.flags, []);
+  assert.equal(
+    formatPlaybookPhaseDecisionForTrace(decision).manualPhaseGuardStatus,
+    "blocked-no-next-phase"
+  );
+  assert.deepEqual(nextPhaseForOwner(owner), decision);
+  assert.equal(
+    applyActiveBranchPhase({
+      parent,
+      owner,
+      targetPhase: decision.phase,
+      phaseProgress: owner.phaseProgress,
+      now: 99,
+    }),
+    undefined
+  );
+  assert.deepEqual(parent, snapshot);
+}

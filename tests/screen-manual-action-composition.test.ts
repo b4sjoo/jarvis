@@ -1047,3 +1047,58 @@ test("fresh uncommitted new-parent projection never proves owned origin", () => 
   }
   }
 });
+
+test("MR4 real Next caller stops a terminal Coding parent before Advisor without runtime or history changes", async () => {
+  const h = actionHarness();
+  let advisorCalls = 0;
+  const runAdvisor = h.environment.runAdvisor;
+  h.environment.runAdvisor = async (options: any) => {
+    advisorCalls += 1;
+    return runAdvisor(options);
+  };
+
+  await h.apply("next-phase");
+  await h.apply("next-phase");
+  assert.equal(advisorCalls, 2);
+  assert.equal(h.plans.length, 2);
+  const parent = h.context.taskRuntime.parent!;
+  assert.equal(parent.child, undefined);
+  assert.equal(parent.playbookPhase, "implementation_validation");
+  assert.equal(parent.phaseProgress.implementation, true);
+  assert.equal(parent.phaseProgress.edge_case_validation, true);
+  const phaseHistory = h.environment.playbookPhaseHistoryRef.current;
+  const ownerKey = history.toPlaybookPhaseOwnerKey({
+    kind: "parent", id: parent.id, parentId: parent.id,
+  });
+  assert.equal(phaseHistory.branches[ownerKey].phaseRevision, 2);
+  assert.equal(phaseHistory.branches[ownerKey].entries.length, 2);
+
+  const before = {
+    runtime: JSON.stringify(h.context.taskRuntime),
+    runtimeRevision: h.context.taskRuntime.revision,
+    activeMeetingTask: JSON.stringify(h.context.activeMeetingTask),
+    history: JSON.stringify(phaseHistory),
+    stable: h.stableRef.current,
+    runtimeCommands: h.runtimeCommands.length,
+    traces: h.traces.length,
+    observations: h.observations.length,
+  };
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    await h.apply("next-phase");
+    assert.equal(h.events.at(-1).stage, "terminal");
+    assert.equal(h.events.at(-1).terminalDisposition, "rejected");
+    assert.equal(h.events.at(-1).reason, "no-next-phase");
+    assert.match(h.environment.state.error, /no next playbook phase/);
+    assert.equal(advisorCalls, 2);
+    assert.equal(h.plans.length, 2);
+    assert.equal(h.context.taskRuntime.revision, before.runtimeRevision);
+    assert.equal(JSON.stringify(h.context.taskRuntime), before.runtime);
+    assert.equal(JSON.stringify(h.context.activeMeetingTask), before.activeMeetingTask);
+    assert.equal(JSON.stringify(h.environment.playbookPhaseHistoryRef.current), before.history);
+    assert.strictEqual(h.environment.playbookPhaseHistoryRef.current, phaseHistory);
+    assert.strictEqual(h.stableRef.current, before.stable);
+    assert.equal(h.runtimeCommands.length, before.runtimeCommands);
+    assert.equal(h.traces.length, before.traces);
+    assert.equal(h.observations.length, before.observations);
+  }
+});
