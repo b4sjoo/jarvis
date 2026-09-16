@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -369,6 +369,18 @@ pub struct NativeSpeechDetectedEvent {
     pub vad_maximum_segment_samples: u64,
     pub media_type: &'static str,
     pub audio_base64: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery_timing: Option<NativeAudioDeliveryTiming>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeAudioDeliveryTiming {
+    pub raw_ready_at_ms: u64,
+    pub encode_started_at_ms: u64,
+    pub encoded_at_ms: u64,
+    pub encode_duration_micros: u64,
+    pub emit_started_at_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1041,6 +1053,17 @@ async fn start_audio_capture(
         }
     };
 
+    let diagnostics = serde_json::json!({
+        "stage": "capture-format",
+        "captureSessionId": capture_session_id,
+        "captureGeneration": capture_generation,
+        "owner": capture_owner.as_str(),
+        "occurredAtMs": now_ms(),
+        "requestedDeviceId": requested_device_id,
+        "actualRoute": input.capture_diagnostics(),
+    });
+    info!("[native-audio-observation] {}", diagnostics);
+    let _ = app.emit("native-audio-observation", diagnostics);
     let stream = match std::panic::catch_unwind(AssertUnwindSafe(|| input.stream())) {
         Ok(stream) => stream,
         Err(_) => {
@@ -1817,6 +1840,8 @@ async fn run_continuous_capture(
     let mut termination_flush_disposition = NativeTailFlushDisposition::NoQualifyingCandidate;
     let mut termination_no_candidate_reason = Some("empty-continuous-buffer");
     if !audio_buffer.is_empty() {
+        let raw_ready_at_ms = now_ms();
+        let encode_started = Instant::now();
         // let duration = start_time.elapsed().as_secs_f32();
 
         // Apply noise gate
@@ -1852,6 +1877,13 @@ async fn run_continuous_capture(
                         minimum_speech_samples: 0,
                         pre_speech_samples: 0,
                         maximum_segment_samples: max_samples as u64,
+                    },
+                    NativeAudioDeliveryTiming {
+                        raw_ready_at_ms,
+                        encode_started_at_ms: raw_ready_at_ms,
+                        encoded_at_ms: now_ms(),
+                        encode_duration_micros: encode_started.elapsed().as_micros() as u64,
+                        emit_started_at_ms: 0,
                     },
                 );
                 termination_emitted_segment_sequence = Some(segment_sequence);
@@ -1999,9 +2031,11 @@ fn emit_speech_detected(
     capture_owner: NativeCaptureOwner,
     capture_generation: u64,
     boundary: NativeSegmentBoundary,
+    mut timing: NativeAudioDeliveryTiming,
 ) -> u64 {
     *segment_sequence += 1;
     let duration_samples = boundary.sample_end.saturating_sub(boundary.sample_start);
+    timing.emit_started_at_ms = now_ms();
     let event = NativeSpeechDetectedEvent {
         capture_session_id: capture_session_id.to_string(),
         capture_generation,
@@ -2025,8 +2059,26 @@ fn emit_speech_detected(
         vad_maximum_segment_samples: boundary.maximum_segment_samples,
         media_type: "audio/wav",
         audio_base64,
+        delivery_timing: Some(timing.clone()),
     };
-    let _ = app.emit("speech-detected", event);
+    let emit_started = Instant::now();
+    let result = app.emit("speech-detected", event);
+    let observation = serde_json::json!({
+        "stage": "segment-delivery",
+        "captureSessionId": capture_session_id,
+        "captureGeneration": capture_generation,
+        "segmentSequence": *segment_sequence,
+        "owner": capture_owner.as_str(),
+        "deliveryTiming": timing,
+        "emitFinishedAtMs": now_ms(),
+        "emitDurationMicros": emit_started.elapsed().as_micros() as u64,
+        "emitSucceeded": result.is_ok(),
+        "emitError": result.err().map(|error| error.to_string()),
+    });
+    // This compact receipt contains no PCM and follows the audio emit. Its end
+    // timestamp cannot be included in the audio envelope emitted before it.
+    info!("[native-audio-observation] {}", observation);
+    let _ = app.emit("native-audio-observation", observation);
     *segment_sequence
 }
 
@@ -2041,8 +2093,17 @@ fn encode_and_emit_speech_segment(
     capture_generation: u64,
     boundary: NativeSegmentBoundary,
 ) -> Result<u64, String> {
+    let encode_started_at_ms = now_ms();
+    let encode_started = Instant::now();
     let normalized = normalize_audio_level(samples, 0.1);
     let audio_base64 = samples_to_wav_b64(sample_rate, &normalized)?;
+    let timing = NativeAudioDeliveryTiming {
+        raw_ready_at_ms: boundary.segment_emitted_at_ms,
+        encode_started_at_ms,
+        encoded_at_ms: now_ms(),
+        encode_duration_micros: encode_started.elapsed().as_micros() as u64,
+        emit_started_at_ms: 0,
+    };
     Ok(emit_speech_detected(
         app,
         capture_session_id,
@@ -2052,6 +2113,7 @@ fn encode_and_emit_speech_segment(
         capture_owner,
         capture_generation,
         boundary,
+        timing,
     ))
 }
 
@@ -2828,6 +2890,7 @@ mod tests {
             vad_maximum_segment_samples: 1_440_000,
             media_type: "audio/wav",
             audio_base64: "UklGRg==".to_string(),
+            delivery_timing: None,
         };
 
         let value = serde_json::to_value(event).expect("event should serialize");

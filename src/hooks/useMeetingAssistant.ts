@@ -495,6 +495,7 @@ import {
   RawZeroInputEpisode,
   projectRawZeroInputWarning,
   parseNativeAudioSegmentDroppedEvent,
+  parseNativeAudioObservation,
   buildMemoryEvaluationTraceMetadata,
   formatMeetingAnswerTraceMetadata,
   formatModelGenerationTerminalForTrace,
@@ -36686,12 +36687,25 @@ export function useMeetingAssistant() {
   useEffect(() => {
     let disposed = false;
     let unlistenAudioLiveness: (() => void) | undefined;
+    let unlistenAudioObservation: (() => void) | undefined;
     let unlistenSpeechStart: (() => void) | undefined;
     let unlistenSpeech: (() => void) | undefined;
     let unlistenSegmentDrop: (() => void) | undefined;
     let unlistenLifecycle: (() => void) | undefined;
 
     const setupListeners = async () => {
+      const observationUnlisten = await listen<unknown>("native-audio-observation", (event) => {
+        const observedAtMs = Date.now();
+        const observation = parseNativeAudioObservation(event.payload);
+        if (!observation) return;
+        // Observation only: late stop-drain receipts remain joinable by their
+        // original identity and never acquire current-capture authority.
+        sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+          ...observation, observationReceivedAtMs: observedAtMs,
+        });
+      });
+      if (disposed) { observationUnlisten(); return; }
+      unlistenAudioObservation = observationUnlisten;
       const audioLivenessUnlisten = await listen<unknown>(
         "native-audio-liveness",
         (event) => {
@@ -36933,6 +36947,7 @@ export function useMeetingAssistant() {
 
         lastNativeSegmentSequenceRef.current =
           authorization.event.segmentSequence;
+        const receivedEvent = { ...authorization.event, jsReceivedAtMs: observedAtMs };
         sessionRecordingManagerRef.current?.recordNativeSpeechEvent({
           authorized: true,
           nativeSpeechAuthorizationAuthority:
@@ -36944,9 +36959,9 @@ export function useMeetingAssistant() {
               : "open-drain",
           audioDrainOperationId:
             openDrainAuthorization?.operationId,
-          ...buildNativeSpeechEventTraceMetadata(authorization.event),
+          ...buildNativeSpeechEventTraceMetadata(receivedEvent),
         });
-        speechDetectedHandlerRef.current?.(authorization.event);
+        speechDetectedHandlerRef.current?.(receivedEvent);
       });
 
       if (disposed) {
@@ -37269,6 +37284,7 @@ export function useMeetingAssistant() {
     return () => {
       disposed = true;
       unlistenAudioLiveness?.();
+      unlistenAudioObservation?.();
       unlistenSpeechStart?.();
       unlistenSpeech?.();
       unlistenSegmentDrop?.();

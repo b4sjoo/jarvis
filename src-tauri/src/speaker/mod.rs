@@ -97,6 +97,13 @@ pub struct SpeakerInput {
 }
 
 impl SpeakerInput {
+    pub(crate) fn capture_diagnostics(&self) -> serde_json::Value {
+        #[cfg(target_os = "macos")]
+        return self.inner.capture_diagnostics();
+        #[cfg(not(target_os = "macos"))]
+        serde_json::Value::Null
+    }
+
     // Creates a new speaker input. Fails on unsupported platforms.
     #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     pub fn new() -> Result<Self> {

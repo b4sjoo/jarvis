@@ -139,6 +139,8 @@ fn find_output_device_by_uid(uid: &str) -> Option<ca::Device> {
 }
 
 pub struct SpeakerInput {
+    output_uid: String,
+    aggregate_uid: String,
     tap: ca::TapGuard, // Assuming ca::TapGuard from core-audio-rs
     agg_desc: arc::Retained<cf::DictionaryOf<cf::String, cf::Type>>,
 }
@@ -216,6 +218,7 @@ impl SpeakerInput {
             &[tap.uid().unwrap().as_type_ref()],
         );
 
+        let aggregate_uid = cf::Uuid::new().to_cf_string();
         let agg_desc = cf::DictionaryOf::with_keys_values(
             &[
                 agg_keys::is_private(),
@@ -233,13 +236,22 @@ impl SpeakerInput {
                 cf::Boolean::value_true(),
                 cf::str!(c"system-audio-tap"), // Simplified name
                 &output_uid,
-                &cf::Uuid::new().to_cf_string(),
+                &aggregate_uid,
                 &cf::ArrayOf::from_slice(&[sub_device.as_ref()]),
                 &cf::ArrayOf::from_slice(&[sub_tap.as_ref()]),
             ],
         );
 
-        Ok(Self { tap, agg_desc })
+        Ok(Self { tap, agg_desc, output_uid: output_uid.to_string(), aggregate_uid: aggregate_uid.to_string() })
+    }
+
+    pub(crate) fn capture_diagnostics(&self) -> serde_json::Value {
+        serde_json::json!({
+            "outputUid": self.output_uid,
+            "aggregateUid": self.aggregate_uid,
+            "tapUid": self.tap.uid().ok().map(|uid| uid.to_string()),
+            "audioFormat": self.tap.asbd().ok().map(|format| format!("{:?}", format)),
+        })
     }
 
     fn start_device(

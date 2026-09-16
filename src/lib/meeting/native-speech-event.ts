@@ -8,6 +8,14 @@ export interface NativeSpeechStartEvent {
   sampleRate: number;
 }
 
+export interface NativeAudioDeliveryTiming {
+  rawReadyAtMs: number;
+  encodeStartedAtMs: number;
+  encodedAtMs: number;
+  encodeDurationMicros: number;
+  emitStartedAtMs: number;
+}
+
 export interface NativeSpeechDetectedEvent {
   captureSessionId: string;
   captureGeneration: number;
@@ -36,6 +44,64 @@ export interface NativeSpeechDetectedEvent {
   vadMaximumSegmentSamples: number;
   mediaType: "audio/wav";
   audioBase64: string;
+  deliveryTiming?: NativeAudioDeliveryTiming;
+  // Stamped at the JS event callback, never read from the native payload.
+  jsReceivedAtMs?: number;
+}
+
+export function parseNativeAudioDeliveryTiming(value: unknown): NativeAudioDeliveryTiming | undefined {
+  if (!isRecord(value)) return undefined;
+  const fields = ["rawReadyAtMs", "encodeStartedAtMs", "encodedAtMs", "encodeDurationMicros", "emitStartedAtMs"] as const;
+  if (fields.some((key) => !Number.isSafeInteger(value[key]) || (value[key] as number) < 0)) return undefined;
+  return Object.fromEntries(fields.map((key) => [key, value[key]])) as unknown as NativeAudioDeliveryTiming;
+}
+
+export function parseNativeAudioObservation(payload: unknown) {
+  if (!isRecord(payload) || typeof payload.captureSessionId !== "string" || !payload.captureSessionId ||
+      !Number.isSafeInteger(payload.captureGeneration) || (payload.captureGeneration as number) < 1 ||
+      payload.owner !== "meeting") return null;
+  const identity = { nativeCaptureSessionId: payload.captureSessionId,
+    nativeCaptureGeneration: payload.captureGeneration as number, nativeCaptureOwner: payload.owner };
+  if (payload.stage === "segment-delivery") {
+    const timing = parseNativeAudioDeliveryTiming(payload.deliveryTiming);
+    if (!timing || !Number.isSafeInteger(payload.segmentSequence) || (payload.segmentSequence as number) < 1 ||
+        !Number.isSafeInteger(payload.emitFinishedAtMs) || (payload.emitFinishedAtMs as number) < 0 ||
+        !Number.isSafeInteger(payload.emitDurationMicros) || (payload.emitDurationMicros as number) < 0 ||
+        typeof payload.emitSucceeded !== "boolean") return null;
+    return { ...identity, stage: "native-segment-delivery", nativeSegmentSequence: payload.segmentSequence,
+      nativeDeliveryTiming: timing, nativeEmitFinishedAtMs: payload.emitFinishedAtMs,
+      nativeEmitDurationMicros: payload.emitDurationMicros, nativeEmitSucceeded: payload.emitSucceeded,
+      nativeEmitError: typeof payload.emitError === "string" ? payload.emitError.slice(0, 512) : undefined };
+  }
+  if (payload.stage === "capture-format") {
+    const route = isRecord(payload.actualRoute) ? payload.actualRoute : {};
+    const text = (value: unknown) => typeof value === "string" ? value.slice(0, 512) : undefined;
+    return { ...identity, stage: "native-capture-format", occurredAtMs: payload.occurredAtMs,
+      requestedDeviceId: text(payload.requestedDeviceId),
+      actualRoute: { outputUid: text(route.outputUid), aggregateUid: text(route.aggregateUid),
+        tapUid: text(route.tapUid), audioFormat: text(route.audioFormat) } };
+  }
+  return null;
+}
+
+// Wall-clock deltas are same-host observations, not monotonic durations. Missing
+// or reversed clocks remain unknown rather than being reported as zero latency.
+export function measureNativeAudioDelivery(input: {
+  timing?: NativeAudioDeliveryTiming;
+  emitDurationMicros?: number;
+  jsReceivedAtMs?: number;
+  queuedAtMs?: number;
+  dequeuedAtMs?: number;
+}) {
+  const delta = (end?: number, start?: number) => end != null && start != null && end >= start ? end - start : undefined;
+  return {
+    rawReadyToEncodeMs: delta(input.timing?.encodeStartedAtMs, input.timing?.rawReadyAtMs),
+    encodeDurationMs: input.timing == null ? undefined : input.timing.encodeDurationMicros / 1000,
+    nativeEmitDurationMs: input.emitDurationMicros == null ? undefined : input.emitDurationMicros / 1000,
+    emitStartToJsMs: delta(input.jsReceivedAtMs, input.timing?.emitStartedAtMs),
+    jsToEnqueueMs: delta(input.queuedAtMs, input.jsReceivedAtMs),
+    queueWaitMs: delta(input.dequeuedAtMs, input.queuedAtMs),
+  };
 }
 
 export type NativeSpeechStartEventRejectionReason =
@@ -150,6 +216,7 @@ export function parseNativeSpeechDetectedEvent(
     return null;
   }
 
+  const deliveryTiming = parseNativeAudioDeliveryTiming(payload.deliveryTiming);
   return {
     captureSessionId,
     captureGeneration: captureGeneration as number,
@@ -173,6 +240,7 @@ export function parseNativeSpeechDetectedEvent(
     vadMaximumSegmentSamples: vadMaximumSegmentSamples as number,
     mediaType: "audio/wav",
     audioBase64,
+    ...(deliveryTiming ? { deliveryTiming } : {}),
   };
 }
 
@@ -359,6 +427,8 @@ export function buildNativeSpeechEventTraceMetadata(
     nativeSpeechStartedAtMs: event.speechStartedAtMs,
     nativeSpeechEndedAtMs: event.speechEndedAtMs,
     nativeSegmentEmittedAtMs: event.segmentEmittedAtMs,
+    nativeDeliveryTiming: event.deliveryTiming,
+    nativeJsReceivedAtMs: event.jsReceivedAtMs,
     nativeSampleStart: event.sampleStart,
     nativeSampleEnd: event.sampleEnd,
     nativeSampleRate: event.sampleRate,

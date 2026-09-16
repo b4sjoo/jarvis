@@ -7,6 +7,8 @@ import {
   buildNativeSpeechStartTraceMetadata,
   parseNativeSpeechDetectedEvent,
   parseNativeSpeechStartEvent,
+  parseNativeAudioObservation,
+  measureNativeAudioDelivery,
 } from "../src/lib/meeting/native-speech-event.js";
 
 const FIXTURE = {
@@ -43,6 +45,37 @@ const START_FIXTURE = {
   occurredAtMs: 1300,
   sampleRate: 48_000,
 };
+
+test("delivery timing joins by exact segment and distinguishes encode, emit, JS and queue delays", () => {
+  const deliveryTiming = { rawReadyAtMs: 2_300, encodeStartedAtMs: 2_305,
+    encodedAtMs: 2_405, encodeDurationMicros: 100_000, emitStartedAtMs: 2_410 };
+  const event = parseNativeSpeechDetectedEvent({ ...FIXTURE, deliveryTiming })!;
+  const receipt = parseNativeAudioObservation({ ...FIXTURE, owner: "meeting", stage: "segment-delivery",
+    deliveryTiming, emitFinishedAtMs: 2_430, emitDurationMicros: 20_000, emitSucceeded: true });
+  assert.equal(receipt?.nativeCaptureSessionId, event.captureSessionId);
+  assert.ok(receipt && "nativeSegmentSequence" in receipt);
+  assert.equal(receipt.nativeSegmentSequence, event.segmentSequence);
+  assert.equal("audioBase64" in receipt!, false);
+  assert.deepEqual(measureNativeAudioDelivery({ timing: event.deliveryTiming,
+    emitDurationMicros: 20_000, jsReceivedAtMs: 2_800, queuedAtMs: 2_815, dequeuedAtMs: 2_900 }), {
+    rawReadyToEncodeMs: 5, encodeDurationMs: 100, nativeEmitDurationMs: 20,
+    emitStartToJsMs: 390, jsToEnqueueMs: 15, queueWaitMs: 85,
+  });
+  assert.equal(measureNativeAudioDelivery({}).encodeDurationMs, undefined);
+  assert.equal(measureNativeAudioDelivery({ timing: deliveryTiming, jsReceivedAtMs: 1 }).emitStartToJsMs, undefined);
+});
+
+test("diagnostic fields never change speech content or source authorization", () => {
+  const invalid = parseNativeSpeechDetectedEvent({ ...FIXTURE, deliveryTiming: { bad: true }, jsReceivedAtMs: 12 });
+  assert.deepEqual(invalid, FIXTURE);
+  assert.equal(parseNativeAudioObservation({ stage: "segment-delivery", owner: "meeting" }), null);
+  const route = parseNativeAudioObservation({ captureSessionId: "c", captureGeneration: 1,
+    owner: "meeting", stage: "capture-format", occurredAtMs: 1,
+    actualRoute: { outputUid: "output", tapUid: "tap", aggregateUid: "aggregate", audioFormat: "mono48k", forbidden: "discard" } });
+  assert.ok(route && "actualRoute" in route);
+  assert.equal(route.actualRoute.outputUid, "output");
+  assert.equal("forbidden" in route.actualRoute, false);
+});
 
 test("parses the Rust native speech serialization fixture", () => {
   assert.deepEqual(parseNativeSpeechDetectedEvent(FIXTURE), FIXTURE);
