@@ -27,8 +27,11 @@ const limits = [
 
 // This loader follows the source-execution tests, but retains complete modules and their dependencies.
 // It is a tool-local composition adapter, never a replacement request/retry implementation.
-export function createProductionRuntime({ cap, fetchImpl = () => { throw new Error("network disabled"); }, now = Date.now, onTerminal = () => {} } = {}) {
+export function createProductionRuntime({ cap, operationKind = "question-type-adjudication", fetchImpl = () => { throw new Error("network disabled"); }, now = Date.now, onTerminal = () => {} } = {}) {
   if (![512, 1024].includes(cap)) throw new Error("Only approved caps 512 and 1024 are allowed");
+  if (!["question-type-adjudication", "task-relation-parent-affinity", "task-relation-child-affinity", "task-relation-canonical-shadow"].includes(operationKind)) throw new Error("Unsupported bounded calibration operation");
+  const typeOperation = operationKind === "question-type-adjudication";
+  const requestFile = typeOperation ? "question-type-adjudication-request.ts" : "task-relation-split-shadow-request.ts";
   const cache = new Map();
   const sources = {};
   const requests = [];
@@ -54,9 +57,9 @@ export function createProductionRuntime({ cap, fetchImpl = () => { throw new Err
       target = target.replace(/\.js$/, "");
       if (!target.endsWith(".ts")) target = existsSync(target + ".ts") ? target + ".ts" : join(target, "index.ts");
       const exports = load(target);
-      if (filename.endsWith("question-type-adjudication-request.ts") && target.endsWith("runtime-inference.ts")) {
+      if (filename.endsWith(requestFile) && target.endsWith("runtime-inference.ts")) {
         return { ...exports, getRuntimeInferenceOperationDefinition: kind => {
-          if (kind !== "question-type-adjudication") throw new Error("Only Type operations allowed");
+          if (kind !== operationKind) throw new Error("Operation differs from frozen calibration route");
           return { ...exports.getRuntimeInferenceOperationDefinition(kind), maxOutputTokens: cap };
         } };
       }
@@ -89,7 +92,10 @@ export function createProductionRuntime({ cap, fetchImpl = () => { throw new Err
     return module.exports;
   }
   const type = load(join(root, "src/lib/meeting/question-type-adjudication.ts"));
-  const requestModule = load(join(root, "src/lib/meeting/question-type-adjudication-request.ts"));
+  const requestModule = load(join(root, "src/lib/meeting", requestFile));
+  const split = typeOperation ? undefined : load(join(root, "src/lib/meeting/task-relation-split-shadow.ts"));
+  const prompts = typeOperation ? type.buildQuestionTypeAdjudicationPrompts
+    : operationKind === "task-relation-canonical-shadow" ? split.buildTaskRelationCanonicalShadowPrompts : split.buildTaskRelationAffinityPrompts;
   function makeRequest(input) {
     // Labels and category never cross the model boundary; context is an existing bounded prior.
     const text = input.text;
@@ -100,17 +106,21 @@ export function createProductionRuntime({ cap, fetchImpl = () => { throw new Err
       compositionReasons: ["independent-current-turn"], boundaryReason: "independent-current-turn", truncated: false,
     }, ...(input.currentBranchType ? { structuredHints: { currentBranchType: input.currentBranchType } } : {}) });
   }
-  return { sources, requests, events, makeRequest, prompts: type.buildQuestionTypeAdjudicationPrompts,
+  return { sources, requests, events, makeRequest, prompts,
     builtinProvider: id => load(join(root, "src/config/ai-providers.constants.ts")).AI_PROVIDERS.find(p => p.id === id),
-    parse: type.parseQuestionTypeAdjudicationOutput,
-    async run({ config, request, operationId }) {
+    parse: typeOperation ? type.parseQuestionTypeAdjudicationOutput
+      : operationKind === "task-relation-canonical-shadow" ? split.parseTaskRelationCanonicalShadowOutput : split.parseTaskRelationAffinityOutput,
+    async run({ config, request, operationId, singleAttempt = false }) {
       const startedAt = now();
-      const result = await requestModule.requestQuestionTypeAdjudication({ ...config, request,
-        signal: new AbortController().signal, timeoutMs: 4000, readRetryDeadlineAt: () => startedAt + 4000,
-        isExecutionCurrent: () => true, executionIdentity: { requestId: operationId, executionPlanId: operationId,
-          sessionId: "bounded-calibration", runtimeEpoch: 1 } });
+      const execution = { ...config, request, signal: new AbortController().signal,
+        executionIdentity: { requestId: operationId, executionPlanId: operationId,
+          sessionId: "bounded-calibration", runtimeEpoch: 1 } };
+      const result = typeOperation
+        ? await requestModule.requestQuestionTypeAdjudication({ ...execution, timeoutMs: 4000,
+            ...(singleAttempt ? {} : { readRetryDeadlineAt: () => startedAt + 4000 }), isExecutionCurrent: () => true })
+        : await requestModule.requestTaskRelationSplitShadow(execution);
       return { ...result, startedAt, durationMs: now() - startedAt,
-        onTimeStrictValid: Boolean(result.parsed.ok && result.completedAt <= startedAt + 4000) };
+        onTimeStrictValid: typeOperation ? Boolean(result.parsed.ok && result.completedAt <= startedAt + 4000) : undefined };
     } };
 }
 

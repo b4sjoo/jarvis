@@ -16,6 +16,49 @@ const config = {
 const valid = JSON.stringify({ v: 1, t: "field-knowledge", c: 0.95, e: "HNSW" });
 const response = (content = valid) => new Response(JSON.stringify({ choices: [{ message: { content }, finish_reason: "stop" }], usage: { prompt_tokens: 10, completion_tokens: 12, total_tokens: 22 } }), { headers: { "content-type": "application/json" } });
 
+test("bounded onsite Type pilot disables retries explicitly without changing production defaults", async () => {
+  let calls = 0;
+  const runtime = tool.createProductionRuntime({ cap: 1024, fetchImpl: async () => {
+    calls++; return new Response("unavailable", { status: 503 });
+  } });
+  const result = await runtime.run({ config, request: runtime.makeRequest(tool.frozenInputs[2]), operationId: "onsite-single", singleAttempt: true });
+  assert.equal(calls, 1);
+  assert.equal(runtime.requests.length, 1);
+  assert.equal(result.parsed.ok, false);
+});
+
+test("bounded onsite relation adapter reuses actual prompts/request/parser at both caps", async () => {
+  const pilot = await import(pathToFileURL(resolve("scripts/prepare-onsite-runtime-pilot.mjs")).href);
+  for (const kind of ["task-relation-parent-affinity", "task-relation-child-affinity", "task-relation-canonical-shadow"]) {
+    for (const cap of [512, 1024]) {
+      const calls: any[] = [];
+      const canonical = kind === "task-relation-canonical-shadow";
+      const child = kind === "task-relation-child-affinity";
+      const currentQuestion = { sourceTexts: ["Explain HNSW."] };
+      const activeParent = { topic: "RAG", objective: "RAG", acceptedConstraints: [] };
+      const semanticPayload = canonical ? { currentQuestion, activeParent, recentEvidence: [], affinity: { parent: { status: "unknown" } } }
+        : child ? { currentQuestion, activeChild: { question: "HNSW", sourceEvidence: ["HNSW"] }, recentBranchEvidence: [] }
+        : { currentQuestion, activeParent: { ...activeParent, sourceEvidence: ["RAG"] }, recentParentEvidence: [] };
+      const runtime = tool.createProductionRuntime({ cap, operationKind: kind, fetchImpl: async (_url: string, init: any) => {
+        calls.push(JSON.parse(init.body));
+        return response(canonical ? JSON.stringify({ schemaVersion: 3, relation: "child-probe", confidence: 0.89,
+          currentQuestionEvidenceSpans: ["HNSW"], parentEvidenceSpans: ["RAG"] })
+          : JSON.stringify({ v: 1, d: "r", c: 0.89, q: "HNSW", b: child ? "HNSW" : "RAG" }));
+      } });
+      const seed = { operationKind: kind, affinityKind: child ? "child" : "parent", identity: { logicalQuestionUnitId: "q", logicalQuestionRevision: 1 }, semanticPayload, semanticPayloadDigest: "fixture", promptVersion: "fixture", schemaVersion: canonical ? 3 : 1 };
+      const prompts = runtime.prompts(seed);
+      const request = pilot.requestFromSavedPrompt({ runtime, operationKind: kind, traceId: "saved", promptText: `${prompts.systemPrompt}\n\n${prompts.userMessage}` });
+      assert.equal(runtime.prompts(request).userMessage.includes("offline:"), false);
+      const result = await runtime.run({ config, request, operationId: `onsite-${kind}-${cap}`, singleAttempt: true });
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0].max_completion_tokens, cap);
+      assert.equal(result.parsed.ok, true);
+      assert.equal(runtime.requests[0].timeoutMs, canonical ? 6000 : 7000);
+      assert.equal(result.onTimeStrictValid, undefined, "standalone relation duration must not impersonate original foreground usefulness");
+    }
+  }
+});
+
 test("frozen plan has eight inputs, 24 alternating pairs, 48 operations and no expected payload", () => {
   const plan = tool.createPlan(config);
   assert.equal(plan.operations.length, 48);
