@@ -938,6 +938,9 @@ export const MeetingAssistant = ({
         meeting.currentQuestionLineage?.questionInstanceId)
       ? meeting.manualQuestionTypeCorrection
       : undefined;
+  const audioWarningLabel = meeting.audioInputLiveness?.severity === "warning"
+    ? meeting.audioInputLiveness.label : undefined;
+  const audioWarningDetail = audioWarningLabel ? meeting.audioInputLiveness?.detail : undefined;
   const focusSnapshot = useMemo<MeetingFocusSnapshot>(
     () => createMeetingFocusDisplayModel({
       active: focusModeActive,
@@ -967,8 +970,8 @@ export const MeetingAssistant = ({
       phaseOutputNotice: meeting.phaseOutputNotice,
       isBusy,
       audioControl: audioPauseResumeControl,
-      audioInputWarning: meeting.audioInputLiveness?.severity === "warning"
-        ? { label: meeting.audioInputLiveness.label, detail: meeting.audioInputLiveness.detail }
+      audioInputWarning: audioWarningLabel && audioWarningDetail
+        ? { label: audioWarningLabel, detail: audioWarningDetail }
         : undefined,
       showClarifyingQuestion,
       clarifyingQuestion,
@@ -1050,7 +1053,8 @@ export const MeetingAssistant = ({
       hasActiveMeetingScreenContext,
       meeting.error,
       meeting.nativeAudioManualRecovery,
-      meeting.audioInputLiveness,
+      audioWarningLabel,
+      audioWarningDetail,
       meeting.speechCorrections,
       meeting.status,
       meetingStatusLabel,
