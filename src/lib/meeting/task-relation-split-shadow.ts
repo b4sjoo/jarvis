@@ -17,7 +17,6 @@ import {
   type TaskRelationSourceEvidenceRole,
 } from "./task-relation-adjudication.js";
 import {
-  areCompatibleParentContinuityTypes,
   canParentQuestionTypeOwnChild,
   canQuestionTypeCreateParent,
   normalizeCanonicalQuestionType,
@@ -373,11 +372,18 @@ export type FirstBatchRelationReleaseReason =
   | "same-type-independent-new-parent"
   | "parent-related-type-incompatible"
   | "active-child-preserve-child"
-  | "active-child-combination-not-released";
+  | "active-child-combination-not-released"
+  | "active-child-detour"
+  | "type-excludes-existing-tree"
+  | "type-related-branch-conflict"
+  | "type-location-unresolved"
+  | "field-parent-capability-conflict"
+  | "manual-parent-retype-related";
 
 export interface FirstBatchRelationReleaseDecision {
   authorized: boolean;
   relation?: Exclude<RuntimeTaskRelation, "unknown">;
+  preserveActiveChild?: boolean;
   reason: FirstBatchRelationReleaseReason;
   confidence: number;
   minimumConfidence: number;
@@ -393,8 +399,6 @@ export interface FirstBatchRelationReleaseDecision {
   parentEvidenceSpans: string[];
 }
 
-export const ORDERED_RELATION_RESOLUTION_MIN_CONFIDENCE = 0.95;
-
 export type OrderedTaskRelationResolutionStage =
   | "runtime-matrix"
   | "canonical-relation"
@@ -405,7 +409,6 @@ export type OrderedTaskRelationResolutionReason =
   | "canonical-authorized"
   | "canonical-missing"
   | "canonical-unknown"
-  | "canonical-confidence-below-threshold"
   | "canonical-topology-incompatible"
   | "voice-preserve-active-child"
   | "voice-preserve-active-parent"
@@ -419,6 +422,8 @@ export interface OrderedTaskRelationResolutionDecision {
   status: "resolved" | "unresolved";
   stage?: OrderedTaskRelationResolutionStage;
   relation?: Exclude<RuntimeTaskRelation, "unknown">;
+  preserveActiveChild?: boolean;
+  currentQuestionTypeInherited?: boolean;
   reason: OrderedTaskRelationResolutionReason;
   confidence: number;
   currentEvidenceSpans: string[];
@@ -429,6 +434,8 @@ export interface OrderedTaskRelationResolutionDecision {
 export function decideOrderedTaskRelationResolution(input: {
   sourceKind: "voice" | "screen" | "mixed";
   currentQuestionType: unknown;
+  currentQuestionTypeInherited?: boolean;
+  allowParentRetype?: boolean;
   activeParentQuestionType?: unknown;
   activeChildQuestionType?: unknown;
   hasActiveChild: boolean;
@@ -439,152 +446,74 @@ export function decideOrderedTaskRelationResolution(input: {
   screenTypeEvidenceAuthorized?: boolean;
   finalizeWithNullHypothesis?: boolean;
 }): OrderedTaskRelationResolutionDecision {
-  const currentQuestionType =
-    normalizeCanonicalQuestionType(input.currentQuestionType) ?? "unknown";
-  const activeParentQuestionType = normalizeCanonicalQuestionType(
-    input.activeParentQuestionType
-  );
-  const activeChildQuestionType = normalizeCanonicalQuestionType(
-    input.activeChildQuestionType
-  );
+  const currentQuestionType = normalizeCanonicalQuestionType(input.currentQuestionType) ?? "unknown";
+  const activeParentQuestionType = normalizeCanonicalQuestionType(input.activeParentQuestionType);
+  const activeChildQuestionType = normalizeCanonicalQuestionType(input.activeChildQuestionType);
+  const inherited = input.currentQuestionTypeInherited === true || currentQuestionType === "unknown";
   const matrix = decideFirstBatchRelationRelease({
-    currentQuestionType,
-    activeParentQuestionType,
-    activeChildQuestionType,
-    hasActiveChild: input.hasActiveChild,
-    childAffinity: input.childAffinity,
-    parentAffinity: input.parentAffinity,
+    ...input, currentQuestionType, activeParentQuestionType, activeChildQuestionType,
+    final: input.finalizeWithNullHypothesis === true,
   });
-  const deferSameTypeIndependentNewParent =
-    matrix.authorized &&
-    matrix.relation === "new-parent" &&
-    matrix.reason === "same-type-independent-new-parent" &&
-    !input.hasActiveChild;
-  if (
-    matrix.authorized &&
-    matrix.relation &&
-    !deferSameTypeIndependentNewParent
-  ) {
-    return {
-      status: "resolved",
-      stage: "runtime-matrix",
-      relation: matrix.relation,
-      reason: matrix.reason,
-      confidence: matrix.confidence,
-      currentEvidenceSpans: [...matrix.currentEvidenceSpans],
-      parentEvidenceSpans: [...matrix.parentEvidenceSpans],
-      matrix,
-    };
-  }
-
-  const canonicalAuthorization = authorizeCanonicalRelationForTopology({
-    canonical: input.canonical,
-    currentQuestionType,
-    activeParentQuestionType,
-    activeChildQuestionType,
-    hasActiveChild: input.hasActiveChild,
+  const result = (value: Omit<OrderedTaskRelationResolutionDecision, "matrix" | "currentQuestionTypeInherited">): OrderedTaskRelationResolutionDecision => ({
+    ...value, matrix, currentQuestionTypeInherited: inherited,
   });
-  if (canonicalAuthorization.authorized && input.canonical) {
-    return {
-      status: "resolved",
-      stage: "canonical-relation",
-      relation: input.canonical.relation as Exclude<
-        RuntimeTaskRelation,
-        "unknown"
-      >,
-      reason: "canonical-authorized",
-      confidence: input.canonical.confidence,
-      currentEvidenceSpans: [
-        ...input.canonical.currentQuestionEvidenceSpans,
-      ],
-      parentEvidenceSpans: [...input.canonical.parentEvidenceSpans],
-      matrix,
-    };
+  const canonical = input.canonical;
+  // A timely valid Canonical result is the final relation axis. Affinity cannot
+  // vote it away; only topology capability can make its execution Answer-only.
+  if (canonical && canonical.relation !== "unknown") {
+    const authorization = authorizeCanonicalRelationForTopology({
+      canonical, currentQuestionType, activeParentQuestionType, activeChildQuestionType,
+      hasActiveChild: input.hasActiveChild,
+      allowParentRetype: input.allowParentRetype,
+    });
+    if (authorization.authorized) {
+      return result({
+        status: "resolved", stage: "canonical-relation", relation: canonical.relation,
+        reason: "canonical-authorized", confidence: canonical.confidence,
+        currentEvidenceSpans: [...canonical.currentQuestionEvidenceSpans],
+        parentEvidenceSpans: [...canonical.parentEvidenceSpans],
+        preserveActiveChild: canonical.relation === "child-probe" && input.hasActiveChild
+          ? currentQuestionType === activeChildQuestionType && input.childAffinity?.decision !== "unrelated"
+          : undefined,
+      });
+    }
+    // An inherited type is not positive evidence of a contradictory child type.
+    if (!(inherited && canonical.relation === "child-probe")) {
+      return result({ status: "resolved", stage: "canonical-relation",
+        reason: "canonical-topology-incompatible", confidence: canonical.confidence,
+        currentEvidenceSpans: [...canonical.currentQuestionEvidenceSpans],
+        parentEvidenceSpans: [...canonical.parentEvidenceSpans] });
+    }
   }
-
-  if (deferSameTypeIndependentNewParent && input.finalizeWithNullHypothesis) {
-    return {
-      status: "resolved",
-      stage: "runtime-matrix",
-      relation: matrix.relation,
-      reason: matrix.reason,
-      confidence: matrix.confidence,
-      currentEvidenceSpans: [...matrix.currentEvidenceSpans],
-      parentEvidenceSpans: [...matrix.parentEvidenceSpans],
-      matrix,
-    };
+  const sameTypeIndependentNeedsCanonical = !input.finalizeWithNullHypothesis &&
+    matrix.reason === "same-type-independent-new-parent" && !input.hasActiveChild;
+  if (matrix.authorized && matrix.relation && !sameTypeIndependentNeedsCanonical) {
+    return result({ status: "resolved", stage: "runtime-matrix", relation: matrix.relation,
+      preserveActiveChild: matrix.preserveActiveChild,
+      reason: matrix.reason, confidence: matrix.confidence,
+      currentEvidenceSpans: [...matrix.currentEvidenceSpans], parentEvidenceSpans: [...matrix.parentEvidenceSpans] });
   }
-
-  const unresolvedReason: OrderedTaskRelationResolutionReason =
-    !input.canonical
-      ? "canonical-missing"
-      : input.canonical.relation === "unknown"
-        ? "canonical-unknown"
-        : input.canonical.confidence <
-            ORDERED_RELATION_RESOLUTION_MIN_CONFIDENCE
-          ? "canonical-confidence-below-threshold"
-          : "canonical-topology-incompatible";
   if (!input.finalizeWithNullHypothesis) {
-    return {
-      status: "unresolved",
-      reason: unresolvedReason,
-      confidence: input.canonical?.confidence ?? matrix.confidence,
-      currentEvidenceSpans:
-        input.canonical?.currentQuestionEvidenceSpans ??
-        matrix.currentEvidenceSpans,
-      parentEvidenceSpans:
-        input.canonical?.parentEvidenceSpans ?? matrix.parentEvidenceSpans,
-      matrix,
-    };
+    return result({ status: "unresolved", reason: canonical ? "canonical-unknown" : "canonical-missing",
+      confidence: canonical?.confidence ?? matrix.confidence,
+      currentEvidenceSpans: canonical?.currentQuestionEvidenceSpans ?? matrix.currentEvidenceSpans,
+      parentEvidenceSpans: canonical?.parentEvidenceSpans ?? matrix.parentEvidenceSpans });
   }
-
-  const sourceKind = input.sourceKind === "mixed" ? "voice" : input.sourceKind;
-  if (
-    sourceKind === "screen" &&
-    input.screenBoundaryPrior &&
-    input.screenTypeEvidenceAuthorized &&
-    !input.hasActiveChild &&
-    canQuestionTypeCreateParent(currentQuestionType)
-  ) {
-    return resolvedNullHypothesis({
-      relation: "new-parent",
-      reason: "screen-milestone-new-parent",
-      matrix,
-    });
+  if (matrix.reason === "type-related-branch-conflict" || matrix.reason === "type-location-unresolved" ||
+      matrix.reason === "field-parent-capability-conflict") {
+    return result({ status: "resolved", stage: "runtime-matrix", reason: matrix.reason,
+      confidence: matrix.confidence, currentEvidenceSpans: [...matrix.currentEvidenceSpans],
+      parentEvidenceSpans: [...matrix.parentEvidenceSpans] });
   }
-  if (sourceKind === "screen" && input.hasActiveChild) {
-    return resolvedNullHypothesis({
-      relation: "child-probe",
-      reason: "screen-preserve-active-child",
-      matrix,
-    });
-  }
-  if (sourceKind === "voice" && input.hasActiveChild) {
-    return resolvedNullHypothesis({
-      relation: "child-probe",
-      reason: "voice-preserve-active-child",
-      matrix,
-    });
-  }
-  if (sourceKind === "voice" && activeParentQuestionType) {
-    return resolvedNullHypothesis({
-      relation: "followup-parent",
-      reason: "voice-preserve-active-parent",
-      matrix,
-    });
-  }
-  if (sourceKind === "screen" && activeParentQuestionType) {
-    return resolvedNullHypothesis({
-      relation: "followup-parent",
-      reason: "screen-preserve-active-parent",
-      matrix,
-    });
-  }
-  return resolvedNullHypothesis({
-    reason:
-      sourceKind === "screen" ? "screen-current-only" : "voice-current-only",
+  const source = input.sourceKind === "screen" ? "screen" : "voice";
+  const fallback = resolvedNullHypothesis({
+    relation: input.hasActiveChild ? "child-probe" : activeParentQuestionType ? "followup-parent" : undefined,
+    reason: input.hasActiveChild ? `${source}-preserve-active-child`
+      : activeParentQuestionType ? `${source}-preserve-active-parent` : `${source}-current-only`,
     matrix,
   });
+  return { ...fallback, preserveActiveChild: input.hasActiveChild ? true : undefined,
+    currentQuestionTypeInherited: inherited };
 }
 
 export function projectOrderedTaskRelationAdjudication(
@@ -620,222 +549,101 @@ export function formatOrderedTaskRelationResolutionForTrace(
     taskRelationOrderedResolutionRelation: decision.relation,
     taskRelationOrderedResolutionReason: decision.reason,
     taskRelationOrderedResolutionConfidence: decision.confidence,
+    taskRelationOrderedResolutionPreserveActiveChild: decision.preserveActiveChild,
+    taskRelationOrderedResolutionTypeInherited: decision.currentQuestionTypeInherited,
+    taskRelationOrderedExecutionScope: decision.status === "resolved" && !decision.relation ? "current-only" : undefined,
   };
 }
 
 export function decideFirstBatchRelationRelease(input: {
   currentQuestionType: unknown;
+  currentQuestionTypeInherited?: boolean;
+  allowParentRetype?: boolean;
   activeParentQuestionType?: unknown;
   activeChildQuestionType?: unknown;
   hasActiveChild: boolean;
   childAffinity?: TaskRelationAffinityAdjudication;
   parentAffinity?: TaskRelationAffinityAdjudication;
+  final?: boolean;
 }): FirstBatchRelationReleaseDecision {
-  const currentQuestionType =
-    normalizeCanonicalQuestionType(input.currentQuestionType) ?? "unknown";
-  const activeParentQuestionType = normalizeCanonicalQuestionType(
-    input.activeParentQuestionType
-  );
-  const activeChildQuestionType = normalizeCanonicalQuestionType(
-    input.activeChildQuestionType
-  );
-  const childAffinity =
-    input.childAffinity?.affinityKind === "child"
-      ? input.childAffinity
-      : undefined;
-  const parentAffinity =
-    input.parentAffinity?.affinityKind === "parent"
-      ? input.parentAffinity
-      : undefined;
+  const currentQuestionType = normalizeCanonicalQuestionType(input.currentQuestionType) ?? "unknown";
+  const activeParentQuestionType = normalizeCanonicalQuestionType(input.activeParentQuestionType);
+  const activeChildQuestionType = normalizeCanonicalQuestionType(input.activeChildQuestionType);
+  const child = input.hasActiveChild;
+  const knownType = currentQuestionType !== "unknown" && !input.currentQuestionTypeInherited;
+  const childAffinity = input.childAffinity?.affinityKind === "child" ? input.childAffinity : undefined;
+  const parentAffinity = input.parentAffinity?.affinityKind === "parent" ? input.parentAffinity : undefined;
+  const ap = parentAffinity?.decision;
+  const ac = childAffinity?.decision;
+  const confidence = Math.min(parentAffinity?.confidence ?? 1, childAffinity?.confidence ?? 1);
   const base = {
-    currentQuestionType,
-    activeParentQuestionType,
-    activeChildQuestionType,
-    childAffinityDecision: childAffinity?.decision as
-      | ChildAffinityDecision
-      | undefined,
+    currentQuestionType, activeParentQuestionType, activeChildQuestionType,
+    childAffinityDecision: ac as ChildAffinityDecision | undefined,
     childAffinityConfidence: childAffinity?.confidence,
-    parentAffinityDecision: parentAffinity?.decision as
-      | ParentAffinityDecision
-      | undefined,
+    parentAffinityDecision: ap as ParentAffinityDecision | undefined,
     parentAffinityConfidence: parentAffinity?.confidence,
-    currentEvidenceSpans: uniqueEvidenceSpans([
-      ...(childAffinity?.currentEvidenceSpans ?? []),
-      ...(parentAffinity?.currentEvidenceSpans ?? []),
-    ]),
-    parentEvidenceSpans: uniqueEvidenceSpans([
-      ...(childAffinity?.branchEvidenceSpans ?? []),
-      ...(parentAffinity?.branchEvidenceSpans ?? []),
-    ]),
-    minimumConfidence: FIRST_BATCH_RELATION_RELEASE_MIN_CONFIDENCE,
+    currentEvidenceSpans: uniqueEvidenceSpans([...(childAffinity?.currentEvidenceSpans ?? []), ...(parentAffinity?.currentEvidenceSpans ?? [])]),
+    parentEvidenceSpans: uniqueEvidenceSpans([...(childAffinity?.branchEvidenceSpans ?? []), ...(parentAffinity?.branchEvidenceSpans ?? [])]),
+    minimumConfidence: input.final ? 0 : FIRST_BATCH_RELATION_RELEASE_MIN_CONFIDENCE,
+    confidence: parentAffinity || childAffinity ? confidence : 0,
+    possibleRelationError: confidence >= FIRST_BATCH_RELATION_POSSIBLE_ERROR_MIN_CONFIDENCE && confidence < FIRST_BATCH_RELATION_RELEASE_MIN_CONFIDENCE,
   };
-  const decide = (
-    decision: Omit<
-      FirstBatchRelationReleaseDecision,
-      keyof typeof base
-    >
-  ): FirstBatchRelationReleaseDecision => ({ ...base, ...decision });
-
+  const decide = (relation: FirstBatchRelationReleaseDecision["relation"], reason: FirstBatchRelationReleaseReason,
+    preserveActiveChild?: boolean): FirstBatchRelationReleaseDecision => ({
+    ...base, authorized: relation != null, relation, reason, preserveActiveChild,
+  });
+  const newParent = (reason: FirstBatchRelationReleaseReason) =>
+    canCreateRelationParent(currentQuestionType, activeParentQuestionType)
+      ? decide("new-parent", reason)
+      : decide(undefined, currentQuestionType === "field-knowledge"
+        ? "field-parent-capability-conflict" : "type-location-unresolved");
   if (!activeParentQuestionType) {
     return canQuestionTypeCreateParent(currentQuestionType)
-      ? decide({
-          authorized: true,
-          relation: "new-parent",
-          reason: "no-parent-parent-eligible",
-          confidence: 1,
-          possibleRelationError: false,
-        })
-      : decide({
-          authorized: false,
-          reason: "no-parent-nonparent-type-unresolved",
-          confidence: 1,
-          possibleRelationError: false,
-        });
+      ? { ...decide("new-parent", "no-parent-parent-eligible"), confidence: 1 }
+      : decide(undefined, "no-parent-nonparent-type-unresolved");
   }
-
-  if (!parentAffinity) {
-    return decide({
-      authorized: false,
-      reason: "affinity-missing",
-      confidence: 0,
-      possibleRelationError: false,
-    });
-  }
-  const parentConfidence = parentAffinity.confidence;
-  const childConfidence = childAffinity?.confidence ?? 1;
-  const confidence = Math.min(parentConfidence, childConfidence);
-  const possibleRelationError =
-    confidence >= FIRST_BATCH_RELATION_POSSIBLE_ERROR_MIN_CONFIDENCE &&
-    confidence < FIRST_BATCH_RELATION_RELEASE_MIN_CONFIDENCE;
-  if (
-    parentAffinity.decision === "unclear" ||
-    childAffinity?.decision === "unclear"
-  ) {
-    return decide({
-      authorized: false,
-      reason: "affinity-unclear",
-      confidence,
-      possibleRelationError,
-    });
-  }
-  if (confidence < FIRST_BATCH_RELATION_RELEASE_MIN_CONFIDENCE) {
-    return decide({
-      authorized: false,
-      reason: "affinity-below-release-threshold",
-      confidence,
-      possibleRelationError,
-    });
-  }
-
-  if (input.hasActiveChild) {
-    if (
-      childAffinity?.decision === "related" &&
-      parentAffinity.decision === "related" &&
-      activeChildQuestionType &&
-      currentQuestionType === activeChildQuestionType
-    ) {
-      return decide({
-        authorized: true,
-        relation: "child-probe",
-        reason: "active-child-preserve-child",
-        confidence,
-        possibleRelationError: false,
-      });
+  // One semantic table, with the existing narrower early-release admission.
+  // Missing/unclear affinity is absence of evidence, not an independent verdict.
+  if (!input.final) {
+    if (!parentAffinity) return decide(undefined, "affinity-missing");
+    if (ap === "unclear" || ac === "unclear") return decide(undefined, "affinity-unclear");
+    if (confidence < FIRST_BATCH_RELATION_RELEASE_MIN_CONFIDENCE) return decide(undefined, "affinity-below-release-threshold");
+    if (child && !(ac === "related" && ap === "related" && currentQuestionType === activeChildQuestionType) &&
+        !(ac === "unrelated" && ap === "related" && currentQuestionType === activeParentQuestionType)) {
+      return decide(undefined, "active-child-combination-not-released");
     }
-    if (
-      childAffinity?.decision === "unrelated" &&
-      parentAffinity.decision === "related" &&
-      areCompatibleParentContinuityTypes(
-        currentQuestionType,
-        activeParentQuestionType
-      )
-    ) {
-      return decide({
-        authorized: true,
-        relation: "resume-parent",
-        reason: "active-child-resume-parent",
-        confidence,
-        possibleRelationError: false,
-      });
-    }
-    return decide({
-      authorized: false,
-      reason: "active-child-combination-not-released",
-      confidence,
-      possibleRelationError: false,
-    });
   }
-
-  if (parentAffinity.decision === "related") {
+  if (child && ac === "related") {
+    return currentQuestionType === activeChildQuestionType || !knownType
+      ? decide("child-probe", "active-child-preserve-child", true)
+      : decide(undefined, "type-related-branch-conflict");
+  }
+  if (child && currentQuestionType === activeChildQuestionType && ac !== "unrelated" && ap !== "independent") {
+    return decide("child-probe", "active-child-preserve-child", true);
+  }
+  if (ap === "related") {
     if (currentQuestionType === activeParentQuestionType) {
-      return decide({
-        authorized: true,
-        relation: "followup-parent",
-        reason: "same-type-parent-related",
-        confidence,
-        possibleRelationError: false,
-      });
+      return decide(child ? "resume-parent" : "followup-parent", child ? "active-child-resume-parent" : "same-type-parent-related");
     }
-    if (
-      canParentQuestionTypeOwnChild(
-        activeParentQuestionType,
-        currentQuestionType
-      )
-    ) {
-      return decide({
-        authorized: true,
-        relation: "child-probe",
-        reason: "allowed-child-parent-related",
-        confidence,
-        possibleRelationError: false,
-      });
+    if (canParentQuestionTypeOwnChild(activeParentQuestionType, currentQuestionType)) {
+      return decide("child-probe", child ? "active-child-detour" : "allowed-child-parent-related", child ? false : undefined);
     }
-    return decide({
-      authorized: false,
-      reason: "parent-related-type-incompatible",
-      confidence,
-      possibleRelationError: false,
-    });
-  }
-
-  if (currentQuestionType === activeParentQuestionType) {
-    return decide({
-      authorized: true,
-      relation: "new-parent",
-      reason: "same-type-independent-new-parent",
-      confidence,
-      possibleRelationError: false,
-    });
-  }
-  if (canQuestionTypeCreateParent(currentQuestionType)) {
-    if (
-      currentQuestionType === "field-knowledge" &&
-      canParentQuestionTypeOwnChild(
-        activeParentQuestionType,
-        currentQuestionType
-      )
-    ) {
-      return decide({
-        authorized: false,
-        reason: "bounded-child-parent-independent-unresolved",
-        confidence,
-        possibleRelationError: false,
-      });
+    if (input.final && !child && input.allowParentRetype && canCreateRelationParent(currentQuestionType, activeParentQuestionType)) {
+      return decide("followup-parent", "manual-parent-retype-related");
     }
-    return decide({
-      authorized: true,
-      relation: "new-parent",
-      reason: "different-parent-type-independent",
-      confidence,
-      possibleRelationError: false,
-    });
+    return decide(undefined, !knownType ? "affinity-unclear"
+      : input.final ? "type-related-branch-conflict" : "parent-related-type-incompatible");
   }
-  return decide({
-    authorized: false,
-    reason: "nonparent-type-independent-unresolved",
-    confidence,
-    possibleRelationError: false,
-  });
+  if (ap === "independent") {
+    return newParent(currentQuestionType === activeParentQuestionType ? "same-type-independent-new-parent" : "different-parent-type-independent");
+  }
+  const excludesActive = knownType && currentQuestionType !== (child ? activeChildQuestionType : activeParentQuestionType);
+  if (excludesActive || (child && ac === "unrelated")) {
+    const excludesTree = knownType && currentQuestionType !== activeParentQuestionType &&
+      currentQuestionType !== activeChildQuestionType && !canParentQuestionTypeOwnChild(activeParentQuestionType, currentQuestionType);
+    return excludesTree ? newParent("type-excludes-existing-tree") : decide(undefined, "type-location-unresolved");
+  }
+  return decide(undefined, parentAffinity ? "affinity-unclear" : "affinity-missing");
 }
 
 export function projectFirstBatchRelationAdjudication(
@@ -1608,18 +1416,16 @@ function authorizeCanonicalRelationForTopology(input: {
   activeParentQuestionType?: CanonicalQuestionType;
   activeChildQuestionType?: CanonicalQuestionType;
   hasActiveChild: boolean;
+  allowParentRetype?: boolean;
 }) {
   const canonical = input.canonical;
   if (!canonical) return { authorized: false as const };
-  if (
-    canonical.relation === "unknown" ||
-    canonical.confidence < ORDERED_RELATION_RESOLUTION_MIN_CONFIDENCE
-  ) {
+  if (canonical.relation === "unknown") {
     return { authorized: false as const };
   }
   if (canonical.relation === "new-parent") {
     return {
-      authorized: canQuestionTypeCreateParent(input.currentQuestionType),
+      authorized: canCreateRelationParent(input.currentQuestionType, input.activeParentQuestionType),
     } as const;
   }
   if (!input.activeParentQuestionType) {
@@ -1627,10 +1433,8 @@ function authorizeCanonicalRelationForTopology(input: {
   }
   if (canonical.relation === "followup-parent") {
     return {
-      authorized: areCompatibleParentContinuityTypes(
-        input.currentQuestionType,
-        input.activeParentQuestionType
-      ),
+      authorized: !input.hasActiveChild && (input.currentQuestionType === input.activeParentQuestionType ||
+        Boolean(input.allowParentRetype && canCreateRelationParent(input.currentQuestionType, input.activeParentQuestionType))),
     } as const;
   }
   if (canonical.relation === "child-probe") {
@@ -1650,12 +1454,14 @@ function authorizeCanonicalRelationForTopology(input: {
     authorized: Boolean(
       canonical.relation === "resume-parent" &&
         input.hasActiveChild &&
-        areCompatibleParentContinuityTypes(
-          input.currentQuestionType,
-          input.activeParentQuestionType
-        )
+        input.currentQuestionType === input.activeParentQuestionType
     ),
   } as const;
+}
+
+function canCreateRelationParent(type: CanonicalQuestionType, parentType?: CanonicalQuestionType) {
+  return canQuestionTypeCreateParent(type) && !(type === "field-knowledge" &&
+    parentType && canParentQuestionTypeOwnChild(parentType, type));
 }
 
 function resolvedNullHypothesis(input: {

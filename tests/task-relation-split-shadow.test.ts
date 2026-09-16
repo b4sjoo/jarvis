@@ -568,7 +568,7 @@ test("releases only the approved no-parent and parent-without-child matrix", () 
   assert.equal("responseOnly" in blockedLongParent, false);
   assert.equal(
     blockedLongParent.reason,
-    "bounded-child-parent-independent-unresolved"
+    "field-parent-capability-conflict"
   );
   for (const activeParentQuestionType of [
     "general-system-design",
@@ -817,8 +817,8 @@ test("normalizes unresolved-like provider outcomes to the active-owner null hypo
     });
 
     assert.equal(decision.status, "resolved", fault);
-    assert.equal(decision.stage, "source-topology-null-hypothesis", fault);
-    assert.equal(decision.relation, "followup-parent", fault);
+    assert.equal(decision.stage, "runtime-matrix", fault);
+    assert.equal(decision.relation, undefined, fault);
   }
 });
 
@@ -870,7 +870,7 @@ test("ordered relation null hypothesis treats authoritative unbound Screen as a 
     finalizeWithNullHypothesis: true,
   });
   assert.equal(screen.relation, "new-parent");
-  assert.equal(screen.reason, "screen-milestone-new-parent");
+  assert.equal(screen.reason, "type-excludes-existing-tree");
 
   const activeChild = decideOrderedTaskRelationResolution({
     sourceKind: "screen",
@@ -882,8 +882,8 @@ test("ordered relation null hypothesis treats authoritative unbound Screen as a 
     screenTypeEvidenceAuthorized: true,
     finalizeWithNullHypothesis: true,
   });
-  assert.equal(activeChild.relation, "child-probe");
-  assert.equal(activeChild.reason, "screen-preserve-active-child");
+  assert.equal(activeChild.relation, undefined);
+  assert.equal(activeChild.reason, "type-location-unresolved");
 });
 
 test("freezes only Affinity results that existed at the coordinator cutoff", () => {

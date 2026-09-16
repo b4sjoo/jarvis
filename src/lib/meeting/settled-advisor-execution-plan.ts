@@ -201,7 +201,7 @@ export interface EffectiveAdvisorSettlementView {
   source: "committed-settlement" | "pre-settlement-fallback";
   settlementId?: string;
   rawQuestionType: CanonicalQuestionType;
-  rawRelation: InterviewTaskRelation;
+  rawRelation: CurrentQuestionRelation;
   taskRuntimeRevision: number;
   questionType: CanonicalQuestionType;
   relation: EffectiveInterviewTaskRelation;
@@ -255,9 +255,9 @@ export function buildEffectiveAdvisorSettlementView(input: {
       ? settlement.questionType
     : normalizeCanonicalQuestionType(input.fallback.questionType) ?? "unknown";
   const rawRelation = alreadyEffective
-    ? toInterviewTaskRelation(settlement.rawRelation)
+    ? settlement.rawRelation === "none" ? "none" : toInterviewTaskRelation(settlement.rawRelation)
     : settlement
-      ? toInterviewTaskRelation(settlement.relation)
+      ? settlement.relation === "none" ? "none" : toInterviewTaskRelation(settlement.relation)
     : input.fallback.relation;
   const activeTask = input.activeMeetingTask;
   const activeParent = activeTask?.parent;
@@ -364,7 +364,7 @@ export function buildEffectiveAdvisorSettlementView(input: {
   const effectiveRelation: EffectiveInterviewTaskRelation = relationCurrentOnly
     ? "none"
     : (relation as Exclude<InterviewTaskRelation, "unknown">);
-  const effectiveNullHypothesisReason = relationCurrentOnly
+  const effectiveNullHypothesisReason = relationCurrentOnly && rawRelation === "unknown"
     ? nullHypothesisReason ??
       (activeTask?.parent
         ? "active-parent-preserved"
@@ -391,7 +391,8 @@ export function buildEffectiveAdvisorSettlementView(input: {
           ? activeTask?.parent.revisions
           : undefined,
         effectiveChildId:
-          relation === "child-probe" ? activeTask?.child?.id : undefined,
+          relation === "child-probe" && questionType === activeChildType &&
+            settlement.preserveActiveChild !== false ? activeTask?.child?.id : undefined,
         questionType,
         relation: effectiveRelation,
         activeParentId:

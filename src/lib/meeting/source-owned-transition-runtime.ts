@@ -36,7 +36,7 @@ export function resolveSourceOwnedRuntimeTransition(input: {
 }): MeetingTaskRuntimeTransitionKind {
   const { sourceResult, runtimeBefore } = input;
   if (sourceResult.candidate.kind === "child-probe") {
-    return "attach-child";
+    return sourceResult.candidate.preserveChildId ? "update-parent-context" : "attach-child";
   }
   if (sourceResult.candidate.kind === "resume-parent") {
     return "resume-parent";

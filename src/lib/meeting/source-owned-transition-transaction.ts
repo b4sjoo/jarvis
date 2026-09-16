@@ -3,7 +3,6 @@ import type { PlaybookPhaseDecision } from "./playbook-phase-contracts.js";
 
 import {
   createCodingChildPhaseState,
-  preserveOrCreateCodingChildPhaseState,
 } from "./coding-child-phase.js";
 import {
   createInitialPlaybookPhaseProgress,
@@ -598,7 +597,8 @@ function applyTransition(
 
   if (candidate.kind === "child-probe") {
     if (candidate.preserveChildId) {
-      if (currentTask.child?.id !== candidate.preserveChildId) {
+      if (currentTask.child?.id !== candidate.preserveChildId ||
+          currentTask.child.questionType !== candidate.questionType) {
         return {
           task: currentTask,
           mutationApplied: false,
@@ -611,23 +611,10 @@ function applyTransition(
           child: {
             ...currentTask.child,
             updatedAt: now,
-            questionType: candidate.questionType,
-            relation: "child-probe",
-            intent: candidate.subtaskIntent,
-            question: candidate.question,
-            basedOnTurnIds: [...candidate.sourceTurnIds],
-            basedOnObservationIds: [
-              ...candidate.sourceObservationIds,
-            ],
             latestScreenObservationId: resolveLatestScreenObservationId({
               source: candidate.source,
               sourceObservationIds: candidate.sourceObservationIds,
               current: currentTask.child.latestScreenObservationId,
-            }),
-            phaseState: preserveOrCreateCodingChildPhaseState({
-              questionType: candidate.questionType,
-              existing: currentTask.child.phaseState,
-              playbook: candidate.playbook,
             }),
           },
           updatedAt: now,

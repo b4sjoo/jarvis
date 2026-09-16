@@ -3,6 +3,7 @@ import type { ActiveMeetingTask } from "./meeting-task-contracts.js";
 import {
   decideOrderedTaskRelationResolution,
   type OrderedTaskRelationResolutionDecision,
+  type TaskRelationAffinityAdjudication,
 } from "./task-relation-split-shadow.js";
 
 export type OrderedSettlementCoordinatorStage =
@@ -166,6 +167,10 @@ export function formatOrderedSettlementReleaseForTrace(
 export function coordinateOrderedSettlement(input: {
   sourceKind: "voice" | "screen" | "mixed";
   currentQuestionType: unknown;
+  currentQuestionTypeInherited?: boolean;
+  allowParentRetype?: boolean;
+  childAffinity?: TaskRelationAffinityAdjudication;
+  parentAffinity?: TaskRelationAffinityAdjudication;
   activeMeetingTask?: ActiveMeetingTask;
   orderedRelation?: OrderedTaskRelationResolutionDecision;
   screenBoundaryPrior?: boolean;
@@ -185,6 +190,10 @@ export function coordinateOrderedSettlement(input: {
   const relation = decideOrderedTaskRelationResolution({
     sourceKind: input.sourceKind,
     currentQuestionType: input.currentQuestionType,
+    currentQuestionTypeInherited: input.currentQuestionTypeInherited,
+    allowParentRetype: input.allowParentRetype,
+    childAffinity: input.childAffinity,
+    parentAffinity: input.parentAffinity,
     activeParentQuestionType: parent?.questionType,
     activeChildQuestionType: child?.questionType,
     hasActiveChild: Boolean(child),

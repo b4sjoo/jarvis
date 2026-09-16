@@ -79,6 +79,7 @@ export function projectObservedParentAction(input: {
       input.committedLifecycleEvidence
     );
   }
+  if (input.currentOnly) return "none";
   const lifecycleCommand = input.lifecycleCommand;
   if (lifecycleCommand === "create-parent") return "create";
   if (lifecycleCommand === "replace-parent") {
@@ -97,8 +98,7 @@ export function projectObservedParentAction(input: {
   if (
     lifecycleCommand === "preserve" ||
     lifecycleCommand === "update-parent-context" ||
-    lifecycleCommand === "set-phase" ||
-    input.currentOnly
+    lifecycleCommand === "set-phase"
   ) {
     return "preserve";
   }
@@ -115,13 +115,13 @@ export function projectObservedParentAction(input: {
     return input.mutationAuthorized === false ? "preserve" : "resume";
   }
   if (
-    input.relation === "none" ||
     input.relation === "followup-parent" ||
     input.relation === "correction" ||
     input.relation === "logistics"
   ) {
     return "preserve";
   }
+  if (input.relation === "none") return "none";
   return input.mutationAuthorized === false ? "none" : undefined;
 }
 
@@ -173,7 +173,7 @@ export function recommendedParentActionForRelation(
     case "unknown":
       return "none";
     case "none":
-      return "preserve";
+      return "none";
   }
 }
 

@@ -222,7 +222,7 @@ test("uses an authoritative Screen milestone as the bounded new-parent fallback"
 
   assert.equal(decision.stage, "topology-null-hypothesis");
   assert.equal(decision.relation.relation, "new-parent");
-  assert.equal(decision.relation.reason, "screen-milestone-new-parent");
+  assert.equal(decision.relation.reason, "type-excludes-existing-tree");
 });
 
 test("settles a fresh Coding LQU as a child of a related AI/ML parent", () => {

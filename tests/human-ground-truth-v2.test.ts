@@ -489,7 +489,7 @@ test("validates relation and parent-action tuples before ground truth is saved",
     ["logistics", "preserve"],
     ["correction", "preserve"],
     ["unknown", "none"],
-    ["none", "preserve"],
+    ["none", "none"],
   ] as const;
 
   for (const [relation, parentAction] of canonicalTuples) {
@@ -1234,7 +1234,7 @@ test("uses the effective settlement while retaining raw abstention diagnostics",
   assert.equal(observed.contextReadScope, "active-parent-read");
 });
 
-test("projects current-only execution as parent preservation without borrowing an owner", () => {
+test("projects current-only execution as no lifecycle action without borrowing an owner", () => {
   const trace = buildSettledAttemptTrace({
     id: "trace_current_only",
     status: "success",
@@ -1254,7 +1254,7 @@ test("projects current-only execution as parent preservation without borrowing a
   const observed = buildHumanEvaluationObservedSnapshotV2(trace);
   assert.equal(observed.questionType, "behavioral");
   assert.equal(observed.relation, "none");
-  assert.equal(observed.parentAction, "preserve");
+  assert.equal(observed.parentAction, "none");
   assert.equal(observed.settledParentId, undefined);
   assert.equal(observed.settledChildId, undefined);
   assert.equal(observed.contextReadScope, "current-only");

@@ -22,6 +22,13 @@ import {
   projectPrimaryAsk,
 } from "../src/lib/meeting/primary-ask-projection.js";
 import { projectCrossTypeTaskRelationHint } from "../src/lib/meeting/task-relation-authority.js";
+import { composeCanonicalTurnCandidate } from "../src/lib/meeting/logical-question-unit.js";
+import { createProvisionalCurrentQuestion, settleCurrentQuestion } from "../src/lib/meeting/current-question-settlement.js";
+import { decideOrderedTaskRelationResolution } from "../src/lib/meeting/task-relation-split-shadow.js";
+import { commitStableAnswerRevision } from "../src/lib/meeting/stable-answer.js";
+import { parseMeetingAnswer } from "../src/lib/meeting/meeting-answer.js";
+import { authorizeAdvisorOutputCommit } from "../src/lib/meeting/advisor-trigger-job.js";
+import { buildHumanEvaluationObservedSnapshotV2 } from "../src/lib/meeting/human-ground-truth-v2.js";
 import type { SelectedInterviewPlaybook, TransientPersonalStatusDecision } from "../src/lib/meeting/types.js";
 
 
@@ -33,6 +40,64 @@ const providers: MeetingModelProviderSnapshot = {
   selectedProvider: { provider: "main", variables: {} },
   codingProvider: { provider: "coding", variables: {} },
 };
+
+test("C4 resolved conflict stays Answer-only through settlement, plan, stable answer and evaluation", () => {
+  const task: ActiveMeetingTask = { ...activeTask("ai-ml-system-design"), child: {
+    id: "child-code", questionType: "coding", relation: "child-probe", intent: "implementation-probe",
+    question: "Implement the API.", createdAt: 20, updatedAt: 20, basedOnTurnIds: ["old"], basedOnObservationIds: [],
+  } };
+  const before = JSON.stringify(task);
+  const unit = composeCanonicalTurnCandidate({ sessionId: "session-a", runtimeEpoch: 4,
+    currentTurn: { id: "current", text: "Explain this project's reliability choices.", speaker: "them",
+      source: "system-audio", isFinal: true, startedAt: 100, endedAt: 110 } });
+  const current = createProvisionalCurrentQuestion({ logicalQuestionUnit: unit, sourceKind: "voice" });
+  const ordered = decideOrderedTaskRelationResolution({ sourceKind: "voice", currentQuestionType: "project-deep-dive",
+    activeParentQuestionType: "ai-ml-system-design", activeChildQuestionType: "coding", hasActiveChild: true,
+    canonical: { schemaVersion: 3, relation: "child-probe", confidence: 0.89,
+      currentQuestionEvidenceSpans: [unit.normalizedText], parentEvidenceSpans: [task.parent.topic] },
+    finalizeWithNullHypothesis: true });
+  const resolved = settleCurrentQuestion({ currentQuestion: current, manualCorrectionRevision: 0,
+    activeParentId: task.id, activeParentRevision: task.parent.revisions,
+    deterministicProposal: { source: "deterministic-fast-path", sessionId: current.sessionId,
+      runtimeEpoch: current.runtimeEpoch, logicalQuestionUnitId: current.logicalQuestionUnitId, revision: current.revision,
+      sourceHash: current.sourceHash, questionType: "project-deep-dive", typeEvidenceAuthorized: true,
+      relation: ordered.relation ?? "none", relationEvidenceAuthorized: true, action: "answer", actionEvidenceAuthorized: true,
+      reasons: [ordered.reason] },
+    policy: { runtimeMutationAuthorized: true, questionComplete: true, commitParent: false },
+  });
+  assert.equal(resolved.relation, "none");
+  const view = buildEffectiveAdvisorSettlementView({ settlement: resolved, activeMeetingTask: task, taskRuntimeRevision: 1,
+    fallback: { questionType: "coding", relation: "child-probe" } });
+  assert.equal(view.currentOnly, true);
+  assert.equal(view.nullHypothesisApplied, false);
+  assert.equal(view.questionType, "project-deep-dive");
+  assert.equal(effectiveSettlementAuthorizesSourceTransition(view), false);
+  const plan = buildSettledAdvisorExecutionPlan({ settlement: view.effectiveSettlement!, activeMeetingTask: task,
+    taskBoundaryCommitted: false, childOwnsResponse: false, providerSnapshot: providers,
+    memoryUseCase: "meeting_assistant", askFrame: "unknown", topicDomain: "unknown" });
+  assert.equal(plan.responseOwner.questionType, "project-deep-dive");
+  assert.equal(plan.responseOwner.source, "current-question");
+  assert.equal(plan.modelRoute.route, "main");
+  assert.deepEqual(plan.requestedArtifacts, ["answer"]);
+  assert.equal(plan.taskMutationPolicy.kind, "preserve");
+  assert.equal(plan.taskMutationCommittedBeforeAdvisor, false);
+  assert.equal(authorizeAdvisorOutputCommit({ executionAuthorized: plan.responseAuthorized }).authorized, true);
+  const stable = commitStableAnswerRevision({ candidate: { id: "answer", kind: "answer", confidence: "high",
+    content: "Answer: Use the documented project evidence.\nCode:\n```python\nforbidden()\n```",
+    meetingAnswer: parseMeetingAnswer("Answer: Use the documented project evidence.\nCode:\n```python\nforbidden()\n```"),
+    createdAt: 120, basedOnTurnIds: unit.sourceTurnIds, basedOnObservationIds: [] },
+    authorizedArtifacts: plan.requestedArtifacts, taskId: null, logicalQuestionUnitId: unit.id, logicalQuestionRevision: unit.revision });
+  assert.ok(stable);
+  assert.match(stable.suggestion.content, /documented project evidence/);
+  assert.doesNotMatch(stable.suggestion.content, /forbidden/);
+  assert.equal(JSON.stringify(task), before);
+  const observed = buildHumanEvaluationObservedSnapshotV2({ id: "trace", kind: "voice", status: "success",
+    startedAt: 100, steps: [], inputs: [], outputs: [], metadata: { ...formatEffectiveAdvisorSettlementViewForTrace(view),
+      ...formatSettledAdvisorExecutionPlanForTrace(plan) } });
+  assert.equal(observed.relation, "none");
+  assert.equal(observed.parentAction, "none");
+  assert.equal(observed.settledParentId, undefined);
+});
 
 function settlement(
   overrides: Partial<CurrentQuestionSettlementDecision> = {}

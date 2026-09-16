@@ -6231,6 +6231,13 @@ const TraceHumanEvaluationPanel = ({
                 ? ` / ${trace.metadata.responseOnlyContextReadScope}`
                 : ""}
             </div>
+            {observedRelation === "none" ? (
+              <div>
+                Answer-only / no lifecycle action
+                {typeof trace.metadata?.taskRelationOrderedResolutionReason === "string"
+                  ? `: ${trace.metadata.taskRelationOrderedResolutionReason}` : ""}
+              </div>
+            ) : null}
             <div>parent owner: {observedSnapshotV2.settledParentId ?? "none"}</div>
             <div>branch owner: {observedSnapshotV2.settledBranchId ?? "none"}</div>
             <div>context owner: {observedSnapshotV2.contextOwnerId ?? "none"}</div>

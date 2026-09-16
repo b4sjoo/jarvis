@@ -65,7 +65,8 @@ test("all source-owned mutations keep candidate deadlines out of parent payloads
     });
     assert.ok(candidate);
     const result = prepareSourceOwnedTransition({
-      candidate: { ...candidate, ...scenario },
+      candidate: { ...candidate, ...scenario,
+        ...(scenario.preserveChildId ? { questionType: "field-knowledge" as const } : {}) },
       currentTask: parent,
       currentSessionId: "session-a",
       currentRuntimeEpoch: 3,
@@ -205,10 +206,10 @@ test("preserves active child identity for a settled same-branch follow-up", () =
   assert.equal(result.task?.child?.createdAt, 50);
   assert.equal(
     result.task?.child?.question,
-    "How does efSearch affect recall?"
+    "What is HNSW?"
   );
   assert.deepEqual(result.task?.child?.basedOnTurnIds, [
-    "turn-child-followup",
+    "turn-child-root",
   ]);
   assert.equal(
     result.task?.child?.returnCapsule,

@@ -753,6 +753,7 @@ import {
   questionTypeDecisionAuthorityConfidence,
   isExactLowValueAcknowledgement,
   isParentCanonicalQuestionType,
+  canParentQuestionTypeOwnChild,
   normalizeCanonicalQuestionType,
   mergeSentenceFragments,
   normalizeInterviewBriefTypes as normalizeTaxonomyInterviewBriefTypes,
@@ -1320,6 +1321,7 @@ function mapSourceOwnedExecutionPlanCommand(
 
   const result = receipt!.sourceResult;
   const candidate = result.candidate;
+  if (receipt?.runtimeTransition === "update-parent-context") return { kind: "update-parent-context" };
   if (candidate.kind === "new-parent") {
     return {
       kind: "create-parent",
@@ -20879,6 +20881,8 @@ export function useMeetingAssistant() {
       handle: TaskRelationAdjudicationScheduleHandle;
       traceId: string;
       currentQuestionType: CanonicalQuestionType;
+      currentQuestionTypeInherited?: boolean;
+      allowParentRetype?: boolean;
       sourceKind: "voice" | "screen" | "mixed";
       activeMeetingTask?: ActiveMeetingTask;
       screenBoundaryPrior?: boolean;
@@ -20947,6 +20951,9 @@ export function useMeetingAssistant() {
       let decision = decideOrderedTaskRelationResolution({
         sourceKind: input.sourceKind,
         currentQuestionType: input.currentQuestionType,
+        allowParentRetype: input.allowParentRetype,
+        currentQuestionTypeInherited: input.currentQuestionTypeInherited ??
+          (input.sourceKind === "screen" && input.screenTypeEvidenceAuthorized === false),
         activeParentQuestionType:
           input.activeMeetingTask?.parent.questionType,
         activeChildQuestionType:
@@ -20999,6 +21006,9 @@ export function useMeetingAssistant() {
         decision = decideOrderedTaskRelationResolution({
           sourceKind: input.sourceKind,
           currentQuestionType: input.currentQuestionType,
+          allowParentRetype: input.allowParentRetype,
+          currentQuestionTypeInherited: input.currentQuestionTypeInherited ??
+            (input.sourceKind === "screen" && input.screenTypeEvidenceAuthorized === false),
           activeParentQuestionType:
             input.activeMeetingTask?.parent.questionType,
           activeChildQuestionType:
@@ -21022,6 +21032,9 @@ export function useMeetingAssistant() {
         decision = decideOrderedTaskRelationResolution({
           sourceKind: input.sourceKind,
           currentQuestionType: input.currentQuestionType,
+          allowParentRetype: input.allowParentRetype,
+          currentQuestionTypeInherited: input.currentQuestionTypeInherited ??
+            (input.sourceKind === "screen" && input.screenTypeEvidenceAuthorized === false),
           activeParentQuestionType:
             input.activeMeetingTask?.parent.questionType,
           activeChildQuestionType:
@@ -21612,7 +21625,7 @@ export function useMeetingAssistant() {
         const resolvedQuestionType = orderedType.questionType;
         const resolvedOrderedRelation =
           orderedRelation?.status === "resolved"
-            ? orderedRelation.relation
+            ? orderedRelation.relation ?? "none"
             : undefined;
         const localProposal: CurrentQuestionSettlementProposal = {
           ...(taskRelationHandle?.deterministicProposal ?? {
@@ -21628,6 +21641,7 @@ export function useMeetingAssistant() {
           }),
           questionType: resolvedQuestionType,
           relation: resolvedOrderedRelation ?? "unknown",
+          preserveActiveChild: orderedRelation?.preserveActiveChild,
           confidence: Math.max(
             orderedType.confidence,
             taskRelationHandle?.deterministicProposal?.confidence ?? 0.95
@@ -21640,6 +21654,7 @@ export function useMeetingAssistant() {
             ...(taskRelationHandle?.deterministicProposal?.reasons ?? []),
             `ordered-question-type:${orderedType.stage}`,
             "ordered-relation-type-input",
+            ...(orderedRelation ? [`ordered-relation:${orderedRelation.reason}`] : []),
           ],
         };
         const relationCandidate = orderedRelation
@@ -21647,12 +21662,12 @@ export function useMeetingAssistant() {
           : undefined;
         const relationProposal =
           relationCandidate && latestParent
-            ? createTaskRelationSettlementProposal({
+            ? { ...createTaskRelationSettlementProposal({
                 currentQuestion,
                 adjudication: relationCandidate,
                 expectedParentId: latestParent.id,
                 expectedParentRevision: latestParent.revisions,
-              })
+              }), preserveActiveChild: orderedRelation?.preserveActiveChild }
             : undefined;
         const authoritativeTypeProposal:
           | CurrentQuestionSettlementProposal
@@ -21710,15 +21725,15 @@ export function useMeetingAssistant() {
             allowLlmRelationRepair: Boolean(relationProposal),
             allowLlmActionRepair: Boolean(authoritativeTypeSettlement),
             runtimeTypeAdjudicationMinConfidence: 0,
-            llmRelationRepairMinConfidence: 0.95,
+            llmRelationRepairMinConfidence: 0,
             runtimeMutationAuthorized: true,
             questionComplete: true,
             commitParent: Boolean(resolvedOrderedRelation),
           },
         });
         const convergedSettlement = Boolean(
-          orderedRelation?.relation &&
-            settlement.relation === orderedRelation.relation
+          orderedRelation?.status === "resolved" &&
+            settlement.relation === (orderedRelation.relation ?? "none")
         );
         const releaseEligible = Boolean(
           runtimeActiveRef.current &&
@@ -21952,9 +21967,18 @@ export function useMeetingAssistant() {
               reason: "operation-authorization-missing",
               mismatchedKey: "operation",
             };
+          const retainedAffinity = taskRelationHandle?.readAffinityOutcome?.();
+          const qualifiedAffinity = retainedAffinity && operationAuthorization.authorized
+            ? filterTaskRelationAffinityOutcomeAtCutoff(
+                taskRelationHandle?.revalidateAffinityOutcome?.(retainedAffinity) ?? retainedAffinity,
+                createOrderedRelationPhaseBudget(foregroundDeadline).affinityCutoffAt)
+            : undefined;
           const coordinated = coordinateOrderedSettlement({
             sourceKind: taskRelationHandle?.sourceKind ?? "voice",
             currentQuestionType: effectiveType,
+            currentQuestionTypeInherited: resolveOrderedQuestionType(settledTypeOutcome).stage === "preserve-current-type",
+            childAffinity: qualifiedAffinity?.child.adjudication,
+            parentAffinity: qualifiedAffinity?.parent.adjudication,
             activeMeetingTask,
           });
           settledOrderedRelation = coordinated.relation;
@@ -21981,6 +22005,7 @@ export function useMeetingAssistant() {
           handle: taskRelationHandle,
           traceId: input.traceId,
           currentQuestionType: effectiveType,
+          currentQuestionTypeInherited: resolveOrderedQuestionType(settledTypeOutcome).stage === "preserve-current-type",
           sourceKind: taskRelationHandle.sourceKind ?? "voice",
           activeMeetingTask:
             contextManagerRef.current.getState().activeMeetingTask,
@@ -27869,10 +27894,9 @@ export function useMeetingAssistant() {
                 : "settled-current-only";
             const orderedDeterministicProposal = {
               ...screenDeterministicSettlementProposal,
-              relation: coordinatedRelation.relation ?? "unknown",
-              relationEvidenceAuthorized: Boolean(
-                coordinatedRelation.relation
-              ),
+              relation: coordinatedRelation.relation ?? "none",
+              preserveActiveChild: coordinatedRelation.preserveActiveChild,
+              relationEvidenceAuthorized: coordinatedRelation.status === "resolved",
               reasons: [
                 ...(screenDeterministicSettlementProposal.reasons ?? []),
                 `ordered-relation:${coordinatedRelation.reason}`,
@@ -27881,14 +27905,14 @@ export function useMeetingAssistant() {
             const llmRelationProposal =
               releasedRelationCandidate &&
               preflightContextState.activeMeetingTask?.parent
-                ? createTaskRelationSettlementProposal({
+                ? { ...createTaskRelationSettlementProposal({
                     currentQuestion: screenCurrentQuestion,
                     adjudication: releasedRelationCandidate,
                     expectedParentId:
                       preflightContextState.activeMeetingTask.parent.id,
                     expectedParentRevision:
                       preflightContextState.activeMeetingTask.parent.revisions,
-                  })
+                  }), preserveActiveChild: coordinatedRelation.preserveActiveChild }
                 : undefined;
             screenCurrentQuestionSettlement = settleCurrentQuestion({
               operationId: taskRelationAdjudicationHandle.operationId,
@@ -27905,7 +27929,7 @@ export function useMeetingAssistant() {
                 allowRuntimeTypeAdjudication: false,
                 allowLlmRelationRepair: Boolean(llmRelationProposal),
                 allowLlmActionRepair: false,
-                llmRelationRepairMinConfidence: 0.95,
+                llmRelationRepairMinConfidence: 0,
                 runtimeMutationAuthorized: true,
                 questionComplete: screenQuestionComplete,
                 commitParent: Boolean(coordinatedRelation.relation),
@@ -27976,7 +28000,8 @@ export function useMeetingAssistant() {
           !screenDirectRelationAuthority &&
           screenCurrentQuestion &&
           screenDeterministicSettlementProposal &&
-          !screenCurrentQuestionSettlement?.relationMutationAuthorized
+          !screenCurrentQuestionSettlement?.relationMutationAuthorized &&
+          screenCurrentQuestionSettlement?.relation !== "none"
         ) {
           screenCoordinatorDecision = coordinateOrderedSettlement({
             sourceKind: "screen",
@@ -27989,10 +28014,9 @@ export function useMeetingAssistant() {
           const coordinatedRelation = screenCoordinatorDecision.relation;
           const coordinatedProposal: CurrentQuestionSettlementProposal = {
             ...screenDeterministicSettlementProposal,
-            relation: coordinatedRelation.relation ?? "unknown",
-            relationEvidenceAuthorized: Boolean(
-              coordinatedRelation.relation
-            ),
+            relation: coordinatedRelation.relation ?? "none",
+            preserveActiveChild: coordinatedRelation.preserveActiveChild,
+            relationEvidenceAuthorized: coordinatedRelation.status === "resolved",
             reasons: [
               ...(screenDeterministicSettlementProposal.reasons ?? []),
               `screen-coordinator:${coordinatedRelation.reason}`,
@@ -31880,6 +31904,8 @@ export function useMeetingAssistant() {
                 handle: relationAdjudicationHandle,
                 traceId: correctionTrace.id,
                 currentQuestionType: correctedType,
+                allowParentRetype: decision.target === "parent" && isParentCanonicalQuestionType(correctedType) &&
+                  !canParentQuestionTypeOwnChild(normalizeCanonicalQuestionType(activeTask?.parent.questionType) ?? "unknown", correctedType),
                 sourceKind: correctionCurrentQuestionSourceKind,
                 activeMeetingTask: activeTask,
                 screenBoundaryPrior:
@@ -31942,6 +31968,8 @@ export function useMeetingAssistant() {
         const correctionCoordinatorDecision = coordinateOrderedSettlement({
           sourceKind: correctionCurrentQuestionSourceKind,
           currentQuestionType: correctedType,
+          allowParentRetype: decision.target === "parent" && isParentCanonicalQuestionType(correctedType) &&
+            !canParentQuestionTypeOwnChild(normalizeCanonicalQuestionType(activeTask?.parent.questionType) ?? "unknown", correctedType),
           activeMeetingTask: activeTask,
           orderedRelation: orderedCorrectionRelation,
           screenBoundaryPrior:
@@ -31963,8 +31991,22 @@ export function useMeetingAssistant() {
             manualCorrectionRevision:
               manualCorrectionRevisionRef.current,
             relationCandidate: orderedCorrectionRelationCandidate,
+            orderedRelationProposal: orderedCorrectionRelation.status === "resolved" ? {
+              source: orderedCorrectionRelationCandidate ? "runtime-adjudication" : "deterministic-fast-path",
+              sessionId: correctionCurrentQuestion.sessionId,
+              runtimeEpoch: correctionCurrentQuestion.runtimeEpoch,
+              logicalQuestionUnitId: correctionCurrentQuestion.logicalQuestionUnitId,
+              revision: correctionCurrentQuestion.revision,
+              sourceHash: correctionCurrentQuestion.sourceHash,
+              relation: orderedCorrectionRelation.relation ?? "none",
+              preserveActiveChild: orderedCorrectionRelation.preserveActiveChild,
+              confidence: orderedCorrectionRelation.confidence,
+              typeEvidenceAuthorized: false, relationEvidenceAuthorized: true,
+              expectedParentId: activeTask?.parent.id, expectedParentRevision: activeTask?.parent.revisions,
+              reasons: [`ordered-relation:${orderedCorrectionRelation.reason}`],
+            } : undefined,
             relationOperationLeaseAuthorized:
-              Boolean(orderedCorrectionRelationCandidate),
+              orderedCorrectionRelation.status === "resolved",
             revisionStableRelation: correctionRevisionStableRelation,
             revisionStableRelationReason:
               revisionStableTopologyBinding?.source ??
@@ -35227,11 +35269,12 @@ export function useMeetingAssistant() {
               normalizeCanonicalQuestionType(
                 latestParent?.questionType
               ) ?? "unknown";
-            const settledCorrectionType =
-              normalizeCanonicalQuestionType(
-                outcome.settlement?.questionType ??
-                  outcome.candidate?.questionType
-              ) ?? latestParentType;
+            const correctionTypeResolution = decideOrderedVoiceQuestionTypeResolution({
+              llmSettlement: outcome.settlement,
+              llmAuthorized: outcome.enforcement.authorized,
+              currentBranchType: latestContext.activeMeetingTask?.child?.questionType ?? latestParentType,
+            });
+            const settledCorrectionType = correctionTypeResolution.questionType;
             let orderedCorrectionRelation:
               | OrderedTaskRelationResolutionDecision
               | undefined;
@@ -35251,6 +35294,7 @@ export function useMeetingAssistant() {
                     handle: correctionRelationHandle,
                     traceId: repairTrace.id,
                     currentQuestionType: settledCorrectionType,
+                    currentQuestionTypeInherited: correctionTypeResolution.stage === "preserve-current-type",
                     sourceKind: correctionSourceKind,
                     activeMeetingTask: latestContext.activeMeetingTask,
                     screenBoundaryPrior:
@@ -35290,6 +35334,7 @@ export function useMeetingAssistant() {
               coordinateOrderedSettlement({
                 sourceKind: correctionSourceKind,
                 currentQuestionType: settledCorrectionType,
+                currentQuestionTypeInherited: correctionTypeResolution.stage === "preserve-current-type",
                 activeMeetingTask: latestContext.activeMeetingTask,
                 orderedRelation: orderedCorrectionRelation,
                 screenBoundaryPrior: correctionSourceKind === "screen",

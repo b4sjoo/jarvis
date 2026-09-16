@@ -298,6 +298,7 @@ export interface SessionCurrentQuestionProposalSummary {
   sourceHash?: string;
   questionType?: string;
   relation?: string;
+  preserveActiveChild?: boolean;
   action?: string;
   evidenceMode?: string;
   authority?: string;
@@ -8561,6 +8562,7 @@ function buildRawCurrentQuestionProposalSummary(
       metadataSources,
       "currentQuestionSettlementRelation"
     ),
+    preserveActiveChild: readFirstBoolean(metadataSources, "currentQuestionSettlementPreserveActiveChild"),
     action: readFirstString(
       metadataSources,
       "currentQuestionSettlementAction"

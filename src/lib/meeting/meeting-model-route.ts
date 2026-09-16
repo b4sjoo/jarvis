@@ -4,7 +4,6 @@ import type {
   SelectedProviderState,
 } from "./types";
 import {
-  areCompatibleParentContinuityTypes,
   normalizeCanonicalQuestionType,
   type CanonicalQuestionType,
 } from "./task-taxonomy.js";
@@ -110,7 +109,7 @@ export function resolveMeetingResponseOwner(input: {
   const activeChildType =
     normalizeCanonicalQuestionType(input.activeChildType) ?? undefined;
 
-  if (input.taskBoundaryCommitted && postBoundaryParentType) {
+  if (input.taskBoundaryCommitted && postBoundaryParentType && input.relation !== "none") {
     return {
       questionType: postBoundaryParentType,
       source: "committed-parent",
@@ -134,10 +133,7 @@ export function resolveMeetingResponseOwner(input: {
     (input.relation === "followup-parent" ||
       input.relation === "resume-parent") &&
     (proposedQuestionType === "unknown" ||
-      areCompatibleParentContinuityTypes(
-        postBoundaryParentType,
-        proposedQuestionType
-      ))
+      postBoundaryParentType === proposedQuestionType)
   ) {
     return {
       questionType: postBoundaryParentType,

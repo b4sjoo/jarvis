@@ -26,7 +26,6 @@ export interface ManualCorrectionRelationAdmissionDecision {
     | "ordered-relation-authorized"
     | "candidate-missing"
     | "candidate-relation-unknown"
-    | "candidate-confidence-below-threshold"
     | "operation-lease-not-authorized";
   releasedRelation?: Exclude<
     LlmTaskRelationAdjudication["relation"],
@@ -84,6 +83,7 @@ export function settleManualQuestionTypeCorrection(input: {
   activeParentRevision?: number;
   manualCorrectionRevision: number;
   relationCandidate?: LlmTaskRelationAdjudication;
+  orderedRelationProposal?: CurrentQuestionSettlementProposal;
   relationOperationLeaseAuthorized?: boolean;
   revisionStableRelation?: Extract<
     CurrentQuestionSettlementDecision["relation"],
@@ -141,7 +141,8 @@ export function settleManualQuestionTypeCorrection(input: {
             "manual-correction-preserves-revision-stable-relation",
         ],
       } satisfies CurrentQuestionSettlementProposal)
-    : undefined;
+    : input.orderedRelationProposal?.source === "deterministic-fast-path"
+      ? input.orderedRelationProposal : undefined;
   const relationRelease = input.activeParentId
     ? authorizeOrderedManualCorrectionRelation({
         candidate: input.relationCandidate,
@@ -149,7 +150,9 @@ export function settleManualQuestionTypeCorrection(input: {
           input.relationOperationLeaseAuthorized === true,
       })
     : undefined;
-  const llmRelationProposal =
+  const llmRelationProposal = input.relationOperationLeaseAuthorized &&
+    input.orderedRelationProposal?.source === "runtime-adjudication"
+    ? input.orderedRelationProposal :
     relationRelease?.authorized &&
     input.relationCandidate &&
     input.activeParentId
@@ -176,7 +179,7 @@ export function settleManualQuestionTypeCorrection(input: {
         allowRuntimeTypeAdjudication: false,
         allowLlmRelationRepair: true,
         allowLlmActionRepair: false,
-        llmRelationRepairMinConfidence: 0.95,
+        llmRelationRepairMinConfidence: 0,
         runtimeMutationAuthorized: true,
         questionComplete: true,
         commitParent: true,
@@ -202,12 +205,6 @@ function authorizeOrderedManualCorrectionRelation(input: {
     return {
       authorized: false,
       reason: "candidate-relation-unknown",
-    };
-  }
-  if (input.candidate.confidence < 0.95) {
-    return {
-      authorized: false,
-      reason: "candidate-confidence-below-threshold",
     };
   }
   return {

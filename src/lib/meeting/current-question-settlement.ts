@@ -119,6 +119,7 @@ export interface CurrentQuestionSettlementProposal {
   sourceHash?: string;
   questionType?: unknown;
   relation?: CurrentQuestionRelation;
+  preserveActiveChild?: boolean;
   action?: InterviewerIntentAction;
   evidenceMode?: InterviewerEvidenceMode;
   confidence?: number;
@@ -196,6 +197,7 @@ export interface CurrentQuestionSettlementDecision {
   sourceHash: string;
   questionType: CanonicalQuestionType;
   relation: CurrentQuestionRelation;
+  preserveActiveChild?: boolean;
   action: InterviewerIntentAction;
   evidenceMode: InterviewerEvidenceMode;
   authority: CurrentQuestionAuthority;
@@ -664,6 +666,7 @@ export function settleCurrentQuestion(input: {
     relation: relationSelection.value,
     action: actionSelection.value,
     authority: mutationAuthority.authority,
+    preserveActiveChild: relationSelection.proposal?.preserveActiveChild,
     typeAuthoritySource: typeSelection.source,
     relationAuthoritySource: relationSelection.source,
     actionAuthoritySource: actionSelection.source,
@@ -690,6 +693,7 @@ export function settleCurrentQuestion(input: {
     relation: relationSelection.value,
     action: actionSelection.value,
     evidenceMode: evidenceModeSelection,
+    preserveActiveChild: relationSelection.proposal?.preserveActiveChild,
     authority: mutationAuthority.authority,
     authoritySource,
     typeAuthoritySource: typeSelection.source,
@@ -1021,6 +1025,7 @@ export function formatCurrentQuestionSettlementForTrace(
     currentQuestionSettlementSourceHash: decision.sourceHash,
     currentQuestionSettlementType: decision.questionType,
     currentQuestionSettlementRelation: decision.relation,
+    currentQuestionSettlementPreserveActiveChild: decision.preserveActiveChild,
     currentQuestionSettlementAction: decision.action,
     currentQuestionSettlementEvidenceMode: decision.evidenceMode,
     currentQuestionSettlementAuthority: decision.authority,
@@ -1287,7 +1292,8 @@ function selectQuestionRelation(input: {
   rejectedProposals: CurrentQuestionSettlementProposalRejection[];
 }) {
   for (const proposal of [input.manual, input.deterministic]) {
-    if (!proposal?.relation || isUnresolvedRelation(proposal.relation)) {
+    if (!proposal?.relation || proposal.relation === "unknown" ||
+        (proposal.relation === "none" && proposal.relationEvidenceAuthorized !== true)) {
       continue;
     }
     if (proposal.relationEvidenceAuthorized === false) {
@@ -1307,7 +1313,8 @@ function selectQuestionRelation(input: {
   }
 
   const llm = input.llm;
-  if (llm?.relation && !isUnresolvedRelation(llm.relation)) {
+  if (llm?.relation && llm.relation !== "unknown" &&
+      (llm.relation !== "none" || llm.relationEvidenceAuthorized === true)) {
     const minConfidence = clampConfidence(
       input.policy.llmRelationRepairMinConfidence ??
         input.policy.runtimeTypeAdjudicationMinConfidence ??
@@ -1471,14 +1478,11 @@ function addProposalRejection(
   rejections.push({ source, reasons: [reason] });
 }
 
-function isUnresolvedRelation(relation: CurrentQuestionRelation) {
-  return relation === "unknown" || relation === "none";
-}
-
 function createSettlementId(input: {
   currentQuestion: ProvisionalCurrentQuestion;
   questionType: CanonicalQuestionType;
   relation: CurrentQuestionRelation;
+  preserveActiveChild?: boolean;
   action: InterviewerIntentAction;
   authority: CurrentQuestionAuthority;
   typeAuthoritySource:
@@ -1511,6 +1515,7 @@ function createSettlementId(input: {
       input.activeParentId ?? "",
       input.activeParentRevision ?? "",
       input.manualCorrectionRevision,
+      ...(input.preserveActiveChild === undefined ? [] : [input.preserveActiveChild]),
     ].join("|")
   )}`;
 }
