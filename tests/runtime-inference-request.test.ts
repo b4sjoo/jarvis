@@ -139,6 +139,9 @@ for (const c of cases) {
       assert.equal(sent.applyResponseSettings, false);
       assert.equal(sent.requestOptions.timeoutMs, c.kind === "question-type-adjudication" ? 7777 : h.operation.timeoutMs);
       assert.equal(sent.requestOptions.maxOutputTokens, c.kind === "question-type-adjudication" ? 1024 : h.operation.maxOutputTokens);
+      if (["task-relation-child-affinity", "task-relation-parent-affinity", "task-relation-canonical-shadow"].includes(c.kind)) {
+        assert.equal(sent.requestOptions.maxOutputTokens, 1024, "the actual relation request, not only trace config, uses1024");
+      }
       assert.equal("operationLabel" in sent, false);
       assert.equal("onFirstToken" in sent, false);
       assert.equal(tokens, status === "content" ? 1 : 0);

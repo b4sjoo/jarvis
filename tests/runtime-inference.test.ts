@@ -119,9 +119,9 @@ test("registers each atomic runtime operation with an isolated policy", () => {
   assert.equal(canonicalRelation.timeoutMs, 6_000);
   assert.equal(relation.timeoutMs, 5_000);
   assert.equal(relation.maxOutputTokens, 512);
-  assert.equal(childAffinity.maxOutputTokens, 512);
-  assert.equal(parentAffinity.maxOutputTokens, 512);
-  assert.equal(canonicalRelation.maxOutputTokens, 512);
+  assert.equal(childAffinity.maxOutputTokens, 1024);
+  assert.equal(parentAffinity.maxOutputTokens, 1024);
+  assert.equal(canonicalRelation.maxOutputTokens, 1024);
   assert.equal(answerResolution.lane, "background");
   assert.equal(answerResolution.timeoutMs, 1_500);
   assert.equal(answerResolution.maxOutputTokens, 256);
