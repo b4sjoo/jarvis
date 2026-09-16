@@ -426,7 +426,10 @@ function prepareOutputCandidate(h, options = {}) {
   const candidate = suggestion(options.id ?? "visible-b", "Answer: The queue preserves FIFO order.");
   const continuity = h.evaluate("updateInterviewTaskContinuityForAnswer(continuityInput)", {
     continuityInput: {
-      existingTask: parent, source, questionType: child?.questionType ?? parent.stableKind, relation,
+      existingTask: parent, source,
+      responseOwner: { questionType: child?.questionType ?? parent.stableKind,
+        source: relation === "unknown" ? "current-question"
+          : relation === "child-probe" ? "authorized-child" : "committed-parent", relation },
       finalContent: candidate.content, parsedAnswer: candidate.meetingAnswer,
       observationId: parent.latestScreenObservationId,
       expiresAt: options.deadline ?? Date.now() + 600_000,

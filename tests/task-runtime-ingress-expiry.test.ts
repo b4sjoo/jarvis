@@ -88,6 +88,8 @@ function harness() {
     manualCorrectionRevisionRef: { current: 0 },
     traceStoreRef: { current: new MeetingTraceStore() },
     flushPendingSentenceCompletion: () => {},
+    latestManualCorrectionTargetRef: { current: undefined },
+    recordManualRuntimeAction: () => {},
   });
   compile("buildEffectiveAdvisorBasePromptContext", context);
   compile("buildAdvisorJob", context);

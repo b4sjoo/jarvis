@@ -817,7 +817,6 @@ import {
   selectManualCorrectionTargetFromHistory,
   upsertManualCorrectionTargetHistory,
   ManualCorrectionOperationCoordinator,
-  decideInterviewTaskContinuityBranch,
   projectActiveParentTaskRelationHint,
   projectCrossTypeTaskRelationHint,
   isExplicitResumeParentTranscript,
@@ -3497,6 +3496,8 @@ export function useMeetingAssistant() {
       observedTaskId?: string;
       observedVisibleAnswerRevision?: number;
       specializedEventId?: string;
+      correctedType?: string;
+      uiSurface?: "meeting-response-actions" | "normal-mode" | "focus-mode";
       terminalDisposition?: ManualRuntimeActionTerminalDisposition;
       reason?: string;
       occurredAt?: number;
@@ -3504,6 +3505,7 @@ export function useMeetingAssistant() {
       ingressReceivedAt?: number;
     }) => {
       const runtimeState = contextManagerRef.current.getState();
+      if (input.action === "type-correction") console.info("[manual-runtime-action]", input);
       return sessionRecordingManagerRef.current?.recordManualRuntimeAction(
         createManualRuntimeActionEvent({
           ...input,
@@ -9306,8 +9308,12 @@ export function useMeetingAssistant() {
   );
 
   const setInterviewSessionBrief = useCallback(
-    (brief: InterviewSessionBrief | undefined) => {
+    (brief: InterviewSessionBrief | undefined, uiSurface: "normal-mode" | "focus-mode" = "normal-mode") => {
       const normalizedBrief = normalizeInterviewSessionBrief(brief);
+      const observation = { stage: "interview-brief-updated", uiSurface,
+        interviewTypes: normalizedBrief?.interviewTypes ?? [], priorOnly: true };
+      console.info("[interview-brief]", observation);
+      sessionRecordingManagerRef.current?.recordCaptureLifecycle(observation);
       persistInterviewSessionBrief(normalizedBrief);
       contextManagerRef.current.setInterviewSessionBrief(normalizedBrief);
       const contextState = contextManagerRef.current.getState();
@@ -15559,14 +15565,6 @@ export function useMeetingAssistant() {
           : postModelContinuityAuthority.owner === "active-parent"
             ? "followup-parent"
             : advisorContinuityRelation;
-      const outputPhaseDecision =
-        postModelContinuityAuthority.owner !== "settled-relation" ||
-        taskBoundaryCommittedBeforeAdvisor ||
-        sourceOwnedTransitionCommittedBeforeAdvisor ||
-        settledExecutionPlan?.taskMutationCommittedBeforeAdvisor ||
-        manualPhaseAdvanceCommitted
-          ? undefined
-          : playbookPhaseDecision;
       const baseSettledArtifactAuthorization =
         settledExecutionPlan?.artifactPolicy ??
         authorizeResponseArtifactMutation({
@@ -15625,28 +15623,11 @@ export function useMeetingAssistant() {
             existingTask: existingInterviewTask,
             parentTopic: readEffectiveSemanticTask(contextManagerRef.current.getState().activeMeetingTask, advisorJob.logicalQuestionUnit)?.parent.topic,
             source: advisorEvidenceSource,
-            questionType:
-              options.artifactRegenerationTarget && existingInterviewTask
-                ? existingInterviewTask.stableKind
-                : continuityRelation === "followup-parent" &&
-              existingInterviewTask
-                ? existingInterviewTask.stableKind
-                : advisorQuestionType,
-            relation:
-              options.artifactRegenerationTarget
-                ? "followup-parent"
-                : continuityRelation === "none"
-                ? "unknown"
-                : continuityRelation,
+            responseOwner: settledExecutionPlan?.responseOwner ?? responseOwner,
             finalContent,
             parsedAnswer: parsedMeetingAnswer,
             whiteboardRenderValidation,
-            playbook:
-              settledExecutionPlan?.playbook ??
-              advisorRuntimePlaybook,
-            phaseDecision: options.artifactRegenerationTarget
-              ? undefined
-              : outputPhaseDecision,
+            phaseDecision: playbookPhaseDecision,
             observationId:
               advisorEvidenceSource === "screen"
                 ? promptContext.taskRuntime.screenAttachment?.basedOnObservationId
@@ -30104,10 +30085,6 @@ export function useMeetingAssistant() {
           screenLatestUsefulAnswerMutationAuthorized =
             screenArtifactAuthorization.allowLatestUsefulAnswer &&
             !screenCurrentOnly;
-          const screenContinuityRelation: InterviewTaskRelation =
-            screenFreshParentCreated
-              ? "followup-parent"
-              : screenRelationDecision.relation;
           const screenContinuity = screenCurrentOnly
             ? {
                 task: undefined,
@@ -30118,13 +30095,11 @@ export function useMeetingAssistant() {
             existingTask: existingInterviewTask,
             parentTopic: readEffectiveSemanticTask(contextManagerRef.current.getState().activeMeetingTask, screenRelationLogicalQuestionUnit)?.parent.topic,
             source: "screen",
-            questionType: settledScreenTaskKind,
-            relation: screenContinuityRelation,
+            responseOwner: screenResponseOwner,
             finalContent: committedScreenTaskContent,
             parsedAnswer: parsedScreenMeetingAnswer,
             whiteboardRenderValidation:
               screenWhiteboardRenderValidation,
-            playbook: screenRuntimePlaybook,
             phaseDecision: screenDurableTransitionSatisfiedBeforeModel
               ? undefined
               : screenPhaseDecision,
@@ -31113,8 +31088,23 @@ export function useMeetingAssistant() {
   const correctActiveQuestionType = useCallback(
     async (
       correctedType: CanonicalQuestionType,
-      source: ManualQuestionTypeCorrectionSource = "normal-mode"
+      source: ManualQuestionTypeCorrectionSource = "normal-mode",
+      invocation: ManualRuntimeActionInvocation = {}
     ) => {
+      const actionId = invocation.actionId ?? createMeetingId("manual_action");
+      const requestedTarget = latestManualCorrectionTargetRef.current?.logicalQuestionUnit;
+      const actionEvidence = {
+        actionId, action: "type-correction" as const, correctedType, uiSurface: source,
+        ingressSource: invocation.ingressSource ?? "ui" as const,
+        ingressReceivedAt: invocation.ingressReceivedAt ?? Date.now(),
+        observedLogicalQuestionUnitId: requestedTarget?.id,
+        observedLogicalQuestionUnitRevision: requestedTarget?.revision,
+        observedTaskId: contextManagerRef.current.getState().activeMeetingTask?.id,
+      };
+      recordManualRuntimeAction({ ...actionEvidence, stage: "requested" });
+      const rejectCorrectionRequest = (reason: string, terminalDisposition: ManualRuntimeActionTerminalDisposition = "rejected") => {
+        recordManualRuntimeAction({ ...actionEvidence, stage: "terminal", terminalDisposition, reason });
+      };
       flushPendingSentenceCompletion("manual-question-type-correction");
 
       contextManagerRef.current.clearExpiredActiveMeetingTask();
@@ -31178,6 +31168,7 @@ export function useMeetingAssistant() {
           error:
             "The interviewer moved to a newer question. Correct the latest question instead.",
         }));
+        rejectCorrectionRequest(canonicalTargetAuthorization.reason, "stale");
         return;
       }
       const canonicalCorrectionTarget =
@@ -31219,6 +31210,7 @@ export function useMeetingAssistant() {
           ...previous,
           error: "There is no active question to correct.",
         }));
+        rejectCorrectionRequest("no-current-question");
         return;
       }
 
@@ -31239,6 +31231,7 @@ export function useMeetingAssistant() {
           error:
             "The latest visible question has no authoritative evidence to regenerate from.",
         }));
+        rejectCorrectionRequest("missing-question-source");
         return;
       }
       const correctionLogicalQuestionLease =
@@ -31260,7 +31253,10 @@ export function useMeetingAssistant() {
             reason: "manual-correction-reasserts-current-question-boundary",
           }
         : initialDecision;
-      if (decision.noOp || !decision.target) return;
+      if (decision.noOp || !decision.target) {
+        rejectCorrectionRequest(decision.reason);
+        return;
+      }
 
       const correctionOriginTurn = correctionLineage?.triggerTurnId
         ? contextState.transcriptTurns.find(
@@ -31318,6 +31314,7 @@ export function useMeetingAssistant() {
           ...previous,
           error: "The active question has no repairable parent task.",
         }));
+        rejectCorrectionRequest("no-repairable-parent");
         return;
       }
       const correctionTargetSource =
@@ -31355,7 +31352,14 @@ export function useMeetingAssistant() {
           eventId,
           correctionRequestKey
         );
-      if (!operationClaim.accepted) return;
+      if (!operationClaim.accepted) {
+        recordManualRuntimeAction({ ...actionEvidence, stage: "terminal", terminalDisposition: "rejected",
+          reason: "duplicate-correction-request", specializedEventId: operationClaim.duplicateOfOperationId });
+        return;
+      }
+      recordManualRuntimeAction({ ...actionEvidence, stage: "accepted", specializedEventId: eventId,
+        observedLogicalQuestionUnitId: correctionLogicalQuestionUnit.id,
+        observedLogicalQuestionUnitRevision: correctionLogicalQuestionUnit.revision });
       manualCorrectionRevisionRef.current += 1;
       settleAwaitingVisualEvidenceRecovery(
         "cancelled",
@@ -31425,6 +31429,7 @@ export function useMeetingAssistant() {
           : "screen",
         {
           source: "manual-question-type-correction",
+          manualRuntimeActionId: actionId,
           manualQuestionTypeCorrectionSource: source,
           manualQuestionTypeCorrectionTarget: decision.target,
           manualCorrectionTargetSource: correctionTargetSource,
@@ -31694,6 +31699,16 @@ export function useMeetingAssistant() {
           error: terminal.error,
         };
         correctionTerminalized = true;
+        recordManualRuntimeAction({ ...actionEvidence, stage: "terminal", traceId: correctionTrace.id,
+          specializedEventId: eventId,
+          observedTaskId: correction.taskId,
+          observedLogicalQuestionUnitId: correctionLogicalQuestionUnit.id,
+          observedLogicalQuestionUnitRevision: correctionLogicalQuestionUnit.revision,
+          terminalDisposition: stableAnswerCommitted ? "completed"
+            : input.authorizationFailureReason ? "stale"
+            : input.regenerationTraceStatus === "cancelled" ? "cancelled" : "failed",
+          reason: terminal.error ?? correction.regenerationCommitDisposition,
+        });
         sessionRecordingManagerRef.current?.recordManualQuestionTypeCorrection(
           correction
         );
@@ -32824,6 +32839,10 @@ export function useMeetingAssistant() {
               : "Failed to correct the active question type.",
         });
       } finally {
+        if (!correctionTerminalized && !manualCorrectionOperationCoordinatorRef.current.owns(eventId)) {
+          recordManualRuntimeAction({ ...actionEvidence, stage: "terminal", traceId: correctionTrace.id,
+            specializedEventId: eventId, terminalDisposition: "cancelled", reason: "correction-superseded" });
+        }
         if (
           !correctionTerminalized &&
           manualCorrectionOperationCoordinatorRef.current.owns(eventId)
@@ -32845,6 +32864,7 @@ export function useMeetingAssistant() {
       readRuntimeCommitSnapshot,
       recordHumanGroundTruthV2,
       readEffectiveSemanticTask,
+      recordManualRuntimeAction,
       resolveOrderedTaskRelationWithinWindow,
       resolveMeetingModelRoute,
       runAdvisor,
@@ -38030,21 +38050,20 @@ function inferAdvisorSubtaskIntent(
 }
 
 function updateInterviewTaskContinuityForAnswer({
-  existingTask, parentTopic, source, questionType, relation, finalContent, parsedAnswer,
-  whiteboardRenderValidation, playbook, phaseDecision, observationId, traceId,
+  existingTask, parentTopic, source, responseOwner, finalContent, parsedAnswer,
+  whiteboardRenderValidation, phaseDecision, observationId, traceId,
   whiteboardUpdateSource, selectedOverlayIds, expiresAt, supportedFactAnchors,
   projectBinding, artifactAuthorization, artifactIntent, deadlineCalculatedAt,
 }: {
   existingTask?: ActiveInterviewParent;
   parentTopic?: string;
   source: "screen" | "voice";
-  questionType: MemoryQuestionType | ScreenTaskKind;
-  relation: InterviewTaskRelation;
+  responseOwner: SettledAdvisorExecutionPlan["responseOwner"];
   finalContent: string;
   parsedAnswer?: ParsedMeetingAnswer;
   whiteboardRenderValidation?: WhiteboardRenderValidationDecision;
-  playbook?: ActiveInterviewParent["playbook"];
-  phaseDecision?: PlaybookPhaseDecision;
+  phaseDecision?: Pick<PlaybookPhaseDecision,
+    "whiteboardProvisional" | "whiteboardOpenConstraintCategories" | "whiteboardRevisionReason">;
   observationId?: string;
   traceId?: string;
   whiteboardUpdateSource?: WhiteboardUpdateSource;
@@ -38056,17 +38075,11 @@ function updateInterviewTaskContinuityForAnswer({
   artifactAuthorization: ReturnType<typeof authorizeResponseArtifactMutation>;
   artifactIntent?: SettledAdvisorExecutionPlan["artifactIntent"];
 }): InterviewTaskContinuityResult {
-  const decision = decideInterviewTaskContinuityBranch({
-    hasExistingParent: Boolean(existingTask),
-    existingParentQuestionType: existingTask?.stableKind,
-    candidateQuestionType: questionType,
-    relation,
-  });
-  if (decision.branch === "new-parent") {
-    throw new Error("Generated output requires its parent to be committed before generation.");
-  }
-  if (!existingTask) return { task: undefined, startedNewParent: false, clearedParent: false };
-  if (decision.branch === "child-probe" && !existingTask.child) {
+  const childOwned = responseOwner.source === "authorized-child" || responseOwner.source === "active-child-preserved";
+  const currentOnly = responseOwner.source === "current-question" || responseOwner.source === "transient-personal-status";
+  if (currentOnly) return { task: existingTask, startedNewParent: false, clearedParent: false };
+  if (!existingTask) throw new Error("Generated output requires its owner to be committed before generation.");
+  if (childOwned && !existingTask.child) {
     throw new Error("Generated child output requires a committed child owner.");
   }
   const now = Date.now();
@@ -38077,29 +38090,13 @@ function updateInterviewTaskContinuityForAnswer({
     current: existingTask.latestScreenObservationId,
   });
   let proposed = existingTask;
-  if (decision.branch === "preserve") {
-    if (latestScreenObservationId !== existingTask.latestScreenObservationId) {
-      proposed = { ...existingTask, latestScreenObservationId };
-    }
-  } else {
-    const parentPhaseOwned = decision.branch === "continue-parent";
-    const nextPhase = parentPhaseOwned
-      ? phaseDecision?.phase ?? playbook?.phase ?? existingTask.playbookPhase
-      : existingTask.playbookPhase;
-    const storedPlaybook = parentPhaseOwned
-      ? withInterviewPlaybookPhase(playbook ?? existingTask.playbook, nextPhase)
-      : existingTask.playbook;
+  {
     const whiteboardAuthorized = isWhiteboardRevisionAuthorized({
       artifactIntent,
       policyAllowsWhiteboard: artifactAuthorization.allowWhiteboard,
     });
     proposed = {
       ...existingTask,
-      playbook: storedPlaybook,
-      playbookPhase: nextPhase,
-      phaseProgress: parentPhaseOwned
-        ? applyPlaybookPhaseDecisionToProgress(existingTask.phaseProgress, phaseDecision, storedPlaybook?.phase)
-        : existingTask.phaseProgress,
       projectBinding: artifactAuthorization.allowParentContextMutation
         ? projectBinding ?? existingTask.projectBinding : existingTask.projectBinding,
       supportedFactAnchors: artifactAuthorization.allowParentContextMutation
@@ -38114,7 +38111,7 @@ function updateInterviewTaskContinuityForAnswer({
             parentTopic: parentTopic ?? "",
             finalContent: finalContent.trim(),
             parsedAnswer: parsed,
-            phase: phaseDecision?.phase ?? nextPhase,
+            phase: existingTask.playbookPhase,
             traceId,
             selectedOverlayIds,
             updateSource: whiteboardUpdateSource ?? "model-output",
@@ -38125,8 +38122,7 @@ function updateInterviewTaskContinuityForAnswer({
             now,
           })
         : existingTask.whiteboardArtifact,
-      child: relation === "resume-parent" ? undefined : existingTask.child,
-      latestScreenObservationId: decision.branch === "child-probe"
+      latestScreenObservationId: childOwned
         ? existingTask.latestScreenObservationId : latestScreenObservationId,
     };
   }
@@ -38137,7 +38133,7 @@ function updateInterviewTaskContinuityForAnswer({
       : existingTask,
     startedNewParent: false,
     clearedParent: false,
-    childSummary: decision.branch === "child-probe" && existingTask.child && buildMeetingAnswerSummary(parsed).text
+    childSummary: childOwned && existingTask.child && buildMeetingAnswerSummary(parsed).text
       ? buildCompactChildSummary({
           questionType: existingTask.child.questionType,
           subtaskIntent: existingTask.child.intent,
@@ -38145,10 +38141,10 @@ function updateInterviewTaskContinuityForAnswer({
           parsedAnswer: parsed,
         })
       : undefined,
-    deadlineDelta: decision.branch !== "preserve" || changed
+    deadlineDelta: !currentOnly || changed
       ? { parent: { ownerId: existingTask.id, deadline: expiresAt } }
       : undefined,
-    deadlineCalculatedAt: decision.branch !== "preserve" || changed ? deadlineCalculatedAt : undefined,
+    deadlineCalculatedAt: !currentOnly || changed ? deadlineCalculatedAt : undefined,
   };
 }
 

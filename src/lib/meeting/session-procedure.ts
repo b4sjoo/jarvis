@@ -179,6 +179,9 @@ export function buildSessionProcedureV1(input: {
     input.transcriptTurns.map((turn) => [turn.id, turn])
   );
   const manualActionsById = groupManualActions(input.manualActions);
+  const ledgerTypeCorrectionIds = new Set(input.manualActions
+    .filter((event) => event.action === "type-correction" && event.specializedEventId)
+    .map((event) => `type:${event.specializedEventId}`));
   const ingressTraceIdsByTurnId = collectIngressTraceIdsByTurnId(
     input.timelineEvents
   );
@@ -217,6 +220,7 @@ export function buildSessionProcedureV1(input: {
 
   for (const event of input.timelineEvents) {
     const specializedIdentity = timelineSpecializedIdentity(event);
+    if (specializedIdentity && ledgerTypeCorrectionIds.has(specializedIdentity)) continue;
     if (
       specializedIdentity &&
       representedSpecializedEventIds.has(specializedIdentity)
@@ -603,7 +607,7 @@ function buildManualActionStep(
     event,
     kind: source.action,
     replaySupport: "capture-only",
-    input: {},
+    input: source.action === "type-correction" ? { correctedType: requested?.correctedType ?? source.correctedType } : {},
     actionId: source.actionId,
     specializedEventId: events
       .map((candidate) => candidate.specializedEventId)

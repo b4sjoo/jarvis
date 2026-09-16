@@ -242,7 +242,7 @@ test(`MR1 origin ${scope} Plan reaches post-model consumer without recreating it
   const before = JSON.stringify(f.parent);
   const parsed = parseMeetingAnswer("Answer: Explain the current question only.\nApproach: Keep its constraints.");
   const result = consume({
-    existingTask: f.parent, source: "voice", questionType: "coding", relation,
+    existingTask: f.parent, source: "voice", responseOwner: plan.responseOwner,
     finalContent: "Answer: Explain the current question only.", parsedAnswer: parsed,
     playbook: f.parent.playbook, artifactAuthorization: { ...plan.artifactPolicy, allowParentContextMutation: false },
     artifactIntent: "preserve",

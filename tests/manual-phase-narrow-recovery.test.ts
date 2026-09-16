@@ -357,15 +357,15 @@ function recoveryHarness() {
       const scope = { ...ownerScope, postModelContinuityAuthority: authority };
       const relation = initializer("continuityRelation", scope);
       assert.equal(relation, "followup-parent");
-      const outputPhaseDecision = initializer("outputPhaseDecision", scope);
-      assert.equal(outputPhaseDecision, undefined);
       const artifactAuthorization = projectResponseArtifactAuthorizationForGeneration({
         authorization: executionPlan.artifactPolicy, authority: executionPlan.artifactGenerationAuthority,
       });
       const continuity = consumeOwner({
-        existingTask: context.taskRuntime.parent, source: "screen", questionType: "coding", relation,
+        existingTask: context.taskRuntime.parent, source: "screen", responseOwner: executionPlan.responseOwner,
         finalContent: nextSuggestion.content, parsedAnswer: nextSuggestion.meetingAnswer,
-        playbook: context.taskRuntime.parent!.playbook, phaseDecision: outputPhaseDecision,
+        // Legacy caller fields cannot reset the committed Implementation phase.
+        playbook: { ...context.taskRuntime.parent!.playbook, phase: "baseline_reasoning" },
+        phaseDecision: { phase: "baseline_reasoning" },
         observationId: "mr3-screen", artifactAuthorization, artifactIntent: executionPlan.artifactIntent,
       });
       assert.equal(continuity.startedNewParent, false);

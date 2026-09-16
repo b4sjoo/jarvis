@@ -80,7 +80,7 @@ test("routes settled Screen policy through the shared execution plan", () => {
     modelStart
   );
   const postModelEnd = source.indexOf(
-    "const screenContinuityRelation",
+    "const screenContinuity =",
     postModelStart
   );
   const preModelBlock = source.slice(planStart, modelStart);

@@ -21,6 +21,7 @@ import {
   MEETING_FOCUS_SNAPSHOT_EVENT,
   resolveFocusControlsGeometry,
   stripOuterCodeFence,
+  createMeetingId,
 } from "@/lib/meeting";
 import { cn } from "@/lib/utils";
 import { invoke } from "@tauri-apps/api/core";
@@ -104,7 +105,13 @@ export function MeetingFocusWindow({ kind }: { kind: MeetingFocusWindowKind }) {
   }, [envelope]);
 
   const snapshot = envelope?.payload ?? EMPTY_MEETING_FOCUS_SNAPSHOT;
-  const sendFocusAction = (action: MeetingFocusUserAction) => { void consumerRef.current?.dispatch(action); };
+  const sendFocusAction = (action: MeetingFocusUserAction) => {
+    const requested = action.type === "correct-question-type"
+      ? { ...action, actionId: action.actionId ?? createMeetingId("manual_action"), requestedAt: Date.now() }
+      : action;
+    if (requested.type === "correct-question-type") console.info("[type-correction-focus-requested]", requested);
+    void consumerRef.current?.dispatch(requested);
+  };
   return <div className="contents" data-focus-window={kind}
     data-focus-publisher={envelope?.publisherInstanceId} data-focus-sequence={envelope?.sequence}>
     {protocolError ? <div role="alert" className="fixed inset-x-2 top-2 z-50 rounded-sm border border-destructive bg-background p-2 text-xs text-destructive">{protocolError}</div> : null}

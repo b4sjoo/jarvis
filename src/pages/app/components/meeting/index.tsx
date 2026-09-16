@@ -1565,7 +1565,8 @@ export const MeetingAssistant = ({
         updatedAt: Date.now(),
       };
       meeting.setInterviewSessionBrief(
-        isEditableInterviewSessionBriefEmpty(nextBrief) ? undefined : nextBrief
+        isEditableInterviewSessionBriefEmpty(nextBrief) ? undefined : nextBrief,
+        "focus-mode"
       );
     },
     [editableBriefForFocus, meeting.setInterviewSessionBrief]
@@ -1597,7 +1598,8 @@ export const MeetingAssistant = ({
       case "correct-question-type":
         void meeting.correctActiveQuestionType(
           action.correctedType,
-          action.source
+          action.source,
+          { actionId: action.actionId, ingressReceivedAt: action.requestedAt, ingressSource: "ui" }
         );
         break;
       case "update-interview-types":

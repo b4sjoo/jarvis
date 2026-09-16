@@ -11,6 +11,31 @@ import {
 import { createManualRuntimeActionEvent } from "../src/lib/meeting/manual-runtime-action.js";
 import { createRuntimeRegressionStepEvent } from "../src/lib/meeting/runtime-regression.js";
 
+test("Type Correction requested/accepted/terminal and specialized records form one procedure input", () => {
+  const common = { actionId: "manual-1", action: "type-correction" as const, correctedType: "coding",
+    runtimeSessionId: "meeting", runtimeEpoch: 1, uiSurface: "focus-mode" as const };
+  const manualActions = [
+    createManualRuntimeActionEvent({ ...common, stage: "requested", occurredAt: 100 }),
+    createManualRuntimeActionEvent({ ...common, stage: "accepted", specializedEventId: "correction-1", occurredAt: 102 }),
+    createManualRuntimeActionEvent({ ...common, stage: "terminal", specializedEventId: "correction-1",
+      traceId: "trace-correction", terminalDisposition: "completed", occurredAt: 110 }),
+  ];
+  const procedure = buildSessionProcedureV1({ recordingSessionId: "recording", folderName: "session", sourceDigest: "fixture",
+    scriptedValidation: true, forcedScripted: false, transcriptTurns: [], humanEvaluationProjections: [], manualActions,
+    timelineEvents: [
+      { id: "requested", kind: "manual-runtime-action", createdAt: 100, metadata: { actionId: "manual-1", stage: "requested" } },
+      { id: "specialized", kind: "manual-question-type-correction", createdAt: 103,
+        metadata: { manualQuestionTypeCorrectionId: "correction-1", correctedQuestionType: "coding" } },
+      { id: "completed", kind: "manual-runtime-action", createdAt: 110, metadata: { actionId: "manual-1", stage: "terminal" } },
+    ],
+  });
+  assert.equal(procedure.steps.length, 1);
+  assert.equal(procedure.steps[0].kind, "type-correction");
+  assert.deepEqual(procedure.steps[0].input, { correctedType: "coding" });
+  assert.equal(procedure.steps[0].provenance.actionId, "manual-1");
+  assert.equal(procedure.steps[0].provenance.specializedEventId, "correction-1");
+});
+
 test("compiles ordered source and action steps without injecting resolved targets", () => {
   const manualActions = [
     createManualRuntimeActionEvent({

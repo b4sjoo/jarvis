@@ -204,6 +204,8 @@ export type MeetingFocusAction =
   | { type: "deactivate-correction"; correctionId: string }
   | {
       type: "correct-question-type";
+      actionId?: string;
+      requestedAt?: number;
       correctedType: CanonicalQuestionType;
       source: ManualQuestionTypeCorrectionSource;
     }

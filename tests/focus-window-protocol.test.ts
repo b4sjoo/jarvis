@@ -40,6 +40,16 @@ class Bus {
 }
 const fail = (error: Error) => { throw error; };
 
+test("Focus carries the original Type Correction request identity to the main window", async () => {
+  const bus = new Bus(), p = publisher(bus), c = consumer(bus, "controls");
+  await p.start(); await c.start(); await p.publish({ ...empty, active: true }); bus.drain();
+  await c.dispatch({ type: "correct-question-type", correctedType: "coding", source: "focus-mode",
+    actionId: "focus-click-1", requestedAt: 123 });
+  bus.drain();
+  assert.deepEqual(p.actions, [{ type: "correct-question-type", correctedType: "coding", source: "focus-mode",
+    actionId: "focus-click-1", requestedAt: 123 }]);
+});
+
 test("audio warning is display-only and survives the independent Focus transport", async () => {
   const bus = new Bus(), p = publisher(bus), c = consumer(bus, "controls");
   await p.start(); await c.start();

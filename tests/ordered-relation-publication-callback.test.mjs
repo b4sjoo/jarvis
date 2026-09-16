@@ -1268,6 +1268,9 @@ test("terminalizes Type Correction client errors before reading a Relation decis
     ...imports,
     relationAdjudicationWaitDisposition: "pending",
     correctionTrace: { id: "type-correction-trace" },
+    actionEvidence: { actionId: "request-1", action: "type-correction", correctedType: "coding" },
+    correctionLogicalQuestionUnit: { id: "question-1", revision: 1 },
+    recordManualRuntimeAction() {},
     correctionTerminalized: false,
     mutationApplied: false,
     correction: {

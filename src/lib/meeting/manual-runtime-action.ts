@@ -1,6 +1,7 @@
 export const MANUAL_RUNTIME_ACTION_SCHEMA_VERSION = 1 as const;
 
 export type ManualRuntimeActionKind =
+  | "type-correction"
   | "force-advise"
   | "next-phase"
   | "previous-phase"
@@ -57,7 +58,7 @@ export interface ManualRuntimeActionEventV1 {
   stage: ManualRuntimeActionEventStage;
   runtimeSessionId: string;
   runtimeEpoch: number;
-  uiSurface: "meeting-response-actions";
+  uiSurface: "meeting-response-actions" | "normal-mode" | "focus-mode";
   occurredAt: number;
   ingressSource?: "ui" | "shortcut";
   ingressReceivedAt?: number;
@@ -67,6 +68,7 @@ export interface ManualRuntimeActionEventV1 {
   observedTaskId?: string;
   observedVisibleAnswerRevision?: number;
   specializedEventId?: string;
+  correctedType?: string;
   terminalDisposition?: ManualRuntimeActionTerminalDisposition;
   reason?: string;
 }
@@ -101,7 +103,7 @@ export function decideManualRuntimeActionIngress(input: {
   hasVisibleAnswer: boolean;
   hasActiveTask: boolean;
 }): ManualRuntimeActionIngressDecision {
-  if (input.action === "clear-task" || input.action === "force-advise") {
+  if (input.action === "clear-task" || input.action === "force-advise" || input.action === "type-correction") {
     return { authorized: true };
   }
   if (input.busy) return { authorized: false, reason: "meeting-busy" };
