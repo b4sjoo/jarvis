@@ -263,8 +263,8 @@ test("aggregates answer stability and delivery protection metrics", () => {
     }
   );
   assert.equal(
-    summary.answerStability.suppressionRecommendedVisibleRefreshCount,
-    1
+    "suppressionRecommendedVisibleRefreshCount" in summary.answerStability,
+    false
   );
   assert.equal(
     summary.answerStability.primaryAskProjectionDisagreementCount,

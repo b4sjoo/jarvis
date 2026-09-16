@@ -797,7 +797,6 @@ test("merges advisor intent repairs without losing original decision evidence", 
         sourceTurnIds: ["turn_1"],
         preDecision: {
           intent: "statement",
-          wouldSuppress: true,
           executionAuthorized: false,
         },
         createdAt: 10,
@@ -832,7 +831,6 @@ test("merges advisor intent repairs without losing original decision evidence", 
   ]);
   assert.deepEqual(repaired[0].advisorIntent?.preDecision, {
     intent: "statement",
-    wouldSuppress: true,
     executionAuthorized: false,
     outputCommitAuthorized: true,
   });

@@ -418,10 +418,6 @@ export interface SessionCompactTraceSummary {
   taskRelationLexicalAuthorityStage?: string;
   taskRelationLexicalMatchedSpans: string[];
   advisorTurnIntent?: string;
-  advisorTurnConfidence?: number;
-  advisorTurnEnforcement?: string;
-  advisorIntentAuthoritySource?: string;
-  advisorWouldSuppress?: boolean;
   advisorExecutionAuthorized?: boolean;
   responseOpportunityLocalDisposition?: string;
   responseOpportunityLocalReason?: string;
@@ -1327,7 +1323,6 @@ interface SessionAnswerStabilityAggregate {
   unauthorizedVisibleRefreshCount: number;
   visibleRefreshWithoutPrimaryAskCount: number;
   visibleRefreshWithoutPrimaryAskByAuthority: Record<string, number>;
-  suppressionRecommendedVisibleRefreshCount: number;
   primaryAskProjectionDisagreementCount: number;
   runtimeIntentContradictedVisibleRefreshCount: number;
   manualHardOverrideRefreshCount: number;
@@ -4925,22 +4920,6 @@ export function buildCompactTraceSummary({
       "taskRelationLexicalMatchedSpans"
     ),
     advisorTurnIntent: readFirstString(metadataSources, "advisorTurnIntent"),
-    advisorTurnConfidence: readFirstNumberFromMetadata(
-      metadataSources,
-      "advisorTurnConfidence"
-    ),
-    advisorTurnEnforcement: readFirstString(
-      metadataSources,
-      "advisorTurnEnforcement"
-    ),
-    advisorIntentAuthoritySource: readFirstString(
-      metadataSources,
-      "advisorIntentAuthoritySource"
-    ),
-    advisorWouldSuppress: readFirstBoolean(
-      metadataSources,
-      "advisorWouldSuppress"
-    ),
     advisorExecutionAuthorized: readFirstBoolean(
       metadataSources,
       "advisorExecutionAuthorized"
@@ -7675,12 +7654,6 @@ function aggregateAnswerStability(
       countSessionVisibleRefreshesByAuthority(
         summaries.filter(visibleRefreshWithoutPrimaryAsk)
       ),
-    suppressionRecommendedVisibleRefreshCount: summaries.filter(
-      (summary) =>
-        summary.visibleAnswerChanged === true &&
-        summary.advisorWouldSuppress === true &&
-        summary.refreshAuthorityHardOverride !== true
-    ).length,
     primaryAskProjectionDisagreementCount: summaries.filter(
       (summary) =>
         summary.visibleAnswerChanged === true &&

@@ -30,10 +30,19 @@ const callbackNames = [
   "publishCanonicalLogicalQuestionTarget",
   "scheduleResponseOpportunityInference",
   "scheduleAdvisorAfterQuestionTypeWindow",
+  "appendTranscriptTurnForTrace",
+  "buildLogicalQuestionForTurn",
+  "flushPendingSentenceCompletion",
+  "holdPendingSentenceCompletion",
+  "consumePendingSentenceCompletion",
+  "activateSentenceContinuationFromSpeechStart",
+  "processPostBufferThemTurn",
 ];
 const callbackSources = callbackNames.map(callback);
 const helperSource = find(file, (node) =>
   ts.isFunctionDeclaration(node) && node.name?.text === "toObservedAdvisorAction"
+).getText(file) + "\n" + find(file, (node) =>
+  ts.isFunctionDeclaration(node) && node.name?.text === "evaluateThemTurnForAdvisor"
 ).getText(file);
 const outputCallback = find(file, (node) =>
   ts.isPropertyAssignment(node) && node.name.getText(file) === "onOutputAuthorized"
@@ -63,6 +72,7 @@ for (const node of file.statements) {
 for (const name of [
   "runtime-inference-runtime", "response-opportunity-generation-gate",
   "short-intent-gate", "logical-question-unit", "runtime-inference-health",
+  "settled-advisor-execution-plan", "advisor-trigger-job", "stable-answer", "meeting-answer",
 ]) {
   exports.push(`export * from "@/lib/meeting/${name}";`);
 }
@@ -122,7 +132,7 @@ function createHarness() {
   class TestDate extends Date { static now() { return clock.now; } }
   const module = { exports: {} };
   const environment = {
-    module, exports: module.exports, require, console, AbortController,
+    module, exports: module.exports, require, console, AbortController, structuredClone,
     Date: TestDate, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout,
     window: clock,
   };
@@ -130,7 +140,7 @@ function createHarness() {
   vm.runInContext(bundle.outputFiles[0].text, context);
   const pure = module.exports;
   Object.assign(environment, pure);
-  const state = { sessionId: "session-a", transcriptTurns: [] };
+  const state = { sessionId: "session-a", transcriptTurns: [], taskRuntime: {} };
   let ui = { latestInterviewerTurnCandidate: null, latestSuggestion: "stable answer" };
   let stateWrites = 0;
   const metadata = new Map();
@@ -151,17 +161,36 @@ function createHarness() {
   Object.assign(environment, {
     VOICE_ORDERED_RELATION_FOREGROUND_BUDGET_MS: 4_000,
     ADVISOR_DEBOUNCE_MS: 200,
-    contextManagerRef: { current: { getState: () => state, clearExpiredActiveMeetingTask: () => false } },
+    contextManagerRef: { current: { getState: () => state, clearExpiredActiveMeetingTask: () => false,
+      addTranscriptTurn: (turn) => state.transcriptTurns.push(turn),
+    } },
     runtimeEpochRef: { current: 2 },
     manualCorrectionRevisionRef: { current: 0 },
     runtimeActiveRef: { current: true },
     logicalQuestionUnitRef: { current: null },
+    adjacentQuestionScopeRef: { current: null },
     latestForceAdviseTargetRef: { current: undefined },
     latestManualCorrectionTargetRef: { current: undefined },
     manualCorrectionTargetHistoryRef: { current: [] },
     effectiveQuestionSourceLedgerRef: { current: { list: () => [] } },
     stableAnswerRevisionRef: { current: undefined },
     visibleAnswerRevisionRef: { current: 0 },
+    activeRef: { current: true }, shutdownRequestedRef: { current: false },
+    currentQuestionLineageRef: { current: undefined }, activeAdvisorJobRef: { current: undefined },
+    cancelledAdvisorTurnIdsRef: { current: new Set() }, taskBoundaryCandidateRef: { current: undefined },
+    latestSourceOwnedSetupRef: { current: undefined }, latestNativeSpeechStartRef: { current: null },
+    pendingSentenceCompletionRef: { current: null }, pendingConfirmationRef: { current: null },
+    pendingInterviewSectionHintRef: { current: undefined }, pendingInterviewTaskBoundaryRef: { current: undefined },
+    processPostBufferThemTurnRef: { current: null },
+    sttEvaluationCaptureManagerRef: { current: undefined },
+    SENTENCE_COMPLETION_BUFFER_MS: 3250, SENTENCE_COMPLETION_ABSOLUTE_MAX_MS: 4000,
+    isCurrentAudioSegment: (segment) => segment.sessionId === 1,
+    scheduleMeetingMetadataInference() {}, promoteMeTurnForFusion() {},
+    holdPendingConfirmation() { assert.fail("fixture must not enter the short confirmation window"); },
+    scheduleSemanticTaxonomyShadow: () => ({ taskRelation: {
+      operationId: "relation", releaseWindowRequested: false, sourceKind: "voice",
+      authorizeOperation: () => ({ authorized: true, reason: "source-operation-current" }),
+    } }),
     responseOpportunityGenerationGateRef: { current: new pure.ResponseOpportunityGenerationGateCoordinator() },
     responseOpportunityRuntimeRef: { current: runtime },
     responseOpportunityCircuitRef: { current: new pure.RuntimeInferenceSessionCircuitBreaker() },
@@ -191,6 +220,7 @@ function createHarness() {
   callbackNames.forEach((name, index) => {
     environment[name] = vm.runInContext(transpile(`(${callbackSources[index]})`), context);
   });
+  environment.processPostBufferThemTurnRef.current = environment.processPostBufferThemTurn;
   vm.runInContext(transpile(helperSource), context);
 
   function candidate(id, text = `How would you design ${id}?`, birthEpoch = 2) {
@@ -258,8 +288,127 @@ function createHarness() {
     };
   }
 
-  return { environment, pure, state, clock, runtime, start, candidate, settle, modelResult, products, metadata, finished, advisorCalls, providerCalls, settlements };
+  return { environment, pure, state, clock, runtime, start, candidate, settle, modelResult, products, metadata, finished, advisorCalls, providerCalls, settlements, scheduled };
 }
+
+function bufferedTurn(h, id, text) {
+  const value = h.candidate(id, text);
+  const segment = { traceId: value.traceId, sessionId: 1, sequence: Number(id) || 1,
+    source: "system-audio", speaker: "them" };
+  return { ...value, segment };
+}
+
+test("A1 original CRUD source reaches RO, settled output permission and stable Answer without Force", async () => {
+  const h = createHarness();
+  const item = bufferedTurn(h, "1", "Maybe to help kind of structure, we can start with like defining APIs for just the first part, which is the review CRUD, and then we can move on to the, after we finish that part with like the data models, then we can come back and then add the reward parts later, just to help you kind of think about it.");
+  h.environment.processPostBufferThemTurn(item.turn, item.segment);
+  assert.equal(h.scheduled.length, 1);
+  h.settle(h.scheduled[0], h.modelResult(h.scheduled[0].job));
+  await h.clock.flush();
+  assert.equal(h.advisorCalls.length, 1);
+  const call = h.advisorCalls[0];
+  const settlement = call[7];
+  assert.equal(settlement.responseAuthorized, true);
+  assert.equal(call[6], "input-evidence");
+  const plan = h.pure.buildSettledAdvisorExecutionPlan({ settlement,
+    taskBoundaryCommitted: false, childOwnsResponse: false,
+    providerSnapshot: { providers: [{ id: "main", curl: "https://main.test" }],
+      selectedProvider: { provider: "main", variables: {} },
+      codingProvider: { provider: "main", variables: {} } },
+    memoryUseCase: "meeting_assistant", askFrame: "unknown", topicDomain: "unknown" });
+  assert.equal(h.pure.authorizeAdvisorOutputCommit({ executionAuthorized: plan.responseAuthorized }).authorized, true);
+  const content = "Answer: Start with create, read, update, and delete review APIs, then define their data models.";
+  const stable = h.pure.commitStableAnswerRevision({ candidate: {
+    id: "crud-answer", kind: "answer", confidence: "high", content,
+    meetingAnswer: h.pure.parseMeetingAnswer(content), createdAt: h.clock.now,
+    basedOnTurnIds: call[5].sourceTurnIds, basedOnObservationIds: [],
+  }, authorizedArtifacts: plan.requestedArtifacts, taskId: null,
+    logicalQuestionUnitId: call[5].id, logicalQuestionRevision: call[5].revision });
+  assert.match(stable.suggestion.content, /create, read, update, and delete/);
+  assert.equal(stable.logicalQuestionUnitId, call[5].id);
+  h.runtime.cancelAll();
+});
+
+test("CX1 original E complete ask with incomplete tail reaches the real RO once after timeout", async () => {
+  const h = createHarness();
+  const text = "But then how, were you using AI to extract this? Did you write like a program to, so were you sending this to another AI to extract or are you...";
+  const item = bufferedTurn(h, "1", text);
+  const decision = h.pure.decideSentenceCompletion(text);
+  assert.equal(decision.disposition, "buffer");
+  h.environment.holdPendingSentenceCompletion(item.turn, item.segment, decision);
+  assert.equal(h.scheduled.length, 0);
+  await h.clock.advance(3250);
+  assert.equal(h.environment.pendingSentenceCompletionRef.current, null);
+  assert.equal(h.state.transcriptTurns.length, 1);
+  assert.equal(h.scheduled.length, 1);
+  assert.equal(h.scheduled[0].job.request.decisionSpans.map((s) => s.text).join(" "), text);
+  h.settle(h.scheduled[0], h.modelResult(h.scheduled[0].job));
+  await h.clock.flush();
+  assert.equal(h.advisorCalls.length, 1);
+  assert.equal(h.metadata.get(item.traceId).responseOpportunityGenerationGateDisposition, "output-authorized");
+  h.runtime.cancelAll();
+});
+
+test("CX1 rebuffer retains original four-second deadline and one terminal handoff", async () => {
+  const h = createHarness();
+  const first = bufferedTurn(h, "1", "The important tradeoff is between consistency and");
+  h.environment.holdPendingSentenceCompletion(first.turn, first.segment, h.pure.decideSentenceCompletion(first.turn.text));
+  const original = h.environment.pendingSentenceCompletionRef.current.firstHeldAt;
+  await h.clock.advance(3000);
+  const second = bufferedTurn(h, "2", "availability, but");
+  const merge = h.environment.consumePendingSentenceCompletion(second.turn, second.segment);
+  h.environment.holdPendingSentenceCompletion(second.turn, second.segment, h.pure.decideSentenceCompletion(second.turn.text), merge);
+  assert.equal(h.environment.pendingSentenceCompletionRef.current.firstHeldAt, original);
+  await h.clock.advance(999);
+  assert.equal(h.scheduled.length, 0);
+  await h.clock.advance(1);
+  assert.equal(h.scheduled.length, 1);
+  assert.equal(h.state.transcriptTurns.length, 1);
+  h.environment.flushPendingSentenceCompletion("timeout");
+  assert.equal(h.scheduled.length, 1);
+  h.runtime.cancelAll();
+});
+
+test("CX2 manual and stopped flushes retain source without launching a competing automatic RO", async () => {
+  for (const reason of ["force-advise", "manual-question-type-correction", "screen-task", "next-phase", "stop"]) {
+    const h = createHarness();
+    const item = bufferedTurn(h, "1", "Can you explain...");
+    const old = h.products();
+    h.environment.holdPendingSentenceCompletion(item.turn, item.segment, h.pure.decideSentenceCompletion(item.turn.text));
+    h.environment.flushPendingSentenceCompletion(reason);
+    await h.clock.advance(5000);
+    assert.equal(h.scheduled.length, 0, reason);
+    assert.equal(h.state.transcriptTurns[0].text, item.turn.text, reason);
+    assert.equal(h.products().manualTarget, old.manualTarget, reason);
+    assert.equal(h.products().unit, old.unit, reason);
+  }
+});
+
+test("CX1 continuation deadline and late callbacks hand off once and expose actual lateness", async () => {
+  const h = createHarness();
+  const item = bufferedTurn(h, "1", "Can you explain...");
+  h.environment.holdPendingSentenceCompletion(item.turn, item.segment, h.pure.decideSentenceCompletion(item.turn.text));
+  h.environment.pendingSentenceCompletionRef.current.continuationDeadlineAt = h.clock.now + 4000;
+  h.environment.pendingSentenceCompletionRef.current.continuationExtensionUsed = true;
+  h.clock.now += 6000;
+  h.environment.flushPendingSentenceCompletion("continuation-absolute-timeout");
+  assert.equal(h.scheduled.length, 1);
+  assert.equal(h.metadata.get(item.traceId).sentenceBufferDeadlineOverrunMs, 2000);
+  h.environment.flushPendingSentenceCompletion("timeout");
+  assert.equal(h.scheduled.length, 1);
+  h.runtime.cancelAll();
+});
+
+test("CX2 stale buffered capture cannot append or regain RO authority", () => {
+  const h = createHarness();
+  const item = bufferedTurn(h, "1", "Can you explain...");
+  item.segment.sessionId = 99;
+  h.environment.holdPendingSentenceCompletion(item.turn, item.segment, h.pure.decideSentenceCompletion(item.turn.text));
+  h.environment.flushPendingSentenceCompletion("timeout");
+  assert.equal(h.state.transcriptTurns.length, 0);
+  assert.equal(h.scheduled.length, 0);
+  assert.equal(h.metadata.get(item.traceId).sentenceBufferOutcome, "cancelled");
+});
 
 test("RO-F1: B publishes through real ordered handoff; inverse A completion cannot restore captured state", async () => {
   const h = createHarness();
@@ -404,7 +553,7 @@ for (const mode of ["speculative-authoritative", "authoritative", "shadow-observ
             : undefined;
       h.settle(operation, result, outcome === "budget-exhausted" ? "budget-exhausted" : outcome === "error" ? "error" : "completed");
       await h.clock.flush();
-      const publishes = mode !== "shadow-observation" && (outcome === "output-request" || (mode === "speculative-authoritative" && outcome !== "no-output-request"));
+      const publishes = mode !== "shadow-observation" && outcome !== "no-output-request" && outcome !== "error";
       assert.equal(h.advisorCalls.length, publishes ? 1 : 0);
       assert.equal(h.environment.logicalQuestionUnitRef.current.id, publishes ? candidate.unit.id : before.unit.id);
       assert.equal(h.metadata.get(candidate.traceId).responseOpportunityLeaseAuthorized, true);
@@ -425,7 +574,7 @@ for (const mode of ["speculative-authoritative", "authoritative", "shadow-observ
         assert.equal(h.products().manualTarget, before.manualTarget);
         assert.equal(h.products().history, before.history);
       }
-      if (mode === "speculative-authoritative") assert.equal(h.environment.responseOpportunityGenerationGateRef.current.read(operation.job.operationId).disposition, outcome === "no-output-request" ? "output-suppressed" : "output-authorized");
+      if (mode !== "shadow-observation") assert.equal(h.environment.responseOpportunityGenerationGateRef.current.read(operation.job.operationId).disposition, outcome === "no-output-request" ? "output-suppressed" : outcome === "error" ? "unresolved" : "output-authorized");
       h.runtime.cancelAll();
     });
   }
@@ -443,8 +592,9 @@ for (const skip of ["disabled", "circuit", "missing-provider", "session-budget"]
       h.start(candidate, mode);
       assert.equal(h.providerCalls.length, 0);
       assert.equal(h.runtime.getCurrentOperationId(), undefined);
-      assert.equal(h.advisorCalls.length, mode === "speculative-authoritative" ? 1 : 0);
-      assert.equal(h.environment.logicalQuestionUnitRef.current?.id, mode === "speculative-authoritative" ? candidate.unit.id : undefined);
+      const publishes = skip === "disabled" || skip === "session-budget";
+      assert.equal(h.advisorCalls.length, publishes ? 1 : 0);
+      assert.equal(h.environment.logicalQuestionUnitRef.current?.id, publishes ? candidate.unit.id : undefined);
       h.runtime.cancelAll();
     });
   }

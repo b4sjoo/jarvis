@@ -1712,8 +1712,6 @@ export interface AdvisorIntentEvaluationPreDecision {
   speechAct?: string;
   intent?: string;
   action?: string;
-  enforcement?: string;
-  wouldSuppress?: boolean;
   executionAuthorized?: boolean;
   outputCommitAuthorized?: boolean;
 }

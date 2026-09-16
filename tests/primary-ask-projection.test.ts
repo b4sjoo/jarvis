@@ -45,8 +45,9 @@ test("does not admit future behavioral examples as a current question", () => {
   assert.equal(result.normalizedPrimaryAsk, undefined);
   assert.equal(result.disposition, "append-setup");
   assert.ok(result.quotedOrFutureExampleSpans.length >= 1);
-  assert.equal(reconciled.executionAuthorized, false);
-  assert.equal(reconciled.action, "append-only");
+  assert.equal(reconciled.intent, "informational");
+  assert.equal("executionAuthorized" in reconciled, false);
+  assert.equal("action" in reconciled, false);
 });
 
 test("preserves a source-owned design ask before a start-with instruction", () => {

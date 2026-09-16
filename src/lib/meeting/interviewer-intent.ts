@@ -1,5 +1,4 @@
 import type {
-  AdvisorTurnGateAction,
   AdvisorTurnIntent,
   AdvisorTurnIntentDecision,
 } from "./advisor-turn-intent.js";
@@ -66,17 +65,15 @@ export function projectInterviewerIntentDecision({
   relation,
   contextTurnIds = [],
   evidenceSpans = [],
-}: ProjectInterviewerIntentInput): InterviewerIntentDecision {
+}: ProjectInterviewerIntentInput): Omit<InterviewerIntentDecision, "action" | "confidence"> {
   return {
     schemaVersion: 1,
     speechAct: projectSpeechAct(turnDecision.intent),
     questionType,
     relation: projectIntentRelation(relation),
     evidenceMode: projectEvidenceMode(questionType),
-    action: projectIntentAction(turnDecision.intent, turnDecision.action),
     contextTurnIds: uniqueStrings(contextTurnIds),
     evidenceSpans: uniqueEvidenceSpans(evidenceSpans),
-    confidence: clampConfidence(turnDecision.confidence),
   };
 }
 
@@ -141,27 +138,6 @@ export function projectEvidenceMode(
     case "unknown":
       return "unknown";
   }
-}
-
-export function projectIntentAction(
-  intent: AdvisorTurnIntent,
-  action: AdvisorTurnGateAction
-): InterviewerIntentAction {
-  if (intent === "incomplete") return "buffer";
-  switch (action) {
-    case "answer-refresh":
-      return "answer";
-    case "append-only":
-    case "state-update":
-      return "append-context";
-    case "ignore":
-      return "ignore";
-  }
-}
-
-function clampConfidence(value: number) {
-  if (!Number.isFinite(value)) return 0;
-  return Math.min(1, Math.max(0, value));
 }
 
 function uniqueStrings(values: string[]) {

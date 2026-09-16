@@ -205,8 +205,9 @@ test("preserves provisional question lineage when an adjacent constraint replace
     triggerTurnId: questionTurn.id,
     sessionId: manager.getState().sessionId,
     runtimeEpoch: harness.getRuntimeEpoch(),
-    action: questionDecision.action,
-    executionAuthorized: questionDecision.executionAuthorized,
+    // The harness begins after a resolved RO output grant, not a local label.
+    action: "answer-refresh",
+    executionAuthorized: true,
   });
   assert.ok(lineage);
   const scope = createAdjacentQuestionScope({
@@ -278,7 +279,7 @@ test("preserves provisional question lineage when an adjacent constraint replace
   assert.deepEqual(
     authorizeAdvisorTaskMutation({
       authority: secondJob.taskMutationAuthority,
-      turnIntentDecision: constraintDecision,
+      responseAuthorized: true,
     }),
     {
       authorized: true,
@@ -479,12 +480,10 @@ test("shadow low-value execution preserves output, parent, phase, answer, and wh
   });
   const authorization = authorizeAdvisorTaskMutation({
     authority: "input-evidence",
-    turnIntentDecision: intent,
+    responseAuthorized: false,
   });
   const outputAuthorization = authorizeAdvisorOutputCommit({
-    authority: "input-evidence",
-    executionAuthorized: intent.executionAuthorized,
-    turnIntentDecision: intent,
+    executionAuthorized: false,
   });
   let visibleOutput = "Clarify scale and consistency.";
   const operation = harness.startOperation<string>({

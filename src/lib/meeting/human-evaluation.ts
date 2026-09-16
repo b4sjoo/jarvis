@@ -632,13 +632,6 @@ export function buildAdvisorIntentEvaluationFromTrace({
     preDecision: {
       intent,
       action: turnAction,
-      enforcement: readOptionalString(
-        metadata.advisorTurnEnforcement
-      ),
-      wouldSuppress:
-        typeof metadata.advisorWouldSuppress === "boolean"
-          ? metadata.advisorWouldSuppress
-          : undefined,
       executionAuthorized,
       outputCommitAuthorized,
     },

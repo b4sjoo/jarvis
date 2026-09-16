@@ -1,7 +1,6 @@
 import type { AdvisorTurnIntentDecision } from "./advisor-turn-intent.js";
 import {
   projectInterviewerIntentDecision,
-  type InterviewerIntentDecision,
 } from "./interviewer-intent.js";
 import {
   buildQuestionTypeKeywordView,
@@ -21,7 +20,7 @@ export interface InterviewerIntentKeywordEvidence {
   hardNegativeMarkers: string[];
   keywordView: ReturnType<typeof buildQuestionTypeKeywordView>;
   questionTypeDecision: QuestionTypeInferenceDecision;
-  counterfactual: InterviewerIntentDecision;
+  counterfactual: ReturnType<typeof projectInterviewerIntentDecision>;
 }
 
 export interface ExtractInterviewerIntentKeywordEvidenceInput {

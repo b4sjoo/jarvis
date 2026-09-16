@@ -4,74 +4,41 @@ import { decideSentenceCompletion } from "./sentence-completion-buffer.js";
 import { inferExplicitProgrammingLanguageFromText } from "./programming-language.js";
 import { classifyAdjacentConstraintKinds } from "./adjacent-question-constraint.js";
 import { isExplicitMeetingLogisticsTranscript } from "./meeting-logistics.js";
-
-
-export type AdvisorTurnIntent =
-  | "direct-question"
-  | "constraint-or-follow-up"
-  | "correction"
-  | "confirmation"
-  | "informational"
-  | "logistics"
-  | "incomplete"
-  | "unknown";
-
-export type AdvisorTurnGateAction =
-  | "ignore"
-  | "append-only"
-  | "state-update"
-  | "answer-refresh";
-
-export type AdvisorTurnIntentEnforcement = "allow" | "shadow" | "enforce";
-
+export type AdvisorTurnIntent = "direct-question" | "constraint-or-follow-up" | "correction" | "confirmation" | "informational" | "logistics" | "incomplete" | "unknown";
+export type AdvisorTurnGateAction = "ignore" | "append-only" | "state-update" | "answer-refresh";
 export interface AdvisorTurnIntentDecision {
   intent: AdvisorTurnIntent;
-  confidence: number;
   evidence: string[];
-  action: AdvisorTurnGateAction;
-  recommendedAction: AdvisorTurnGateAction;
   reason: string;
-  contextPromptEligible: boolean;
-  enforcement: AdvisorTurnIntentEnforcement;
-  wouldSuppress: boolean;
-  executionAuthorized: boolean;
   followupScopeSource?: "active-task" | "provisional-question" | "none";
-  authoritySource?: "local" | "runtime-intent-gate";
   phaseControl?: PlaybookPhaseControlEvidence;
 }
-
 export interface AdvisorTurnIntentOptions {
   hasActiveTask: boolean;
   hasRecentQuestionContext?: boolean;
   hasPendingConfirmation?: boolean;
   hasCompanyContextOnly?: boolean;
-  enforceBufferedIncomplete?: boolean;
 }
-
-export interface AdvisorExecutionAuthorization {
-  authorized: boolean;
-  reason: string;
-  bypassed: boolean;
+export function formatAdvisorTurnIntentForTrace(decision: AdvisorTurnIntentDecision) {
+  return {
+    advisorTurnIntent: decision.intent,
+    advisorTurnReason: decision.reason,
+    advisorTurnEvidence: decision.evidence,
+    followupScopeSource: decision.followupScopeSource ?? "none",
+    phaseSignal: decision.phaseControl?.signal,
+    phaseSignalSource: decision.phaseControl?.source,
+    phaseSignalSourceTurnId: decision.phaseControl?.sourceTurnId,
+  };
 }
-
-export const ADVISOR_INTENT_ENFORCEMENT_CONFIDENCE = 0.85;
-export const ADVISOR_INTENT_SHADOW_CONFIDENCE = 0.6;
-
-export function decideAdvisorTurnIntent(
-  text: string,
-  options: AdvisorTurnIntentOptions
-): AdvisorTurnIntentDecision {
+export function decideAdvisorTurnIntent(text: string, options: AdvisorTurnIntentOptions): AdvisorTurnIntentDecision {
   const trimmed = text.trim();
   if (!trimmed) {
-    return enforcedDecision({
+    return {
       intent: "unknown",
-      confidence: 1,
       evidence: ["empty-transcript"],
-      action: "ignore",
       reason: "empty-transcript",
-    });
+    };
   }
-
   const normalized = normalizeAdvisorTurnText(trimmed);
   const wordEquivalent = calculateWordEquivalent(trimmed);
   const directAskEvidence = collectDirectAskEvidence(trimmed, normalized);
@@ -83,433 +50,182 @@ export function decideAdvisorTurnIntent(
       ? "provisional-question"
       : "none";
   const hasQuestionScope = followupScopeSource !== "none";
-
   if (isExactLowValueAcknowledgement(normalized)) {
     if (options.hasPendingConfirmation) {
-      return allowedDecision({
+      return {
         intent: "confirmation",
-        confidence: 0.98,
         evidence: [
           "pending-confirmation",
           "short-confirmation",
           "exact-acknowledgement",
         ],
-        action: "answer-refresh",
         reason: "contextual-confirmation",
-        contextPromptEligible: true,
-      });
+      };
     }
-
-    return enforcedDecision({
+    return {
       intent: "confirmation",
-      confidence: 0.98,
       evidence: [
         "short-confirmation",
         "exact-acknowledgement",
         "no-pending-confirmation",
       ],
-      action: "ignore",
       reason: "exact-acknowledgement",
-    });
+    };
   }
-
   if (directAskEvidence.length === 0 && isMeetingLogistics(normalized)) {
-    return enforcedDecision({
+    return {
       intent: "logistics",
-      confidence: 0.96,
       evidence: ["meeting-logistics"],
-      action: "append-only",
       reason: "meeting-logistics",
-    });
+    };
   }
-
   if (options.hasCompanyContextOnly && directAskEvidence.length === 0) {
-    return enforcedDecision({
+    return {
       intent: "informational",
-      confidence: 0.95,
       evidence: ["company-context-only"],
-      action: "state-update",
       reason: "company-context-only",
-    });
+    };
   }
-
   if (decideSentenceCompletion(trimmed).disposition === "buffer") {
-    if (options.enforceBufferedIncomplete) {
-      return enforcedDecision({
-        intent: "incomplete",
-        confidence: 0.95,
-        evidence: ["buffered-incomplete-clause"],
-        action: "append-only",
-        reason: "incomplete-buffer-flushed",
-        contextPromptEligible: true,
-      });
-    }
-
-    return shadowDecision({
+    return {
       intent: "incomplete",
-      confidence: 0.8,
       evidence: ["incomplete-clause"],
-      recommendedAction: "append-only",
       reason: "incomplete-awaiting-buffer",
-      contextPromptEligible: true,
-    });
+    };
   }
-
   if (correctionEvidence.length > 0) {
     if (directAskEvidence.length > 0) {
-      return withFollowupScope(allowedDecision({
+      return withFollowupScope({
         intent: "correction",
-        confidence: 0.98,
         evidence: [...correctionEvidence, ...directAskEvidence],
-        action: "answer-refresh",
         reason: hasQuestionScope
           ? "scoped-correction-direct-ask"
           : "self-contained-correction-direct-ask",
-        contextPromptEligible: true,
-      }), followupScopeSource);
+      }, followupScopeSource);
     }
-
     if (hasQuestionScope) {
-      return withFollowupScope(allowedDecision({
+      return withFollowupScope({
         intent: "correction",
-        confidence: 0.96,
         evidence: correctionEvidence,
-        action: "answer-refresh",
         reason: options.hasActiveTask
           ? "active-task-correction"
           : "recent-question-correction",
-        contextPromptEligible: true,
-      }), followupScopeSource);
+      }, followupScopeSource);
     }
-
-    return withFollowupScope(enforcedDecision({
+    return withFollowupScope({
       intent: "correction",
-      confidence: 0.9,
       evidence: [...correctionEvidence, "no-question-scope"],
-      action: "append-only",
       reason: "unscoped-correction",
-    }), followupScopeSource);
+    }, followupScopeSource);
   }
-
   if (constraintEvidence.length > 0) {
     if (directAskEvidence.length > 0) {
-      return withFollowupScope(allowedDecision({
+      return withFollowupScope({
         intent: "constraint-or-follow-up",
-        confidence: 0.97,
         evidence: [...directAskEvidence, ...constraintEvidence],
-        action: "answer-refresh",
         reason: hasQuestionScope
           ? "scoped-constraint-direct-ask"
           : "self-contained-constraint-direct-ask",
-        contextPromptEligible: true,
-      }), followupScopeSource);
+      }, followupScopeSource);
     }
     if (hasQuestionScope) {
-      return withFollowupScope(allowedDecision({
+      return withFollowupScope({
         intent: "constraint-or-follow-up",
-        confidence: 0.94,
         evidence: constraintEvidence,
-        action: "answer-refresh",
         reason: options.hasActiveTask
           ? "active-task-constraint"
           : "recent-question-constraint",
-        contextPromptEligible: true,
-      }), followupScopeSource);
+      }, followupScopeSource);
     }
-
-    return withFollowupScope(enforcedDecision({
+    return withFollowupScope({
       intent: "informational",
-      confidence: 0.88,
       evidence: [...constraintEvidence, "no-question-scope"],
-      action: "append-only",
       reason: "unscoped-constraint",
-    }), followupScopeSource);
+    }, followupScopeSource);
   }
-
   if (directAskEvidence.length > 0) {
-    return allowedDecision({
+    return {
       intent: "direct-question",
-      confidence: 0.97,
       evidence: directAskEvidence,
-      action: "answer-refresh",
       reason: "direct-question-or-task",
-      contextPromptEligible: true,
-    });
+    };
   }
-
   const technicalEvidence = collectTechnicalEvidence(normalized);
   const followUpEvidence = collectFollowUpEvidence(normalized);
   const declarativeEvidence = collectDeclarativeEvidence(normalized);
-
-  if (
-    hasQuestionScope &&
+  if (hasQuestionScope &&
     wordEquivalent <= 6 &&
     declarativeEvidence.length === 0 &&
-    (technicalEvidence.length > 0 || followUpEvidence.length > 0)
-  ) {
-    return withFollowupScope(allowedDecision({
+    (technicalEvidence.length > 0 || followUpEvidence.length > 0)) {
+    return withFollowupScope({
       intent: "constraint-or-follow-up",
-      confidence: 0.88,
       evidence: [
         `${followupScopeSource}-elliptical-probe`,
         ...technicalEvidence,
         ...followUpEvidence,
       ],
-      action: "answer-refresh",
       reason: `${followupScopeSource}-elliptical-probe`,
-      contextPromptEligible: true,
-    }), followupScopeSource);
+    }, followupScopeSource);
   }
-
-  if (
-    !options.hasActiveTask &&
+  if (!options.hasActiveTask &&
     wordEquivalent <= 12 &&
     /\b(your|you)\b/i.test(normalized) &&
-    declarativeEvidence.length === 0
-  ) {
-    return allowedDecision({
+    declarativeEvidence.length === 0) {
+    return {
       intent: "direct-question",
-      confidence: 0.86,
       evidence: ["interview-elliptical-prompt"],
-      action: "answer-refresh",
       reason: "interview-elliptical-prompt",
-      contextPromptEligible: true,
-    });
+    };
   }
-
   if (declarativeEvidence.length > 0) {
-    return enforcedDecision({
+    return {
       intent: "informational",
-      confidence: technicalEvidence.length > 0 ? 0.93 : 0.88,
       evidence: [...declarativeEvidence, ...technicalEvidence],
-      action: "append-only",
       reason: technicalEvidence.length > 0
         ? "technical-declarative-statement"
         : "declarative-statement",
-      contextPromptEligible: hasQuestionScope,
-    });
+    };
   }
-
   if (wordEquivalent < 3) {
-    return shadowDecision({
+    return {
       intent: "unknown",
-      confidence: 0.65,
       evidence: ["short-ambiguous-turn"],
-      recommendedAction: "ignore",
       reason: "short-ambiguous-turn",
-      contextPromptEligible: true,
-    });
+    };
   }
-
-  return shadowDecision({
+  return {
     intent: technicalEvidence.length > 0 ? "informational" : "unknown",
-    confidence: technicalEvidence.length > 0 ? 0.72 : 0.64,
     evidence: technicalEvidence.length > 0
       ? ["ambiguous-technical-content", ...technicalEvidence]
       : ["ambiguous-substantive-turn"],
-    recommendedAction: "append-only",
     reason: technicalEvidence.length > 0
       ? "ambiguous-technical-content"
       : "ambiguous-substantive-turn",
-    contextPromptEligible: true,
-  });
-}
-
-export function authorizeAdvisorExecution({
-  force,
-  hasExplicitAction,
-  decision,
-}: {
-  force: boolean;
-  hasExplicitAction: boolean;
-  decision?: AdvisorTurnIntentDecision;
-}): AdvisorExecutionAuthorization {
-  if (force || hasExplicitAction) {
-    return {
-      authorized: true,
-      reason: force ? "force-bypass" : "explicit-action-bypass",
-      bypassed: true,
-    };
-  }
-
-  if (!decision) {
-    return {
-      authorized: false,
-      reason: "missing-turn-intent-decision",
-      bypassed: false,
-    };
-  }
-
-  return {
-    authorized: decision.executionAuthorized,
-    reason: decision.executionAuthorized
-      ? decision.enforcement === "shadow"
-        ? `shadow-fail-open:${decision.reason}`
-        : `intent-authorized:${decision.reason}`
-      : `intent-abstained:${decision.reason}`,
-    bypassed: false,
   };
 }
-
-export function applySourceOwnedPhaseControlToTurnIntent(
-  decision: AdvisorTurnIntentDecision,
-  phaseControl: PlaybookPhaseControlEvidence | undefined
-): AdvisorTurnIntentDecision {
-  if (!phaseControl) return decision;
+export function applySourceOwnedPhaseControlToTurnIntent(decision: AdvisorTurnIntentDecision, phaseControl: PlaybookPhaseControlEvidence | undefined): AdvisorTurnIntentDecision {
+  if (!phaseControl)
+    return decision;
   return {
     ...decision,
     intent: "constraint-or-follow-up",
-    confidence: Math.max(decision.confidence, 0.99),
-    evidence: Array.from(
-      new Set([
-        ...decision.evidence,
-        "source-owned-phase-control",
-        phaseControl.signal,
-        ...phaseControl.evidence,
-      ])
-    ),
-    action: "answer-refresh",
-    recommendedAction: "answer-refresh",
+    evidence: Array.from(new Set([
+      ...decision.evidence,
+      "source-owned-phase-control",
+      phaseControl.signal,
+      ...phaseControl.evidence,
+    ])),
     reason: `source-owned-phase-control:${phaseControl.signal}`,
-    contextPromptEligible: true,
-    enforcement: "allow",
-    wouldSuppress: false,
-    executionAuthorized: true,
     followupScopeSource: "active-task",
-    authoritySource: "local",
     phaseControl: {
       ...phaseControl,
       evidence: [...phaseControl.evidence],
     },
   };
 }
-
-export function formatAdvisorTurnIntentForTrace(
-  decision: AdvisorTurnIntentDecision
-) {
-  const exactAcknowledgementSuppressed =
-    decision.reason === "exact-acknowledgement" &&
-    !decision.executionAuthorized;
-  return {
-    advisorTurnIntent: decision.intent,
-    advisorTurnAction: decision.action,
-    advisorTurnReason: decision.reason,
-    advisorTurnConfidence: decision.confidence,
-    advisorTurnEvidence: decision.evidence,
-    advisorTurnEnforcement: decision.enforcement,
-    advisorTurnRecommendedAction: decision.recommendedAction,
-    advisorWouldSuppress: decision.wouldSuppress,
-    advisorExecutionAuthorized: decision.executionAuthorized,
-    advisorIntentAuthoritySource: decision.authoritySource ?? "local",
-    followupScopeSource: decision.followupScopeSource ?? "none",
-    advisorSuppressionOperation: exactAcknowledgementSuppressed
-      ? "exact-acknowledgement"
-      : undefined,
-    advisorProviderCallAvoided: exactAcknowledgementSuppressed,
-    advisorAvoidedCallOpportunity: exactAcknowledgementSuppressed,
-    phaseSignal: decision.phaseControl?.signal,
-    phaseSignalSource: decision.phaseControl?.source,
-    phaseSignalSourceTurnId: decision.phaseControl?.sourceTurnId,
-  };
-}
-
-function withFollowupScope(
-  decision: AdvisorTurnIntentDecision,
-  followupScopeSource: "active-task" | "provisional-question" | "none"
-): AdvisorTurnIntentDecision {
+function withFollowupScope(decision: AdvisorTurnIntentDecision, followupScopeSource: "active-task" | "provisional-question" | "none"): AdvisorTurnIntentDecision {
   return { ...decision, followupScopeSource };
 }
-
-function allowedDecision({
-  intent,
-  confidence,
-  evidence,
-  action,
-  reason,
-  contextPromptEligible = false,
-}: {
-  intent: AdvisorTurnIntent;
-  confidence: number;
-  evidence: string[];
-  action: AdvisorTurnGateAction;
-  reason: string;
-  contextPromptEligible?: boolean;
-}): AdvisorTurnIntentDecision {
-  return {
-    intent,
-    confidence,
-    evidence,
-    action,
-    recommendedAction: action,
-    reason,
-    contextPromptEligible,
-    enforcement: "allow",
-    wouldSuppress: false,
-    executionAuthorized: action === "answer-refresh",
-    authoritySource: "local",
-  };
-}
-
-function enforcedDecision({
-  intent,
-  confidence,
-  evidence,
-  action,
-  reason,
-  contextPromptEligible = false,
-}: {
-  intent: AdvisorTurnIntent;
-  confidence: number;
-  evidence: string[];
-  action: Exclude<AdvisorTurnGateAction, "answer-refresh">;
-  reason: string;
-  contextPromptEligible?: boolean;
-}): AdvisorTurnIntentDecision {
-  return {
-    intent,
-    confidence,
-    evidence,
-    action,
-    recommendedAction: action,
-    reason,
-    contextPromptEligible,
-    enforcement: "enforce",
-    wouldSuppress: true,
-    executionAuthorized: false,
-    authoritySource: "local",
-  };
-}
-
-function shadowDecision({
-  intent,
-  confidence,
-  evidence,
-  recommendedAction,
-  reason,
-  contextPromptEligible,
-}: {
-  intent: AdvisorTurnIntent;
-  confidence: number;
-  evidence: string[];
-  recommendedAction: Exclude<AdvisorTurnGateAction, "answer-refresh">;
-  reason: string;
-  contextPromptEligible: boolean;
-}): AdvisorTurnIntentDecision {
-  return {
-    intent,
-    confidence,
-    evidence,
-    action: "answer-refresh",
-    recommendedAction,
-    reason,
-    contextPromptEligible,
-    enforcement: "shadow",
-    wouldSuppress: true,
-    executionAuthorized: true,
-    authoritySource: "local",
-  };
-}
-
 function normalizeAdvisorTurnText(text: string) {
   return text
     .toLowerCase()

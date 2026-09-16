@@ -12,21 +12,18 @@ import {
 } from "../src/lib/meeting/answer-generation-lease.js";
 import { decideAdvisorTurnIntent } from "../src/lib/meeting/advisor-turn-intent.js";
 import type { CurrentQuestionSettlementDecision } from "../src/lib/meeting/current-question-settlement.js";
+import { ResponseOpportunityGenerationGateCoordinator, resolveResponseOpportunityRefreshAuthority } from "../src/lib/meeting/response-opportunity-generation-gate.js";
 
-test("grants refresh authority to substantive turns and explicit actions", () => {
+test("automatic refresh requires a RO grant while explicit actions retain authority", () => {
   const substantive = decideRefreshAuthority({
     source: "live-turn",
-    turnIntentDecision: decideAdvisorTurnIntent(
-      "Implement a queue using two stacks.",
-      { hasActiveTask: false }
-    ),
   });
   const manual = decideRefreshAuthority({
     source: "manual-correction",
   });
 
-  assert.equal(substantive.authorized, true);
-  assert.equal(substantive.kind, "automatic-substantive");
+  assert.equal(substantive.authorized, false);
+  assert.equal(substantive.kind, "denied");
   assert.equal(substantive.hardOverride, false);
   assert.equal(manual.authorized, true);
   assert.equal(manual.kind, "manual-hard-override");
@@ -36,9 +33,6 @@ test("grants refresh authority to substantive turns and explicit actions", () =>
 test("does not let an acknowledgement supersede a valid generation", () => {
   const authority = decideRefreshAuthority({
     source: "live-turn",
-    turnIntentDecision: decideAdvisorTurnIntent("Yeah, yeah.", {
-      hasActiveTask: true,
-    }),
   });
 
   assert.equal(authority.authorized, false);
@@ -46,36 +40,26 @@ test("does not let an acknowledgement supersede a valid generation", () => {
   assert.equal(authority.maySupersedeGeneration, false);
 });
 
-test("does not let shadow fail-open become visible refresh authority", () => {
+test("no local permission label can supply missing response authority", () => {
   const authority = decideRefreshAuthority({
     source: "live-turn",
-    turnIntentDecision: decideAdvisorTurnIntent("Kubernetes.", {
-      hasActiveTask: true,
-    }),
   });
 
   assert.equal(authority.authorized, false);
   assert.equal(authority.kind, "denied");
-  assert.equal(authority.reason, "shadow-fail-open-disallowed");
+  assert.equal(authority.reason, "missing-response-authority");
   assert.equal(authority.hardOverride, false);
   assert.equal(authority.maySupersedeGeneration, false);
 });
 
 test("grants action-only refresh authority to a released runtime intent answer", () => {
-  const base = decideAdvisorTurnIntent("Kubernetes.", {
-    hasActiveTask: true,
-  });
-  const authority = decideRefreshAuthority({
-    source: "live-turn",
-    turnIntentDecision: {
-      ...base,
-      action: "answer-refresh",
-      recommendedAction: "answer-refresh",
-      enforcement: "allow",
-      wouldSuppress: false,
-      executionAuthorized: true,
-      authoritySource: "runtime-intent-gate",
-    },
+  const gate = new ResponseOpportunityGenerationGateCoordinator();
+  gate.create({ operationId: "ro", sessionId: "session", runtimeEpoch: 1,
+    logicalQuestionUnitId: "q", logicalQuestionUnitRevision: 1, sourceHash: "source",
+    manualCorrectionRevision: 0, createdAt: 1 });
+  const snapshot = gate.settle({ operationId: "ro", disposition: "output-authorized", reason: "llm-output-request" });
+  const authority = resolveResponseOpportunityRefreshAuthority({
+    localAuthority: decideRefreshAuthority({ source: "live-turn" }), operationId: "ro", snapshot,
   });
 
   assert.equal(authority.authorized, true);
@@ -134,11 +118,8 @@ test("turns an accepted type adjudication into one answer-only refresh authority
   assert.equal(authority.typeAuthority, "runtime-adjudication");
   assert.equal(authority.authorityScope, "type-only");
   const refresh = decideRefreshAuthority({
-    source: "live-turn",
-    turnIntentDecision: decideAdvisorTurnIntent("Kubernetes.", {
-      hasActiveTask: true,
-    }),
-    runtimeTypeAdjudicationOutputAuthority: authority,
+      source: "live-turn",
+      runtimeTypeAdjudicationOutputAuthority: authority
   });
   assert.equal(refresh.authorized, true);
   assert.equal(refresh.kind, "runtime-type-adjudication-output-only");

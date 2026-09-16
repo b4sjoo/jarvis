@@ -174,7 +174,7 @@ export class ResponseOpportunityGenerationGateCoordinator {
         const timedOut = this.settle({
           operationId,
           disposition: "output-authorized",
-          reason: "local-output-authority-preserved:gate-wait-timeout",
+          reason: "response-null-hypothesis:gate-wait-timeout",
         });
         complete(timedOut ?? missingGateSnapshot(operationId));
       }, Math.max(0, timeoutMs));
@@ -221,9 +221,9 @@ export function formatResponseOpportunityGenerationGateForTrace(
     responseOpportunityEffectiveCommand: effectiveCommand,
     responseOpportunityEffectiveAuthoritySource:
       effectiveCommand === "output-authorized"
-        ? "existing-local-output-authority"
+        ? "response-opportunity"
         : effectiveCommand === "preserve-stable-answer"
-          ? "state-preservation-null-hypothesis"
+          ? "response-opportunity-no-output"
           : undefined,
   };
 }
@@ -279,6 +279,7 @@ export function resolveResponseOpportunityRefreshAuthority<
   snapshot?: ResponseOpportunityGenerationGateSnapshot;
 }): TAuthority | ResponseOpportunityRefreshAuthority {
   if (!input.operationId) return input.localAuthority;
+  if (input.localAuthority.hardOverride) return input.localAuthority;
 
   const command = resolveResponseOpportunityEffectiveCommand(input.snapshot);
   if (command === "preserve-stable-answer") {

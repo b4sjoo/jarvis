@@ -129,9 +129,9 @@ test("emits the job identity needed to reconstruct ownership", () => {
       advisorJobExpectedParentId: undefined,
       advisorJobExpectedParentRevision: undefined,
       advisorJobMutationAuthority: "input-evidence",
-      refreshAuthority: "automatic-substantive",
-      refreshAuthorityAuthorized: true,
-      refreshAuthorityReason: "substantive-turn",
+      refreshAuthority: "denied",
+      refreshAuthorityAuthorized: false,
+      refreshAuthorityReason: "missing-response-authority",
       refreshAuthorityHardOverride: false,
       advisorJobManualCorrectionRevision: 0,
       advisorJobResponseActionRevision: 0,
@@ -524,6 +524,7 @@ test("force advise preserves the current branch without mutating topology", () =
   assert.deepEqual(
     authorizeAdvisorTaskMutation({
       authority: "output-only-current-branch",
+      responseAuthorized: true,
     }),
     { authorized: false, reason: "manual-output-only" }
   );
@@ -544,10 +545,9 @@ test("force advise preserves the current branch without mutating topology", () =
   );
   assert.deepEqual(
     authorizeAdvisorOutputCommit({
-      authority: "output-only-current-branch",
       executionAuthorized: true,
     }),
-    { authorized: true, reason: "manual-action-output-authority" }
+    { authorized: true, reason: "response-output-authority" }
   );
 });
 
@@ -571,189 +571,53 @@ test("manual correction remains the only explicit retype authority", () => {
   assert.equal(inputEvidence.relation, "new-parent");
 });
 
-test("shadow execution cannot authorize output, task, or phase mutation", () => {
-  const turnIntentDecision = decideAdvisorTurnIntent("Kubernetes.", {
-    hasActiveTask: true,
-  });
-  const authorization = authorizeAdvisorTaskMutation({
-    authority: "input-evidence",
-    turnIntentDecision,
-  });
-  const taskMutation = decideAdvisorTaskMutation({
-    authority: "input-evidence",
-    resolvedRelation: "new-parent",
-    hasActiveParent: true,
-    hasActiveChild: false,
-    mutationAuthorized: authorization.authorized,
-  });
-  const phaseMutation = decideAdvisorPhaseMutation({
-    authority: "input-evidence",
-    taskMutationAuthorized: authorization.authorized,
-    manualPhaseAdvance: false,
-    currentPhase: "requirement_clarification",
-    hasActiveChild: false,
-    automaticDecision: {
-      phase: "design_framing",
-      flags: ["architecture"],
-      requiredArtifacts: ["answer", "whiteboard"],
-      action: "advance",
-      reason: "automatic-advance",
-    },
-    manualDecision: {
-      phase: "design_framing",
-      flags: [],
-      requiredArtifacts: ["answer", "whiteboard"],
-      action: "advance",
-      reason: "manual-next",
-    },
-  });
-
-  assert.equal(turnIntentDecision.enforcement, "shadow");
-  assert.equal(turnIntentDecision.wouldSuppress, true);
-  assert.deepEqual(authorization, {
-    authorized: false,
-    reason: "turn-intent-would-suppress",
-  });
+test("missing response grant cannot authorize input mutation or output", () => {
+  const authorization = authorizeAdvisorTaskMutation({ authority: "input-evidence", responseAuthorized: false });
+  assert.deepEqual(authorization, { authorized: false, reason: "response-not-authorized" });
+  const taskMutation = decideAdvisorTaskMutation({ authority: "input-evidence", resolvedRelation: "new-parent",
+    hasActiveParent: true, hasActiveChild: false, mutationAuthorized: authorization.authorized });
   assert.equal(taskMutation.commitParent, false);
-  assert.equal(taskMutation.relation, "new-parent");
-  assert.equal(taskMutation.preserveActiveTaskType, false);
-  assert.equal(taskMutation.reason, "turn-intent-mutation-suppressed");
+  assert.deepEqual(authorizeAdvisorOutputCommit({ executionAuthorized: false }),
+    { authorized: false, reason: "execution-not-authorized" });
+  const phaseMutation = decideAdvisorPhaseMutation({
+    authority: "input-evidence", taskMutationAuthorized: false, manualPhaseAdvance: false,
+    currentPhase: "requirement_clarification", hasActiveChild: false,
+    automaticDecision: { phase: "design_framing", flags: ["architecture"], requiredArtifacts: ["answer", "whiteboard"], action: "advance", reason: "automatic-advance" },
+    manualDecision: { phase: "design_framing", flags: [], requiredArtifacts: ["answer", "whiteboard"], action: "advance", reason: "manual-next" },
+  });
   assert.equal(phaseMutation.phase, "requirement_clarification");
   assert.equal(phaseMutation.action, "stay");
-  assert.deepEqual(
-    authorizeAdvisorOutputCommit({
-      authority: "input-evidence",
-      executionAuthorized: true,
-      turnIntentDecision,
-    }),
-    {
-      authorized: false,
-      reason: "execution-not-authorized",
-    }
-  );
 });
 
-test("runtime intent answer can commit output without mutating task state", () => {
-  const local = decideAdvisorTurnIntent("Kubernetes.", {
-    hasActiveTask: true,
-  });
-  const released = {
-    ...local,
-    action: "answer-refresh" as const,
-    recommendedAction: "answer-refresh" as const,
-    enforcement: "allow" as const,
-    wouldSuppress: false,
-    executionAuthorized: true,
-    authoritySource: "runtime-intent-gate" as const,
-  };
-
-  assert.deepEqual(
-    authorizeAdvisorTaskMutation({
-      authority: "runtime-intent-answer",
-      turnIntentDecision: released,
-    }),
-    { authorized: false, reason: "runtime-intent-action-only" }
-  );
-  assert.deepEqual(
-    authorizeAdvisorOutputCommit({
-      authority: "runtime-intent-answer",
-      executionAuthorized: true,
-      turnIntentDecision: released,
-    }),
-    {
-      authorized: true,
-      reason: "runtime-intent-answer-output-authority",
-    }
-  );
+test("valid response grant cannot be vetoed by historical local permission fields", () => {
+  const local = decideAdvisorTurnIntent("Multi-region failover.", { hasActiveTask: true });
+  for (const enforcement of ["allow", "shadow", "enforce"]) {
+    const legacyFixture = { executionAuthorized: true, authority: "input-evidence",
+      turnIntentDecision: { ...local, enforcement, wouldSuppress: true, executionAuthorized: false } };
+    assert.deepEqual(authorizeAdvisorOutputCommit(legacyFixture),
+      { authorized: true, reason: "response-output-authority" });
+  }
 });
 
-test("runtime type adjudication authorizes output only", () => {
-  const shadow = decideAdvisorTurnIntent("Multi-region failover.", {
-    hasActiveTask: true,
-  });
-
-  assert.deepEqual(
-    authorizeAdvisorTaskMutation({
-      authority: "runtime-type-adjudication-output-only",
-      turnIntentDecision: shadow,
-    }),
-    {
-      authorized: false,
-      reason: "runtime-type-adjudication-output-only",
-    }
-  );
-  assert.deepEqual(
-    authorizeAdvisorOutputCommit({
-      authority: "runtime-type-adjudication-output-only",
-      executionAuthorized: true,
-      turnIntentDecision: shadow,
-    }),
-    {
-      authorized: true,
-      reason: "runtime-type-adjudication-output-authority",
-    }
-  );
+test("output authority does not grant topology mutation to output-only operations", () => {
+  for (const [authority, reason] of [
+    ["runtime-intent-answer", "runtime-intent-action-only"],
+    ["runtime-type-adjudication-output-only", "runtime-type-adjudication-output-only"],
+    ["output-only-current-branch", "manual-output-only"],
+  ] as const) {
+    assert.deepEqual(authorizeAdvisorTaskMutation({ authority, responseAuthorized: true }), { authorized: false, reason });
+    assert.deepEqual(authorizeAdvisorOutputCommit({ executionAuthorized: true }),
+      { authorized: true, reason: "response-output-authority" });
+  }
 });
 
-test("output authority follows execution without granting task mutation", () => {
-  const allowed = decideAdvisorTurnIntent(
-    "How would you design a distributed cache?",
-    { hasActiveTask: false }
-  );
-
-  assert.deepEqual(
-    authorizeAdvisorOutputCommit({
-      authority: "input-evidence",
-      executionAuthorized: true,
-      turnIntentDecision: allowed,
-    }),
-    { authorized: true, reason: "substantive-output-authority" }
-  );
-  assert.deepEqual(
-    authorizeAdvisorOutputCommit({
-      authority: "preserve-parent",
-      executionAuthorized: true,
-    }),
-    { authorized: true, reason: "manual-action-output-authority" }
-  );
-  assert.deepEqual(
-    authorizeAdvisorOutputCommit({
-      authority: "output-only-current-branch",
-      executionAuthorized: true,
-    }),
-    { authorized: true, reason: "manual-action-output-authority" }
-  );
-  assert.deepEqual(
-    authorizeAdvisorOutputCommit({
-      authority: "input-evidence",
-      executionAuthorized: false,
-      turnIntentDecision: allowed,
-    }),
-    { authorized: false, reason: "execution-not-authorized" }
-  );
-});
-
-test("substantive input and explicit actions retain canonical mutation authority", () => {
-  const substantive = decideAdvisorTurnIntent(
-    "How would you design a distributed cache?",
-    { hasActiveTask: false }
-  );
-
-  assert.deepEqual(
-    authorizeAdvisorTaskMutation({
-      authority: "input-evidence",
-      turnIntentDecision: substantive,
-    }),
-    { authorized: true, reason: "substantive-input-authority" }
-  );
-  assert.deepEqual(
-    authorizeAdvisorTaskMutation({ authority: "preserve-parent" }),
-    { authorized: true, reason: "explicit-action-authority" }
-  );
-  assert.deepEqual(
-    authorizeAdvisorTaskMutation({ authority: "manual-correction" }),
-    { authorized: true, reason: "manual-correction-authority" }
-  );
+test("accepted input and explicit actions retain only their existing mutation capability", () => {
+  assert.deepEqual(authorizeAdvisorTaskMutation({ authority: "input-evidence", responseAuthorized: true }),
+    { authorized: true, reason: "substantive-input-authority" });
+  assert.deepEqual(authorizeAdvisorTaskMutation({ authority: "preserve-parent", responseAuthorized: true }),
+    { authorized: true, reason: "explicit-action-authority" });
+  assert.deepEqual(authorizeAdvisorTaskMutation({ authority: "manual-correction", responseAuthorized: true }),
+    { authorized: true, reason: "manual-correction-authority" });
 });
 
 test("regenerate and speakable preserve phase while manual next can advance", () => {

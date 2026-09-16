@@ -29,12 +29,10 @@ test("projects current advisor and taxonomy decisions into one intent contract",
       questionType: "general-system-design",
       relation: "new-parent",
       evidenceMode: "hypothetical-design",
-      action: "answer",
       contextTurnIds: ["turn_1"],
       evidenceSpans: [
         { turnId: "turn_1", text: "Design a ticket selling system" },
       ],
-      confidence: 0.97,
     }
   );
 });
@@ -51,15 +49,15 @@ test("projects incomplete and suppressed turns without granting answer authority
     projectInterviewerIntentDecision({
       turnDecision: incomplete,
       relation: "unknown",
-    }).action,
-    "buffer"
+    }).speechAct,
+    "informational"
   );
   assert.equal(
     projectInterviewerIntentDecision({
       turnDecision: acknowledgement,
       relation: "followup-parent",
-    }).action,
-    "ignore"
+    }).speechAct,
+    "acknowledgement"
   );
 });
 

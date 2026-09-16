@@ -645,7 +645,6 @@ import {
   type RuntimeRegressionStepTerminalDisposition,
   SttEvaluationCaptureManager,
   areCompatibleQuestionTypes,
-  authorizeAdvisorExecution,
   authorizeAdvisorOutputCommit,
   createAdvisorTriggerJob,
   decideAdvisorGenerationAdmission,
@@ -712,7 +711,6 @@ import {
   composeSttPrompt,
   consumeSttContinuationPromptLease,
   createSttContinuationPromptLease,
-  composeLogicalQuestionUnit,
   composeCanonicalTurnCandidate,
   getLogicalQuestionAnswerFocusText,
   getLogicalQuestionSemanticEvidenceText,
@@ -901,6 +899,7 @@ import {
   SemanticTaxonomyRuntime,
   PlaybookPhaseDecision,
   SENTENCE_COMPLETION_BUFFER_MS,
+  SENTENCE_COMPLETION_ABSOLUTE_MAX_MS,
   attachQuestionLineageToSuggestion,
   createAdjacentQuestionScope,
   createAuthorizedQuestionLineage,
@@ -2247,17 +2246,6 @@ function evaluateRuntimeAnswerSufficiencyShadow(input: {
   });
 }
 
-function mapAdvisorTurnActionToSufficiencyAction(
-  action: AdvisorTurnIntentDecision["action"] | undefined
-) {
-  if (action === "answer-refresh") return "answer" as const;
-  if (action === "append-only" || action === "state-update") {
-    return "append-context" as const;
-  }
-  if (action === "ignore") return "ignore" as const;
-  return undefined;
-}
-
 function buildScreenAnswerSufficiencyLogicalQuestionUnit(input: {
   observationId: string;
   question: string;
@@ -2532,6 +2520,7 @@ interface RuntimeAdjudicationScheduleHandle {
 }
 
 interface ScheduleAdvisorAfterTypeWindowInput {
+  advisorJobSource?: AdvisorJobSource;
   handle?: RuntimeAdjudicationScheduleHandle;
   mode: AdvisorRequestMode;
   traceId: string;
@@ -2688,6 +2677,7 @@ interface SemanticTaxonomyTurnEvidence {
 interface SentenceCompletionMergeContext {
   operationId: string;
   firstHeldAt: number;
+  continuationExtensionUsed: boolean;
   fragmentTurnIds: string[];
   fragmentTraceIds: string[];
   fragmentSequences: number[];
@@ -3644,6 +3634,9 @@ export function useMeetingAssistant() {
   const pendingConfirmationRef = useRef<PendingConfirmation | null>(null);
   const pendingSentenceCompletionRef =
     useRef<PendingSentenceCompletion | null>(null);
+  const processPostBufferThemTurnRef = useRef<
+    ((turn: TranscriptTurn, segment: QueuedSpeechSegment, confirmationWindowClosed?: boolean) => void) | null
+  >(null);
   const speechCorrectionsRef = useRef<SpeechCorrection[]>([]);
   const microphoneContextEnabledRef = useRef(
     INITIAL_STATE.settings.microphoneContextEnabled
@@ -10370,7 +10363,7 @@ export function useMeetingAssistant() {
       });
     }
     const responseOpportunityGenerationGateOperationId =
-      options.logicalQuestionUnit && !options.artifactRegenerationTarget
+      options.logicalQuestionUnit && source === "live-turn"
         ? responseOpportunityGenerationGateRef.current.findOperationId({
             logicalQuestionUnitId: options.logicalQuestionUnit.id,
             logicalQuestionUnitRevision:
@@ -10384,7 +10377,6 @@ export function useMeetingAssistant() {
     const refreshAuthority = resolveResponseOpportunityRefreshAuthority({
       localAuthority: decideRefreshAuthority({
         source,
-        turnIntentDecision: options.turnIntentDecision,
         runtimeTypeAdjudicationOutputAuthority:
           options.runtimeTypeAdjudicationOutputAuthority,
       }),
@@ -10495,8 +10487,9 @@ export function useMeetingAssistant() {
         refreshResponseOpportunityGenerationGate()
       );
     const responseOpportunityGenerationAuthorized = () =>
-      !responseOpportunityGenerationGateOperationId ||
-      responseOpportunityEffectiveCommand() === "output-authorized";
+      advisorJob.refreshAuthority.authorized &&
+      (advisorJob.source !== "live-turn" ||
+        responseOpportunityEffectiveCommand() === "output-authorized");
     const responseOpportunityGenerationTerminallySuppressed = () => {
       return (
         responseOpportunityEffectiveCommand() ===
@@ -11485,28 +11478,20 @@ export function useMeetingAssistant() {
         : undefined;
     const runtimeTypeAdjudicationOutputAuthorized =
       runtimeTypeAdjudicationOutputAuthorization?.authorized === true;
-    const executionAuthorization =
-      advisorJob.runtimeTypeAdjudicationOutputAuthority
-        ? {
-            authorized: runtimeTypeAdjudicationOutputAuthorized,
-            reason: runtimeTypeAdjudicationOutputAuthorized
-              ? "runtime-type-adjudication-output-authority"
-              : `runtime-type-adjudication-denied:${runtimeTypeAdjudicationOutputAuthorization?.reason ?? "missing-authorization"}`,
-            bypassed: runtimeTypeAdjudicationOutputAuthorized,
-          }
-        : authorizeAdvisorExecution({
-            force,
-            hasExplicitAction,
-            decision: inferredTurnIntentDecision,
-          });
+    const executionAuthorization = {
+      authorized: responseOpportunityGenerationAuthorized() &&
+        (!advisorJob.runtimeTypeAdjudicationOutputAuthority || runtimeTypeAdjudicationOutputAuthorized),
+      reason: advisorJob.runtimeTypeAdjudicationOutputAuthority && !runtimeTypeAdjudicationOutputAuthorized
+        ? `runtime-type-adjudication-denied:${runtimeTypeAdjudicationOutputAuthorization?.reason}`
+        : responseOpportunityGenerationAuthorized() ? "response-authorized" : "response-not-authorized",
+      bypassed: force || hasExplicitAction,
+    };
     const taskMutationAuthorization = authorizeAdvisorTaskMutation({
       authority: advisorJob.taskMutationAuthority,
-      turnIntentDecision: inferredTurnIntentDecision,
+      responseAuthorized: executionAuthorization.authorized,
     });
     const outputCommitAuthorization = authorizeAdvisorOutputCommit({
-      authority: advisorJob.taskMutationAuthority,
       executionAuthorized: executionAuthorization.authorized,
-      turnIntentDecision: inferredTurnIntentDecision,
     });
     const advisorTaskMutationDecision = decideAdvisorTaskMutation({
       authority: advisorJob.taskMutationAuthority,
@@ -11805,9 +11790,7 @@ export function useMeetingAssistant() {
       triggerTurnId: advisorJob.triggerTurnId ?? latestTurn?.id,
       sessionId: advisorJob.expectedSessionId,
       runtimeEpoch: advisorJob.runtimeCommitToken.runtimeEpoch,
-      action:
-        inferredTurnIntentDecision?.action ??
-        (hasExplicitAction ? "answer-refresh" : undefined),
+      action: executionAuthorization.authorized ? "answer-refresh" : undefined,
       executionAuthorized: executionAuthorization.authorized,
       inherited: advisorJob.questionLineage,
     });
@@ -11818,14 +11801,7 @@ export function useMeetingAssistant() {
         : advisorTaskSignals.source === "semantic-unknown-rescue"
           ? "semantic-unknown-rescue"
           : "accepted-transcript";
-    const questionComplete =
-      Boolean(options.manualQuestionTypeCorrection) ||
-      Boolean(advisorTaskSignals.openingRoute?.commitParent) ||
-      Boolean(
-        inferredTurnIntentDecision?.executionAuthorized &&
-          inferredTurnIntentDecision.intent !== "incomplete" &&
-          inferredTurnIntentDecision.intent !== "unknown"
-      );
+    const questionComplete = executionAuthorization.authorized;
     const commitParent =
       advisorTaskMutationDecision.commitParent &&
       advisorTaskSignals.openingRoute?.commitParent !== false;
@@ -14618,8 +14594,6 @@ export function useMeetingAssistant() {
     const automaticVoiceStreamingAuthorized = () =>
       advisorJob.source === "live-turn" &&
       advisorJob.refreshAuthority.authorized &&
-      inferredTurnIntentDecision?.action === "answer-refresh" &&
-      inferredTurnIntentDecision.executionAuthorized &&
       outputCommitAuthorization.authorized &&
       responseOpportunityGenerationAuthorized();
     let stagedAnswerDeliveryChunkCount = 0;
@@ -15328,9 +15302,7 @@ export function useMeetingAssistant() {
             parsedAnswer: parsedMeetingAnswer,
             factAnchorRequired: factAnchorDecision.requiredFor !== "none",
             factAnchorAvailable: factAnchorDecision.state !== "no-anchor",
-            currentTurnAction: mapAdvisorTurnActionToSufficiencyAction(
-              inferredTurnIntentDecision?.action
-            ),
+            currentTurnAction: executionAuthorization.authorized ? "answer" : undefined,
             relation:
               settledExecutionPlan?.relationApplicable === false ||
               (!settledExecutionPlan &&
@@ -16529,9 +16501,7 @@ export function useMeetingAssistant() {
         advisorOutputDisposition: pendingAnswer
           ? "pending-delivery"
           : committedVisibleAnswer
-            ? inferredTurnIntentDecision?.enforcement === "shadow"
-              ? "shadow-visible"
-              : "committed"
+            ? "committed"
             : advisorGenerationCommit &&
                 !advisorGenerationCommit.committed
               ? "publication-rejected"
@@ -16919,7 +16889,8 @@ export function useMeetingAssistant() {
     taskMutationAuthority: AdvisorTaskMutationAuthority = "input-evidence",
     currentQuestionSettlementOverride?: CurrentQuestionSettlementDecision,
     debounceMs = ADVISOR_DEBOUNCE_MS,
-    runtimeTypeAdjudicationOutputAuthority?: RuntimeTypeAdjudicationOutputAuthority
+    runtimeTypeAdjudicationOutputAuthority?: RuntimeTypeAdjudicationOutputAuthority,
+    advisorJobSource: AdvisorJobSource = "live-turn"
   ) => {
     if (shutdownRequestedRef.current) {
       if (traceId) traceStoreRef.current.finishTrace(traceId, "cancelled");
@@ -16933,7 +16904,7 @@ export function useMeetingAssistant() {
       traceId,
       turnIntentDecision,
       triggerTurnId,
-      advisorJobSource: "live-turn",
+      advisorJobSource,
       taskMutationAuthority,
       questionLineage:
         questionLineage ??
@@ -17055,15 +17026,20 @@ export function useMeetingAssistant() {
         });
       const automaticExecutionAuthorized =
         targetKind === "canonical-question" &&
-        intentDecision.executionAuthorized;
+        resolveResponseOpportunityEffectiveCommand(responseOpportunityGenerationGateRef.current.read(
+          responseOpportunityGenerationGateRef.current.findOperationId({
+            logicalQuestionUnitId: logicalQuestionUnit.id,
+            logicalQuestionUnitRevision: logicalQuestionUnit.revision,
+          })
+        )) === "output-authorized";
       const presentation: ForceAdviseTargetPresentation = {
         targetId: `${targetKind}:${traceId}:${turn.id}:${logicalQuestionUnit.id}:${logicalQuestionUnit.revision}`,
         targetKind,
         originalTraceId: traceId,
         turnId: turn.id,
         text: logicalQuestionUnit.normalizedText || turn.text,
-        observedAction: toObservedAdvisorAction(intentDecision),
-        executionAuthorized: intentDecision.executionAuthorized,
+        observedAction: toObservedAdvisorAction(intentDecision, automaticExecutionAuthorized),
+        executionAuthorized: automaticExecutionAuthorized,
         logicalQuestionUnitId: logicalQuestionUnit.id,
         logicalQuestionUnitRevision: logicalQuestionUnit.revision,
         sourceTurnIds: [...logicalQuestionUnit.sourceTurnIds],
@@ -17138,6 +17114,16 @@ export function useMeetingAssistant() {
         targetKind: "canonical-question",
         questionLineage,
       });
+      if (target.presentation.executionAuthorized &&
+          !contextManagerRef.current.getState().activeMeetingTask) {
+        const scope = createAdjacentQuestionScope({
+          lineage: questionLineage, questionTurnId: turn.id, questionTraceId: traceId,
+          questionText: getLogicalQuestionAnswerFocusText(logicalQuestionUnit) || turn.text,
+          sessionId: logicalQuestionUnit.sessionId, runtimeEpoch: runtimeEpochRef.current,
+        });
+        adjacentQuestionScopeRef.current = scope;
+        traceStoreRef.current.updateMetadata(traceId, formatAdjacentQuestionScopeForTrace(scope));
+      }
       const manualCorrectionTarget: ManualCorrectionRuntimeTarget = {
         sourceKind: "voice",
         originTraceId: traceId,
@@ -17280,7 +17266,7 @@ export function useMeetingAssistant() {
         request,
         manualCorrectionRevision: manualCorrectionRevisionRef.current,
       });
-      const generationGate = speculative
+      const generationGate = authoritative
         ? responseOpportunityGenerationGateRef.current.create(lease)
         : undefined;
       const settleGenerationGateUnresolved = (reason: string) => {
@@ -17289,13 +17275,13 @@ export function useMeetingAssistant() {
           responseOpportunityGenerationGateRef.current.settle({
             operationId: generationGate.operationId,
             disposition: "output-authorized",
-            reason: `local-output-authority-preserved:${reason}`,
+            reason: `response-null-hypothesis:${reason}`,
           });
         traceStoreRef.current.updateMetadata(traceId, {
           ...formatResponseOpportunityGenerationGateForTrace(settled),
           responseOpportunityGenerationCandidateState:
             "response-authority-granted",
-          responseOpportunityLocalAuthorityPreserved: true,
+          responseOpportunityNullHypothesisApplied: true,
           responseOpportunityEffectiveReason: reason,
         });
       };
@@ -17340,10 +17326,10 @@ export function useMeetingAssistant() {
       };
       const releaseLocalFallback = (reason: string) => {
         settleGenerationGateUnresolved(reason);
-        if (speculative) {
+        if (authoritative) {
           releaseOutput(
             originalDecision,
-            `local-output-fallback:${reason}`
+            `response-null-hypothesis:${reason}`
           );
           return;
         }
@@ -17404,9 +17390,7 @@ export function useMeetingAssistant() {
         responseOpportunityGenerationCandidateState: speculative
           ? "speculative-started"
           : undefined,
-        advisorExecutionAuthorized: deferredAuthoritative
-          ? false
-          : originalDecision.executionAuthorized,
+        advisorExecutionAuthorized: false,
         memoryRetrievalSuppressedReason: deferredAuthoritative
           ? "response-opportunity-pending"
           : undefined,
@@ -17437,7 +17421,8 @@ export function useMeetingAssistant() {
           responseOpportunityDisposition: "provider-circuit-open",
           responseOpportunitySkipReason: "provider-circuit-open",
         });
-        releaseLocalFallback("provider-circuit-open");
+        traceStoreRef.current.finishTrace(traceId, "error", "Response Opportunity provider circuit is open.");
+        setState((previous) => ({ ...previous, error: "Response Opportunity provider is unavailable. Check its configuration." }));
         return;
       }
 
@@ -17469,7 +17454,8 @@ export function useMeetingAssistant() {
           responseOpportunitySkipReason:
             "provider-configuration-error",
         });
-        releaseLocalFallback("provider-configuration-error");
+        traceStoreRef.current.finishTrace(traceId, "error", "Response Opportunity provider configuration is invalid.");
+        setState((previous) => ({ ...previous, error: "Response Opportunity provider configuration is invalid." }));
         return;
       }
 
@@ -17492,7 +17478,7 @@ export function useMeetingAssistant() {
           : sessionBudget.reason,
       });
       if (!sessionBudget.authorized) {
-        releaseLocalFallback(sessionBudget.reason);
+        if (sessionBudget.reason !== "duplicate-operation") releaseLocalFallback(sessionBudget.reason);
         return;
       }
 
@@ -17738,19 +17724,25 @@ export function useMeetingAssistant() {
           const releaseUnresolved =
             !releaseDecision ||
             releaseDecision.generationDisposition === "unresolved";
-          const localAuthorityPreserved =
+          const responseFailure = result?.providerOutcome?.failureClass;
+          const nonSemanticFailure = responseFailure === "configuration" ||
+            responseFailure === "authentication" || responseFailure === "unexpected" ||
+            providerDisposition === "provider-auth-error" || settlement.disposition === "error" ||
+            settlement.disposition === "operation-mismatch";
+          const nullHypothesisApplied =
             authorization.authorized &&
-            speculative &&
+            authoritative && !nonSemanticFailure &&
+            (settlement.disposition === "completed" || settlement.disposition === "budget-exhausted") &&
             releaseUnresolved;
           const generationGateDisposition = !authorization.authorized
             ? "stale"
-            : localAuthorityPreserved
+            : nullHypothesisApplied
               ? "output-authorized"
               : releaseDecision?.generationDisposition ?? "unresolved";
           const generationGateReason = !authorization.authorized
             ? authorization.reason
-            : localAuthorityPreserved
-              ? "local-output-authority-preserved:runtime-abstention"
+            : nullHypothesisApplied
+              ? "response-null-hypothesis:runtime-abstention"
               : releaseDecision?.reason ??
                 result?.parseDisposition ??
                 settlement.disposition;
@@ -17762,10 +17754,10 @@ export function useMeetingAssistant() {
               })
             : undefined;
           const validAppliedDecision = releaseDecision?.released
-            ? releaseDecision.advisorDecision
+            ? originalDecision
             : undefined;
           const fallbackAppliedDecision =
-            localAuthorityPreserved
+            nullHypothesisApplied
               ? originalDecision
               : undefined;
           const effectiveAppliedDecision =
@@ -17831,8 +17823,7 @@ export function useMeetingAssistant() {
             responseOpportunityEvidenceSpans:
               parsedValue?.targetSpans,
             responseOpportunityDecisionApplied: decisionApplied,
-            responseOpportunityLocalAuthorityPreserved:
-              localAuthorityPreserved,
+            responseOpportunityNullHypothesisApplied: nullHypothesisApplied,
             responseOpportunityReleased:
               authoritative && (releaseDecision?.released ?? false),
             responseOpportunityShadowObserved: !authoritative,
@@ -17852,7 +17843,7 @@ export function useMeetingAssistant() {
               }),
             responseOpportunityRawOutputStored: rawOutputStored,
             runtimeIntentReleasedAction:
-              effectiveAppliedDecision?.action === "answer-refresh"
+              effectiveAppliedDecision
                 ? "answer"
                 : undefined,
             // Compatibility telemetry remains readable until Task 168
@@ -17955,14 +17946,18 @@ export function useMeetingAssistant() {
             return;
           }
 
-          if (
-            effectiveAppliedDecision?.action === "answer-refresh"
-          ) {
+          if (nonSemanticFailure) {
+            const message = `Response Opportunity failed: ${responseFailure ?? providerDisposition}`;
+            traceStoreRef.current.finishTrace(traceId, "error", message);
+            setState((previous) => ({ ...previous, error: message }));
+            return;
+          }
+          if (effectiveAppliedDecision) {
             releaseOutput(
               effectiveAppliedDecision,
               validAppliedDecision
                 ? "runtime-response-opportunity"
-                : "local-output-authority-preserved",
+                : "response-null-hypothesis",
               targetedLogicalQuestionUnit
             );
             return;
@@ -18595,17 +18590,17 @@ export function useMeetingAssistant() {
       }
 
       const addedLatencyMs = Date.now() - pending.firstHeldAt;
+      const deadlineAt = Math.min(pending.continuationDeadlineAt ??
+        pending.heldAt + SENTENCE_COMPLETION_BUFFER_MS,
+        pending.firstHeldAt + SENTENCE_COMPLETION_ABSOLUTE_MAX_MS);
       const intentDecision = decideAdvisorTurnIntent(pending.turn.text, {
         hasActiveTask: Boolean(
           contextManagerRef.current.getState().activeMeetingTask
         ),
         hasRecentQuestionContext: Boolean(currentQuestionLineageRef.current),
-        enforceBufferedIncomplete: true,
       });
-      pending.turn.contextPromptEligible = intentDecision.contextPromptEligible;
-      pending.turn.contextFusionStatus = intentDecision.contextPromptEligible
-        ? "none"
-        : "debug-only";
+      pending.turn.contextPromptEligible = true;
+      pending.turn.contextFusionStatus = "none";
 
       const sentenceMetadata = {
         sentenceBufferOperationId: pending.operationId,
@@ -18615,6 +18610,10 @@ export function useMeetingAssistant() {
         sentenceBufferFlushReason: reason,
         sentenceBufferFragmentCount: pending.fragmentTurnIds.length,
         sentenceBufferAddedLatencyMs: addedLatencyMs,
+        sentenceBufferFirstHeldAt: pending.firstHeldAt,
+        sentenceBufferDeadlineAt: deadlineAt,
+        sentenceBufferDispatchedAt: Date.now(),
+        sentenceBufferDeadlineOverrunMs: Math.max(0, Date.now() - deadlineAt),
         sentenceBufferInitialWaitMs: pending.continuationActivatedAt
           ? Math.max(
               0,
@@ -18634,10 +18633,7 @@ export function useMeetingAssistant() {
       traceStoreRef.current.updateMetadata(pending.segment.traceId, {
         ...sentenceMetadata,
         ...formatAdvisorTurnIntentForTrace(intentDecision),
-        turnGateAction: intentDecision.action,
         turnGateReason: intentDecision.reason,
-        memoryRetrievalSuppressedReason: `sentence-buffer:${reason}`,
-        modelExecutionSuppressedReason: `sentence-buffer:${reason}`,
       });
       const flushStepId = traceStoreRef.current.startStep(
         pending.segment.traceId,
@@ -18654,13 +18650,21 @@ export function useMeetingAssistant() {
         flushStepId,
         "success"
       );
+      const automaticHandoff = reason === "timeout" || reason === "continuation-absolute-timeout" ||
+        reason === "continuation-segment-mismatch" || reason === "meaningful-speaker-switch-me";
+      if (automaticHandoff && runtimeActiveRef.current && !shutdownRequestedRef.current) {
+        const ingress = processPostBufferThemTurnRef.current;
+        if (!ingress) throw new Error("Post-buffer ingress is not initialized.");
+        ingress(pending.turn, pending.segment);
+        return true;
+      }
       const { contextState } = appendTranscriptTurnForTrace(
         pending.turn,
         pending.segment.traceId,
         pending.segment,
         {
           ...sentenceMetadata,
-          turnGateAction: intentDecision.action,
+          turnGateAction: "append-only",
           turnGateReason: intentDecision.reason,
         }
       );
@@ -18816,6 +18820,9 @@ export function useMeetingAssistant() {
         segment.sequence,
       ];
       const firstHeldAt = mergeContext?.firstHeldAt ?? heldAt;
+      const deadlineAt = Math.min(heldAt + SENTENCE_COMPLETION_BUFFER_MS,
+        firstHeldAt + SENTENCE_COMPLETION_ABSOLUTE_MAX_MS);
+      const remainingWaitMs = Math.max(0, deadlineAt - heldAt);
       const sentenceMetadata = {
         sentenceBufferOperationId: operationId,
         sentenceBufferOperationRole: "source-fragment",
@@ -18827,7 +18834,8 @@ export function useMeetingAssistant() {
         sentenceBufferTurnIds: fragmentTurnIds,
         sentenceBufferTraceIds: fragmentTraceIds,
         sentenceBufferSegmentSequences: fragmentSequences,
-        sentenceBufferTimeoutMs: SENTENCE_COMPLETION_BUFFER_MS,
+        sentenceBufferTimeoutMs: remainingWaitMs,
+        sentenceBufferAbsoluteDeadlineAt: firstHeldAt + SENTENCE_COMPLETION_ABSOLUTE_MAX_MS,
       };
       traceStoreRef.current.updateMetadata(segment.traceId, sentenceMetadata);
       const heldStepId = traceStoreRef.current.startStep(
@@ -18845,9 +18853,9 @@ export function useMeetingAssistant() {
 
       const timeoutId = window.setTimeout(() => {
         const pending = pendingSentenceCompletionRef.current;
-        if (!pending || pending.turn.id !== turn.id) return;
+        if (!pending || pending.turn.id !== turn.id || pending.timeoutId !== timeoutId) return;
         flushPendingSentenceCompletion("timeout");
-      }, SENTENCE_COMPLETION_BUFFER_MS);
+      }, remainingWaitMs);
 
       pendingSentenceCompletionRef.current = {
         operationId,
@@ -18856,7 +18864,7 @@ export function useMeetingAssistant() {
         heldAt,
         firstHeldAt,
         timeoutId,
-        continuationExtensionUsed: false,
+        continuationExtensionUsed: mergeContext?.continuationExtensionUsed ?? false,
         fragmentTurnIds,
         fragmentTraceIds,
         fragmentSequences,
@@ -18889,6 +18897,10 @@ export function useMeetingAssistant() {
         clearPendingSentenceCompletionForRuntimeReset("stale-before-merge");
         return undefined;
       }
+      if (Date.now() >= pending.firstHeldAt + SENTENCE_COMPLETION_ABSOLUTE_MAX_MS) {
+        flushPendingSentenceCompletion("timeout");
+        return undefined;
+      }
 
       if (
         pending.continuationNativeCandidateSequence != null &&
@@ -18918,6 +18930,7 @@ export function useMeetingAssistant() {
       const mergeContext: SentenceCompletionMergeContext = {
         operationId: pending.operationId,
         firstHeldAt: pending.firstHeldAt,
+        continuationExtensionUsed: pending.continuationExtensionUsed,
         fragmentTurnIds: [...pending.fragmentTurnIds],
         fragmentTraceIds: [...pending.fragmentTraceIds],
         fragmentSequences: [...pending.fragmentSequences],
@@ -19040,40 +19053,9 @@ export function useMeetingAssistant() {
 
       pending.turn.contextFusionStatus = "paired";
       pending.turn.relatedTurnIds = [meTurn.id];
-      const { contextState } = appendTranscriptTurnForTrace(
-        pending.turn,
-        pending.segment.traceId,
-        pending.segment,
-        {
-          fusedWithTurnId: meTurn.id,
-        }
-      );
-      const debounceStepId = traceStoreRef.current.startStep(
-        pending.segment.traceId,
-        "Advisor debounce scheduled",
-        { debounceMs: ADVISOR_DEBOUNCE_MS, reason: "clarification-pair" }
-      );
-      traceStoreRef.current.finishStep(
-        pending.segment.traceId,
-        debounceStepId,
-        "success"
-      );
-      const turnIntentDecision = decideAdvisorTurnIntent(pending.turn.text, {
-        hasActiveTask: Boolean(contextState.activeMeetingTask),
-        hasRecentQuestionContext: Boolean(currentQuestionLineageRef.current),
-        hasPendingConfirmation: true,
-      });
-      traceStoreRef.current.updateMetadata(pending.segment.traceId, {
-        ...formatAdvisorTurnIntentForTrace(turnIntentDecision),
-        turnGateAction: turnIntentDecision.action,
-        turnGateReason: turnIntentDecision.reason,
-      });
-      scheduleAdvisor(
-        contextState.activeMeetingTask?.screen ? "screen-anchored" : "live",
-        pending.segment.traceId,
-        turnIntentDecision,
-        pending.turn.id
-      );
+      const ingress = processPostBufferThemTurnRef.current;
+      if (!ingress) throw new Error("Post-buffer ingress is not initialized.");
+      ingress(pending.turn, pending.segment);
 
       return true;
     },
@@ -19134,44 +19116,18 @@ export function useMeetingAssistant() {
           expiredStepId,
           "success"
         );
+        if (currentSegment && runtimeActiveRef.current && !shutdownRequestedRef.current) {
+          const ingress = processPostBufferThemTurnRef.current;
+          if (!ingress) throw new Error("Post-buffer ingress is not initialized.");
+          ingress(turn, segment, true);
+          return;
+        }
         if (currentSegment && recoveryDecision.appendTranscript) {
-          const intentDecision = decideAdvisorTurnIntent(turn.text, {
-            hasActiveTask: Boolean(
-              contextManagerRef.current.getState().activeMeetingTask
-            ),
-            hasRecentQuestionContext: Boolean(
-              currentQuestionLineageRef.current
-            ),
-          });
-          turn.contextPromptEligible = intentDecision.contextPromptEligible;
-          turn.contextFusionStatus = intentDecision.contextPromptEligible
-            ? "none"
-            : "debug-only";
+          turn.contextPromptEligible = true;
+          turn.contextFusionStatus = "none";
           appendTranscriptTurnForTrace(turn, segment.traceId, segment, {
-            turnGateAction: intentDecision.action,
-            turnGateReason: "pending-confirmation-expired",
-            transcriptAppendReason: "pending-confirmation-expired",
+            transcriptAppendReason: "pending-confirmation-expired-during-drain",
           });
-          if (recoveryDecision.publishRecoveryTarget) {
-            const contextState = contextManagerRef.current.getState();
-            const primaryAskProjection = projectPrimaryAsk({
-              turnId: turn.id,
-              text: turn.text,
-            });
-            const logicalQuestionUnit = composeLogicalQuestionUnit({
-              currentTurn: turn,
-              sessionId: contextState.sessionId,
-              runtimeEpoch: runtimeEpochRef.current,
-              intentDecision,
-              primaryAskProjection,
-            });
-            publishResponseRecoveryTarget({
-              logicalQuestionUnit,
-              traceId: segment.traceId,
-              turn,
-              intentDecision,
-            });
-          }
         }
         traceStoreRef.current.updateMetadata(segment.traceId, {
           confirmationRecoveryReason: recoveryDecision.reason,
@@ -21963,7 +21919,8 @@ export function useMeetingAssistant() {
               : "input-evidence",
           settlementReleased ? settlement : undefined,
           0,
-          runtimeTypeAdjudicationOutputAuthority
+          runtimeTypeAdjudicationOutputAuthority,
+          input.advisorJobSource
         );
       };
 
@@ -22404,6 +22361,617 @@ export function useMeetingAssistant() {
     []
   );
 
+  const processPostBufferThemTurn = useCallback((turn: TranscriptTurn, segment: QueuedSpeechSegment, confirmationWindowClosed = false) => {
+      const traceId = segment.traceId;
+      const activeContextState = contextManagerRef.current.getState();
+      const activeScreenTask = activeContextState.taskRuntime.screenAttachment;
+      const activeInterviewTask = activeContextState.taskRuntime.parent;
+      const hasActiveInterviewTask = Boolean(activeScreenTask || activeInterviewTask);
+      const primaryAskProjection = projectPrimaryAsk({
+        turnId: turn.id,
+        text: turn.text,
+      });
+      const sourceOwnedSetupCandidate =
+        createSourceOwnedSetupCandidate({
+          turn,
+          sessionId: activeContextState.sessionId,
+          runtimeEpoch: runtimeEpochRef.current,
+          activeMeetingTask: activeContextState.activeMeetingTask,
+        });
+      if (sourceOwnedSetupCandidate) {
+        latestSourceOwnedSetupRef.current =
+          appendSourceOwnedSetupCandidate(
+            latestSourceOwnedSetupRef.current,
+            sourceOwnedSetupCandidate
+          );
+        traceStoreRef.current.updateMetadata(traceId, {
+          sourceOwnedSetupCandidateStored: true,
+          sourceOwnedSetupCandidateTurnId:
+            sourceOwnedSetupCandidate.turnId,
+          sourceOwnedSetupCandidateTurnIds:
+            latestSourceOwnedSetupRef.current.sourceTurnIds,
+          sourceOwnedSetupCandidateSpeechAct:
+            sourceOwnedSetupCandidate.speechAct,
+          sourceOwnedSetupCandidateParentId:
+            sourceOwnedSetupCandidate.parentId,
+        });
+      }
+      const projectedAnswerFocusText = primaryAskAnswerFocusText(
+        primaryAskProjection,
+        turn.text
+      );
+      const projectedSemanticEvidenceText = primaryAskClassifierText(
+        primaryAskProjection,
+        turn.text
+      );
+      const shortConfirmationDetected = isShortConfirmationLike(turn.text);
+      const hasExplicitConstraintOrCorrection =
+        hasConstraintOrCorrectionSignal(turn.text);
+      const shortConfirmationAdmission =
+        decideShortConfirmationAdmission({
+          shortConfirmationDetected,
+          hasConstraintOrCorrectionSignal:
+            hasExplicitConstraintOrCorrection,
+          primaryAskProjection,
+        });
+      const classifiedTransitionTurn = classifyInterviewTransitionTurn(
+        turn.text
+      );
+      const transitionTurnDecision =
+        reconcileInterviewTransitionTurnWithPrimaryAsk(
+          classifiedTransitionTurn,
+          primaryAskProjection.normalizedPrimaryAsk
+        );
+      const sectionTransitionDetection = detectInterviewSectionTransition(
+        turn.text
+      );
+      if (sectionTransitionDetection.detected) {
+        pendingInterviewSectionHintRef.current =
+          createPendingInterviewSectionHint({
+            detection: sectionTransitionDetection,
+            sourceTurnId: turn.id,
+            sourceText: turn.text,
+            sessionId: activeContextState.sessionId,
+            runtimeEpoch: runtimeEpochRef.current,
+            observedAt: turn.endedAt,
+          });
+        pendingInterviewTaskBoundaryRef.current = undefined;
+      } else if (transitionTurnDecision.detected) {
+        pendingInterviewSectionHintRef.current = undefined;
+        pendingInterviewTaskBoundaryRef.current =
+          transitionTurnDecision.disposition === "hint-only"
+            ? createPendingInterviewTaskBoundary({
+                sourceTurnId: turn.id,
+                sourceText: turn.text,
+                sessionId: activeContextState.sessionId,
+                runtimeEpoch: runtimeEpochRef.current,
+                observedAt: turn.endedAt,
+              })
+            : undefined;
+      }
+      traceStoreRef.current.updateMetadata(traceId, {
+        ...formatPrimaryAskProjectionForTrace(primaryAskProjection),
+        taskSwitchEvidenceDetected: transitionTurnDecision.detected,
+        taskSwitchDisposition: transitionTurnDecision.disposition,
+        taskSwitchDispositionReason: transitionTurnDecision.reason,
+        sectionHintDetected: sectionTransitionDetection.detected,
+        sectionHintId: pendingInterviewSectionHintRef.current?.id,
+        sectionHintType: pendingInterviewSectionHintRef.current?.questionType,
+        sectionHintSourceTurnId:
+          pendingInterviewSectionHintRef.current?.sourceTurnId,
+        sectionHintObservedAt:
+          pendingInterviewSectionHintRef.current?.observedAt,
+        sectionHintExpiresAt:
+          pendingInterviewSectionHintRef.current?.expiresAt,
+        sectionHintDisposition:
+          pendingInterviewSectionHintRef.current?.disposition,
+        explicitTaskBoundaryId:
+          pendingInterviewTaskBoundaryRef.current?.id,
+        explicitTaskBoundarySourceTurnId:
+          pendingInterviewTaskBoundaryRef.current?.sourceTurnId,
+        explicitTaskBoundaryObservedAt:
+          pendingInterviewTaskBoundaryRef.current?.observedAt,
+        explicitTaskBoundaryExpiresAt:
+          pendingInterviewTaskBoundaryRef.current?.expiresAt,
+        explicitTaskBoundaryDisposition:
+          pendingInterviewTaskBoundaryRef.current?.disposition,
+        shortConfirmationDetected,
+        shortConfirmationDisposition:
+          shortConfirmationAdmission.disposition,
+        shortConfirmationDispositionReason:
+          shortConfirmationAdmission.reason,
+        shortConfirmationPrimaryAskOverride:
+          shortConfirmationAdmission.primaryAskOverride,
+      });
+
+      if (transitionTurnDecision.disposition === "hint-only") {
+        latestForceAdviseTargetRef.current = undefined;
+        const switchStepId = traceStoreRef.current.startStep(
+          traceId,
+          "Interview section transition recorded",
+          {
+            turnId: turn.id,
+            ...getActiveMeetingTaskTraceMetadata(
+              activeContextState.activeMeetingTask
+            ),
+            activeScreenTaskId: activeScreenTask?.id,
+            activeInterviewTaskId: activeInterviewTask?.id,
+            transcriptChars: turn.text.trim().length,
+            taskSwitchDisposition: transitionTurnDecision.disposition,
+            taskSwitchDispositionReason: transitionTurnDecision.reason,
+          }
+        );
+        appendTranscriptTurnForTrace(turn, traceId, segment, {
+          turnGateAction: "append-only",
+          turnGateReason: "task-switch-announcement",
+          transcriptAppendReason: "task-switch-announcement",
+        });
+        traceStoreRef.current.finishStep(traceId, switchStepId, "success");
+        traceStoreRef.current.finishTrace(traceId, "success");
+        setState((previous) => ({
+          ...previous,
+          status: runtimeActiveRef.current ? "listening" : "idle",
+          partialSuggestion: "",
+          latestInterviewerTurnCandidate: undefined,
+        }));
+        return;
+      }
+
+      const previousTurns = contextManagerRef.current.getState()
+        .transcriptTurns;
+      const clarificationMatch =
+        shortConfirmationAdmission.disposition === "admit-primary-ask"
+          ? null
+          : findRecentMeClarificationForTurn(turn, previousTurns);
+      if (clarificationMatch) {
+        promoteMeTurnForFusion(clarificationMatch.meTurn, turn.id);
+        turn.contextPromptEligible = true;
+        turn.contextFusionStatus = "paired";
+        turn.relatedTurnIds = [clarificationMatch.meTurn.id];
+        traceStoreRef.current.updateMetadata(traceId, {
+          clarificationPairDetected: true,
+          clarificationPairMeTurnId: clarificationMatch.meTurn.id,
+          clarificationPairReason: clarificationMatch.reason,
+        });
+      }
+
+      if (
+        !confirmationWindowClosed && !clarificationMatch && turn.contextFusionStatus !== "paired" &&
+        shortConfirmationAdmission.disposition === "hold-confirmation"
+      ) {
+        traceStoreRef.current.updateMetadata(traceId, {
+          turnGateAction: "ignore",
+          turnGateReason: "pending-short-confirmation",
+        });
+        const gateStepId = traceStoreRef.current.startStep(
+          traceId,
+          "Advisor turn gate",
+          {
+            action: "ignore",
+            reason: "pending-short-confirmation",
+            turnId: turn.id,
+            transcriptChars: turn.text.trim().length,
+            activeScreenTask: Boolean(activeScreenTask),
+            audioSegmentSeq: segment.sequence,
+            audioSessionId: segment.sessionId,
+          }
+        );
+        traceStoreRef.current.finishStep(traceId, gateStepId, "success");
+        holdPendingConfirmation(turn, segment);
+        return;
+      }
+
+      const pendingAdjacentQuestionScope = hasActiveInterviewTask
+        ? null
+        : adjacentQuestionScopeRef.current;
+      const adjacentConstraintDecision =
+        resolveAdjacentConstraintInheritance({
+          scope: pendingAdjacentQuestionScope,
+          text: turn.text,
+          sessionId: activeContextState.sessionId,
+          runtimeEpoch: runtimeEpochRef.current,
+        });
+      if (adjacentConstraintDecision.shouldClearScope) {
+        adjacentQuestionScopeRef.current = null;
+      }
+      if (pendingAdjacentQuestionScope) {
+        traceStoreRef.current.updateMetadata(
+          traceId,
+          formatAdjacentConstraintDecisionForTrace(
+            adjacentConstraintDecision
+          )
+        );
+      }
+
+      const baseTurnGate = reconcilePrimaryAskTurnDecision(
+        primaryAskProjection,
+        evaluateThemTurnForAdvisor(
+          { ...turn, text: projectedAnswerFocusText },
+          {
+            hasActiveTask: hasActiveInterviewTask,
+            hasRecentQuestionContext: Boolean(
+              currentQuestionLineageRef.current ||
+                adjacentConstraintDecision.inherited
+            ),
+          }
+        )
+      );
+      const assumptionAuthorizationDecision =
+        decideInterviewerAssumptionAuthorization({
+          text: turn.text,
+          speaker: turn.speaker,
+          activeQuestionType:
+            activeContextState.activeMeetingTask?.parent.questionType,
+          currentPhase:
+            activeContextState.activeMeetingTask?.parent.playbookPhase,
+          hasActiveChild: Boolean(
+            activeContextState.activeMeetingTask?.child
+          ),
+          sourceTurnId: turn.id,
+        });
+      const turnGate = applySourceOwnedPhaseControlToTurnIntent(
+        baseTurnGate,
+        assumptionAuthorizationDecision.phaseControl
+      );
+      const phaseControlMetadata =
+        formatInterviewerAssumptionAuthorizationForTrace(
+          assumptionAuthorizationDecision
+        );
+      const taxonomyTurnGateAction = turnGate.phaseControl
+        ? "phase-control"
+        : "answer-refresh";
+      const keywordIntentEvidence =
+        formatInterviewerIntentKeywordEvidenceForTrace(
+          extractInterviewerIntentKeywordEvidence({
+            text: projectedAnswerFocusText,
+            turnDecision: turnGate,
+            currentTurnId: turn.id,
+          })
+        );
+      const responseOpportunityLocalDecision =
+        decideResponseOpportunityLocalRoute({
+          text: turn.text,
+          decision: turnGate,
+          pendingConfirmation: Boolean(clarificationMatch || turn.contextFusionStatus === "paired" || pendingConfirmationRef.current),
+        });
+      if (
+        responseOpportunityLocalDecision.disposition !==
+        "deterministic-no-output"
+      ) {
+        responseOpportunityRuntimeRef.current?.cancelAll("superseded");
+        responseOpportunityGenerationGateRef.current.cancelAll(
+          "superseded"
+        );
+      }
+      traceStoreRef.current.updateMetadata(traceId, {
+        ...formatAdvisorTurnIntentForTrace(turnGate),
+        ...phaseControlMetadata,
+        ...keywordIntentEvidence,
+        ...formatResponseOpportunityLocalDecisionForTrace(
+          responseOpportunityLocalDecision
+        ),
+        turnGateReason: turnGate.reason,
+        runtimeLexicalRuleSetVersion: "runtime-lexical-rules-v1",
+        responseOpportunityLocalRuleId:
+          responseOpportunityLocalDecision.reason,
+        responseOpportunityLocalAuthorityStage:
+          responseOpportunityLocalDecision.disposition ===
+          "deterministic-no-output"
+            ? "structural-authority"
+            : responseOpportunityLocalDecision.disposition ===
+                "deterministic-output"
+              ? "speculative-hint"
+              : "prompt-hint",
+        responseOpportunityLocalMatchedSpans: [
+          ...primaryAskProjection.primaryAskSpans.map((span) => span.text),
+          ...primaryAskProjection.setupSpans.map((span) => span.text),
+        ].slice(0, 8),
+        modelExecutionSuppressedReason: "response-opportunity-pending",
+      });
+      const wordEquivalent = calculateWordEquivalent(turn.text);
+      const logicalQuestionMaterialization =
+        decideLogicalQuestionMaterialization({
+          wordEquivalent,
+          exactHighFiller: responseOpportunityLocalDecision.disposition === "deterministic-no-output",
+        });
+      const logicalQuestionPublication =
+        decideLogicalQuestionPublication({
+          materialization: logicalQuestionMaterialization,
+          runtimeIntentSettlementPending:
+            responseOpportunityLocalDecision.runtimeReviewRequired,
+        });
+      traceStoreRef.current.updateMetadata(traceId, {
+        canonicalLogicalQuestionMaterialized:
+          logicalQuestionMaterialization.materialize,
+        canonicalLogicalQuestionMaterializationReason:
+          logicalQuestionMaterialization.reason,
+        ...formatLogicalQuestionPublicationForTrace(
+          logicalQuestionPublication
+        ),
+        logicalQuestionPublicationStage:
+          !logicalQuestionMaterialization.materialize
+            ? "not-materialized"
+            : logicalQuestionPublication.publishCanonical
+              ? "canonical-published"
+              : "provisional",
+      });
+      const gateStepId = traceStoreRef.current.startStep(
+        traceId,
+        "Advisor turn gate",
+        {
+          reason: turnGate.reason,
+          ...formatAdvisorTurnIntentForTrace(turnGate),
+          ...phaseControlMetadata,
+          ...keywordIntentEvidence,
+          turnId: turn.id,
+          transcriptChars: turn.text.trim().length,
+          wordEquivalent,
+          activeScreenTask: Boolean(activeScreenTask),
+          activeInterviewTask: Boolean(activeInterviewTask),
+          audioSegmentSeq: segment.sequence,
+          audioSessionId: segment.sessionId,
+        }
+      );
+      traceStoreRef.current.finishStep(traceId, gateStepId, "success");
+
+      const currentQuestionType =
+        normalizeCanonicalQuestionType(
+          inferCanonicalQuestionTypeFromText(
+            projectedSemanticEvidenceText
+          )
+        ) ?? "unknown";
+      const answerFocusQuestionType =
+        normalizeCanonicalQuestionType(
+          inferCanonicalQuestionTypeFromText(
+            projectedAnswerFocusText
+          )
+        ) ?? "unknown";
+      traceStoreRef.current.updateMetadata(traceId, {
+        primaryAskAnswerFocusQuestionTypeProposal:
+          answerFocusQuestionType,
+        primaryAskSemanticEvidenceQuestionTypeProposal:
+          currentQuestionType,
+        primaryAskQuestionTypeProposalChanged:
+          answerFocusQuestionType !== currentQuestionType,
+      });
+      const sectionHintConsumption = consumeInterviewSectionHint({
+        hint: pendingInterviewSectionHintRef.current,
+        questionId: turn.id,
+        currentQuestionType,
+        substantive: Boolean(primaryAskProjection.normalizedPrimaryAsk),
+        sessionId: activeContextState.sessionId,
+        runtimeEpoch: runtimeEpochRef.current,
+        now: turn.endedAt,
+      });
+      const questionTypeAxisConflict = detectRuntimeAxisConflict({
+        axis: "question-type",
+        proposals: [
+          {
+            source: "question-type-lexical",
+            value:
+              currentQuestionType === "unknown"
+                ? undefined
+                : currentQuestionType,
+            eligible: currentQuestionType !== "unknown",
+            productionEligible: true,
+          },
+          {
+            source: "interviewer-section-hint",
+            value: sectionHintConsumption.hint?.questionType,
+            eligible:
+              sectionHintConsumption.disposition === "applied" ||
+              sectionHintConsumption.disposition === "conflicted",
+            productionEligible: true,
+          },
+        ],
+      });
+      pendingInterviewSectionHintRef.current =
+        sectionHintConsumption.nextHint;
+      const taskBoundaryConsumption = consumeInterviewTaskBoundary({
+        boundary: pendingInterviewTaskBoundaryRef.current,
+        questionId: turn.id,
+        substantive:
+          logicalQuestionMaterialization.materialize &&
+          Boolean(primaryAskProjection.normalizedPrimaryAsk),
+        sessionId: activeContextState.sessionId,
+        runtimeEpoch: runtimeEpochRef.current,
+        now: turn.endedAt,
+      });
+      pendingInterviewTaskBoundaryRef.current =
+        taskBoundaryConsumption.nextBoundary;
+      traceStoreRef.current.updateMetadata(
+        traceId,
+        {
+          ...formatRuntimeAxisConflictForTrace(
+            questionTypeAxisConflict,
+            "questionTypeAxis"
+          ),
+          ...formatInterviewTaskBoundaryForTrace(
+            taskBoundaryConsumption
+          ),
+        }
+      );
+      if (sectionHintConsumption.disposition !== "no-hint") {
+        const sectionHintMetadata = {
+          ...formatInterviewSectionHintForTrace(sectionHintConsumption),
+          sectionHintClassificationBefore: currentQuestionType,
+        };
+        traceStoreRef.current.updateMetadata(traceId, sectionHintMetadata);
+        sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+          stage: "interview-section-hint-consumed",
+          traceId,
+          ...sectionHintMetadata,
+        });
+      }
+
+      const logicalQuestionUnit =
+        logicalQuestionMaterialization.materialize
+          ? buildLogicalQuestionForTurn({
+              turn,
+              traceId,
+              intentDecision: turnGate,
+              explicitTaskSwitch:
+                transitionTurnDecision.detected ||
+                sectionHintConsumption.disposition === "applied" ||
+                taskBoundaryConsumption.disposition === "applied",
+              sectionHint:
+                sectionHintConsumption.disposition === "applied"
+                  ? sectionHintConsumption.hint
+                  : undefined,
+              taskBoundaryEvidence:
+                taskBoundaryConsumption.disposition === "applied"
+                  ? taskBoundaryConsumption.boundary
+                  : undefined,
+              primaryAskProjection,
+              commitCanonical:
+                logicalQuestionPublication.publishCanonical,
+            })
+          : undefined;
+      if (
+        logicalQuestionUnit &&
+        logicalQuestionPublication.publishCanonical
+      ) {
+        publishCanonicalLogicalQuestionTarget({
+          logicalQuestionUnit,
+          traceId,
+          turn,
+          intentDecision: turnGate,
+        });
+      } else if (logicalQuestionUnit) {
+        publishResponseRecoveryTarget({
+          logicalQuestionUnit,
+          traceId,
+          turn,
+          intentDecision: turnGate,
+        });
+      }
+
+      if (
+        responseOpportunityLocalDecision.disposition ===
+          "deterministic-no-output"
+      ) {
+        if (logicalQuestionUnit) {
+          scheduleSemanticTaxonomyShadow({
+            turn,
+            traceId,
+            turnGateAction: taxonomyTurnGateAction,
+            logicalQuestionUnit,
+            questionTypeAxisConflict,
+          });
+        }
+        traceStoreRef.current.updateMetadata(traceId, {
+          acceptedSpeechDisposition: "low-value-ignored",
+          transcriptAppendDisposition: "suppressed",
+          transcriptAppendReason: turnGate.reason,
+        });
+        const ignoredStepId = traceStoreRef.current.startStep(
+          traceId,
+          "Transcript ignored",
+          {
+            reason: turnGate.reason,
+            transcriptChars: turn.text.trim().length,
+            activeScreenTask: Boolean(activeScreenTask),
+            activeInterviewTask: Boolean(activeInterviewTask),
+          }
+        );
+        traceStoreRef.current.finishStep(traceId, ignoredStepId, "success");
+        traceStoreRef.current.finishTrace(traceId, "success");
+        setState((previous) => ({
+          ...previous,
+          status: runtimeActiveRef.current ? "listening" : "idle",
+        }));
+        return;
+      }
+
+      turn.contextPromptEligible = true;
+      if (turn.contextFusionStatus !== "paired") turn.contextFusionStatus = "none";
+
+      appendTranscriptTurnForTrace(turn, traceId, segment, { turnGateReason: turnGate.reason });
+      const advisorQuestionLineage = adjacentConstraintDecision.lineage;
+      let runtimeAdjudication:
+        | RuntimeAdjudicationScheduleHandle
+        | undefined;
+      if (logicalQuestionUnit) {
+        runtimeAdjudication = scheduleSemanticTaxonomyShadow({
+          turn,
+          traceId,
+          turnGateAction:
+            responseOpportunityLocalDecision.disposition ===
+            "runtime-required"
+              ? "answer-refresh"
+              : taxonomyTurnGateAction,
+          logicalQuestionUnit,
+          questionTypeAxisConflict,
+        });
+        const responseOpportunityExecutionMode =
+          resolveResponseOpportunityExecutionMode(
+            responseOpportunityLocalDecision
+          );
+        if (responseOpportunityExecutionMode) {
+          scheduleResponseOpportunityInference({
+            turn,
+            traceId,
+            logicalQuestionUnit,
+            originalDecision: turnGate,
+            executionMode: responseOpportunityExecutionMode,
+            onOutputAuthorized: ({
+              intentDecision,
+              logicalQuestionUnit: releasedLogicalQuestionUnit,
+            }) => {
+              const latestContext = contextManagerRef.current.getState();
+              const mode = latestContext.activeMeetingTask?.screen
+                ? "screen-anchored"
+                : "live";
+              if (
+                scheduleAdvisorAfterQuestionTypeWindow({
+                  handle: runtimeAdjudication,
+                  mode,
+                  traceId,
+                  turnIntentDecision: intentDecision,
+                  triggerTurnId: turn.id,
+                  questionLineage: advisorQuestionLineage,
+                  logicalQuestionUnit: releasedLogicalQuestionUnit,
+                })
+              ) {
+                return;
+              }
+              const debounceStepId = traceStoreRef.current.startStep(
+                traceId,
+                "Advisor debounce scheduled",
+                {
+                  debounceMs: ADVISOR_DEBOUNCE_MS,
+                  reason: intentDecision.reason,
+                  runtimeIntentReleasedAction: "answer",
+                }
+              );
+              traceStoreRef.current.finishStep(
+                traceId,
+                debounceStepId,
+                "success"
+              );
+              scheduleAdvisor(
+                mode,
+                traceId,
+                intentDecision,
+                turn.id,
+                advisorQuestionLineage,
+                releasedLogicalQuestionUnit,
+                "input-evidence"
+              );
+            },
+          });
+          return;
+        }
+      }
+
+      traceStoreRef.current.finishTrace(traceId, "success");
+
+    }, [appendTranscriptTurnForTrace, buildLogicalQuestionForTurn, holdPendingConfirmation,
+      publishCanonicalLogicalQuestionTarget, publishResponseRecoveryTarget, promoteMeTurnForFusion,
+      scheduleAdvisor, scheduleAdvisorAfterQuestionTypeWindow, scheduleResponseOpportunityInference,
+      scheduleSemanticTaxonomyShadow]);
+  processPostBufferThemTurnRef.current = processPostBufferThemTurn;
+
   const processCanonicalTurnIngress = useCallback(
     async ({
       turn,
@@ -22685,864 +23253,13 @@ export function useMeetingAssistant() {
           : 0,
         sentenceBufferMergedTranscriptChars: turn.text.length,
       });
-      const primaryAskProjection = projectPrimaryAsk({
-        turnId: turn.id,
-        text: turn.text,
-      });
-      const sourceOwnedSetupCandidate =
-        createSourceOwnedSetupCandidate({
-          turn,
-          sessionId: activeContextState.sessionId,
-          runtimeEpoch: runtimeEpochRef.current,
-          activeMeetingTask: activeContextState.activeMeetingTask,
-        });
-      if (sourceOwnedSetupCandidate) {
-        latestSourceOwnedSetupRef.current =
-          appendSourceOwnedSetupCandidate(
-            latestSourceOwnedSetupRef.current,
-            sourceOwnedSetupCandidate
-          );
-        traceStoreRef.current.updateMetadata(traceId, {
-          sourceOwnedSetupCandidateStored: true,
-          sourceOwnedSetupCandidateTurnId:
-            sourceOwnedSetupCandidate.turnId,
-          sourceOwnedSetupCandidateTurnIds:
-            latestSourceOwnedSetupRef.current.sourceTurnIds,
-          sourceOwnedSetupCandidateSpeechAct:
-            sourceOwnedSetupCandidate.speechAct,
-          sourceOwnedSetupCandidateParentId:
-            sourceOwnedSetupCandidate.parentId,
-        });
-      }
-      const projectedAnswerFocusText = primaryAskAnswerFocusText(
-        primaryAskProjection,
-        turn.text
-      );
-      const projectedSemanticEvidenceText = primaryAskClassifierText(
-        primaryAskProjection,
-        turn.text
-      );
-      const shortConfirmationDetected = isShortConfirmationLike(turn.text);
-      const hasExplicitConstraintOrCorrection =
-        hasConstraintOrCorrectionSignal(turn.text);
-      const shortConfirmationAdmission =
-        decideShortConfirmationAdmission({
-          shortConfirmationDetected,
-          hasConstraintOrCorrectionSignal:
-            hasExplicitConstraintOrCorrection,
-          primaryAskProjection,
-        });
-      const classifiedTransitionTurn = classifyInterviewTransitionTurn(
-        turn.text
-      );
-      const transitionTurnDecision =
-        reconcileInterviewTransitionTurnWithPrimaryAsk(
-          classifiedTransitionTurn,
-          primaryAskProjection.normalizedPrimaryAsk
-        );
-      const sectionTransitionDetection = detectInterviewSectionTransition(
-        turn.text
-      );
-      if (sectionTransitionDetection.detected) {
-        pendingInterviewSectionHintRef.current =
-          createPendingInterviewSectionHint({
-            detection: sectionTransitionDetection,
-            sourceTurnId: turn.id,
-            sourceText: turn.text,
-            sessionId: activeContextState.sessionId,
-            runtimeEpoch: runtimeEpochRef.current,
-            observedAt: turn.endedAt,
-          });
-        pendingInterviewTaskBoundaryRef.current = undefined;
-      } else if (transitionTurnDecision.detected) {
-        pendingInterviewSectionHintRef.current = undefined;
-        pendingInterviewTaskBoundaryRef.current =
-          transitionTurnDecision.disposition === "hint-only"
-            ? createPendingInterviewTaskBoundary({
-                sourceTurnId: turn.id,
-                sourceText: turn.text,
-                sessionId: activeContextState.sessionId,
-                runtimeEpoch: runtimeEpochRef.current,
-                observedAt: turn.endedAt,
-              })
-            : undefined;
-      }
-      traceStoreRef.current.updateMetadata(traceId, {
-        ...formatPrimaryAskProjectionForTrace(primaryAskProjection),
-        taskSwitchEvidenceDetected: transitionTurnDecision.detected,
-        taskSwitchDisposition: transitionTurnDecision.disposition,
-        taskSwitchDispositionReason: transitionTurnDecision.reason,
-        sectionHintDetected: sectionTransitionDetection.detected,
-        sectionHintId: pendingInterviewSectionHintRef.current?.id,
-        sectionHintType: pendingInterviewSectionHintRef.current?.questionType,
-        sectionHintSourceTurnId:
-          pendingInterviewSectionHintRef.current?.sourceTurnId,
-        sectionHintObservedAt:
-          pendingInterviewSectionHintRef.current?.observedAt,
-        sectionHintExpiresAt:
-          pendingInterviewSectionHintRef.current?.expiresAt,
-        sectionHintDisposition:
-          pendingInterviewSectionHintRef.current?.disposition,
-        explicitTaskBoundaryId:
-          pendingInterviewTaskBoundaryRef.current?.id,
-        explicitTaskBoundarySourceTurnId:
-          pendingInterviewTaskBoundaryRef.current?.sourceTurnId,
-        explicitTaskBoundaryObservedAt:
-          pendingInterviewTaskBoundaryRef.current?.observedAt,
-        explicitTaskBoundaryExpiresAt:
-          pendingInterviewTaskBoundaryRef.current?.expiresAt,
-        explicitTaskBoundaryDisposition:
-          pendingInterviewTaskBoundaryRef.current?.disposition,
-        shortConfirmationDetected,
-        shortConfirmationDisposition:
-          shortConfirmationAdmission.disposition,
-        shortConfirmationDispositionReason:
-          shortConfirmationAdmission.reason,
-        shortConfirmationPrimaryAskOverride:
-          shortConfirmationAdmission.primaryAskOverride,
-      });
-
-      if (transitionTurnDecision.disposition === "hint-only") {
-        latestForceAdviseTargetRef.current = undefined;
-        const switchStepId = traceStoreRef.current.startStep(
-          traceId,
-          "Interview section transition recorded",
-          {
-            turnId: turn.id,
-            ...getActiveMeetingTaskTraceMetadata(
-              activeContextState.activeMeetingTask
-            ),
-            activeScreenTaskId: activeScreenTask?.id,
-            activeInterviewTaskId: activeInterviewTask?.id,
-            transcriptChars: turn.text.trim().length,
-            taskSwitchDisposition: transitionTurnDecision.disposition,
-            taskSwitchDispositionReason: transitionTurnDecision.reason,
-          }
-        );
-        appendTranscriptTurnForTrace(turn, traceId, segment, {
-          turnGateAction: "append-only",
-          turnGateReason: "task-switch-announcement",
-          transcriptAppendReason: "task-switch-announcement",
-        });
-        traceStoreRef.current.finishStep(traceId, switchStepId, "success");
-        traceStoreRef.current.finishTrace(traceId, "success");
-        setState((previous) => ({
-          ...previous,
-          status: runtimeActiveRef.current ? "listening" : "idle",
-          partialSuggestion: "",
-          latestInterviewerTurnCandidate: undefined,
-        }));
-        return;
-      }
-
-      const previousTurns = contextManagerRef.current.getState()
-        .transcriptTurns;
-      const clarificationMatch =
-        shortConfirmationAdmission.disposition === "admit-primary-ask"
-          ? null
-          : findRecentMeClarificationForTurn(turn, previousTurns);
-      if (clarificationMatch) {
-        const turnIntentDecision = decideAdvisorTurnIntent(turn.text, {
-          hasActiveTask: hasActiveInterviewTask,
-          hasRecentQuestionContext: Boolean(
-            currentQuestionLineageRef.current
-          ),
-          hasPendingConfirmation: true,
-        });
-        promoteMeTurnForFusion(clarificationMatch.meTurn, turn.id);
-        turn.contextPromptEligible = true;
-        turn.contextFusionStatus = "paired";
-        turn.relatedTurnIds = [clarificationMatch.meTurn.id];
-        traceStoreRef.current.updateMetadata(traceId, {
-          ...formatAdvisorTurnIntentForTrace(turnIntentDecision),
-          turnGateAction: turnIntentDecision.action,
-          turnGateReason: "clarification-pair",
-        });
-        const gateStepId = traceStoreRef.current.startStep(
-          traceId,
-          "Advisor turn gate",
-          {
-            action: "answer-refresh",
-            reason: "clarification-pair",
-            ...formatAdvisorTurnIntentForTrace(turnIntentDecision),
-            turnId: turn.id,
-            transcriptChars: turn.text.trim().length,
-            activeScreenTask: Boolean(activeScreenTask),
-            audioSegmentSeq: segment.sequence,
-            audioSessionId: segment.sessionId,
-          }
-        );
-        traceStoreRef.current.finishStep(traceId, gateStepId, "success");
-        const pairStepId = traceStoreRef.current.startStep(
-          traceId,
-          "Clarification pair detected",
-          {
-            reason: clarificationMatch.reason,
-            meTurnId: clarificationMatch.meTurn.id,
-            themTurnId: turn.id,
-            audioSegmentSeq: segment.sequence,
-            audioSessionId: segment.sessionId,
-          }
-        );
-        traceStoreRef.current.finishStep(traceId, pairStepId, "success");
-        const { contextState } = appendTranscriptTurnForTrace(
-          turn,
-          traceId,
-          segment,
-          {
-            fusedWithTurnId: clarificationMatch.meTurn.id,
-            turnGateAction: "answer-refresh",
-            turnGateReason: "clarification-pair",
-          }
-        );
-        const logicalQuestionUnit = buildLogicalQuestionForTurn({
-          turn,
-          traceId,
-          intentDecision: turnIntentDecision,
-        });
-        publishCanonicalLogicalQuestionTarget({
-          logicalQuestionUnit,
-          traceId,
-          turn,
-          intentDecision: turnIntentDecision,
-        });
-        const questionTypeAdjudication =
-          scheduleSemanticTaxonomyShadow({
-            turn,
-            traceId,
-            turnGateAction: "answer-refresh",
-            logicalQuestionUnit,
-          });
-        if (
-          scheduleAdvisorAfterQuestionTypeWindow({
-            handle: questionTypeAdjudication,
-            mode: contextState.activeMeetingTask?.screen
-              ? "screen-anchored"
-              : "live",
-            traceId,
-            turnIntentDecision,
-            triggerTurnId: turn.id,
-            logicalQuestionUnit,
-          })
-        ) {
-          return;
-        }
-        const debounceStepId = traceStoreRef.current.startStep(
-          traceId,
-          "Advisor debounce scheduled",
-          { debounceMs: ADVISOR_DEBOUNCE_MS, reason: "clarification-pair" }
-        );
-        traceStoreRef.current.finishStep(traceId, debounceStepId, "success");
-        scheduleAdvisor(
-          contextState.activeMeetingTask?.screen ? "screen-anchored" : "live",
-          traceId,
-          turnIntentDecision,
-          turn.id,
-          undefined,
-          logicalQuestionUnit
-        );
-        return;
-      }
-
-      if (
-        shortConfirmationAdmission.disposition === "hold-confirmation"
-      ) {
-        traceStoreRef.current.updateMetadata(traceId, {
-          turnGateAction: "ignore",
-          turnGateReason: "pending-short-confirmation",
-        });
-        const gateStepId = traceStoreRef.current.startStep(
-          traceId,
-          "Advisor turn gate",
-          {
-            action: "ignore",
-            reason: "pending-short-confirmation",
-            turnId: turn.id,
-            transcriptChars: turn.text.trim().length,
-            activeScreenTask: Boolean(activeScreenTask),
-            audioSegmentSeq: segment.sequence,
-            audioSessionId: segment.sessionId,
-          }
-        );
-        traceStoreRef.current.finishStep(traceId, gateStepId, "success");
-        holdPendingConfirmation(turn, segment);
-        return;
-      }
-
-      const pendingAdjacentQuestionScope = hasActiveInterviewTask
-        ? null
-        : adjacentQuestionScopeRef.current;
-      const adjacentConstraintDecision =
-        resolveAdjacentConstraintInheritance({
-          scope: pendingAdjacentQuestionScope,
-          text: turn.text,
-          sessionId: activeContextState.sessionId,
-          runtimeEpoch: runtimeEpochRef.current,
-        });
-      if (adjacentConstraintDecision.shouldClearScope) {
-        adjacentQuestionScopeRef.current = null;
-      }
-      if (pendingAdjacentQuestionScope) {
-        traceStoreRef.current.updateMetadata(
-          traceId,
-          formatAdjacentConstraintDecisionForTrace(
-            adjacentConstraintDecision
-          )
-        );
-      }
-
-      const baseTurnGate = reconcilePrimaryAskTurnDecision(
-        primaryAskProjection,
-        evaluateThemTurnForAdvisor(
-          { ...turn, text: projectedAnswerFocusText },
-          {
-            hasActiveTask: hasActiveInterviewTask,
-            hasRecentQuestionContext: Boolean(
-              currentQuestionLineageRef.current ||
-                adjacentConstraintDecision.inherited
-            ),
-          }
-        )
-      );
-      const assumptionAuthorizationDecision =
-        decideInterviewerAssumptionAuthorization({
-          text: turn.text,
-          speaker: turn.speaker,
-          activeQuestionType:
-            activeContextState.activeMeetingTask?.parent.questionType,
-          currentPhase:
-            activeContextState.activeMeetingTask?.parent.playbookPhase,
-          hasActiveChild: Boolean(
-            activeContextState.activeMeetingTask?.child
-          ),
-          sourceTurnId: turn.id,
-        });
-      const turnGate = applySourceOwnedPhaseControlToTurnIntent(
-        baseTurnGate,
-        assumptionAuthorizationDecision.phaseControl
-      );
-      const phaseControlMetadata =
-        formatInterviewerAssumptionAuthorizationForTrace(
-          assumptionAuthorizationDecision
-        );
-      const taxonomyTurnGateAction = turnGate.phaseControl
-        ? "phase-control"
-        : turnGate.action;
-      const keywordIntentEvidence =
-        formatInterviewerIntentKeywordEvidenceForTrace(
-          extractInterviewerIntentKeywordEvidence({
-            text: projectedAnswerFocusText,
-            turnDecision: turnGate,
-            currentTurnId: turn.id,
-          })
-        );
-      const responseOpportunityLocalDecision =
-        decideResponseOpportunityLocalRoute({
-          text: turn.text,
-          decision: turnGate,
-          pendingConfirmation: Boolean(
-            pendingConfirmationRef.current
-          ),
-        });
-      if (
-        responseOpportunityLocalDecision.disposition !==
-        "deterministic-no-output"
-      ) {
-        responseOpportunityRuntimeRef.current?.cancelAll("superseded");
-        responseOpportunityGenerationGateRef.current.cancelAll(
-          "superseded"
-        );
-      }
-      traceStoreRef.current.updateMetadata(traceId, {
-        ...formatAdvisorTurnIntentForTrace(turnGate),
-        ...phaseControlMetadata,
-        ...keywordIntentEvidence,
-        ...formatResponseOpportunityLocalDecisionForTrace(
-          responseOpportunityLocalDecision
-        ),
-        turnGateAction: turnGate.action,
-        turnGateReason: turnGate.reason,
-        runtimeLexicalRuleSetVersion: "runtime-lexical-rules-v1",
-        responseOpportunityLocalRuleId:
-          responseOpportunityLocalDecision.reason,
-        responseOpportunityLocalAuthorityStage:
-          responseOpportunityLocalDecision.disposition ===
-          "deterministic-no-output"
-            ? "structural-authority"
-            : responseOpportunityLocalDecision.disposition ===
-                "deterministic-output"
-              ? "speculative-hint"
-              : "prompt-hint",
-        responseOpportunityLocalMatchedSpans: [
-          ...primaryAskProjection.primaryAskSpans.map((span) => span.text),
-          ...primaryAskProjection.setupSpans.map((span) => span.text),
-        ].slice(0, 8),
-        memoryRetrievalSuppressedReason: turnGate.executionAuthorized
-          ? undefined
-          : `turn-intent:${turnGate.reason}`,
-        modelExecutionSuppressedReason: turnGate.executionAuthorized
-          ? undefined
-          : `turn-intent:${turnGate.reason}`,
-      });
-      const wordEquivalent = calculateWordEquivalent(turn.text);
-      const logicalQuestionMaterialization =
-        decideLogicalQuestionMaterialization({
-          action: turnGate.action,
-          wordEquivalent,
-          exactHighFiller: isExactLowValueAcknowledgement(turn.text),
-        });
-      const logicalQuestionPublication =
-        decideLogicalQuestionPublication({
-          materialization: logicalQuestionMaterialization,
-          runtimeIntentSettlementPending:
-            responseOpportunityLocalDecision.runtimeReviewRequired,
-        });
-      traceStoreRef.current.updateMetadata(traceId, {
-        canonicalLogicalQuestionMaterialized:
-          logicalQuestionMaterialization.materialize,
-        canonicalLogicalQuestionMaterializationReason:
-          logicalQuestionMaterialization.reason,
-        ...formatLogicalQuestionPublicationForTrace(
-          logicalQuestionPublication
-        ),
-        logicalQuestionPublicationStage:
-          !logicalQuestionMaterialization.materialize
-            ? "not-materialized"
-            : logicalQuestionPublication.publishCanonical
-              ? "canonical-published"
-              : "provisional",
-      });
-      const gateStepId = traceStoreRef.current.startStep(
-        traceId,
-        "Advisor turn gate",
-        {
-          action: turnGate.action,
-          reason: turnGate.reason,
-          ...formatAdvisorTurnIntentForTrace(turnGate),
-          ...phaseControlMetadata,
-          ...keywordIntentEvidence,
-          turnId: turn.id,
-          transcriptChars: turn.text.trim().length,
-          wordEquivalent,
-          activeScreenTask: Boolean(activeScreenTask),
-          activeInterviewTask: Boolean(activeInterviewTask),
-          contextPromptEligible: turnGate.contextPromptEligible,
-          audioSegmentSeq: segment.sequence,
-          audioSessionId: segment.sessionId,
-        }
-      );
-      traceStoreRef.current.finishStep(traceId, gateStepId, "success");
-
-      const currentQuestionType =
-        normalizeCanonicalQuestionType(
-          inferCanonicalQuestionTypeFromText(
-            projectedSemanticEvidenceText
-          )
-        ) ?? "unknown";
-      const answerFocusQuestionType =
-        normalizeCanonicalQuestionType(
-          inferCanonicalQuestionTypeFromText(
-            projectedAnswerFocusText
-          )
-        ) ?? "unknown";
-      traceStoreRef.current.updateMetadata(traceId, {
-        primaryAskAnswerFocusQuestionTypeProposal:
-          answerFocusQuestionType,
-        primaryAskSemanticEvidenceQuestionTypeProposal:
-          currentQuestionType,
-        primaryAskQuestionTypeProposalChanged:
-          answerFocusQuestionType !== currentQuestionType,
-      });
-      const sectionHintConsumption = consumeInterviewSectionHint({
-        hint: pendingInterviewSectionHintRef.current,
-        questionId: turn.id,
-        currentQuestionType,
-        substantive: turnGate.action === "answer-refresh",
-        sessionId: activeContextState.sessionId,
-        runtimeEpoch: runtimeEpochRef.current,
-        now: turn.endedAt,
-      });
-      const questionTypeAxisConflict = detectRuntimeAxisConflict({
-        axis: "question-type",
-        proposals: [
-          {
-            source: "question-type-lexical",
-            value:
-              currentQuestionType === "unknown"
-                ? undefined
-                : currentQuestionType,
-            eligible: currentQuestionType !== "unknown",
-            productionEligible: true,
-          },
-          {
-            source: "interviewer-section-hint",
-            value: sectionHintConsumption.hint?.questionType,
-            eligible:
-              sectionHintConsumption.disposition === "applied" ||
-              sectionHintConsumption.disposition === "conflicted",
-            productionEligible: true,
-          },
-        ],
-      });
-      pendingInterviewSectionHintRef.current =
-        sectionHintConsumption.nextHint;
-      const taskBoundaryConsumption = consumeInterviewTaskBoundary({
-        boundary: pendingInterviewTaskBoundaryRef.current,
-        questionId: turn.id,
-        substantive:
-          logicalQuestionMaterialization.materialize &&
-          turnGate.action === "answer-refresh",
-        sessionId: activeContextState.sessionId,
-        runtimeEpoch: runtimeEpochRef.current,
-        now: turn.endedAt,
-      });
-      pendingInterviewTaskBoundaryRef.current =
-        taskBoundaryConsumption.nextBoundary;
-      traceStoreRef.current.updateMetadata(
-        traceId,
-        {
-          ...formatRuntimeAxisConflictForTrace(
-            questionTypeAxisConflict,
-            "questionTypeAxis"
-          ),
-          ...formatInterviewTaskBoundaryForTrace(
-            taskBoundaryConsumption
-          ),
-        }
-      );
-      if (sectionHintConsumption.disposition !== "no-hint") {
-        const sectionHintMetadata = {
-          ...formatInterviewSectionHintForTrace(sectionHintConsumption),
-          sectionHintClassificationBefore: currentQuestionType,
-        };
-        traceStoreRef.current.updateMetadata(traceId, sectionHintMetadata);
-        sessionRecordingManagerRef.current?.recordCaptureLifecycle({
-          stage: "interview-section-hint-consumed",
-          traceId,
-          ...sectionHintMetadata,
-        });
-      }
-
-      const logicalQuestionUnit =
-        logicalQuestionMaterialization.materialize
-          ? buildLogicalQuestionForTurn({
-              turn,
-              traceId,
-              intentDecision: turnGate,
-              explicitTaskSwitch:
-                transitionTurnDecision.detected ||
-                sectionHintConsumption.disposition === "applied" ||
-                taskBoundaryConsumption.disposition === "applied",
-              sectionHint:
-                sectionHintConsumption.disposition === "applied"
-                  ? sectionHintConsumption.hint
-                  : undefined,
-              taskBoundaryEvidence:
-                taskBoundaryConsumption.disposition === "applied"
-                  ? taskBoundaryConsumption.boundary
-                  : undefined,
-              primaryAskProjection,
-              commitCanonical:
-                logicalQuestionPublication.publishCanonical,
-            })
-          : undefined;
-      if (
-        logicalQuestionUnit &&
-        logicalQuestionPublication.publishCanonical
-      ) {
-        publishCanonicalLogicalQuestionTarget({
-          logicalQuestionUnit,
-          traceId,
-          turn,
-          intentDecision: turnGate,
-        });
-      } else if (logicalQuestionUnit) {
-        publishResponseRecoveryTarget({
-          logicalQuestionUnit,
-          traceId,
-          turn,
-          intentDecision: turnGate,
-        });
-      }
-
-      if (
-        turnGate.action === "ignore" &&
-        responseOpportunityLocalDecision.disposition ===
-          "deterministic-no-output"
-      ) {
-        if (logicalQuestionUnit) {
-          scheduleSemanticTaxonomyShadow({
-            turn,
-            traceId,
-            turnGateAction: taxonomyTurnGateAction,
-            logicalQuestionUnit,
-            questionTypeAxisConflict,
-          });
-        }
-        traceStoreRef.current.updateMetadata(traceId, {
-          acceptedSpeechDisposition: "low-value-ignored",
-          transcriptAppendDisposition: "suppressed",
-          transcriptAppendReason: turnGate.reason,
-        });
-        const ignoredStepId = traceStoreRef.current.startStep(
-          traceId,
-          "Transcript ignored",
-          {
-            reason: turnGate.reason,
-            transcriptChars: turn.text.trim().length,
-            activeScreenTask: Boolean(activeScreenTask),
-            activeInterviewTask: Boolean(activeInterviewTask),
-          }
-        );
-        traceStoreRef.current.finishStep(traceId, ignoredStepId, "success");
-        traceStoreRef.current.finishTrace(traceId, "success");
-        setState((previous) => ({
-          ...previous,
-          status: runtimeActiveRef.current ? "listening" : "idle",
-        }));
-        return;
-      }
-
-      turn.contextPromptEligible = turnGate.contextPromptEligible;
-      turn.contextFusionStatus = turnGate.contextPromptEligible
-        ? "none"
-        : "debug-only";
-
-      const { contextState } = appendTranscriptTurnForTrace(
-        turn,
-        traceId,
-        segment,
-        {
-          turnGateAction: turnGate.action,
-          turnGateReason: turnGate.reason,
-        }
-      );
-      if (turnGate.action === "state-update") {
-        const updatedAt = Date.now();
-        const stateUpdatedTask = buildStateUpdatedInterviewTask(
-          contextState.taskRuntime.parent,
-          turn,
-          updatedAt
-        );
-        if (stateUpdatedTask) {
-          const previousDeadline = contextManagerRef.current.getTaskDeadlineControl().parent;
-          submitTaskRuntimeTransition(contextManagerRef.current, {
-            transition: contextState.taskRuntime.parent?.child && !stateUpdatedTask.child
-              ? "resume-parent"
-              : "update-parent-context",
-            reason: "turn-gate-state-update",
-            parent: stateUpdatedTask,
-            deadlineDelta: {
-              parent: {
-                ownerId: stateUpdatedTask.id,
-                deadline: previousDeadline?.ownerId === stateUpdatedTask.id && previousDeadline.deadline
-                  ? Math.max(previousDeadline.deadline, updatedAt + 5 * 60_000)
-                  : undefined,
-              },
-            },
-          });
-        }
-        const nextContextState = contextManagerRef.current.getState();
-        traceStoreRef.current.updateMetadata(traceId, {
-          turnGateAction: "state-update",
-          turnGateReason: turnGate.reason,
-          ...getActiveMeetingTaskTraceMetadata(
-            nextContextState.activeMeetingTask
-          ),
-          activeInterviewParentId:
-            nextContextState.taskRuntime.parent?.id,
-          activeInterviewParentKind:
-            nextContextState.taskRuntime.parent?.stableKind,
-          activeInterviewParentPhase:
-            nextContextState.taskRuntime.parent?.playbookPhase,
-        });
-        const stateUpdateStepId = traceStoreRef.current.startStep(
-          traceId,
-          "Interview task state updated",
-          {
-            reason: turnGate.reason,
-            turnId: turn.id,
-            ...getActiveMeetingTaskTraceMetadata(
-              nextContextState.activeMeetingTask
-            ),
-            activeInterviewTaskId:
-              nextContextState.taskRuntime.parent?.id,
-            activeInterviewTaskKind:
-              nextContextState.taskRuntime.parent?.stableKind,
-            transcriptChars: turn.text.trim().length,
-          }
-        );
-        traceStoreRef.current.finishStep(
-          traceId,
-          stateUpdateStepId,
-          "success"
-        );
-        setState((previous) => ({
-          ...previous,
-          status: runtimeActiveRef.current ? "listening" : "idle",
-          transcriptTurns: nextContextState.transcriptTurns,
-          interviewSessionContext:
-            nextContextState.interviewSessionContext,
-          taskRuntime: nextContextState.taskRuntime,
-          activeMeetingTask: nextContextState.activeMeetingTask,
-        }));
-      }
-      let advisorQuestionLineage = adjacentConstraintDecision.lineage;
-      if (
-        !hasActiveInterviewTask &&
-        turnGate.intent === "direct-question" &&
-        turnGate.action === "answer-refresh" &&
-        turnGate.executionAuthorized
-      ) {
-        const provisionalQuestionLineage = createAuthorizedQuestionLineage({
-          traceId,
-          triggerTurnId: turn.id,
-          sessionId: contextState.sessionId,
-          runtimeEpoch: runtimeEpochRef.current,
-          action: turnGate.action,
-          executionAuthorized: turnGate.executionAuthorized,
-        });
-        if (provisionalQuestionLineage) {
-          const adjacentQuestionScope = createAdjacentQuestionScope({
-            lineage: provisionalQuestionLineage,
-            questionTurnId: turn.id,
-            questionTraceId: traceId,
-            questionText:
-              getLogicalQuestionAnswerFocusText(logicalQuestionUnit) ||
-              projectedAnswerFocusText,
-            sessionId: contextState.sessionId,
-            runtimeEpoch: runtimeEpochRef.current,
-          });
-          adjacentQuestionScopeRef.current = adjacentQuestionScope;
-          advisorQuestionLineage = provisionalQuestionLineage;
-          traceStoreRef.current.updateMetadata(
-            traceId,
-            formatAdjacentQuestionScopeForTrace(adjacentQuestionScope)
-          );
-        }
-      }
-      let runtimeAdjudication:
-        | RuntimeAdjudicationScheduleHandle
-        | undefined;
-      if (logicalQuestionUnit) {
-        runtimeAdjudication = scheduleSemanticTaxonomyShadow({
-          turn,
-          traceId,
-          turnGateAction:
-            responseOpportunityLocalDecision.disposition ===
-            "runtime-required"
-              ? "answer-refresh"
-              : taxonomyTurnGateAction,
-          logicalQuestionUnit,
-          questionTypeAxisConflict,
-        });
-        const responseOpportunityExecutionMode =
-          resolveResponseOpportunityExecutionMode(
-            responseOpportunityLocalDecision
-          );
-        if (responseOpportunityExecutionMode) {
-          scheduleResponseOpportunityInference({
-            turn,
-            traceId,
-            logicalQuestionUnit,
-            originalDecision: turnGate,
-            executionMode: responseOpportunityExecutionMode,
-            onOutputAuthorized: ({
-              intentDecision,
-              logicalQuestionUnit: releasedLogicalQuestionUnit,
-            }) => {
-              const latestContext = contextManagerRef.current.getState();
-              const mode = latestContext.activeMeetingTask?.screen
-                ? "screen-anchored"
-                : "live";
-              if (
-                scheduleAdvisorAfterQuestionTypeWindow({
-                  handle: runtimeAdjudication,
-                  mode,
-                  traceId,
-                  turnIntentDecision: intentDecision,
-                  triggerTurnId: turn.id,
-                  questionLineage: advisorQuestionLineage,
-                  logicalQuestionUnit: releasedLogicalQuestionUnit,
-                })
-              ) {
-                return;
-              }
-              const debounceStepId = traceStoreRef.current.startStep(
-                traceId,
-                "Advisor debounce scheduled",
-                {
-                  debounceMs: ADVISOR_DEBOUNCE_MS,
-                  reason: intentDecision.reason,
-                  runtimeIntentReleasedAction: "answer",
-                }
-              );
-              traceStoreRef.current.finishStep(
-                traceId,
-                debounceStepId,
-                "success"
-              );
-              scheduleAdvisor(
-                mode,
-                traceId,
-                intentDecision,
-                turn.id,
-                advisorQuestionLineage,
-                releasedLogicalQuestionUnit,
-                "input-evidence"
-              );
-            },
-          });
-          return;
-        }
-      }
-
-      if (turnGate.action === "state-update") {
-        traceStoreRef.current.finishTrace(traceId, "success");
-        return;
-      }
-
-      if (turnGate.action !== "answer-refresh") {
-        traceStoreRef.current.finishTrace(traceId, "success");
-        return;
-      }
-
-      if (
-        logicalQuestionUnit &&
-        scheduleAdvisorAfterQuestionTypeWindow({
-          handle: runtimeAdjudication,
-          mode: contextState.activeMeetingTask?.screen
-            ? "screen-anchored"
-            : "live",
-          traceId,
-          turnIntentDecision: turnGate,
-          triggerTurnId: turn.id,
-          questionLineage: advisorQuestionLineage,
-          logicalQuestionUnit,
-        })
-      ) {
-        return;
-      }
-
-      const debounceStepId = traceStoreRef.current.startStep(
-        traceId,
-        "Advisor debounce scheduled",
-        { debounceMs: ADVISOR_DEBOUNCE_MS, reason: turnGate.reason }
-      );
-      traceStoreRef.current.finishStep(traceId, debounceStepId, "success");
-      scheduleAdvisor(
-        contextState.activeMeetingTask?.screen ? "screen-anchored" : "live",
-        traceId,
-        turnGate,
-        turn.id,
-        advisorQuestionLineage,
-        logicalQuestionUnit
-        );
+      processPostBufferThemTurn(turn, segment);
     },
     [
       appendTranscriptTurnForTrace,
       buildLogicalQuestionForTurn,
       consumePendingSentenceCompletion,
+      processPostBufferThemTurn,
       flushPendingSentenceCompletion,
       holdPendingConfirmation,
       holdPendingSentenceCompletion,
@@ -36500,9 +36217,6 @@ export function useMeetingAssistant() {
       });
       const reversalIntent: AdvisorTurnIntentDecision = {
         ...inferredIntent,
-        action: "answer-refresh",
-        recommendedAction: "answer-refresh",
-        executionAuthorized: true,
         reason: "manual-term-correction-reversal",
       };
       publishCanonicalLogicalQuestionTarget({
@@ -36518,6 +36232,7 @@ export function useMeetingAssistant() {
         logicalQuestionUnit: reversal.logicalQuestionUnit,
       });
       scheduleAdvisorAfterQuestionTypeWindow({
+        advisorJobSource: "response-action",
         handle: runtimeAdjudication,
         mode: contextState.activeMeetingTask?.screen
           ? "screen-anchored"
@@ -37572,17 +37287,12 @@ function shortcutRejectionMessage(
 }
 
 function toObservedAdvisorAction(
-  decision: AdvisorTurnIntentDecision
+  decision: AdvisorTurnIntentDecision,
+  responseAuthorized = false
 ): ForceAdviseTargetPresentation["observedAction"] {
-  if (decision.executionAuthorized) return "advised";
+  if (responseAuthorized) return "advised";
   if (decision.intent === "incomplete") return "buffered";
-  if (
-    decision.action === "append-only" ||
-    decision.action === "state-update"
-  ) {
-    return "append-only";
-  }
-  return "suppressed";
+  return "append-only";
 }
 
 function applyStrictProjectAnchorPolicy({
@@ -38317,24 +38027,6 @@ function inferAdvisorSubtaskIntent(
     return "clarification";
   }
   return "unknown";
-}
-
-function buildStateUpdatedInterviewTask(
-  task: ActiveInterviewParent | undefined,
-  turn: TranscriptTurn,
-  now = Date.now()
-): ActiveInterviewParent | undefined {
-  if (!task) return undefined;
-
-  return {
-    ...task,
-    updatedAt: now,
-    revisions: task.revisions + 1,
-    child:
-      task.child && isExplicitResumeParentTranscript(turn.text)
-        ? undefined
-        : task.child,
-  };
 }
 
 function updateInterviewTaskContinuityForAnswer({

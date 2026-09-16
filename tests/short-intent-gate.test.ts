@@ -85,17 +85,17 @@ test("keeps exact fillers local while reviewing clear requests in runtime shadow
       hasActiveTask: true,
     }),
   });
-  assert.equal(ask.disposition, "deterministic-output");
-  assert.equal(ask.decision, "output-request");
+  assert.equal(ask.disposition, "runtime-required");
+  assert.equal(ask.decision, "unclear");
   assert.equal(ask.runtimeReviewRequired, true);
   assert.equal(
     resolveResponseOpportunityExecutionMode(ask),
-    "speculative-authoritative"
+    "authoritative"
   );
   assert.equal(resolveResponseOpportunityExecutionMode(filler), undefined);
 });
 
-test("reviews a direct ask with constraints without making Runtime authoritative", () => {
+test("reviews a direct ask with constraints through the same authoritative RO route", () => {
   const text =
     "Please implement an LRU cache with O(1) get and put in Python.";
   const route = decideResponseOpportunityLocalRoute({
@@ -106,11 +106,11 @@ test("reviews a direct ask with constraints without making Runtime authoritative
     }),
   });
 
-  assert.equal(route.disposition, "deterministic-output");
-  assert.equal(route.decision, "output-request");
+  assert.equal(route.disposition, "runtime-required");
+  assert.equal(route.decision, "unclear");
   assert.equal(
     resolveResponseOpportunityExecutionMode(route),
-    "speculative-authoritative"
+    "authoritative"
   );
 });
 
@@ -127,10 +127,7 @@ test("sends contentful residual ambiguity to runtime regardless of length", () =
       decision: {
         ...localDecision,
         intent: "informational",
-        action: "append-only",
-        recommendedAction: "append-only",
         reason: "contentful-statement",
-        executionAuthorized: false,
       },
     });
     assert.equal(route.disposition, "runtime-required", text);
@@ -169,10 +166,6 @@ test("sends contentful logistics to runtime instead of granting local no-output 
     decision: {
       ...localDecision,
       intent: "logistics",
-      confidence: 0.99,
-      action: "append-only",
-      recommendedAction: "append-only",
-      executionAuthorized: false,
     },
   });
 
@@ -660,8 +653,7 @@ test("releases only high-confidence output requests", () => {
 
   assert.equal(output.released, true);
   assert.equal(output.generationDisposition, "output-authorized");
-  assert.equal(output.advisorDecision?.action, "answer-refresh");
-  assert.equal(output.advisorDecision?.executionAuthorized, true);
+  assert.equal("advisorDecision" in output, false, "RO resolves its own command, not a fake local permission DTO");
   assert.equal(noOutput.released, false);
   assert.equal(noOutput.reason, "high-confidence-no-output-request");
   assert.equal(noOutput.generationDisposition, "output-suppressed");

@@ -78,7 +78,7 @@ test("preserves local authority on wait timeout and rejects superseded work", as
   assert.equal(timedOut.disposition, "output-authorized");
   assert.equal(
     timedOut.reason,
-    "local-output-authority-preserved:gate-wait-timeout"
+    "response-null-hypothesis:gate-wait-timeout"
   );
   assert.equal(
     resolveResponseOpportunityEffectiveCommand(timedOut),
@@ -92,10 +92,7 @@ test("preserves local authority on wait timeout and rejects superseded work", as
 
 test("lets one response opportunity gate own refresh authority", () => {
   const localDenied = decideRefreshAuthority({
-    source: "live-turn",
-    turnIntentDecision: decideAdvisorTurnIntent("Kubernetes.", {
-      hasActiveTask: true,
-    }),
+      source: "live-turn"
   });
   const coordinator = new ResponseOpportunityGenerationGateCoordinator();
   const pending = coordinator.create(lease());
@@ -149,10 +146,7 @@ test("lets one response opportunity gate own refresh authority", () => {
 
 test("leaves refresh authority unchanged when no response gate exists", () => {
   const local = decideRefreshAuthority({
-    source: "live-turn",
-    turnIntentDecision: decideAdvisorTurnIntent("Yeah, yeah.", {
-      hasActiveTask: true,
-    }),
+      source: "live-turn"
   });
 
   assert.equal(

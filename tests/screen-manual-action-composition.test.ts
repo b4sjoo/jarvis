@@ -524,7 +524,7 @@ function withRegenerateExecution(h: ReturnType<typeof actionHarness>) {
     findInactiveGuard(hook);
     assert.ok(inactiveGuard, "production inactive-audio gate");
     if (evaluate(`(() => { ${inactiveGuard.getText(hook)}; return false; })()`, scope) !== false) return;
-    for (const name of ["inferredTurnIntentDecision", "hasExplicitAction", "executionAuthorization"]) {
+    for (const name of ["responseOpportunityGenerationAuthorized", "inferredTurnIntentDecision", "hasExplicitAction", "executionAuthorization"]) {
       scope[name] = initializer(name, scope);
     }
     admissions.push(scope.executionAuthorization);
@@ -553,7 +553,7 @@ test("G1 pure Screen Regenerate passes the real factory and executor gate", asyn
   const execution = withRegenerateExecution(h);
   await h.regenerate();
   assert.equal(execution.generated(), 1, JSON.stringify(h.events));
-  assert.equal(execution.admissions[0].reason, "force-bypass");
+  assert.equal(execution.admissions[0].reason, "response-authorized");
   assert.equal(h.events.at(-1).terminalDisposition, "completed");
   assert.equal(h.stableRef.current.logicalQuestionUnitId, before.logicalQuestionUnitId);
   assert.equal(h.stableRef.current.logicalQuestionRevision, before.logicalQuestionRevision);
@@ -573,7 +573,7 @@ test("G1 historical question or acknowledgement does not decide manual Regenerat
     const execution = withRegenerateExecution(h);
     await h.regenerate();
     assert.equal(execution.generated(), 1, text);
-    assert.equal(execution.admissions[0].reason, "force-bypass");
+    assert.equal(execution.admissions[0].reason, "response-authorized");
   }
 });
 

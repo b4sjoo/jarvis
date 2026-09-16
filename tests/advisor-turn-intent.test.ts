@@ -2,11 +2,18 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   applySourceOwnedPhaseControlToTurnIntent,
-  authorizeAdvisorExecution,
   decideAdvisorTurnIntent,
   formatAdvisorTurnIntentForTrace,
 } from "../src/lib/meeting/advisor-turn-intent.js";
 import { decideInterviewerAssumptionAuthorization } from "../src/lib/meeting/playbook-phase.js";
+
+function assertContentOnly(value: object) {
+  for (const key of ["action", "executionAuthorized", "enforcement", "confidence", "recommendedAction",
+    "contextPromptEligible", "wouldSuppress", "authoritySource", "advisorTurnEnforcement",
+    "advisorWouldSuppress", "advisorTurnConfidence", "advisorProviderCallAvoided", "advisorSuppressionOperation"]) {
+    assert.equal(key in value, false, `local content evidence must not produce ${key}`);
+  }
+}
 
 test("admits an authorized interviewer phase-control statement as a substantive refresh", () => {
   const base = decideAdvisorTurnIntent(
@@ -26,8 +33,8 @@ test("admits an authorized interviewer phase-control statement as a substantive 
   );
 
   assert.equal(base.phaseControl, undefined);
-  assert.equal(decision.action, "answer-refresh");
-  assert.equal(decision.executionAuthorized, true);
+  assertContentOnly(decision);
+  assertContentOnly(decision);
   assert.equal(decision.followupScopeSource, "active-task");
   assert.equal(decision.phaseControl?.signal, "assumption-authorized");
   assert.equal(
@@ -36,17 +43,17 @@ test("admits an authorized interviewer phase-control statement as a substantive 
   );
 });
 
-test("enforces abstention for a technical declarative statement", () => {
+test("labels a technical declarative statement without response authority", () => {
   const decision = decideAdvisorTurnIntent(
     "The control plane sends configuration to the data plane.",
     { hasActiveTask: false }
   );
 
   assert.equal(decision.intent, "informational");
-  assert.equal(decision.action, "append-only");
-  assert.equal(decision.enforcement, "enforce");
-  assert.equal(decision.executionAuthorized, false);
-  assert.ok(decision.confidence >= 0.85);
+  assertContentOnly(decision);
+  assertContentOnly(decision);
+  assertContentOnly(decision);
+  assertContentOnly(decision);
 });
 
 test("preserves explicit coding and system-design requests", () => {
@@ -61,8 +68,8 @@ test("preserves explicit coding and system-design requests", () => {
   ]) {
     const decision = decideAdvisorTurnIntent(text, { hasActiveTask: false });
     assert.equal(decision.intent, "direct-question", text);
-    assert.equal(decision.action, "answer-refresh", text);
-    assert.equal(decision.executionAuthorized, true, text);
+    assertContentOnly(decision);
+    assertContentOnly(decision);
   }
 });
 
@@ -76,8 +83,8 @@ test("recognizes discourse-prefixed and sentence-merged direct questions", () =>
       hasActiveTask: true,
     });
     assert.equal(decision.intent, "direct-question", text);
-    assert.equal(decision.action, "answer-refresh", text);
-    assert.equal(decision.executionAuthorized, true, text);
+    assertContentOnly(decision);
+    assertContentOnly(decision);
     assert.ok(
       decision.evidence.some((item) =>
         /embedded-interrogative|cjk-question/.test(item)
@@ -96,21 +103,21 @@ test("keeps indirect wh clauses as declarative context", () => {
     const decision = decideAdvisorTurnIntent(text, {
       hasActiveTask: true,
     });
-    assert.equal(decision.action, "append-only", text);
-    assert.equal(decision.executionAuthorized, false, text);
+    assertContentOnly(decision);
+    assertContentOnly(decision);
   }
 });
 
-test("keeps unbuffered incomplete speech in shadow mode as a fail-open fallback", () => {
+test("labels incomplete speech without granting or suppressing a response", () => {
   const decision = decideAdvisorTurnIntent("Can you describe...", {
     hasActiveTask: false,
   });
 
   assert.equal(decision.intent, "incomplete");
-  assert.equal(decision.enforcement, "shadow");
-  assert.equal(decision.recommendedAction, "append-only");
-  assert.equal(decision.action, "answer-refresh");
-  assert.equal(decision.executionAuthorized, true);
+  assertContentOnly(decision);
+  assertContentOnly(decision);
+  assertContentOnly(decision);
+  assertContentOnly(decision);
 });
 
 test("preserves active-task constraints and elliptical technical probes", () => {
@@ -119,14 +126,14 @@ test("preserves active-task constraints and elliptical technical probes", () => 
     { hasActiveTask: true }
   );
   assert.equal(constraint.intent, "constraint-or-follow-up");
-  assert.equal(constraint.executionAuthorized, true);
+  assertContentOnly(constraint);
 
   const elliptical = decideAdvisorTurnIntent("Latency", {
     hasActiveTask: true,
   });
   assert.equal(elliptical.intent, "constraint-or-follow-up");
   assert.equal(elliptical.reason, "active-task-elliptical-probe");
-  assert.equal(elliptical.executionAuthorized, true);
+  assertContentOnly(elliptical);
 });
 
 test("uses provisional question scope for corrections and follow-ups", () => {
@@ -135,7 +142,7 @@ test("uses provisional question scope for corrections and follow-ups", () => {
     { hasActiveTask: false, hasRecentQuestionContext: true }
   );
   assert.equal(correction.intent, "correction");
-  assert.equal(correction.action, "answer-refresh");
+  assertContentOnly(correction);
   assert.equal(correction.reason, "scoped-correction-direct-ask");
   assert.equal(correction.followupScopeSource, "provisional-question");
 
@@ -144,7 +151,7 @@ test("uses provisional question scope for corrections and follow-ups", () => {
     { hasActiveTask: false, hasRecentQuestionContext: true }
   );
   assert.equal(constraint.intent, "correction");
-  assert.equal(constraint.action, "answer-refresh");
+  assertContentOnly(constraint);
   assert.equal(constraint.reason, "recent-question-correction");
   assert.equal(constraint.followupScopeSource, "provisional-question");
 });
@@ -155,7 +162,7 @@ test("allows an explicit language constraint only with provisional question scop
     hasRecentQuestionContext: true,
   });
   assert.equal(scoped.intent, "constraint-or-follow-up");
-  assert.equal(scoped.action, "answer-refresh");
+  assertContentOnly(scoped);
   assert.equal(scoped.reason, "recent-question-constraint");
   assert.equal(scoped.followupScopeSource, "provisional-question");
   assert.ok(scoped.evidence.includes("programming-language:Python"));
@@ -165,9 +172,9 @@ test("allows an explicit language constraint only with provisional question scop
     hasRecentQuestionContext: false,
   });
   assert.equal(unscoped.intent, "informational");
-  assert.equal(unscoped.action, "append-only");
+  assertContentOnly(unscoped);
   assert.equal(unscoped.reason, "unscoped-constraint");
-  assert.equal(unscoped.executionAuthorized, false);
+  assertContentOnly(unscoped);
 });
 
 test("preserves a self-contained direct ask when the same turn adds constraints", () => {
@@ -182,13 +189,13 @@ test("preserves a self-contained direct ask when the same turn adds constraints"
       hasRecentQuestionContext: false,
     });
     assert.equal(decision.intent, "constraint-or-follow-up", text);
-    assert.equal(decision.action, "answer-refresh", text);
+    assertContentOnly(decision);
     assert.equal(
       decision.reason,
       "self-contained-constraint-direct-ask",
       text
     );
-    assert.equal(decision.executionAuthorized, true, text);
+    assertContentOnly(decision);
   }
 });
 
@@ -203,7 +210,7 @@ test("allows each bounded adjacent constraint family with provisional scope", ()
       hasRecentQuestionContext: true,
     });
     assert.equal(decision.intent, "constraint-or-follow-up", text);
-    assert.equal(decision.action, "answer-refresh", text);
+    assertContentOnly(decision);
     assert.equal(decision.reason, "recent-question-constraint", text);
   }
 });
@@ -215,7 +222,7 @@ test("direct asks survive correction wording without question scope", () => {
   );
 
   assert.equal(decision.intent, "correction");
-  assert.equal(decision.action, "answer-refresh");
+  assertContentOnly(decision);
   assert.equal(decision.reason, "self-contained-correction-direct-ask");
   assert.equal(decision.followupScopeSource, "none");
 });
@@ -227,7 +234,7 @@ test("keeps a truly unscoped correction append-only", () => {
   });
 
   assert.equal(decision.intent, "correction");
-  assert.equal(decision.action, "append-only");
+  assertContentOnly(decision);
   assert.equal(decision.reason, "unscoped-correction");
   assert.equal(decision.followupScopeSource, "none");
 });
@@ -239,9 +246,9 @@ test("keeps useful active-task statements without refreshing the answer", () => 
   );
 
   assert.equal(decision.intent, "informational");
-  assert.equal(decision.action, "append-only");
-  assert.equal(decision.contextPromptEligible, true);
-  assert.equal(decision.executionAuthorized, false);
+  assertContentOnly(decision);
+  assertContentOnly(decision);
+  assertContentOnly(decision);
 });
 
 test("recognizes compact recruiter-style elliptical prompts", () => {
@@ -252,19 +259,19 @@ test("recognizes compact recruiter-style elliptical prompts", () => {
 
   assert.equal(decision.intent, "direct-question");
   assert.equal(decision.reason, "interview-elliptical-prompt");
-  assert.equal(decision.executionAuthorized, true);
+  assertContentOnly(decision);
 });
 
-test("keeps medium-confidence ambiguous turns in shadow fail-open mode", () => {
+test("leaves ambiguous content unknown without fabricated confidence or permissions", () => {
   const decision = decideAdvisorTurnIntent("Kubernetes", {
     hasActiveTask: false,
   });
 
   assert.equal(decision.intent, "unknown");
-  assert.equal(decision.enforcement, "shadow");
-  assert.equal(decision.wouldSuppress, true);
-  assert.equal(decision.action, "answer-refresh");
-  assert.equal(decision.executionAuthorized, true);
+  assertContentOnly(decision);
+  assertContentOnly(decision);
+  assertContentOnly(decision);
+  assertContentOnly(decision);
 });
 
 test("requires context before a short confirmation can refresh an answer", () => {
@@ -272,14 +279,14 @@ test("requires context before a short confirmation can refresh an answer", () =>
     hasActiveTask: true,
   });
   assert.equal(unscoped.intent, "confirmation");
-  assert.equal(unscoped.executionAuthorized, false);
+  assertContentOnly(unscoped);
 
   const contextual = decideAdvisorTurnIntent("Yes", {
     hasActiveTask: true,
     hasPendingConfirmation: true,
   });
   assert.equal(contextual.intent, "confirmation");
-  assert.equal(contextual.executionAuthorized, true);
+  assertContentOnly(contextual);
 });
 
 test("suppresses exact acknowledgement variants without suppressing a real add-on ask", () => {
@@ -295,23 +302,11 @@ test("suppresses exact acknowledgement variants without suppressing a real add-o
       hasActiveTask: true,
     });
     assert.equal(decision.intent, "confirmation", text);
-    assert.equal(decision.action, "ignore", text);
+    assertContentOnly(decision);
     assert.equal(decision.reason, "exact-acknowledgement", text);
-    assert.equal(decision.executionAuthorized, false, text);
+    assertContentOnly(decision);
     assert.ok(decision.evidence.includes("exact-acknowledgement"), text);
-    assert.deepEqual(
-      {
-        operation:
-          formatAdvisorTurnIntentForTrace(decision).advisorSuppressionOperation,
-        avoided:
-          formatAdvisorTurnIntentForTrace(decision).advisorProviderCallAvoided,
-      },
-      {
-        operation: "exact-acknowledgement",
-        avoided: true,
-      },
-      text
-    );
+    assertContentOnly(formatAdvisorTurnIntentForTrace(decision));
   }
 
   const addOn = decideAdvisorTurnIntent(
@@ -319,40 +314,14 @@ test("suppresses exact acknowledgement variants without suppressing a real add-o
     { hasActiveTask: true }
   );
   assert.equal(addOn.intent, "direct-question");
-  assert.equal(addOn.action, "answer-refresh");
-  assert.equal(addOn.executionAuthorized, true);
+  assertContentOnly(addOn);
+  assertContentOnly(addOn);
 
   const acousticAddOn = decideAdvisorTurnIntent(
     "Mm, OK, now estimate QPS.",
     { hasActiveTask: true }
   );
   assert.equal(acousticAddOn.intent, "direct-question");
-  assert.equal(acousticAddOn.action, "answer-refresh");
-  assert.equal(acousticAddOn.executionAuthorized, true);
-});
-
-test("execution authorization fails closed unless intent or an explicit action permits work", () => {
-  assert.deepEqual(
-    authorizeAdvisorExecution({
-      force: false,
-      hasExplicitAction: false,
-    }),
-    {
-      authorized: false,
-      reason: "missing-turn-intent-decision",
-      bypassed: false,
-    }
-  );
-
-  assert.deepEqual(
-    authorizeAdvisorExecution({
-      force: false,
-      hasExplicitAction: true,
-    }),
-    {
-      authorized: true,
-      reason: "explicit-action-bypass",
-      bypassed: true,
-    }
-  );
+  assertContentOnly(acousticAddOn);
+  assertContentOnly(acousticAddOn);
 });

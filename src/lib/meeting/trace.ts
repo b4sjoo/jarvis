@@ -341,7 +341,6 @@ export interface MeetingAnswerStabilitySummary {
   unauthorizedVisibleRefreshCount: number;
   visibleRefreshWithoutPrimaryAskCount: number;
   visibleRefreshWithoutPrimaryAskByAuthority: Record<string, number>;
-  suppressionRecommendedVisibleRefreshCount: number;
   primaryAskProjectionDisagreementCount: number;
   runtimeIntentContradictedVisibleRefreshCount: number;
   manualHardOverrideRefreshCount: number;
@@ -750,12 +749,6 @@ function summarizeAnswerStability(
       countVisibleRefreshesByAuthority(
         metadata.filter(visibleRefreshWithoutPrimaryAsk)
       ),
-    suppressionRecommendedVisibleRefreshCount: count(
-      (value) =>
-        value.visibleAnswerChanged === true &&
-        value.advisorWouldSuppress === true &&
-        value.refreshAuthorityHardOverride !== true
-    ),
     primaryAskProjectionDisagreementCount: count(
       (value) =>
         value.visibleAnswerChanged === true &&

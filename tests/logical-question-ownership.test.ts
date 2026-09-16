@@ -56,15 +56,13 @@ test("source ownership is immutable even when id and revision match", () => {
 test("materializes every non-filler turn as a recoverable logical question", () => {
   assert.deepEqual(
     decideLogicalQuestionMaterialization({
-      action: "answer-refresh",
-      wordEquivalent: 1,
+        wordEquivalent: 1
     }),
-    { materialize: true, reason: "answer-refresh" }
+    { materialize: true, reason: "substantive-non-filler-turn" }
   );
   assert.deepEqual(
     decideLogicalQuestionMaterialization({
-      action: "ignore",
-      wordEquivalent: 8,
+        wordEquivalent: 8
     }),
     {
       materialize: true,
@@ -73,16 +71,14 @@ test("materializes every non-filler turn as a recoverable logical question", () 
   );
   assert.deepEqual(
     decideLogicalQuestionMaterialization({
-      action: "ignore",
-      wordEquivalent: 2,
+        wordEquivalent: 2
     }),
     { materialize: true, reason: "substantive-non-filler-turn" }
   );
   assert.deepEqual(
     decideLogicalQuestionMaterialization({
-      action: "ignore",
-      wordEquivalent: 4,
-      exactHighFiller: true,
+        wordEquivalent: 4,
+        exactHighFiller: true
     }),
     { materialize: false, reason: "exact-high-filler" }
   );
@@ -90,8 +86,7 @@ test("materializes every non-filler turn as a recoverable logical question", () 
 
 test("keeps every runtime-reviewed intent provisional so it cannot invalidate a generation", () => {
   const materialization = decideLogicalQuestionMaterialization({
-    action: "answer-refresh",
-    wordEquivalent: 2,
+      wordEquivalent: 2
   });
 
   assert.deepEqual(
@@ -167,16 +162,9 @@ test("a split-question revision stales every lease bound to the earlier turn", (
     sessionId: "session_1",
     runtimeEpoch: 4,
     intentDecision: {
-      intent: "direct-question",
-      confidence: 0.9,
-      evidence: ["explicit-design-request"],
-      action: "answer-refresh",
-      recommendedAction: "answer-refresh",
-      reason: "direct-question",
-      contextPromptEligible: true,
-      enforcement: "allow",
-      wouldSuppress: false,
-      executionAuthorized: true,
+        intent: "direct-question",
+        evidence: ["explicit-design-request"],
+        reason: "direct-question"
     },
     now: 20,
   });
@@ -195,16 +183,9 @@ test("a split-question revision stales every lease bound to the earlier turn", (
     runtimeEpoch: 4,
     previousUnit: first,
     intentDecision: {
-      intent: "constraint-or-follow-up",
-      confidence: 0.9,
-      evidence: ["elliptical-continuation"],
-      action: "answer-refresh",
-      recommendedAction: "answer-refresh",
-      reason: "scoped-follow-up",
-      contextPromptEligible: true,
-      enforcement: "allow",
-      wouldSuppress: false,
-      executionAuthorized: true,
+        intent: "constraint-or-follow-up",
+        evidence: ["elliptical-continuation"],
+        reason: "scoped-follow-up"
     },
     now: 40,
   });

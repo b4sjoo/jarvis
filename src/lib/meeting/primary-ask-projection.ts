@@ -450,10 +450,8 @@ export function reconcilePrimaryAskTurnDecision(
       : projection.speechAct === "acknowledgement"
         ? "confirmation"
         : "informational";
-  const action = projection.disposition === "ignore" ? "ignore" : "append-only";
   return {
     intent,
-    confidence: projection.confidence,
     evidence: unique([
       "primary-ask-projection",
       projection.reason,
@@ -461,13 +459,7 @@ export function reconcilePrimaryAskTurnDecision(
         ? ["quoted-or-future-example-excluded"]
         : []),
     ]),
-    action,
-    recommendedAction: action,
     reason: projection.reason,
-    contextPromptEligible: action === "append-only",
-    enforcement: "enforce",
-    wouldSuppress: true,
-    executionAuthorized: false,
     followupScopeSource: decision.followupScopeSource,
   };
 }

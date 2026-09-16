@@ -4,6 +4,20 @@
   "updatedAt": "2026-09-10",
   "entries": [
     {
+      "id": "local-turn-intent-permission-layer",
+      "symbolOrSurface": "Local Turn Intent authorization factories, permission fields and suppression writer",
+      "verdict": "migrate-then-delete",
+      "ownerTaskId": 137,
+      "replacement": "Content-only local evidence and the single Response Opportunity grant consumed by generation and publication",
+      "persistedDataImpact": "recording",
+      "historicalReader": "Historical offline readers retain old fields as recorded observations; new live producers do not write or consume them.",
+      "proofCommands": ["npm test", "npm run verify:architecture", "npm run build"],
+      "deletionGate": "Actual normal and buffered RO callbacks plus stable-output consumers pass; old local authorization cannot deny an accepted response.",
+      "rollbackBoundary": "Local DTO, all live consumers and single post-buffer ingress migrate together. No recording or human label rewrites.",
+      "status": "deleted",
+      "forbiddenPatterns": ["authorizeAdvisorExecution", "suppressionRecommendedVisibleRefreshCount"]
+    },
+    {
       "id": "authorized-source-raw-window-intersection",
       "symbolOrSurface": "Authorized parent and child source bodies depend on membership in the raw transcript window",
       "verdict": "migrate-then-delete",

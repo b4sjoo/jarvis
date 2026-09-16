@@ -389,8 +389,7 @@ test("filler preserves the active lease and a later substantive LQU wins publica
     hasRecentQuestionContext: true,
   });
   const fillerRefresh = decideRefreshAuthority({
-    source: "live-turn",
-    turnIntentDecision: fillerIntent,
+      source: "live-turn"
   });
   assert.equal(fillerRefresh.authorized, false);
   assert.equal(

@@ -125,17 +125,10 @@ test("inherits provisional lineage only for explicitly scoped follow-ups", () =>
   assert.equal(
     resolveInheritedQuestionLineageForTurnIntent(
       {
-        intent: "correction",
-        confidence: 0.96,
-        evidence: ["explicit-correction"],
-        action: "answer-refresh",
-        recommendedAction: "answer-refresh",
-        reason: "recent-question-correction",
-        contextPromptEligible: true,
-        enforcement: "allow",
-        wouldSuppress: false,
-        executionAuthorized: true,
-        followupScopeSource: "provisional-question",
+          intent: "correction",
+          evidence: ["explicit-correction"],
+          reason: "recent-question-correction",
+          followupScopeSource: "provisional-question"
       },
       lineage
     ),
@@ -144,16 +137,9 @@ test("inherits provisional lineage only for explicitly scoped follow-ups", () =>
   assert.equal(
     resolveInheritedQuestionLineageForTurnIntent(
       {
-        intent: "direct-question",
-        confidence: 0.97,
-        evidence: ["question-mark"],
-        action: "answer-refresh",
-        recommendedAction: "answer-refresh",
-        reason: "direct-question-or-task",
-        contextPromptEligible: true,
-        enforcement: "allow",
-        wouldSuppress: false,
-        executionAuthorized: true,
+          intent: "direct-question",
+          evidence: ["question-mark"],
+          reason: "direct-question-or-task"
       },
       lineage
     ),

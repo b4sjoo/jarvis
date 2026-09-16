@@ -1,8 +1,6 @@
 import type { AdvisorJobSource } from "./types.js";
 import { createMeetingId } from "./meeting-id.js";
 
-import type { AdvisorTurnIntentDecision } from "./advisor-turn-intent.js";
-
 import type { CurrentQuestionSettlementDecision } from "./current-question-settlement.js";
 
 import type { AnswerArtifactSection } from "./meeting-task-runtime-transition.js";
@@ -12,7 +10,6 @@ export type AnswerArtifactFamily = "answer" | "code" | "whiteboard";
 
 export type RefreshAuthorityKind =
   | "automatic-substantive"
-  | "shadow-fail-open"
   | "runtime-intent-answer"
   | "runtime-type-adjudication-output-only"
   | "manual-hard-override"
@@ -24,7 +21,6 @@ export interface RefreshAuthorityDecision {
   kind: RefreshAuthorityKind;
   reason:
     | "substantive-turn"
-    | "shadow-fail-open"
     | "manual-correction"
     | "explicit-response-action"
     | "force-advise"
@@ -34,10 +30,7 @@ export interface RefreshAuthorityDecision {
     | "response-opportunity-pending"
     | "response-opportunity-output-authorized"
     | "response-opportunity-preserve-stable-answer"
-    | "missing-turn-intent"
-    | "turn-intent-not-authorized"
-    | "turn-intent-not-answer-refresh"
-    | "shadow-fail-open-disallowed";
+    | "missing-response-authority";
   hardOverride: boolean;
   maySupersedeGeneration: boolean;
   authorityId?: string;
@@ -141,7 +134,6 @@ export interface AnswerGenerationLeaseAuthorization {
 
 export function decideRefreshAuthority(input: {
   source: AdvisorJobSource | "screen";
-  turnIntentDecision?: AdvisorTurnIntentDecision;
   runtimeTypeAdjudicationOutputAuthority?: RuntimeTypeAdjudicationOutputAuthority;
 }): RefreshAuthorityDecision {
   if (input.runtimeTypeAdjudicationOutputAuthority) {
@@ -199,61 +191,12 @@ export function decideRefreshAuthority(input: {
     };
   }
 
-  const decision = input.turnIntentDecision;
-  if (!decision) {
-    return {
-      authorized: false,
-      kind: "denied",
-      reason: "missing-turn-intent",
-      hardOverride: false,
-      maySupersedeGeneration: false,
-    };
-  }
-  if (
-    !decision.executionAuthorized
-  ) {
-    return {
-      authorized: false,
-      kind: "denied",
-      reason: "turn-intent-not-authorized",
-      hardOverride: false,
-      maySupersedeGeneration: false,
-    };
-  }
-  if (decision.action !== "answer-refresh") {
-    return {
-      authorized: false,
-      kind: "denied",
-      reason: "turn-intent-not-answer-refresh",
-      hardOverride: false,
-      maySupersedeGeneration: false,
-    };
-  }
-  if (decision.authoritySource === "runtime-intent-gate") {
-    return {
-      authorized: true,
-      kind: "runtime-intent-answer",
-      reason: "runtime-intent-answer",
-      hardOverride: false,
-      maySupersedeGeneration: true,
-    };
-  }
-  if (decision.enforcement === "shadow") {
-    return {
-      authorized: false,
-      kind: "denied",
-      reason: "shadow-fail-open-disallowed",
-      hardOverride: false,
-      maySupersedeGeneration: false,
-    };
-  }
-
   return {
-    authorized: true,
-    kind: "automatic-substantive",
-    reason: "substantive-turn",
+    authorized: false,
+    kind: "denied",
+    reason: "missing-response-authority",
     hardOverride: false,
-    maySupersedeGeneration: true,
+    maySupersedeGeneration: false,
   };
 }
 

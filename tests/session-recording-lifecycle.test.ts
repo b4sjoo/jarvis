@@ -1469,7 +1469,7 @@ test("session summaries retain answer delivery and artifact stability evidence",
   assert.equal(compact.playbookArtifactContractMismatch, true);
   assert.equal(compact.artifactCacheDisposition, "replaced");
   assert.equal(compact.renderedCodeArtifactRevision, 1);
-  assert.equal(compact.advisorIntentAuthoritySource, "runtime-intent-gate");
+  assert.equal("advisorIntentAuthoritySource" in compact, false);
   assert.equal(compact.responseOpportunityDecision, "output-request");
   assert.equal(compact.responseOpportunityReleased, true);
   assert.equal(

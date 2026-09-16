@@ -44,7 +44,7 @@ for (const control of openingCodingRuntimeNegativeControls) {
       hasActiveTask: false,
       hasRecentQuestionContext: false,
     });
-    assert.notEqual(intent.action, "answer-refresh");
+    assert.equal("action" in intent, false);
     assert.equal(
       inferQuestionTypeDecisionFromText(control.text).type,
       undefined
@@ -64,11 +64,11 @@ function runScenario(
     text,
     decision: intent,
   });
-  assert.equal(intent.action, "answer-refresh");
-  assert.equal(responseRoute.disposition, "deterministic-output");
+  assert.equal("action" in intent, false);
+  assert.equal(responseRoute.disposition, "runtime-required");
   assert.equal(
     resolveResponseOpportunityExecutionMode(responseRoute),
-    "speculative-authoritative"
+    "authoritative"
   );
 
   const responseCommand = resolveResponseCommand(responseOutcome, intent);
@@ -97,7 +97,7 @@ function runScenario(
   assert.equal(questionType, "coding");
   const mutationAuthorization = authorizeAdvisorTaskMutation({
     authority: "input-evidence",
-    turnIntentDecision: intent,
+    responseAuthorized: responseCommand === "output-authorized",
   });
   const mutationDecision = decideAdvisorTaskMutation({
     authority: "input-evidence",
@@ -113,9 +113,8 @@ function runScenario(
     authoritySource: "accepted-transcript",
     confidence: 0.98,
     questionComplete: decideLogicalQuestionMaterialization({
-      action: intent.action,
-      wordEquivalent: calculateWordEquivalent(text),
-      exactHighFiller: isExactLowValueAcknowledgement(text),
+        wordEquivalent: calculateWordEquivalent(text),
+        exactHighFiller: isExactLowValueAcknowledgement(text)
     }).materialize,
     mutationAuthorized: mutationAuthorization.authorized,
     commitParent: mutationDecision.commitParent,

@@ -198,20 +198,14 @@ export interface AdvisorTaskMutationAuthorization {
     | "manual-output-only"
     | "runtime-intent-action-only"
     | "runtime-type-adjudication-output-only"
-    | "missing-turn-intent-decision"
-    | "turn-intent-would-suppress"
-    | "turn-intent-not-answer-refresh";
+    | "response-not-authorized";
 }
 
 export interface AdvisorOutputCommitAuthorization {
   authorized: boolean;
   reason:
-    | "substantive-output-authority"
-    | "runtime-intent-answer-output-authority"
-    | "runtime-type-adjudication-output-authority"
-    | "manual-action-output-authority"
-    | "execution-not-authorized"
-    | "turn-intent-not-answer-refresh";
+    | "response-output-authority"
+    | "execution-not-authorized";
 }
 
 export function createAdvisorTriggerJob(
@@ -272,21 +266,21 @@ export function createAdvisorTriggerJob(
     refreshAuthority: input.refreshAuthority
       ? { ...input.refreshAuthority }
       : {
-          authorized: true,
+          authorized: input.source !== "live-turn",
           kind:
             input.source === "live-turn"
-              ? "automatic-substantive"
+              ? "denied"
               : "manual-hard-override",
           reason:
             input.source === "live-turn"
-              ? "substantive-turn"
+              ? "missing-response-authority"
               : input.source === "manual-correction"
                 ? "manual-correction"
                 : input.source === "force-advise"
                   ? "force-advise"
                 : "explicit-response-action",
           hardOverride: input.source !== "live-turn",
-          maySupersedeGeneration: true,
+          maySupersedeGeneration: input.source !== "live-turn",
         },
     runtimeTypeAdjudicationOutputAuthority:
       input.runtimeTypeAdjudicationOutputAuthority
@@ -388,7 +382,7 @@ export function decideAdvisorTaskMutation(input: {
 
 export function authorizeAdvisorTaskMutation(input: {
   authority: AdvisorTaskMutationAuthority;
-  turnIntentDecision?: AdvisorTurnIntentDecision;
+  responseAuthorized: boolean;
 }): AdvisorTaskMutationAuthorization {
   if (input.authority === "manual-correction") {
     return { authorized: true, reason: "manual-correction-authority" };
@@ -409,70 +403,17 @@ export function authorizeAdvisorTaskMutation(input: {
     };
   }
 
-  const decision = input.turnIntentDecision;
-  if (!decision) {
-    return { authorized: false, reason: "missing-turn-intent-decision" };
-  }
-  if (decision.wouldSuppress) {
-    return { authorized: false, reason: "turn-intent-would-suppress" };
-  }
-  if (
-    !decision.executionAuthorized ||
-    decision.action !== "answer-refresh"
-  ) {
-    return { authorized: false, reason: "turn-intent-not-answer-refresh" };
-  }
-
-  return { authorized: true, reason: "substantive-input-authority" };
+  return { authorized: input.responseAuthorized,
+    reason: input.responseAuthorized ? "substantive-input-authority" : "response-not-authorized" };
 }
 
 export function authorizeAdvisorOutputCommit(input: {
-  authority: AdvisorTaskMutationAuthority;
   executionAuthorized: boolean;
-  turnIntentDecision?: AdvisorTurnIntentDecision;
 }): AdvisorOutputCommitAuthorization {
   if (!input.executionAuthorized) {
     return { authorized: false, reason: "execution-not-authorized" };
   }
-  if (
-    input.authority === "manual-correction" ||
-    input.authority === "preserve-parent" ||
-    input.authority === "output-only-current-branch"
-  ) {
-    return { authorized: true, reason: "manual-action-output-authority" };
-  }
-  if (input.authority === "runtime-intent-answer") {
-    return input.turnIntentDecision?.authoritySource ===
-        "runtime-intent-gate" &&
-      input.turnIntentDecision.action === "answer-refresh"
-      ? {
-          authorized: true,
-          reason: "runtime-intent-answer-output-authority",
-        }
-      : {
-          authorized: false,
-          reason: "turn-intent-not-answer-refresh",
-        };
-  }
-  if (input.authority === "runtime-type-adjudication-output-only") {
-    return {
-      authorized: true,
-      reason: "runtime-type-adjudication-output-authority",
-    };
-  }
-
-  const decision = input.turnIntentDecision;
-  if (decision?.action !== "answer-refresh") {
-    return { authorized: false, reason: "turn-intent-not-answer-refresh" };
-  }
-  if (decision.enforcement === "shadow") {
-    return {
-      authorized: false,
-      reason: "execution-not-authorized",
-    };
-  }
-
-  return { authorized: true, reason: "substantive-output-authority" };
+  return { authorized: true, reason: "response-output-authority" };
 }
 
 export function decideAdvisorPhaseMutation(input: {

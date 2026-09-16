@@ -1,4 +1,3 @@
-import type { AdvisorTurnGateAction } from "./advisor-turn-intent.js";
 import type { LogicalQuestionUnit } from "./logical-question-unit.js";
 import type { QuestionInstanceLineage } from "./types.js";
 
@@ -101,19 +100,14 @@ export function authorizeLogicalQuestionUnitLease(
 }
 
 export function decideLogicalQuestionMaterialization({
-  action,
   wordEquivalent,
   exactHighFiller = false,
 }: {
-  action: AdvisorTurnGateAction;
   wordEquivalent: number;
   exactHighFiller?: boolean;
 }): LogicalQuestionMaterializationDecision {
   if (exactHighFiller) {
     return { materialize: false, reason: "exact-high-filler" };
-  }
-  if (action === "answer-refresh") {
-    return { materialize: true, reason: "answer-refresh" };
   }
   if (wordEquivalent >= 1) {
     return {

@@ -48,17 +48,15 @@ test("merges fragments into one normalized logical transcript", () => {
   );
 });
 
-test("a timed-out buffered fragment becomes enforced append-only context", () => {
+test("incomplete content does not carry a local suppression decision", () => {
   const decision = decideAdvisorTurnIntent("Can you describe...", {
     hasActiveTask: true,
-    enforceBufferedIncomplete: true,
   });
 
   assert.equal(decision.intent, "incomplete");
-  assert.equal(decision.action, "append-only");
-  assert.equal(decision.enforcement, "enforce");
-  assert.equal(decision.executionAuthorized, false);
-  assert.equal(decision.contextPromptEligible, true);
+  for (const key of ["action", "enforcement", "executionAuthorized", "contextPromptEligible"]) {
+    assert.equal(key in decision, false);
+  }
 });
 
 test("matching native speech start grants one bounded continuation extension", () => {

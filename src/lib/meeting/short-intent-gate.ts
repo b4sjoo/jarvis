@@ -1,4 +1,4 @@
-import type { AdvisorTurnIntentDecision } from "./advisor-turn-intent.js";
+import { isExactLowValueAcknowledgement, type AdvisorTurnIntentDecision } from "./advisor-turn-intent.js";
 import type { LogicalQuestionUnit } from "./logical-question-unit.js";
 import { parseRuntimeJsonObject } from "./runtime-json-object.js";
 import {
@@ -167,7 +167,6 @@ export interface ResponseOpportunityReleaseDecision {
     | "high-confidence-no-output-request"
     | "output-confidence-below-threshold"
     | "unclear";
-  advisorDecision?: AdvisorTurnIntentDecision;
 }
 
 export interface ResponseOpportunitySessionBudgetDecision {
@@ -243,28 +242,14 @@ export function decideResponseOpportunityLocalRoute(input: {
     };
   }
   if (
-    input.decision.action === "ignore" &&
-    (input.decision.reason === "exact-acknowledgement" ||
-      input.decision.reason === "empty-transcript")
+    (!input.text.trim() || isExactLowValueAcknowledgement(input.text))
   ) {
     return {
       disposition: "deterministic-no-output",
-      reason: input.decision.reason,
+      reason: input.text.trim() ? "exact-acknowledgement" : "empty-transcript",
       wordEquivalent,
       decision: "no-output-request",
       runtimeReviewRequired: false,
-    };
-  }
-  if (
-    input.decision.action === "answer-refresh" &&
-    input.decision.executionAuthorized
-  ) {
-    return {
-      disposition: "deterministic-output",
-      reason: input.decision.reason,
-      wordEquivalent,
-      decision: "output-request",
-      runtimeReviewRequired: true,
     };
   }
   return {
@@ -576,27 +561,6 @@ export function decideResponseOpportunityRelease(input: {
     released: true,
     generationDisposition: "output-authorized",
     reason: "high-confidence-output-request",
-    advisorDecision: {
-      ...input.original,
-      intent: "direct-question",
-      confidence: input.result.confidence,
-      evidence: [
-        ...input.original.evidence,
-        "runtime-response-opportunity",
-        ...input.result.targetSpans.map(
-          (span) =>
-            `runtime-decision-target:${span.turnId}:${span.text}`
-        ),
-      ],
-      action: "answer-refresh",
-      recommendedAction: "answer-refresh",
-      reason: "runtime-response-opportunity-output-request",
-      contextPromptEligible: true,
-      enforcement: "allow",
-      wouldSuppress: false,
-      executionAuthorized: true,
-      authoritySource: "runtime-intent-gate",
-    },
   };
 }
 

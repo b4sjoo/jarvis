@@ -45,7 +45,6 @@ const providers: MeetingModelProviderSnapshot = {
 
 interface CharacterizationDigest {
   intent: string;
-  action: string;
   materialized: boolean;
   published: boolean;
   questionType?: CanonicalQuestionType;
@@ -64,7 +63,6 @@ const cases: Array<{
     text: "Please write code to implement a stack.",
     expected: {
       intent: "direct-question",
-      action: "answer-refresh",
       materialized: true,
       published: true,
       questionType: "coding",
@@ -78,7 +76,6 @@ const cases: Array<{
     text: "Design a URL shortener and start with requirements.",
     expected: {
       intent: "direct-question",
-      action: "answer-refresh",
       materialized: true,
       published: true,
       questionType: "general-system-design",
@@ -92,7 +89,6 @@ const cases: Array<{
     text: "How does HNSW search work?",
     expected: {
       intent: "direct-question",
-      action: "answer-refresh",
       materialized: true,
       published: true,
       questionType: "unknown",
@@ -106,7 +102,6 @@ const cases: Array<{
     text: "Mm, okay.",
     expected: {
       intent: "confirmation",
-      action: "ignore",
       materialized: false,
       published: false,
     },
@@ -138,9 +133,8 @@ function characterizeAcceptedTurn(text: string): CharacterizationDigest {
     hasRecentQuestionContext: false,
   });
   const materialization = decideLogicalQuestionMaterialization({
-    action: intent.action,
-    wordEquivalent: calculateWordEquivalent(text),
-    exactHighFiller: isExactLowValueAcknowledgement(text),
+      wordEquivalent: calculateWordEquivalent(text),
+      exactHighFiller: isExactLowValueAcknowledgement(text)
   });
   const publication = decideLogicalQuestionPublication({
     materialization,
@@ -148,7 +142,6 @@ function characterizeAcceptedTurn(text: string): CharacterizationDigest {
   });
   const base: CharacterizationDigest = {
     intent: intent.intent,
-    action: intent.action,
     materialized: materialization.materialize,
     published: publication.publishCanonical,
   };

@@ -13,7 +13,7 @@ test("routes accepted production STT turns through one canonical ingress", () =>
     "  const enqueueSpeechDetected = useCallback"
   );
   const ingress = sourceSlice(
-    "  const processCanonicalTurnIngress = useCallback(",
+    "  const processPostBufferThemTurn = useCallback(",
     "  const processQueuedSpeechSegment = useCallback"
   );
 
@@ -33,7 +33,7 @@ test("routes accepted production STT turns through one canonical ingress", () =>
 
 test("keeps STT transport concerns outside canonical ingress", () => {
   const ingress = sourceSlice(
-    "  const processCanonicalTurnIngress = useCallback(",
+    "  const processPostBufferThemTurn = useCallback(",
     "  const processQueuedSpeechSegment = useCallback"
   );
 
@@ -46,7 +46,7 @@ test("keeps STT transport concerns outside canonical ingress", () => {
 
 test("joins every reviewed response opportunity before canonical publication and advisor dispatch", () => {
   const ingress = sourceSlice(
-    "  const processCanonicalTurnIngress = useCallback(",
+    "  const processPostBufferThemTurn = useCallback(",
     "  const processQueuedSpeechSegment = useCallback"
   );
   const residualBranch = ingress.slice(
@@ -72,7 +72,7 @@ test("joins every reviewed response opportunity before canonical publication and
   );
   assert.match(
     ingress,
-    /turnGate\.action === "ignore" &&\s*responseOpportunityLocalDecision\.disposition ===\s*"deterministic-no-output"/
+    /responseOpportunityLocalDecision\.disposition ===\s*"deterministic-no-output"/
   );
   assert.match(
     residualBranch,

@@ -18,13 +18,13 @@ test("factorizes coding evidence without changing the current gate decision", ()
     currentTurnId: "turn_1",
   });
 
-  assert.equal(turnDecision.executionAuthorized, true);
+  assert.equal("executionAuthorized" in turnDecision, false);
   assert.equal(evidence.questionTypeDecision.type, "coding");
   assert.ok(evidence.actionVerbs.includes("write"));
   assert.ok(evidence.actionObjects.includes("stack"));
   assert.ok(evidence.domainMarkers.includes("coding-domain"));
   assert.ok(evidence.temporalFrames.includes("current-follow-up"));
-  assert.equal(evidence.counterfactual.action, "answer");
+  assert.equal("action" in evidence.counterfactual, false);
   assert.equal(evidence.counterfactual.questionType, "coding");
 });
 
