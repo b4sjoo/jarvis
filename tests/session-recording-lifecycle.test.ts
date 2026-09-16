@@ -22,11 +22,6 @@ import {
 } from "../src/lib/meeting/human-ground-truth-v2.js";
 import { createQuestionTypeAdjudicationOutcomeEvent } from "../src/lib/meeting/question-type-adjudication.js";
 import {
-  createAdvisorHypothesisChallenge,
-  createAdvisorResponseFingerprintRecord,
-  observeAdvisorResponseConsistency,
-} from "../src/lib/meeting/advisor-response-consistency.js";
-import {
   createRuntimeRegressionRunRecord,
   createRuntimeRegressionStepEvent,
 } from "../src/lib/meeting/runtime-regression.js";
@@ -1768,111 +1763,17 @@ test("answer sufficiency decisions remain joinable after trace export", async ()
   await manager.stop("test-complete");
 });
 
-test("advisor response Shadow records identity and verdict without raw answer text", async () => {
+test("retired Consistency diagnostics have no producers or new recording files", async () => {
   const native = new ControlledRecordingInvoke();
   const manager = new SessionRecordingManager(undefined, native.invoke);
   await manager.start(START_OPTIONS);
-  await settle();
-
-  const previous = createAdvisorResponseFingerprintRecord({
-    sessionId: "session-shadow",
-    runtimeEpoch: 1,
-    logicalQuestionUnitId: "lqu-shadow",
-    logicalQuestionRevision: 1,
-    answerRevision: 1,
-    sourceTraceId: "advisor_shadow_trace",
-    questionType: "general-system-design",
-    parentTaskId: "task_1",
-    manualCorrectionRevision: 0,
-    questionText: "Design a private URL shortener.",
-    parsedAnswer: parseMeetingAnswer(
-      "Answer:\nUse a private implementation detail."
-    ),
-    createdAt: 10,
-  });
-  const current = createAdvisorResponseFingerprintRecord({
-    sessionId: "session-shadow",
-    runtimeEpoch: 1,
-    logicalQuestionUnitId: "lqu-shadow",
-    logicalQuestionRevision: 2,
-    answerRevision: 2,
-    sourceTraceId: "advisor_shadow_trace",
-    questionType: "ai-ml-system-design",
-    parentTaskId: "task_1",
-    manualCorrectionRevision: 0,
-    questionText: "Design a private ranking pipeline.",
-    parsedAnswer: parseMeetingAnswer(
-      "Answer:\nUse the same private implementation detail."
-    ),
-    createdAt: 20,
-  });
-  const observation = observeAdvisorResponseConsistency({
-    previous: previous.fingerprint,
-    current: current.fingerprint,
-    questionSimilarity: 0.2,
-    answerSimilarity: 0.95,
-    createdAt: 21,
-  });
-  const challenge = createAdvisorHypothesisChallenge({
-    observation,
-    independentEvidence: ["llm-type-disagreement"],
-    createdAt: 22,
-  });
-
-  manager.recordAdvisorResponseFingerprint({
-    traceId: "advisor_shadow_trace",
-    taskId: "task_1",
-    fingerprint: current.fingerprint,
-  });
-  manager.recordAdvisorResponseConsistency({
-    traceId: "advisor_shadow_trace",
-    taskId: "task_1",
-    observation,
-  });
-  manager.recordAdvisorHypothesisChallenge({
-    traceId: "advisor_shadow_trace",
-    taskId: "task_1",
-    challenge,
-  });
-  await settle();
-
-  const fingerprintWrite = native.calls.find(
-    (call) =>
-      call.command === "write_meeting_session_recording_text" &&
-      stringArg(call, "relativePath") ===
-        "advisor-response/fingerprints.jsonl"
-  );
-  const consistencyWrite = native.calls.find(
-    (call) =>
-      call.command === "write_meeting_session_recording_text" &&
-      stringArg(call, "relativePath") ===
-        "advisor-response/consistency-shadow.jsonl"
-  );
-  const challengeWrite = native.calls.find(
-    (call) =>
-      call.command === "write_meeting_session_recording_text" &&
-      stringArg(call, "relativePath") ===
-        "advisor-response/hypothesis-challenges.jsonl"
-  );
-  assert.ok(fingerprintWrite);
-  assert.ok(consistencyWrite);
-  assert.ok(challengeWrite);
-  assert.equal(
-    stringArg(fingerprintWrite, "payload").includes(
-      "private implementation detail"
-    ),
-    false
-  );
-  assert.match(
-    stringArg(consistencyWrite, "payload"),
-    /question-low-answer-high/
-  );
-  assert.match(
-    stringArg(challengeWrite, "payload"),
-    /llm-type-disagreement/
-  );
-
-  await manager.stop("test-complete");
+  manager.recordTrace(buildCompletedTrace("retirement-control", Date.now()), "manual");
+  await manager.stop("retirement-control");
+  assert.ok(native.calls.some((call) => stringArg(call, "relativePath") === "traces/retirement-control/summary.json"));
+  for (const method of ["recordAdvisorResponseFingerprint", "recordAdvisorResponseConsistency", "recordAdvisorHypothesisChallenge"]) {
+    assert.equal(method in manager, false);
+  }
+  assert.equal(native.calls.some((call) => stringArg(call, "relativePath").startsWith("advisor-response/")), false);
 });
 
 test("late LLM taxonomy adjudication stays joinable after trace export", async () => {

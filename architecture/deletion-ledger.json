@@ -18,6 +18,20 @@
       "forbiddenPatterns": ["authorizeAdvisorExecution", "suppressionRecommendedVisibleRefreshCount"]
     },
     {
+      "id": "response-consistency-shadow-operation",
+      "symbolOrSurface": "Dedicated Response Consistency algorithm, scheduler, cache, result consumer and recording writers",
+      "verdict": "delete",
+      "ownerTaskId": 168,
+      "replacement": "None; this diagnostic has no product authority",
+      "persistedDataImpact": "recording",
+      "historicalReader": "Existing generic offline metadata and event decoding preserve historical Consistency observations.",
+      "proofCommands": ["npm test", "npm run verify:architecture", "npm run build"],
+      "deletionGate": "No dedicated algorithm, scheduling or writer remains. Sufficiency, shared embeddings, Answer Resolution and publication tests pass.",
+      "rollbackBoundary": "Dedicated diagnostic only; no shared semantic service, foreground budget or visible-answer policy changes.",
+      "status": "deleted",
+      "forbiddenPatterns": ["scheduleAdvisorResponseConsistencyShadow", "recordAdvisorResponseConsistency"]
+    },
+    {
       "id": "authorized-source-raw-window-intersection",
       "symbolOrSurface": "Authorized parent and child source bodies depend on membership in the raw transcript window",
       "verdict": "migrate-then-delete",

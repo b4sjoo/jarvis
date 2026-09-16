@@ -21,14 +21,6 @@ import {
 
 import type { AnswerSufficiencyDecision } from "./answer-sufficiency.js";
 import {
-  formatAdvisorHypothesisChallengeForTrace,
-  formatAdvisorResponseConsistencyForTrace,
-  formatAdvisorResponseFingerprintForTrace,
-  type AdvisorHypothesisChallenge,
-  type AdvisorResponseConsistencyObservation,
-  type AdvisorResponseFingerprint,
-} from "./advisor-response-consistency.js";
-import {
   formatCurrentQuestionSettlementForTrace,
   type CurrentQuestionSettlementDecision,
   type CurrentQuestionSettlementDisposition,
@@ -158,9 +150,6 @@ interface SessionRecordingEvent {
     | "task-relation-adjudication-decision"
     | "meeting-metadata-inference-decision"
     | "answer-sufficiency-decision"
-    | "advisor-response-fingerprint"
-    | "advisor-response-consistency-shadow"
-    | "advisor-hypothesis-challenge"
     | "current-question-settlement"
     | "settled-advisor-execution-plan"
     | "response-only-task-scope"
@@ -3556,116 +3545,8 @@ export class SessionRecordingManager {
     });
   }
 
-  recordAdvisorResponseFingerprint({
-    traceId,
-    taskId,
-    fingerprint,
-  }: {
-    traceId?: string;
-    taskId?: string;
-    fingerprint: AdvisorResponseFingerprint;
-  }) {
-    const session = this.getWritableSession({ traceId });
-    if (!session) return;
-    const artifactPath = "advisor-response/fingerprints.jsonl";
-    const metadata = formatAdvisorResponseFingerprintForTrace(fingerprint);
-    const payload = {
-      recordedAt: Date.now(),
-      sessionId: session.sessionId,
-      traceId,
-      taskId,
-      fingerprint,
-    };
-    this.enqueue(session, () =>
-      this.writeText(
-        session,
-        artifactPath,
-        `${JSON.stringify(payload)}\n`,
-        true
-      )
-    );
-    this.recordEvent(
-      "advisor-response-fingerprint",
-      metadata,
-      [artifactPath],
-      traceId,
-      taskId
-    );
-  }
 
-  recordAdvisorResponseConsistency({
-    traceId,
-    taskId,
-    observation,
-  }: {
-    traceId?: string;
-    taskId?: string;
-    observation: AdvisorResponseConsistencyObservation;
-  }) {
-    const session = this.getWritableSession({ traceId });
-    if (!session) return;
-    const artifactPath = "advisor-response/consistency-shadow.jsonl";
-    const metadata = formatAdvisorResponseConsistencyForTrace(observation);
-    const payload = {
-      recordedAt: Date.now(),
-      sessionId: session.sessionId,
-      traceId,
-      taskId,
-      observation,
-    };
-    this.enqueue(session, () =>
-      this.writeText(
-        session,
-        artifactPath,
-        `${JSON.stringify(payload)}\n`,
-        true
-      )
-    );
-    this.recordEvent(
-      "advisor-response-consistency-shadow",
-      metadata,
-      [artifactPath],
-      traceId,
-      taskId
-    );
-  }
 
-  recordAdvisorHypothesisChallenge({
-    traceId,
-    taskId,
-    challenge,
-  }: {
-    traceId?: string;
-    taskId?: string;
-    challenge: AdvisorHypothesisChallenge;
-  }) {
-    const session = this.getWritableSession({ traceId });
-    if (!session) return;
-    const artifactPath = "advisor-response/hypothesis-challenges.jsonl";
-    const metadata = formatAdvisorHypothesisChallengeForTrace(challenge);
-    const payload = {
-      recordedAt: Date.now(),
-      sessionId: session.sessionId,
-      traceId,
-      taskId,
-      challenge,
-    };
-    this.enqueue(session, () =>
-      this.writeText(
-        session,
-        artifactPath,
-        `${JSON.stringify(payload)}\n`,
-        true
-      )
-    );
-    this.recordEvent(
-      "advisor-hypothesis-challenge",
-      metadata,
-      [artifactPath],
-      traceId,
-      taskId
-    );
-  }
 
   recordCurrentQuestionSettlement({
     traceId,

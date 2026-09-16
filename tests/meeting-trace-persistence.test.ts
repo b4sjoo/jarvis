@@ -10,6 +10,17 @@ import {
 } from "../src/lib/meeting/trace.js";
 import type { MeetingTrace } from "../src/lib/meeting/types.js";
 
+test("historical Consistency metadata remains readable without its retired runtime module", () => {
+  const legacy = buildTrace(1, "historical answer");
+  legacy.metadata = { ...legacy.metadata, advisorResponseFingerprintId: "historical-fingerprint",
+    advisorResponseConsistencyDisposition: "timeout" };
+  const raw = JSON.stringify({ version: 2, traces: [legacy] });
+  const parsed = parseMeetingTraceMetrics(raw);
+  assert.equal(parsed[0].metadata?.advisorResponseFingerprintId, "historical-fingerprint");
+  assert.equal(parsed[0].metadata?.advisorResponseConsistencyDisposition, "timeout");
+  assert.equal(JSON.stringify({ version: 2, traces: [legacy] }), raw);
+});
+
 test("persists a deterministic newest-first trace window within the byte budget", () => {
   const traces = Array.from({ length: 40 }, (_, index) =>
     buildTrace(index, "x".repeat(100_000))

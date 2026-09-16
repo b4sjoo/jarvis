@@ -323,7 +323,6 @@ function createHarness(options = {}) {
     refreshRecordedCompletedTrace: () => {},
     clearPendingAnswerCommitTimer: () => {},
     finalizeAnswerRecoveryAdjudication: () => {},
-    scheduleAdvisorResponseConsistencyShadow: () => {},
     toAnswerDeliveryPresentation: ({ visibleAnswerRevision }) => ({
       visibleAnswerRevision,
     }),

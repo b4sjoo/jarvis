@@ -364,7 +364,7 @@ test("makes visual recovery independent of result arrival order", () => {
   const hook = readFileSync("src/hooks/useMeetingAssistant.ts", "utf8");
   const finalizer = hook.slice(
     hook.indexOf("const finalizeAnswerRecoveryAdjudication"),
-    hook.indexOf("const scheduleAdvisorResponseConsistencyShadow")
+    hook.indexOf("const prepareStableAnswerPublication")
   );
   assert.match(finalizer, /!candidate\.answerResolutionSettled/);
   assert.match(finalizer, /!candidate\.evidenceRequirementSettled/);
