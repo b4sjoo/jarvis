@@ -53,6 +53,7 @@ const readDisplay = object({
   audioControl: object({
     action: string, label: string, title: string, disabled: boolean, urgent: boolean, busy: boolean,
   }),
+  audioInputWarning: optional(object({ label: string, detail: string })),
   showClarifyingQuestion: boolean, clarifyingQuestion: string,
   showClarifyingBooleanFallback: boolean, selectedClarifyingAnswerLabel: text,
   clarifyingSelectionState: text, clarifyingSelectionMessage: text,

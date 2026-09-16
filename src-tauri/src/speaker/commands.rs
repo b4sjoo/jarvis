@@ -411,6 +411,9 @@ pub struct NativeAudioLivenessEvent {
     pub interval_max_peak: f32,
     pub processed_chunk_count: u64,
     pub signal_chunk_count: u64,
+    pub raw_signal_chunk_count: u64,
+    pub raw_zero_duration_ms: u64,
+    pub last_raw_signal_observed_at_ms: Option<u64>,
     pub speech_chunk_count: u64,
     pub speech_candidate_count: u64,
     pub segment_emitted_count: u64,
@@ -440,6 +443,9 @@ struct VadLivenessAccumulator {
     interval_max_peak: f32,
     processed_chunk_count: u64,
     signal_chunk_count: u64,
+    raw_signal_chunk_count: u64,
+    raw_zero_sample_count: u64,
+    last_raw_signal_observed_at_ms: Option<u64>,
     speech_chunk_count: u64,
     speech_candidate_count: u64,
     segment_emitted_count: u64,
@@ -451,6 +457,16 @@ struct VadLivenessAccumulator {
 }
 
 impl VadLivenessAccumulator {
+    fn observe_raw_chunk(&mut self, samples: &[f32], observed_at_ms: u64) {
+        if samples.iter().any(|sample| *sample != 0.0) {
+            self.raw_signal_chunk_count = self.raw_signal_chunk_count.saturating_add(1);
+            self.raw_zero_sample_count = 0;
+            self.last_raw_signal_observed_at_ms = Some(observed_at_ms);
+        } else {
+            self.raw_zero_sample_count = self.raw_zero_sample_count.saturating_add(samples.len() as u64);
+        }
+    }
+
     fn observe_chunk(
         &mut self,
         sample_count: usize,
@@ -545,6 +561,9 @@ impl VadLivenessAccumulator {
             interval_max_peak: self.interval_max_peak,
             processed_chunk_count: self.processed_chunk_count,
             signal_chunk_count: self.signal_chunk_count,
+            raw_signal_chunk_count: self.raw_signal_chunk_count,
+            raw_zero_duration_ms: samples_to_ms(self.raw_zero_sample_count, sample_rate),
+            last_raw_signal_observed_at_ms: self.last_raw_signal_observed_at_ms,
             speech_chunk_count: self.speech_chunk_count,
             speech_candidate_count: self.speech_candidate_count,
             segment_emitted_count: self.segment_emitted_count,
@@ -1231,10 +1250,11 @@ async fn run_vad_capture(
                 }
             }
 
+            let observed_at_ms = now_ms();
+            liveness.observe_raw_chunk(&mono, observed_at_ms);
             let mono = apply_noise_gate(&mono, config.noise_gate_threshold);
             let (rms, peak) = calculate_audio_metrics(&mono);
             let is_speech = rms > config.sensitivity_rms || peak > config.peak_threshold;
-            let observed_at_ms = now_ms();
             liveness.observe_chunk(mono.len(), peak > 0.0, is_speech, rms, peak, observed_at_ms);
             let chunk_start_sample = processed_samples;
             processed_samples = processed_samples.saturating_add(mono.len() as u64);
@@ -2722,6 +2742,7 @@ mod native_capture_control_tests;
 #[cfg(test)]
 mod tests {
     use super::{
+        apply_noise_gate, samples_to_ms,
         begin_capture_stop, claim_capture_lease, control_owns, decide_debug_audio_fault,
         release_active_capture_if_owner, should_emit_tail_segment,
         take_capture_termination_request, CaptureRecoverability, CaptureRunOutcome,
@@ -2848,6 +2869,21 @@ mod tests {
         assert_eq!(value["source"], "system-audio");
         assert_eq!(value["occurredAtMs"], 1234);
         assert_eq!(value["sampleRate"], 48_000);
+    }
+
+    #[test]
+    fn raw_zero_observation_is_before_noise_gate_and_tracks_exact_zero_only() {
+        let mut liveness = VadLivenessAccumulator::default();
+        let quiet = vec![0.000_001; 48_000];
+        assert!(apply_noise_gate(&quiet, 0.003).iter().all(|v| *v < quiet[0]));
+        liveness.observe_raw_chunk(&quiet, 1_000);
+        assert_eq!(liveness.raw_signal_chunk_count, 1);
+        let zeros = vec![0.0; 48_000];
+        for _ in 0..90 { liveness.observe_raw_chunk(&zeros, 91_000); }
+        assert_eq!(samples_to_ms(liveness.raw_zero_sample_count, 48_000), 90_000);
+        liveness.observe_raw_chunk(&quiet, 92_000);
+        assert_eq!(liveness.raw_zero_sample_count, 0);
+        assert_eq!(liveness.last_raw_signal_observed_at_ms, Some(92_000));
     }
 
     #[test]

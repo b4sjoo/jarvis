@@ -967,6 +967,9 @@ export const MeetingAssistant = ({
       phaseOutputNotice: meeting.phaseOutputNotice,
       isBusy,
       audioControl: audioPauseResumeControl,
+      audioInputWarning: meeting.audioInputLiveness?.severity === "warning"
+        ? { label: meeting.audioInputLiveness.label, detail: meeting.audioInputLiveness.detail }
+        : undefined,
       showClarifyingQuestion,
       clarifyingQuestion,
       showClarifyingBooleanFallback:
@@ -1047,6 +1050,7 @@ export const MeetingAssistant = ({
       hasActiveMeetingScreenContext,
       meeting.error,
       meeting.nativeAudioManualRecovery,
+      meeting.audioInputLiveness,
       meeting.speechCorrections,
       meeting.status,
       meetingStatusLabel,

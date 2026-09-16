@@ -22,6 +22,77 @@ export type NativeAudioLivenessAuthorization =
 
 const DEFAULT_HEARTBEAT_STALE_MS = 6_000;
 const DEFAULT_CANDIDATE_STALL_GRACE_MS = 2_000;
+export const RAW_ZERO_PROBE_WAIT_MS = 90_000;
+
+// The episode belongs to user capture intent, not a native generation. Restarting
+// capture must not turn persistent silence into an automatic restart loop.
+export class RawZeroInputEpisode {
+  private seenSignal = false;
+  private lastSignalAt?: number;
+  private zeroSince?: number;
+  private screenWaitUntil = 0;
+  private probeUsed = false;
+
+  reset() {
+    this.seenSignal = false;
+    this.lastSignalAt = undefined;
+    this.zeroSince = undefined;
+    this.screenWaitUntil = 0;
+    this.probeUsed = false;
+  }
+
+  observe(event: NativeAudioLivenessEvent): boolean {
+    if (event.rawZeroDurationMs == null || event.rawSignalChunkCount == null) return false;
+    const signalAt = event.lastRawSignalObservedAtMs;
+    let signalReturned = false;
+    if (signalAt != null && (this.lastSignalAt == null || signalAt > this.lastSignalAt)) {
+      signalReturned = this.zeroSince != null &&
+        (this.probeUsed || event.occurredAtMs - this.zeroSince >= RAW_ZERO_PROBE_WAIT_MS);
+      this.seenSignal = true;
+      this.lastSignalAt = signalAt;
+      this.zeroSince = undefined;
+      this.probeUsed = false;
+    }
+    if (this.seenSignal && event.rawZeroDurationMs > 0 && this.zeroSince == null) {
+      this.zeroSince = event.occurredAtMs - event.rawZeroDurationMs;
+    }
+    return signalReturned;
+  }
+
+  screenAdmitted(nowMs: number) {
+    this.screenWaitUntil = nowMs + RAW_ZERO_PROBE_WAIT_MS;
+  }
+
+  read(nowMs: number, screenActive: boolean) {
+    const warning = this.zeroSince != null && nowMs - this.zeroSince >= RAW_ZERO_PROBE_WAIT_MS;
+    const waitUntil = this.zeroSince == null ? undefined
+      : Math.max(this.zeroSince + RAW_ZERO_PROBE_WAIT_MS, this.screenWaitUntil);
+    const disposition = !warning ? "waiting"
+      : this.probeUsed ? "probe-used"
+      : waitUntil! > nowMs ? "screen-wait"
+      : screenActive ? "screen-deferred" : "probe-ready";
+    return { warning, disposition, zeroSince: this.zeroSince, waitUntil, probeUsed: this.probeUsed };
+  }
+
+  markProbeStarted() { this.probeUsed = true; }
+}
+
+export function projectRawZeroInputWarning(
+  presentation: AudioInputLivenessPresentation | null,
+  episode: ReturnType<RawZeroInputEpisode["read"]>,
+  reconnecting = false
+): AudioInputLivenessPresentation | null {
+  if (!presentation || !episode.warning) return presentation;
+  return {
+    ...presentation,
+    state: "unavailable",
+    severity: "warning",
+    label: reconnecting ? "Checking audio input" : "Audio input may be silent",
+    detail: reconnecting
+      ? "Reconnecting capture once. Actual nonzero input is required to confirm recovery."
+      : "Raw audio has remained zero for at least 90 seconds. Check the meeting audio; silence alone does not prove a device failure.",
+  };
+}
 
 export function parseNativeAudioLivenessEvent(
   payload: unknown
@@ -163,6 +234,9 @@ export function parseNativeAudioLivenessEvent(
     intervalMaxPeak,
     processedChunkCount: integers.processedChunkCount!,
     signalChunkCount: integers.signalChunkCount!,
+    rawSignalChunkCount: readNonNegativeInteger(payload.rawSignalChunkCount),
+    rawZeroDurationMs: readNonNegativeInteger(payload.rawZeroDurationMs),
+    lastRawSignalObservedAtMs: readNonNegativeInteger(payload.lastRawSignalObservedAtMs),
     speechChunkCount: integers.speechChunkCount!,
     speechCandidateCount: integers.speechCandidateCount!,
     segmentEmittedCount: integers.segmentEmittedCount!,
@@ -425,6 +499,9 @@ export function buildAudioInputLivenessTraceMetadata(
     vadIntervalMaxPeak: event.intervalMaxPeak,
     vadProcessedChunkCount: event.processedChunkCount,
     vadSignalChunkCount: event.signalChunkCount,
+    rawSignalChunkCount: event.rawSignalChunkCount,
+    rawZeroDurationMs: event.rawZeroDurationMs,
+    lastRawSignalObservedAtMs: event.lastRawSignalObservedAtMs,
     vadSpeechChunkCount: event.speechChunkCount,
     vadSpeechCandidateCount: event.speechCandidateCount,
     vadSegmentEmittedCount: event.segmentEmittedCount,

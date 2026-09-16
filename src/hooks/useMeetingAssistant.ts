@@ -492,6 +492,8 @@ import {
   buildNativeSpeechEventTraceMetadata,
   buildNativeSpeechStartTraceMetadata,
   resolveAudioInputLivenessPresentation,
+  RawZeroInputEpisode,
+  projectRawZeroInputWarning,
   parseNativeAudioSegmentDroppedEvent,
   buildMemoryEvaluationTraceMetadata,
   formatMeetingAnswerTraceMetadata,
@@ -3612,6 +3614,9 @@ export function useMeetingAssistant() {
   } | null>(null);
   const lastNativeAudioLivenessSequenceRef = useRef(0);
   const nativeRecoveryAttemptTimestampsRef = useRef<number[]>([]);
+  const rawZeroInputEpisodeRef = useRef(new RawZeroInputEpisode());
+  const rawZeroProbePendingRef = useRef(false);
+  const rawZeroProbeObservationRef = useRef("");
   const nativeAudioManualRecoveryRef =
     useRef<NativeAudioManualRecoveryState | null>(null);
   const handledNativeTerminalKeysRef = useRef(new Set<string>());
@@ -25184,6 +25189,20 @@ export function useMeetingAssistant() {
       state.settings.microphoneContextEnabled;
   }, [state.settings.microphoneContextEnabled]);
 
+  const reportRawZeroProbe = useCallback((stage: string, metadata: Record<string, unknown> = {}) => {
+    const observation = {
+      stage: `raw-zero-input:${stage}`,
+      occurredAtMs: Date.now(),
+      captureSessionId: nativeCaptureSessionIdRef.current,
+      captureGeneration: nativeCaptureGenerationRef.current,
+      screenOperationId: screenOperationCoordinatorRef.current.getActiveOperationId(),
+      ...rawZeroInputEpisodeRef.current.read(Date.now(), false),
+      ...metadata,
+    };
+    console.info("[raw-zero-input]", JSON.stringify(observation));
+    sessionRecordingManagerRef.current?.recordCaptureLifecycle(observation);
+  }, []);
+
   const startCapture = useCallback(
     async (
       mode: NativeAudioCaptureStartMode,
@@ -25199,6 +25218,25 @@ export function useMeetingAssistant() {
         return;
       }
       const policy = getNativeAudioCaptureStartPolicy(mode);
+      const silentSourceProbe = recoveryAttempt?.reason === "raw-zero-input";
+      const probeStillEligible = () => {
+        const latest = latestNativeAudioLivenessRef.current;
+        const now = Date.now();
+        return !shutdownRequestedRef.current && activeRef.current &&
+          nativeCaptureSessionIdRef.current === recoveryAttempt?.previousCaptureSessionId &&
+          nativeCaptureGenerationRef.current === recoveryAttempt?.previousCaptureGeneration &&
+          latest != null && now - latest.observedAtMs <= 6_000 &&
+          now - latest.event.occurredAtMs <= 6_000 &&
+          rawZeroInputEpisodeRef.current.read(now,
+            screenOperationCoordinatorRef.current.getActiveOperationId() != null
+          ).disposition === "probe-ready" &&
+          pruneNativeAudioRecoveryAttempts(nativeRecoveryAttemptTimestampsRef.current, now,
+            NATIVE_AUDIO_RECOVERY_WINDOW_MS).length < NATIVE_AUDIO_MAX_RECOVERY_ATTEMPTS_PER_WINDOW;
+      };
+      if (silentSourceProbe && !probeStillEligible()) {
+        reportRawZeroProbe("deferred-before-claim", { recoveryAttemptId: recoveryAttempt.id });
+        return;
+      }
       const pendingManualRecovery =
         mode === "manual-recovery"
           ? nativeAudioManualRecoveryRef.current
@@ -25210,7 +25248,7 @@ export function useMeetingAssistant() {
         }));
         return;
       }
-      revokeAudioDrainAuthorization(`capture-start:${mode}`);
+      if (!silentSourceProbe) revokeAudioDrainAuthorization(`capture-start:${mode}`);
       const manualRecoveryAttempt:
         | NativeAudioManualRecoveryAttemptContext
         | undefined = pendingManualRecovery
@@ -25267,8 +25305,9 @@ export function useMeetingAssistant() {
         });
         setState((previous) => ({
           ...previous,
-          status: disposition.status,
-          partialSuggestion: "",
+          status: silentSourceProbe && screenOperationCoordinatorRef.current.getActiveOperationId()
+            ? previous.status : disposition.status,
+          partialSuggestion: silentSourceProbe ? previous.partialSuggestion : "",
           error: errorMessage,
           nativeAudioManualRecovery:
             disposition.manualRecovery ?? undefined,
@@ -25277,17 +25316,22 @@ export function useMeetingAssistant() {
       const coordinator = captureLifecycleCoordinatorRef.current!;
       const lifecycleOperation = coordinator.claim(policy.lifecycleAction);
       const previousNativeLease = readNativeCaptureLease();
-      nativeCaptureSessionIdRef.current = null;
-      nativeCaptureGenerationRef.current = null;
-      lastNativeSegmentSequenceRef.current = 0;
-      lastNativeSpeechStartCandidateSequenceRef.current = 0;
-      latestNativeSpeechStartRef.current = null;
-      latestNativeAudioLivenessRef.current = null;
-      lastNativeAudioLivenessSequenceRef.current = 0;
+      const clearNativeLease = () => {
+        nativeCaptureSessionIdRef.current = null;
+        nativeCaptureGenerationRef.current = null;
+        lastNativeSegmentSequenceRef.current = 0;
+        lastNativeSpeechStartCandidateSequenceRef.current = 0;
+        latestNativeSpeechStartRef.current = null;
+        latestNativeAudioLivenessRef.current = null;
+        lastNativeAudioLivenessSequenceRef.current = 0;
+      };
+      if (!silentSourceProbe) clearNativeLease();
       if (policy.resetRecoveryBudget) {
         nativeRecoveryAttemptTimestampsRef.current = [];
       }
       if (policy.resetContext) {
+        rawZeroInputEpisodeRef.current.reset();
+        rawZeroProbeObservationRef.current = "";
         handledNativeTerminalKeysRef.current.clear();
         nativeAudioManualRecoveryRef.current = null;
       }
@@ -25331,7 +25375,7 @@ export function useMeetingAssistant() {
         return;
       }
 
-      setState((previous) => ({
+      if (!silentSourceProbe) setState((previous) => ({
         ...previous,
         status: policy.pendingStatus,
         partialSuggestion: "",
@@ -25356,6 +25400,16 @@ export function useMeetingAssistant() {
             );
           }
 
+          // A queued probe must not interrupt a Screen admitted while the native
+          // permission check was pending. User Pause/Stop wins via the coordinator.
+          if (silentSourceProbe && !probeStillEligible()) {
+            reportRawZeroProbe("deferred-before-native-stop", {
+              recoveryAttemptId: recoveryAttempt.id,
+              operationId: lifecycleOperation.id,
+            });
+            return;
+          }
+
           const resetBoundary = policy.resetContext
             ? await resetMeetingRuntimeForNewSession(
                 "meeting-assistant-started"
@@ -25368,9 +25422,25 @@ export function useMeetingAssistant() {
             );
           }
 
-          cancelActiveAdvisorJob("meeting-audio-capture-restarting");
+          if (silentSourceProbe) {
+            rawZeroInputEpisodeRef.current.markProbeStarted();
+            nativeRecoveryAttemptTimestampsRef.current = [
+              ...pruneNativeAudioRecoveryAttempts(nativeRecoveryAttemptTimestampsRef.current,
+                Date.now(), NATIVE_AUDIO_RECOVERY_WINDOW_MS), Date.now(),
+            ];
+            revokeAudioDrainAuthorization("raw-zero-input-probe");
+            clearNativeLease();
+            reportRawZeroProbe("native-restart-started", {
+              recoveryAttemptId: recoveryAttempt.id,
+              operationId: lifecycleOperation.id,
+              previousCaptureSessionId: recoveryAttempt.previousCaptureSessionId,
+              previousCaptureGeneration: recoveryAttempt.previousCaptureGeneration,
+            });
+          } else {
+            cancelActiveAdvisorJob("meeting-audio-capture-restarting");
+          }
           activeRef.current = false;
-          runtimeActiveRef.current = false;
+          if (!silentSourceProbe) runtimeActiveRef.current = false;
           invalidateAudioProcessingSession();
 
           await stopNativeMeetingCapture(previousNativeLease);
@@ -25482,7 +25552,7 @@ export function useMeetingAssistant() {
 
           setState((previous) => ({
             ...previous,
-            status: "listening",
+            status: silentSourceProbe ? previous.status : "listening",
             transcriptTurns: contextState.transcriptTurns,
             screenObservations: contextState.screenObservations,
             interviewSessionBrief: contextState.interviewSessionBrief,
@@ -25501,7 +25571,7 @@ export function useMeetingAssistant() {
             speechCorrections: policy.resetContext
               ? []
               : previous.speechCorrections,
-            partialSuggestion: "",
+            partialSuggestion: silentSourceProbe ? previous.partialSuggestion : "",
             error: null,
             audioStatus,
             nativeAudioManualRecovery:
@@ -25510,8 +25580,13 @@ export function useMeetingAssistant() {
                 : previous.nativeAudioManualRecovery,
           }));
           if (recoveryAttempt) {
+            if (silentSourceProbe) reportRawZeroProbe("native-restart-completed", {
+              recoveryAttemptId: recoveryAttempt.id,
+              operationId: lifecycleOperation.id,
+              signalRestored: false,
+            });
             sessionRecordingManagerRef.current?.recordCaptureLifecycle({
-              stage: "automatic-recovery-succeeded",
+              stage: silentSourceProbe ? "automatic-recovery-native-started" : "automatic-recovery-succeeded",
               recoveryAttemptId: recoveryAttempt.id,
               recoveryStartedAt: recoveryAttempt.startedAt,
               recoveryDurationMs: Date.now() - recoveryAttempt.startedAt,
@@ -25561,7 +25636,7 @@ export function useMeetingAssistant() {
           if (!authorized) return;
 
           activeRef.current = false;
-          runtimeActiveRef.current = false;
+          if (!silentSourceProbe) runtimeActiveRef.current = false;
           invalidateAudioProcessingSession();
           if (recoveryAttempt) {
             nativeRecoveryAttemptTimestampsRef.current =
@@ -25629,6 +25704,7 @@ export function useMeetingAssistant() {
       invalidateAudioProcessingSession,
       maybeFinishNativeAudioFaultTrace,
       readNativeCaptureLease,
+      reportRawZeroProbe,
       prewarmSemanticTaxonomyRuntime,
       revokeAudioDrainAuthorization,
       selectedAudioDevices.output.id,
@@ -25639,6 +25715,38 @@ export function useMeetingAssistant() {
       stopNativeMeetingCapture,
       sttProvider,
     ]);
+
+  const checkRawZeroInputProbe = useCallback(() => {
+    const latest = latestNativeAudioLivenessRef.current;
+    const now = Date.now();
+    const captureActive = activeRef.current && !shutdownRequestedRef.current &&
+      nativeCaptureSessionIdRef.current != null;
+    const episode = rawZeroInputEpisodeRef.current.read(now,
+      screenOperationCoordinatorRef.current.getActiveOperationId() != null);
+    const disposition = !captureActive ? "inactive" : episode.disposition;
+    const key = `${episode.zeroSince ?? ""}:${disposition}`;
+    if (rawZeroProbeObservationRef.current !== key) {
+      rawZeroProbeObservationRef.current = key;
+      if (episode.warning) reportRawZeroProbe(disposition, { disposition });
+    }
+    if (!captureActive || disposition !== "probe-ready" || rawZeroProbePendingRef.current ||
+        !latest || now - latest.observedAtMs > 6_000 || now - latest.event.occurredAtMs > 6_000) return;
+    const attempts = pruneNativeAudioRecoveryAttempts(nativeRecoveryAttemptTimestampsRef.current,
+      now, NATIVE_AUDIO_RECOVERY_WINDOW_MS);
+    if (attempts.length >= NATIVE_AUDIO_MAX_RECOVERY_ATTEMPTS_PER_WINDOW) return;
+    const attempt: NativeAudioRecoveryAttemptContext = {
+      id: createMeetingId("raw_zero_probe"), startedAt: now,
+      previousCaptureSessionId: latest.event.captureSessionId,
+      previousCaptureGeneration: latest.event.captureGeneration,
+      reason: "raw-zero-input",
+    };
+    rawZeroProbePendingRef.current = true;
+    reportRawZeroProbe("requested", { recoveryAttemptId: attempt.id });
+    void startCapture("automatic-recovery", attempt).finally(() => {
+      rawZeroProbePendingRef.current = false;
+      reportRawZeroProbe("request-finished", { recoveryAttemptId: attempt.id });
+    });
+  }, [reportRawZeroProbe, startCapture]);
 
   const start = useCallback(async () => {
     await startCapture("fresh-start");
@@ -25959,6 +26067,8 @@ export function useMeetingAssistant() {
           screenOperationId,
           screenOperationRequestedAt
         );
+      rawZeroInputEpisodeRef.current.screenAdmitted(Date.now());
+      reportRawZeroProbe("screen-wait-reset", { screenOperationId });
       const supersededAnalysisController = screenAnalysisAbortRef.current;
       if (supersededAnalysisController) {
         supersededAnalysisController.abort(
@@ -31270,6 +31380,7 @@ export function useMeetingAssistant() {
       selectedAIProvider,
       settleAwaitingVisualEvidenceRecovery,
       screenshotConfiguration,
+      reportRawZeroProbe,
       state.settings,
       state.status,
       terminalizeGenerationLease,
@@ -36533,14 +36644,17 @@ export function useMeetingAssistant() {
 
     const refresh = () => {
       const latest = latestNativeAudioLivenessRef.current;
-      const presentation = resolveAudioInputLivenessPresentation({
+      checkRawZeroInputProbe();
+      const presentation = projectRawZeroInputWarning(resolveAudioInputLivenessPresentation({
         captureActive,
         vadEnabled,
         captureStartedAtMs: state.audioStatus?.startedAtMs ?? undefined,
         latestEvent: latest?.event,
         latestObservedAtMs: latest?.observedAtMs,
         nowMs: Date.now(),
-      });
+      }), rawZeroInputEpisodeRef.current.read(Date.now(),
+        screenOperationCoordinatorRef.current.getActiveOperationId() != null),
+        rawZeroProbePendingRef.current);
       setState((previous) =>
         sameAudioInputLiveness(
           previous.audioInputLiveness,
@@ -36566,6 +36680,7 @@ export function useMeetingAssistant() {
     state.audioStatus?.captureSessionId,
     state.audioStatus?.startedAtMs,
     state.audioStatus?.vadEnabled,
+    checkRawZeroInputProbe,
   ]);
 
   useEffect(() => {
@@ -36622,13 +36737,22 @@ export function useMeetingAssistant() {
             event: authorization.event,
             observedAtMs,
           };
-          const presentation = resolveAudioInputLivenessPresentation({
+          if (rawZeroInputEpisodeRef.current.observe(authorization.event)) {
+            reportRawZeroProbe("signal-restored", {
+              snapshotSequence: authorization.event.snapshotSequence,
+              signalRestored: true,
+            });
+          }
+          checkRawZeroInputProbe();
+          const presentation = projectRawZeroInputWarning(resolveAudioInputLivenessPresentation({
             captureActive: true,
             vadEnabled: true,
             latestEvent: authorization.event,
             latestObservedAtMs: observedAtMs,
             nowMs: observedAtMs,
-          });
+          }), rawZeroInputEpisodeRef.current.read(observedAtMs,
+            screenOperationCoordinatorRef.current.getActiveOperationId() != null),
+            rawZeroProbePendingRef.current);
           setState((previous) =>
             sameAudioInputLiveness(
               previous.audioInputLiveness,
@@ -37152,6 +37276,8 @@ export function useMeetingAssistant() {
     };
   }, [
     activateSentenceContinuationFromSpeechStart,
+    checkRawZeroInputProbe,
+    reportRawZeroProbe,
     cancelActiveAdvisorJob,
     drainSystemAudioQueueForNativeStop,
     invalidateAudioProcessingSession,

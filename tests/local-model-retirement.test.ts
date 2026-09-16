@@ -6,6 +6,7 @@ import ts from "typescript";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { CaptureLifecycleCoordinator } from "../src/lib/meeting/capture-lifecycle.js";
+import { RawZeroInputEpisode } from "../src/lib/meeting/audio-input-liveness.js";
 import * as nativeLifecycle from "../src/lib/meeting/native-audio-lifecycle.js";
 import { MeetingTraceStore } from "../src/lib/meeting/trace.js";
 import { MeetingContextManager } from "../src/lib/meeting/context-manager.js";
@@ -170,6 +171,7 @@ function entryHarness(old = {}) {
     resetMeetingRuntimeForNewSession: async () => undefined,
     stopNativeMeetingCapture: async () => { calls.push("stop-native"); },
     startAudioProcessingSession: () => { calls.push("audio-processing"); },
+    reportRawZeroProbe: () => undefined,
     prewarmMemoryContextSnapshot: () => undefined,
     prewarmSemanticTaxonomyRuntime: () => undefined,
     invoke: async (command: string) => {
@@ -180,6 +182,7 @@ function entryHarness(old = {}) {
     },
   });
   globals.captureLifecycleCoordinatorRef.current = new CaptureLifecycleCoordinator();
+  globals.rawZeroInputEpisodeRef.current = new RawZeroInputEpisode();
   globals.handledNativeTerminalKeysRef.current = new Set();
   globals.contextManagerRef.current = { getState: () => ({ sessionId: "session", transcriptTurns: [], screenObservations: [] }) };
   load(hook, globals, ["MISSING_STT_MESSAGE", "MISSING_AI_MESSAGE", "MISSING_VISION_MESSAGE"]);

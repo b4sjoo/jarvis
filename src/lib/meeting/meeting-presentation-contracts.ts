@@ -87,6 +87,9 @@ export interface NativeAudioLivenessEvent {
   intervalMaxPeak: number;
   processedChunkCount: number;
   signalChunkCount: number;
+  rawSignalChunkCount?: number;
+  rawZeroDurationMs?: number;
+  lastRawSignalObservedAtMs?: number;
   speechChunkCount: number;
   speechCandidateCount: number;
   segmentEmittedCount: number;

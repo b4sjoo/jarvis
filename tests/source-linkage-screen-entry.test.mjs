@@ -125,6 +125,8 @@ function harness(options = {}) {
     activeAdvisorJobRef: { current: undefined }, activeAdvisorGenerationLeaseRef: { current: undefined },
     pendingAnswerRevisionRef: { current: undefined }, stableAnswerRevisionRef: { current: { logicalQuestionUnitId: unit.id, logicalQuestionRevision: unit.revision } },
     screenOperationCoordinatorRef: { current: new modules.ScreenOperationCoordinator() },
+    rawZeroInputEpisodeRef: { current: { screenAdmitted() {} } },
+    reportRawZeroProbe() {},
     screenAnalysisAbortRef: { current: null }, whiteboardSyntaxRepairRuntimeRef: { current: undefined },
     sourceLinkageAdjudicationRuntimeRef: { current: runtime },
     sourceLinkageAdjudicationCircuitRef: { current: new modules.RuntimeInferenceSessionCircuitBreaker() },

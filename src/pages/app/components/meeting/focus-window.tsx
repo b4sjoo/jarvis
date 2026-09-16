@@ -493,11 +493,13 @@ function MeetingFocusControlsWindow({
             variant="outline"
             className={cn(
               "h-7 shrink-0 rounded-md px-2 text-[10px]",
-              snapshot.error ? "border-red-300 text-red-700" : "text-muted-foreground"
+              snapshot.error || snapshot.audioInputWarning ? "border-red-300 text-red-700" : "text-muted-foreground"
             )}
-            title={snapshot.error || snapshot.statusLabel}
+            title={snapshot.error || snapshot.audioInputWarning?.detail || snapshot.statusLabel}
           >
-            {snapshot.error ? "Error" : snapshot.statusLabel}
+            {snapshot.error ? "Error" : snapshot.audioInputWarning ? (
+              <AlertCircleIcon className="h-3 w-3" aria-label={snapshot.audioInputWarning.label} />
+            ) : snapshot.statusLabel}
           </Badge>
         </div>
 

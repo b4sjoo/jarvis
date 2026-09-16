@@ -164,6 +164,7 @@ export type MeetingFocusSnapshot = FocusReadonly<{
   phaseOutputNotice?: string;
   isBusy: boolean;
   audioControl: NativeAudioPauseResumeControlPresentation;
+  audioInputWarning?: { label: string; detail: string };
   showClarifyingQuestion: boolean;
   clarifyingQuestion: string;
   showClarifyingBooleanFallback: boolean;

@@ -39,6 +39,18 @@ class Bus {
   }
 }
 const fail = (error: Error) => { throw error; };
+
+test("audio warning is display-only and survives the independent Focus transport", async () => {
+  const bus = new Bus(), p = publisher(bus), c = consumer(bus, "controls");
+  await p.start(); await c.start();
+  await p.publish(createMeetingFocusDisplayModel({ ...empty,
+    audioInputWarning: { label: "Checking audio input", detail: "Actual signal is required." },
+  }));
+  bus.drain();
+  assert.deepEqual(c.received.at(-1)?.payload.audioInputWarning,
+    { label: "Checking audio input", detail: "Actual signal is required." });
+  assert.equal(p.actions.length, 0);
+});
 function consumer(bus: Bus | MeetingFocusTransport, windowKind: MeetingFocusWindowKind = "answer") {
   const received: MeetingFocusSnapshotEnvelope[] = [];
   const errors: Error[] = [];

@@ -5,6 +5,8 @@ import {
   buildAudioInputLivenessTraceMetadata,
   parseNativeAudioLivenessEvent,
   resolveAudioInputLivenessPresentation,
+  RawZeroInputEpisode,
+  projectRawZeroInputWarning,
 } from "../src/lib/meeting/audio-input-liveness.js";
 
 const FIXTURE = {
@@ -46,6 +48,54 @@ const FIXTURE = {
   minimumSpeechMs: 149,
   maximumSegmentMs: 30_000,
 } as const;
+
+test("raw-zero episodes require actual pre-gate signal and survive native generations", () => {
+  const episode = new RawZeroInputEpisode();
+  episode.observe({ ...FIXTURE, rawSignalChunkCount: 0, rawZeroDurationMs: 100_000 });
+  assert.equal(episode.read(200_000, false).warning, false);
+  episode.observe({ ...FIXTURE, rawSignalChunkCount: 1, rawZeroDurationMs: 0,
+    occurredAtMs: 200_000, lastRawSignalObservedAtMs: 200_000 });
+  episode.observe({ ...FIXTURE, rawSignalChunkCount: 1, rawZeroDurationMs: 89_999,
+    occurredAtMs: 289_999, lastRawSignalObservedAtMs: 200_000 });
+  assert.equal(episode.read(289_999, false).warning, false);
+  assert.equal(episode.read(290_000, false).disposition, "probe-ready");
+  episode.markProbeStarted();
+  episode.observe({ ...FIXTURE, captureGeneration: 3, rawSignalChunkCount: 0,
+    rawZeroDurationMs: 90_000, occurredAtMs: 380_000 });
+  assert.equal(episode.read(380_000, false).disposition, "probe-used");
+  assert.equal(episode.observe({ ...FIXTURE, captureGeneration: 3, rawSignalChunkCount: 1,
+    rawZeroDurationMs: 0, occurredAtMs: 380_010, lastRawSignalObservedAtMs: 380_010 }), true);
+  assert.equal(episode.read(380_010, false).warning, false);
+});
+
+test("Screen admission resets automatic wait without hiding silence or replenishing the probe", () => {
+  const episode = new RawZeroInputEpisode();
+  episode.observe({ ...FIXTURE, occurredAtMs: 100_000, rawSignalChunkCount: 1,
+    rawZeroDurationMs: 99_000, lastRawSignalObservedAtMs: 1_000 });
+  episode.screenAdmitted(100_000);
+  assert.equal(episode.read(100_000, false).warning, true);
+  assert.equal(episode.read(189_999, false).disposition, "screen-wait");
+  assert.equal(episode.read(190_000, true).disposition, "screen-deferred");
+  assert.equal(episode.read(220_000, false).disposition, "probe-ready");
+  episode.markProbeStarted();
+  episode.screenAdmitted(220_000);
+  assert.equal(episode.read(310_000, false).disposition, "probe-used");
+  const warning = projectRawZeroInputWarning(resolveAudioInputLivenessPresentation({
+    captureActive: true, vadEnabled: true, nowMs: 220_000,
+  }), episode.read(220_000, false), true);
+  assert.equal(warning?.label, "Checking audio input");
+  assert.equal(warning?.severity, "warning");
+});
+
+test("missing legacy raw observations cannot authorize a probe", () => {
+  const episode = new RawZeroInputEpisode();
+  episode.observe(FIXTURE);
+  assert.equal(episode.read(999_999, false).warning, false);
+  const parsed = parseNativeAudioLivenessEvent({ ...FIXTURE, rawZeroDurationMs: 90_000,
+    rawSignalChunkCount: 2, lastRawSignalObservedAtMs: 1_000 });
+  assert.equal(parsed?.rawZeroDurationMs, 90_000);
+  assert.equal(buildAudioInputLivenessTraceMetadata(parsed!, 100_000).rawSignalChunkCount, 2);
+});
 
 test("parses and authorizes a lease-qualified liveness snapshot", () => {
   const parsed = parseNativeAudioLivenessEvent(FIXTURE);
