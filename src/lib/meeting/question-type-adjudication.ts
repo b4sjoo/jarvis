@@ -23,7 +23,7 @@ import type { MeetingQuestionTypeAdjudicationMode } from "./types.js";
 
 export const QUESTION_TYPE_ADJUDICATION_SCHEMA_VERSION = 1;
 export const QUESTION_TYPE_ADJUDICATION_PROMPT_VERSION =
-  "question-type-adjudication-v6";
+  "question-type-adjudication-v7";
 export const QUESTION_TYPE_ADJUDICATION_MAX_OUTPUT_CHARS = 2_048;
 export const QUESTION_TYPE_ENFORCEMENT_WAIT_BUDGET_MS = 2_000;
 export const VOICE_FIRST_PARENT_QUESTION_TYPE_WAIT_BUDGET_MS = 4_000;
@@ -651,6 +651,8 @@ export function buildQuestionTypeAdjudicationPrompts(
       "Use unknown for logistics, compensation, scheduling, filler, incomplete content, or genuine ambiguity.",
       "e must be one shortest identifying exact verbatim substring from question.sourceTexts.",
       "Allowed t values are the questionType values listed above.",
+      "c is your confidence that the selected t is the correct question type. It is required for every t, including unknown, and must be a JSON number between 0 and 1 inclusive, never a percentage or a string.",
+      "Always include v, t, c, and e. Only r is optional.",
       'Schema: {"v":1,"t":"one allowed value","c":number,"e":"exact quote"}.',
       'Optional field: "r":"short ambiguity reason". Omit r when it is not useful.',
       ].join(" ");

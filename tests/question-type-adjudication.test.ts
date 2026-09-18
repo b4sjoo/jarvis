@@ -118,6 +118,58 @@ test("passes current branch type only as a bounded prior for elliptical asks", (
   assert.doesNotMatch(prompts.userMessage, /RAG|parent topic|previous answer/i);
 });
 
+test("Broad Type prompt defines required numeric confidence without changing its payload", () => {
+  const request = buildQuestionTypeAdjudicationRequest({
+    logicalQuestionUnit: unit("For this design, implement the retrieval API in Python."),
+    structuredHints: { currentBranchType: "ai-ml-system-design" },
+  });
+  const prompts = buildQuestionTypeAdjudicationPrompts(request);
+  assert.equal(request.promptVersion, "question-type-adjudication-v7");
+  assert.match(prompts.systemPrompt, /c is your confidence that the selected t is the correct question type/);
+  assert.match(prompts.systemPrompt, /required for every t, including unknown/);
+  assert.match(prompts.systemPrompt, /JSON number between 0 and 1 inclusive/);
+  assert.match(prompts.systemPrompt, /never a percentage or a string/);
+  assert.match(prompts.systemPrompt, /Always include v, t, c, and e\. Only r is optional/);
+  assert.deepEqual(JSON.parse(prompts.userMessage), {
+    question: { sourceTexts: ["For this design, implement the retrieval API in Python."] },
+    nonAuthoritativeHints: { currentBranchType: "ai-ml-system-design" },
+  });
+  const narrow = buildQuestionTypeAdjudicationPrompts({ ...request, reviewScope: "field-vs-coding" });
+  assert.doesNotMatch(narrow.systemPrompt, /c is your confidence|Always include v, t, c, and e/);
+  assert.match(narrow.systemPrompt, /three scores must sum to 1/);
+});
+
+test("Broad Type parser still rejects missing, nonnumeric and out-of-range confidence", () => {
+  const request = buildQuestionTypeAdjudicationRequest({
+    logicalQuestionUnit: unit("Implement the retrieval API in Python."),
+  });
+  for (const c of [undefined, null, "0.95", true, -0.01, 1.01, 10, 63]) {
+    assert.deepEqual(parseQuestionTypeAdjudicationOutput(JSON.stringify({
+      v: 1, t: "coding", c, e: "Implement the retrieval API",
+    }), request), {
+      ok: false, reason: "invalid-confidence", errorKind: "schema", evidenceSpansValid: false,
+    }, `confidence ${String(c)}`);
+  }
+  assert.equal(parseQuestionTypeAdjudicationOutput(
+    '{"v":1,"t":"coding","c":1e309,"e":"Implement the retrieval API"}', request
+  ).ok, false);
+});
+
+test("Broad Type parser accepts inclusive confidence bounds for known and unknown types", () => {
+  const request = buildQuestionTypeAdjudicationRequest({
+    logicalQuestionUnit: unit("Implement the retrieval API in Python."),
+  });
+  for (const t of ["coding", "unknown"]) {
+    for (const c of [0, 0.95, 1]) {
+      const parsed = parseQuestionTypeAdjudicationOutput(JSON.stringify({
+        v: 1, t, c, e: "Implement the retrieval API",
+      }), request);
+      assert.equal(parsed.ok, true);
+      if (parsed.ok) assert.equal(parsed.value.confidence, c);
+    }
+  }
+});
+
 test("passes bounded source hints without granting them prompt authority", () => {
   const request = buildQuestionTypeAdjudicationRequest({
     logicalQuestionUnit: unit("Please design a URL shortener."),
