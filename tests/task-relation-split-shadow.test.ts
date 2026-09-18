@@ -307,6 +307,69 @@ test("parses grounded affinity decisions with operation-specific evidence", () =
   assert.equal(parent.ok ? parent.value.decision : undefined, "related");
 });
 
+test("canonical prompt v2 states the existing exact output contract without changing semantic input", () => {
+  const canonical = buildTaskRelationCanonicalShadowRequest({
+    request: request(), sessionId: "session-a", runtimeEpoch: 4, manualCorrectionRevision: 2,
+  });
+  const prompts = buildTaskRelationCanonicalShadowPrompts(canonical);
+  assert.equal(canonical.promptVersion, "task-relation-canonical-shadow-v2");
+  assert.match(prompts.systemPrompt, /EVERY relation, including new-parent and unknown/);
+  assert.match(prompts.systemPrompt, /Never return an empty currentQuestionEvidenceSpans array/);
+  assert.match(prompts.systemPrompt, /currentQuestionEvidenceSpans, never currentEvidenceSpans/);
+  assert.match(prompts.systemPrompt, /Only ambiguityReason is optional/);
+  assert.match(prompts.systemPrompt, /at most 4 strings, each at most 180 characters/);
+  assert.match(prompts.systemPrompt, /JSON number between 0 and 1 inclusive/);
+  assert.match(prompts.systemPrompt, /format only, not a recommended relation/);
+  const example = prompts.systemPrompt.match(/JSON shape example: (\{[^}]+\})/);
+  assert.ok(example);
+  assert.deepEqual(Object.keys(JSON.parse(example[1])), [
+    "schemaVersion", "relation", "confidence", "currentQuestionEvidenceSpans", "parentEvidenceSpans",
+  ]);
+  assert.deepEqual(JSON.parse(prompts.userMessage), canonical.semanticPayload);
+});
+
+test("canonical parser still rejects recorded alias and empty-current-evidence failure shapes", () => {
+  const canonical = buildTaskRelationCanonicalShadowRequest({
+    request: request(), sessionId: "session-a", runtimeEpoch: 4, manualCorrectionRevision: 2,
+  });
+  const wrongKey = parseTaskRelationCanonicalShadowOutput(JSON.stringify({
+    schemaVersion: 3, relation: "new-parent", confidence: 0.98,
+    currentEvidenceSpans: [], parentEvidenceSpans: [],
+  }), canonical);
+  assert.equal(wrongKey.ok ? "accepted" : wrongKey.reason, "unexpected-field");
+  for (const relation of ["new-parent", "unknown"]) {
+    const empty = parseTaskRelationCanonicalShadowOutput(JSON.stringify({
+      schemaVersion: 3, relation, confidence: 0.9,
+      currentQuestionEvidenceSpans: [], parentEvidenceSpans: [],
+    }), canonical);
+    assert.equal(empty.ok ? "accepted" : empty.reason, "current-evidence-required");
+  }
+});
+
+test("canonical exact-key outputs accept grounded evidence and preserve parent evidence and confidence checks", () => {
+  const canonical = buildTaskRelationCanonicalShadowRequest({
+    request: request(), sessionId: "session-a", runtimeEpoch: 4, manualCorrectionRevision: 2,
+  });
+  const base = { schemaVersion: 3, confidence: 0.9,
+    currentQuestionEvidenceSpans: ["Back to the RAG system"], parentEvidenceSpans: [] as string[] };
+  for (const relation of ["new-parent", "unknown", "followup-parent", "child-probe", "resume-parent"]) {
+    const parentRequired = !["new-parent", "unknown"].includes(relation);
+    const output = { ...base, relation, parentEvidenceSpans: parentRequired ? ["Documents change continuously"] : [] };
+    assert.equal(parseTaskRelationCanonicalShadowOutput(JSON.stringify(output), canonical).ok, true);
+    if (parentRequired) {
+      const missing = parseTaskRelationCanonicalShadowOutput(JSON.stringify({ ...output, parentEvidenceSpans: [] }), canonical);
+      assert.equal(missing.ok ? "accepted" : missing.reason, "parent-evidence-required");
+    }
+  }
+  for (const confidence of [undefined, null, "0.9", -0.1, 1.1]) {
+    assert.equal(parseTaskRelationCanonicalShadowOutput(JSON.stringify({ ...base, relation: "new-parent", confidence }), canonical).ok, false);
+  }
+  const ungrounded = parseTaskRelationCanonicalShadowOutput(JSON.stringify({
+    ...base, relation: "new-parent", currentQuestionEvidenceSpans: ["exact current-question excerpt"],
+  }), canonical);
+  assert.equal(ungrounded.ok ? "accepted" : ungrounded.reason, "ungrounded-evidence");
+});
+
 test("feeds affinity semantics into canonical relation without lineage hashes", () => {
   const base = request();
   const split = buildTaskRelationAffinityRequests({

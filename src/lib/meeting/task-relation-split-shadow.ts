@@ -35,7 +35,7 @@ export const TASK_RELATION_CHILD_AFFINITY_PROMPT_VERSION =
 export const TASK_RELATION_PARENT_AFFINITY_PROMPT_VERSION =
   "task-relation-parent-affinity-v2-compact";
 export const TASK_RELATION_CANONICAL_SHADOW_PROMPT_VERSION =
-  "task-relation-canonical-shadow-v1";
+  "task-relation-canonical-shadow-v2";
 
 export type TaskRelationAffinityKind = "child" | "parent";
 export type ChildAffinityDecision = "related" | "unrelated" | "unclear";
@@ -1063,9 +1063,14 @@ export function buildTaskRelationCanonicalShadowPrompts(
     "Use new-parent when the current question is a concrete independent task that does not need the active parent or child.",
     "Use unknown when source evidence and affinity proposals remain conflicting or insufficient. Runtime will preserve the current branch for unknown.",
     "Do not classify question type, response action, context scope, phase, memory, or artifact intent.",
-    "currentQuestionEvidenceSpans must be exact substrings of currentQuestion.sourceTexts.",
+    "currentQuestionEvidenceSpans is required and must contain 1 to 4 nonempty exact substrings of currentQuestion.sourceTexts for EVERY relation, including new-parent and unknown. Never return an empty currentQuestionEvidenceSpans array.",
     "parentEvidenceSpans must be exact substrings of activeParent, activeChild, or recentEvidence fields. New-parent may use an empty array; followup-parent, child-probe, and resume-parent require at least one.",
-    "Schema: {schemaVersion:3,relation,confidence,currentQuestionEvidenceSpans:string[],parentEvidenceSpans:string[],ambiguityReason?:string}.",
+    "Each evidence array may contain at most 4 strings, each at most 180 characters. Select short identifying excerpts rather than copying long questions. For unknown, parentEvidenceSpans may also be empty.",
+    "Always include exactly these required output keys: schemaVersion, relation, confidence, currentQuestionEvidenceSpans, parentEvidenceSpans. Only ambiguityReason is optional. Do not add any other keys.",
+    "The output key is currentQuestionEvidenceSpans, never currentEvidenceSpans. currentEvidenceSpans belongs to the input Affinity proposals; do not copy their field names into your output.",
+    "schemaVersion must be the number 3. confidence is required for every relation and must be a JSON number between 0 and 1 inclusive, never a percentage or string.",
+    'JSON shape example: {"schemaVersion":3,"relation":"unknown","confidence":0.5,"currentQuestionEvidenceSpans":["exact current-question excerpt"],"parentEvidenceSpans":[]}',
+    "This example demonstrates format only, not a recommended relation. Choose relation using the rules above and replace the example excerpt with actual exact source text; do not copy the placeholder.",
   ].join(" ");
   return buildRuntimeInferenceModelInput({
     systemPrompt,
