@@ -32,11 +32,21 @@ const callbackNames = [
   "scheduleAdvisorAfterQuestionTypeWindow",
   "appendTranscriptTurnForTrace",
   "buildLogicalQuestionForTurn",
+  "readAudioSegmentCommitAuthorization",
+  "isCurrentAudioSegment",
+  "isCurrentTurnSource",
+  "clearPendingSentenceCompletionForRuntimeReset",
+  "clearPendingConfirmation",
   "flushPendingSentenceCompletion",
   "holdPendingSentenceCompletion",
   "consumePendingSentenceCompletion",
   "activateSentenceContinuationFromSpeechStart",
   "processPostBufferThemTurn",
+  "holdPendingConfirmation",
+  "resolvePendingConfirmationForMeTurn",
+  "processCanonicalTurnIngress",
+  "submitRuntimeRegressionText",
+  "waitForRuntimeRegressionTraceTerminal",
 ];
 const callbackSources = callbackNames.map(callback);
 const helperSource = find(file, (node) =>
@@ -73,6 +83,7 @@ for (const name of [
   "runtime-inference-runtime", "response-opportunity-generation-gate",
   "short-intent-gate", "logical-question-unit", "runtime-inference-health",
   "settled-advisor-execution-plan", "advisor-trigger-job", "stable-answer", "meeting-answer",
+  "audio-drain-authorization",
 ]) {
   exports.push(`export * from "@/lib/meeting/${name}";`);
 }
@@ -149,6 +160,8 @@ function createHarness() {
   const providerCalls = [];
   const settlements = [];
   const scheduled = [];
+  const traces = new Map();
+  const replaySteps = [];
   const runtime = new pure.RuntimeInferenceOperationRuntime("response-opportunity-inference");
   const schedule = runtime.schedule.bind(runtime);
   runtime.schedule = (input, delay) => {
@@ -184,9 +197,14 @@ function createHarness() {
     processPostBufferThemTurnRef: { current: null },
     sttEvaluationCaptureManagerRef: { current: undefined },
     SENTENCE_COMPLETION_BUFFER_MS: 3250, SENTENCE_COMPLETION_ABSOLUTE_MAX_MS: 4000,
-    isCurrentAudioSegment: (segment) => segment.sessionId === 1,
+    audioSessionIdRef: { current: 1 },
+    nativeCaptureSessionIdRef: { current: "capture-a" },
+    nativeCaptureGenerationRef: { current: 1 },
+    audioDrainAuthorizationRef: { current: null },
+    runtimeRegressionRunRef: { current: undefined },
+    runtimeRegressionStepIdRef: { current: undefined },
+    PENDING_CONFIRMATION_TTL_MS: 10_000,
     scheduleMeetingMetadataInference() {}, promoteMeTurnForFusion() {},
-    holdPendingConfirmation() { assert.fail("fixture must not enter the short confirmation window"); },
     scheduleSemanticTaxonomyShadow: () => ({ taskRelation: {
       operationId: "relation", releaseWindowRequested: false, sourceKind: "voice",
       authorizeOperation: () => ({ authorized: true, reason: "source-operation-current" }),
@@ -199,13 +217,28 @@ function createHarness() {
     meetingModelProviderSnapshotRef: { current: {} },
     resolveRuntimeInferenceModelRouteFromSnapshot: () => ({ provider: {}, selectedProvider: {}, missingRequiredVariables: [] }),
     readSelectedProviderModelId: () => "test-provider",
-    sessionRecordingManagerRef: { current: undefined },
+    sessionRecordingManagerRef: { current: {
+      getState: () => ({ active: false }),
+      recordRuntimeRegressionStep: (step) => replaySteps.push(step),
+      recordCaptureLifecycle() {}, recordTranscriptTurn() {},
+      recordModelInput() {}, recordModelOutput() {},
+      recordTaskRelationAdjudicationDecision() {},
+    } },
     debugModeRef: { current: false },
     traceStoreRef: { current: {
       updateMetadata: (id, update) => metadata.set(id, { ...metadata.get(id), ...update }),
+      startTrace: (kind, initialMetadata) => {
+        const trace = { id: `replay-trace-${traces.size + 1}`, kind, status: "running" };
+        traces.set(trace.id, trace);
+        metadata.set(trace.id, initialMetadata);
+        return trace;
+      },
       recordInput() {}, recordOutput() {}, finishStep() {}, startStep: () => "step",
-      finishTrace: (...args) => finished.push(args),
-      getTraces: () => [...metadata].map(([id, value]) => ({ id, metadata: value })),
+      finishTrace: (...args) => {
+        finished.push(args);
+        traces.set(args[0], { id: args[0], status: args[1], error: args[2] });
+      },
+      getTraces: () => [...metadata].map(([id, value]) => ({ id, ...traces.get(id), metadata: value })),
     } },
     setState: (update) => { stateWrites += 1; ui = update(ui); },
     refreshRecordedCompletedTrace() {},
@@ -288,15 +321,244 @@ function createHarness() {
     };
   }
 
-  return { environment, pure, state, clock, runtime, start, candidate, settle, modelResult, products, metadata, finished, advisorCalls, providerCalls, settlements, scheduled };
+  return { environment, pure, state, clock, runtime, start, candidate, settle, modelResult, products, metadata, finished, advisorCalls, providerCalls, settlements, scheduled, replaySteps };
 }
 
 function bufferedTurn(h, id, text) {
   const value = h.candidate(id, text);
   const segment = { traceId: value.traceId, sessionId: 1, sequence: Number(id) || 1,
+    nativeCaptureSessionId: "capture-a", nativeCaptureGeneration: 1,
     source: "system-audio", speaker: "them" };
   return { ...value, segment };
 }
+
+const replayBufferedText = "But then how, were you using AI to extract this? Did you write like a program to, so were you sending this to another AI to extract or are you...";
+
+async function injectReplay(h, text = replayBufferedText) {
+  h.environment.activeRef.current = false;
+  h.environment.nativeCaptureSessionIdRef.current = null;
+  h.environment.nativeCaptureGenerationRef.current = null;
+  h.environment.runtimeRegressionRunRef.current = {
+    scenarioRunId: "run-a", runtimeSessionId: h.state.sessionId,
+    startedAt: h.clock.now, stepOrdinal: 0,
+  };
+  const result = h.environment.submitRuntimeRegressionText(text);
+  await h.clock.flush();
+  assert.equal(h.replaySteps[0].event, "injected");
+  return { result, traceId: h.replaySteps[0].traceId };
+}
+
+test("RB1 real Replay submission retains provenance through timeout, RO and recorded terminal", async () => {
+  const h = createHarness();
+  const { result, traceId } = await injectReplay(h);
+  const pending = h.environment.pendingSentenceCompletionRef.current;
+  assert.equal(pending.turn.text, replayBufferedText);
+  assert.deepEqual({ ...pending.segment.replaySource }, {
+    scenarioRunId: "run-a", runtimeSessionId: "session-a", runtimeEpoch: 2,
+  });
+  assert.equal(h.environment.isCurrentAudioSegment(pending.segment), false);
+  assert.equal(h.environment.isCurrentTurnSource(pending.segment), true);
+  assert.equal(h.scheduled.length, 0);
+  await h.clock.advance(3249);
+  assert.equal(h.scheduled.length, 0);
+  await h.clock.advance(1);
+  assert.equal(h.scheduled.length, 1);
+  assert.equal(h.state.transcriptTurns[0].text, replayBufferedText);
+  assert.equal(h.scheduled[0].job.request.decisionSpans.map((s) => s.text).join(" "), replayBufferedText);
+  assert.equal(h.metadata.get(traceId).sentenceBufferOutcome, "timeout");
+  h.environment.flushPendingSentenceCompletion("timeout");
+  assert.equal(h.scheduled.length, 1);
+  h.settle(h.scheduled[0], h.modelResult(h.scheduled[0].job, "no-output-request"));
+  await h.clock.advance(100);
+  assert.equal(await result, true);
+  assert.equal(h.replaySteps.at(-1).event, "terminal");
+  assert.equal(h.replaySteps.at(-1).terminalDisposition, "suppressed");
+  assert.equal(h.products().ui.error, null);
+  h.runtime.cancelAll();
+});
+
+test("RB1 complete Replay input still bypasses the buffer and uses the same RO", async () => {
+  const h = createHarness();
+  const { result } = await injectReplay(h, "Design a service for customer reviews and rewards.");
+  assert.equal(h.environment.pendingSentenceCompletionRef.current, null);
+  assert.equal(h.scheduled.length, 1);
+  h.settle(h.scheduled[0], h.modelResult(h.scheduled[0].job, "no-output-request"));
+  await h.clock.advance(100);
+  assert.equal(await result, true);
+  h.runtime.cancelAll();
+});
+
+test("RB1 buffered Replay output authorization reaches the shared Advisor plan and stable commit", async () => {
+  const h = createHarness();
+  const { result, traceId } = await injectReplay(h);
+  await h.clock.advance(3250);
+  h.settle(h.scheduled[0], h.modelResult(h.scheduled[0].job));
+  await h.clock.flush();
+  assert.equal(h.advisorCalls.length, 1);
+  const call = h.advisorCalls[0];
+  const plan = h.pure.buildSettledAdvisorExecutionPlan({ settlement: call[7],
+    taskBoundaryCommitted: false, childOwnsResponse: false,
+    providerSnapshot: { providers: [{ id: "main", curl: "https://main.test" }],
+      selectedProvider: { provider: "main", variables: {} },
+      codingProvider: { provider: "main", variables: {} } },
+    memoryUseCase: "meeting_assistant", askFrame: "unknown", topicDomain: "unknown" });
+  assert.equal(plan.responseAuthorized, true);
+  const content = "Answer: I would send the input to an extraction model and validate the returned fields.";
+  const stable = h.pure.commitStableAnswerRevision({ candidate: {
+    id: "replay-answer", kind: "answer", confidence: "high", content,
+    meetingAnswer: h.pure.parseMeetingAnswer(content), createdAt: h.clock.now,
+    basedOnTurnIds: call[5].sourceTurnIds, basedOnObservationIds: [],
+  }, authorizedArtifacts: plan.requestedArtifacts, taskId: null,
+    logicalQuestionUnitId: call[5].id, logicalQuestionRevision: call[5].revision });
+  assert.equal(stable.suggestion.content.replace(/\s+/g, " "), content);
+  h.environment.traceStoreRef.current.updateMetadata(traceId, {
+    advisorOutputCommittedToUi: true, visibleAnswerRevisionAfter: stable.revision,
+  });
+  h.environment.traceStoreRef.current.finishTrace(traceId, "success");
+  await h.clock.advance(100);
+  assert.equal(await result, true);
+  assert.equal(h.replaySteps.at(-1).terminalDisposition, "visible");
+  h.runtime.cancelAll();
+});
+
+for (const [name, invalidate] of [
+  ["run replaced", (h) => { h.environment.runtimeRegressionRunRef.current.scenarioRunId = "run-b"; }],
+  ["run stopped", (h) => { h.environment.runtimeRegressionRunRef.current = undefined; }],
+  ["meeting replaced", (h) => { h.state.sessionId = "session-b"; }],
+  ["run meeting replaced", (h) => { h.environment.runtimeRegressionRunRef.current.runtimeSessionId = "session-b"; }],
+  ["Clear epoch", (h) => { h.environment.runtimeEpochRef.current += 1; }],
+  ["inactive runtime", (h) => { h.environment.runtimeActiveRef.current = false; }],
+  ["shutdown", (h) => { h.environment.shutdownRequestedRef.current = true; }],
+]) {
+  test(`RB2 Replay deferred source rejects ${name} without publishing`, async () => {
+    const h = createHarness();
+    const { result } = await injectReplay(h);
+    invalidate(h);
+    await h.clock.advance(3400);
+    await result;
+    assert.equal(h.state.transcriptTurns.length, 0);
+    assert.equal(h.scheduled.length, 0);
+    assert.equal(h.advisorCalls.length, 0);
+    assert.equal(h.environment.pendingSentenceCompletionRef.current, null);
+    h.runtime.cancelAll();
+  });
+}
+
+test("RB2 explicit buffer reset consumes the old timer before another lifetime", async () => {
+  const h = createHarness();
+  const { result } = await injectReplay(h);
+  const pending = h.environment.pendingSentenceCompletionRef.current;
+  const lateTimer = h.clock.timers.get(pending.timeoutId).callback;
+  h.environment.runtimeEpochRef.current += 1;
+  h.environment.clearPendingSentenceCompletionForRuntimeReset("active-task-cleared");
+  lateTimer();
+  await h.clock.advance(4000);
+  await result;
+  assert.equal(h.state.transcriptTurns.length, 0);
+  assert.equal(h.scheduled.length, 0);
+});
+
+test("RB3 native drain still preserves source while a fabricated scenario ID has no authority", async () => {
+  const h = createHarness();
+  const item = bufferedTurn(h, "1", "Can you explain...");
+  assert.equal(h.environment.isCurrentTurnSource(item.segment), true);
+  assert.equal(h.environment.isCurrentTurnSource({ ...item.segment, sessionId: "scenario:run-a" }), false);
+  h.environment.holdPendingSentenceCompletion(item.turn, item.segment, h.pure.decideSentenceCompletion(item.turn.text));
+  h.environment.runtimeActiveRef.current = false;
+  h.environment.nativeCaptureSessionIdRef.current = null;
+  h.environment.audioDrainAuthorizationRef.current = h.pure.createAudioDrainAuthorization({
+    operationId: "drain-a", kind: "stop", audioSessionId: 1,
+    captureSessionId: "capture-a", captureGeneration: 1,
+    issuedAt: h.clock.now, expiresAt: h.clock.now + 5000,
+  });
+  await h.clock.advance(3250);
+  assert.equal(h.state.transcriptTurns[0].text, item.turn.text);
+  assert.equal(h.scheduled.length, 0);
+  h.clock.now += 2000;
+  assert.equal(h.environment.isCurrentTurnSource(item.segment), false);
+});
+
+test("RB3 Replay manual and Screen flushes preserve text without a competing automatic RO", async () => {
+  for (const reason of ["force-advise", "manual-question-type-correction", "screen-task", "next-phase"]) {
+    const h = createHarness();
+    const { result } = await injectReplay(h);
+    h.environment.flushPendingSentenceCompletion(reason);
+    await h.clock.advance(4000);
+    await result;
+    assert.equal(h.state.transcriptTurns[0].text, replayBufferedText, reason);
+    assert.equal(h.scheduled.length, 0, reason);
+  }
+});
+
+test("RB3 Replay confirmation expiry uses source lifetime rather than a native capture", async () => {
+  const h = createHarness();
+  const { result, traceId } = await injectReplay(h, "The first option");
+  assert.ok(h.environment.pendingConfirmationRef.current);
+  await h.clock.advance(10_100);
+  assert.equal(h.environment.pendingConfirmationRef.current, null);
+  assert.equal(h.state.transcriptTurns[0].text, "The first option");
+  assert.equal(h.scheduled.length, 1);
+  h.settle(h.scheduled[0], h.modelResult(h.scheduled[0].job, "no-output-request"));
+  await h.clock.advance(100);
+  assert.equal(await result, true);
+  assert.notEqual(h.metadata.get(traceId).transcriptAppendDisposition, "deferred");
+  h.runtime.cancelAll();
+});
+
+test("RB3 Replay confirmation pairing consumes its original timer once", async () => {
+  const h = createHarness();
+  const { result } = await injectReplay(h, "The first option");
+  const pending = h.environment.pendingConfirmationRef.current;
+  assert.ok(pending);
+  const lateTimer = h.clock.timers.get(pending.timeoutId).callback;
+  const me = { id: "me-clarification", text: "Do you mean the first option?", speaker: "me",
+    source: "microphone", contextTier: "me_clarification_short", isFinal: true,
+    startedAt: h.clock.now, endedAt: h.clock.now };
+  assert.equal(h.environment.resolvePendingConfirmationForMeTurn(me), true);
+  lateTimer();
+  assert.equal(h.state.transcriptTurns.length, 1);
+  assert.equal(h.scheduled.length, 1);
+  h.settle(h.scheduled[0], h.modelResult(h.scheduled[0].job, "no-output-request"));
+  await h.clock.advance(10_100);
+  assert.equal(await result, true);
+  h.runtime.cancelAll();
+});
+
+for (const viaPairing of [false, true]) {
+  test(`RB3 stale Replay confirmation cannot publish through ${viaPairing ? "pairing" : "expiry"}`, async () => {
+    const h = createHarness();
+    const { result } = await injectReplay(h, "The first option");
+    h.environment.runtimeEpochRef.current += 1;
+    if (viaPairing) {
+      assert.equal(h.environment.resolvePendingConfirmationForMeTurn({
+        id: "me", text: "Do you mean the first option?", speaker: "me",
+        startedAt: h.clock.now, endedAt: h.clock.now,
+      }), false);
+    }
+    await h.clock.advance(10_100);
+    await result;
+    assert.equal(h.state.transcriptTurns.length, 0);
+    assert.equal(h.scheduled.length, 0);
+  });
+}
+
+test("RB3 shared merge accepts live Replay provenance and rejects a stale epoch", async () => {
+  for (const stale of [false, true]) {
+    const h = createHarness();
+    const { result } = await injectReplay(h);
+    const pending = h.environment.pendingSentenceCompletionRef.current;
+    const next = h.candidate("next", "using a local parser?");
+    const segment = { ...pending.segment, traceId: next.traceId, sequence: 2 };
+    if (stale) h.environment.runtimeEpochRef.current += 1;
+    // Exercise the shared consumer only; the serial Runner UI remains unchanged.
+    const merged = h.environment.consumePendingSentenceCompletion(next.turn, segment);
+    assert.equal(Boolean(merged), !stale);
+    if (!stale) assert.ok(next.turn.text.startsWith(replayBufferedText.replace(/\.\.\.$/, "")));
+    await h.clock.advance(4000);
+    await result;
+    assert.equal(h.scheduled.length, 0);
+  }
+});
 
 test("A1 original CRUD source reaches RO, settled output permission and stable Answer without Force", async () => {
   const h = createHarness();

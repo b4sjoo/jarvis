@@ -2566,6 +2566,11 @@ interface NativeAudioFaultTraceContext {
 }
 
 interface QueuedSpeechSegment {
+  replaySource?: Readonly<{
+    scenarioRunId: string;
+    runtimeSessionId: string;
+    runtimeEpoch: number;
+  }>;
   base64Audio?: string;
   audioBlob?: Blob;
   audioBase64Chars: number;
@@ -8320,6 +8325,24 @@ export function useMeetingAssistant() {
     (segment: QueuedSpeechSegment) =>
       readAudioSegmentCommitAuthorization(segment).authorized,
     [readAudioSegmentCommitAuthorization]
+  );
+
+  const isCurrentTurnSource = useCallback(
+    (segment: QueuedSpeechSegment) => {
+      const source = segment.replaySource;
+      if (!source) return isCurrentAudioSegment(segment);
+
+      const run = runtimeRegressionRunRef.current;
+      return Boolean(
+        runtimeActiveRef.current &&
+          !shutdownRequestedRef.current &&
+          run?.scenarioRunId === source.scenarioRunId &&
+          run.runtimeSessionId === source.runtimeSessionId &&
+          contextManagerRef.current.getState().sessionId === source.runtimeSessionId &&
+          runtimeEpochRef.current === source.runtimeEpoch
+      );
+    },
+    [isCurrentAudioSegment]
   );
 
   const observeNativeAudioSegment = useCallback(
@@ -18065,7 +18088,7 @@ export function useMeetingAssistant() {
       window.clearTimeout(pending.timeoutId);
       pendingSentenceCompletionRef.current = null;
 
-      if (!isCurrentAudioSegment(pending.segment)) {
+      if (!isCurrentTurnSource(pending.segment)) {
         traceStoreRef.current.updateMetadata(pending.segment.traceId, {
           sentenceBufferOperationId: pending.operationId,
           sentenceBufferOperationRole: "terminal",
@@ -18080,7 +18103,7 @@ export function useMeetingAssistant() {
         traceStoreRef.current.finishTrace(
           pending.segment.traceId,
           "cancelled",
-          "Buffered sentence belongs to a stale audio session."
+          "Buffered sentence belongs to an inactive input source."
         );
         return false;
       }
@@ -18191,7 +18214,7 @@ export function useMeetingAssistant() {
       traceStoreRef.current.finishTrace(pending.segment.traceId, "success");
       return true;
     },
-    [appendTranscriptTurnForTrace, isCurrentAudioSegment]
+    [appendTranscriptTurnForTrace, isCurrentTurnSource]
   );
 
   const activateSentenceContinuationFromSpeechStart = useCallback(
@@ -18389,7 +18412,7 @@ export function useMeetingAssistant() {
       const pending = pendingSentenceCompletionRef.current;
       if (!pending) return undefined;
 
-      if (!isCurrentAudioSegment(pending.segment)) {
+      if (!isCurrentTurnSource(pending.segment)) {
         clearPendingSentenceCompletionForRuntimeReset("stale-before-merge");
         return undefined;
       }
@@ -18495,7 +18518,7 @@ export function useMeetingAssistant() {
     [
       clearPendingSentenceCompletionForRuntimeReset,
       flushPendingSentenceCompletion,
-      isCurrentAudioSegment,
+      isCurrentTurnSource,
     ]
   );
 
@@ -18517,7 +18540,7 @@ export function useMeetingAssistant() {
       const pending = pendingConfirmationRef.current;
       if (!pending) return false;
 
-      if (!isCurrentAudioSegment(pending.segment)) {
+      if (!isCurrentTurnSource(pending.segment)) {
         clearPendingConfirmation("stale-pending-confirmation");
         return false;
       }
@@ -18558,7 +18581,7 @@ export function useMeetingAssistant() {
     [
       appendTranscriptTurnForTrace,
       clearPendingConfirmation,
-      isCurrentAudioSegment,
+      isCurrentTurnSource,
       promoteMeTurnForFusion,
       scheduleAdvisor,
     ]
@@ -18591,7 +18614,7 @@ export function useMeetingAssistant() {
           wordEquivalent: calculateWordEquivalent(turn.text),
           exactHighFiller: isExactLowValueAcknowledgement(turn.text),
         });
-        const currentSegment = isCurrentAudioSegment(segment);
+        const currentSegment = isCurrentTurnSource(segment);
         const expiredStepId = traceStoreRef.current.startStep(
           segment.traceId,
           "Pending confirmation expired",
@@ -18650,7 +18673,7 @@ export function useMeetingAssistant() {
     [
       appendTranscriptTurnForTrace,
       clearPendingConfirmation,
-      isCurrentAudioSegment,
+      isCurrentTurnSource,
       publishResponseRecoveryTarget,
     ]
   );
@@ -24008,6 +24031,11 @@ export function useMeetingAssistant() {
         isFinal: true,
       };
       const segment: QueuedSpeechSegment = {
+        replaySource: {
+          scenarioRunId: run.scenarioRunId,
+          runtimeSessionId: run.runtimeSessionId,
+          runtimeEpoch: runtimeEpochRef.current,
+        },
         audioBase64Chars: 0,
         sessionId: `scenario:${run.scenarioRunId}`,
         sequence: ordinal,
