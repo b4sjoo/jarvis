@@ -235,6 +235,54 @@ test("builds clean child and parent affinity prompts", () => {
   assert.match(parentPrompt.systemPrompt, /"d":"r\|i\|u"/i);
 });
 
+test("affinity prompt v3 explains required confidence for every decision without changing semantic input", () => {
+  const split = buildTaskRelationAffinityRequests({
+    request: request(), sessionId: "session-a", runtimeEpoch: 4, manualCorrectionRevision: 2,
+  });
+  assert.ok(split.child);
+  for (const affinity of [split.parent, split.child]) {
+    const prompts = buildTaskRelationAffinityPrompts(affinity);
+    assert.equal(affinity.promptVersion, `task-relation-${affinity.affinityKind}-affinity-v3-compact`);
+    assert.match(prompts.systemPrompt, /c is your confidence in the chosen affinity decision d/);
+    assert.match(prompts.systemPrompt, /not a category code or percentage/);
+    assert.match(prompts.systemPrompt, /Always include c for every decision/);
+    assert.ok(prompts.systemPrompt.includes(affinity.affinityKind === "child"
+      ? "(related, unrelated, and unclear)" : "(related, independent, and unclear)"));
+    assert.match(prompts.systemPrompt, /JSON number between 0 and 1 inclusive/);
+    assert.match(prompts.systemPrompt, /never omit c or return null or a string/);
+    assert.deepEqual(JSON.parse(prompts.userMessage), affinity.semanticPayload);
+  }
+});
+
+test("affinity parser requires valid confidence on every compact decision branch", () => {
+  const split = buildTaskRelationAffinityRequests({
+    request: request(), sessionId: "session-a", runtimeEpoch: 4, manualCorrectionRevision: 2,
+  });
+  assert.ok(split.child);
+  for (const affinity of [split.parent, split.child]) {
+    for (const d of ["r", affinity.affinityKind === "child" ? "n" : "i", "u"]) {
+      const base = {
+        v: 1, d,
+        q: d === "u" ? null : "Back to the RAG system",
+        b: d === "r"
+          ? affinity.affinityKind === "child" ? "HNSW" : "Documents change continuously"
+          : null,
+        ...(d === "u" ? { a: "Insufficient evidence" } : {}),
+      };
+      for (const c of [0, 0.5, 1]) {
+        const parsed = parseTaskRelationAffinityOutput(JSON.stringify({ ...base, c }), affinity);
+        assert.equal(parsed.ok, true, `${affinity.affinityKind}/${d}/${c}`);
+        assert.equal(parsed.ok ? parsed.value.confidence : undefined, c);
+      }
+      for (const c of [undefined, null, "0.9", -0.1, 1.1, 3]) {
+        const parsed = parseTaskRelationAffinityOutput(JSON.stringify({ ...base, c }), affinity);
+        assert.equal(parsed.ok ? "accepted" : parsed.reason, "invalid-affinity-schema",
+          `${affinity.affinityKind}/${d}/${String(c)}`);
+      }
+    }
+  }
+});
+
 test("shares bounded screen focus evidence across relation prompts without changing source identity", () => {
   const baseline = buildTaskRelationAdjudicationRequest({
     logicalQuestionUnit: unit("Implement LRU cache"),

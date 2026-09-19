@@ -31,9 +31,9 @@ export const FIRST_BATCH_RELATION_POSSIBLE_ERROR_MIN_CONFIDENCE = 0.9;
 export const VOICE_ORDERED_RELATION_FOREGROUND_BUDGET_MS = 4_000;
 export const SCREEN_ORDERED_RELATION_FOREGROUND_BUDGET_MS = 7_000;
 export const TASK_RELATION_CHILD_AFFINITY_PROMPT_VERSION =
-  "task-relation-child-affinity-v2-compact";
+  "task-relation-child-affinity-v3-compact";
 export const TASK_RELATION_PARENT_AFFINITY_PROMPT_VERSION =
-  "task-relation-parent-affinity-v2-compact";
+  "task-relation-parent-affinity-v3-compact";
 export const TASK_RELATION_CANONICAL_SHADOW_PROMPT_VERSION =
   "task-relation-canonical-shadow-v2";
 
@@ -823,6 +823,8 @@ export function buildTaskRelationAffinityPrompts(
         "For related, set d='r', q to one current exact span, and b to one child exact span.",
         "For unrelated, set d='n', q to one current exact span, and b to null.",
         "For unclear, set d='u', q and b to null, and a to one short ambiguity reason.",
+        "c is your confidence in the chosen affinity decision d, not a category code or percentage.",
+        "Always include c for every decision (related, unrelated, and unclear) as a JSON number between 0 and 1 inclusive; never omit c or return null or a string.",
         "Every evidence span must be a non-empty exact substring of at most 180 characters. Select a shorter identifying clause instead of copying a long question.",
         "Schema: {\"v\":1,\"d\":\"r|n|u\",\"c\":number,\"q\":string|null,\"b\":string|null,\"a\"?:string}.",
       ].join(" ")
@@ -837,6 +839,8 @@ export function buildTaskRelationAffinityPrompts(
         "For related, set d='r', q to one current exact span, and b to one parent exact span.",
         "For independent, set d='i', q to one current exact span, and b to null.",
         "For unclear, set d='u', q and b to null, and a to one short ambiguity reason.",
+        "c is your confidence in the chosen affinity decision d, not a category code or percentage.",
+        "Always include c for every decision (related, independent, and unclear) as a JSON number between 0 and 1 inclusive; never omit c or return null or a string.",
         "Every evidence span must be a non-empty exact substring of at most 180 characters. Select a shorter identifying clause instead of copying a long question.",
         "Schema: {\"v\":1,\"d\":\"r|i|u\",\"c\":number,\"q\":string|null,\"b\":string|null,\"a\"?:string}.",
       ].join(" ");
