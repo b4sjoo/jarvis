@@ -5,6 +5,7 @@ import test from "node:test";
 import vm from "node:vm";
 import ts from "typescript";
 import { MeetingContextManager } from "../src/lib/meeting/context-manager.js";
+import { ManualAdviseDisplay } from "../src/lib/meeting/manual-advise-display.js";
 import { createAdvisorTriggerJob } from "../src/lib/meeting/advisor-trigger-job.js";
 import { decideRefreshAuthority } from "../src/lib/meeting/answer-generation-lease.js";
 import {
@@ -73,7 +74,12 @@ function harness() {
     parent: { ownerId: "expiring-owner", deadline: 100 },
   });
   const context = vm.createContext({
-    Date, Promise, createMeetingId, createAdvisorTriggerJob, decideRefreshAuthority,
+    Date, Promise, structuredClone, createMeetingId, createAdvisorTriggerJob, decideRefreshAuthority,
+    manualAdviseDisplayRef: { current: new ManualAdviseDisplay() },
+    stableAnswerRevisionRef: { current: null },
+    artifactReuseSettingsRef: { current: { useMemory: false } },
+    preparationRuntimeContextRef: { current: { preparationContextRevision: 0 } },
+    latestScreenHashRef: { current: undefined },
     resolveResponseOpportunityRefreshAuthority, buildRuntimeCommitSnapshot,
     indexAuthorizedEffectiveSourceRecords, resolveAuthorizedEffectiveSourceContext,
     projectEffectiveTaskSourceView, projectBoundedGeneratedContinuityForTask,
@@ -91,6 +97,10 @@ function harness() {
     latestManualCorrectionTargetRef: { current: undefined },
     recordManualRuntimeAction: () => {},
   });
+  const reuseInputReader = callback("readArtifactReuseInputs");
+  vm.runInContext(ts.transpileModule(`globalThis.readArtifactReuseInputs = ${reuseInputReader.getText(file)};`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.None },
+  }).outputText, context);
   compile("buildEffectiveAdvisorBasePromptContext", context);
   compile("buildAdvisorJob", context);
   return { manager, context };

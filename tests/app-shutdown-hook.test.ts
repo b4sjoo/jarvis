@@ -17,6 +17,7 @@ import type { MeetingAssistantSettings, MeetingAudioStatus } from "../src/lib/me
 const source = ts.createSourceFile("hook.ts", readFileSync("src/hooks/useMeetingAssistant.ts", "utf8"), ts.ScriptTarget.Latest, true);
 const names = ["stop", "stopNativeMeetingCapture", "stopSessionRecording", "drainSystemAudioQueueForNativeStop",
   "readNativeCaptureLease",
+  "readArtifactReuseInputs",
   "abandonSessionRecording",
   "recordCompletedTracesForSession",
   "startCapture", "startRuntimeRegressionRun", "startSessionRecording", "captureScreenContext", "runAdvisor", "enqueueMicrophoneSpeech"];
@@ -104,7 +105,10 @@ async function harness(owner: "meeting" | "system" = "meeting") {
   const disposeMicrophone = async () => { calls.push("mic-dispose"); };
   let ui: any = { presentationArtifactResetRevision: 0, status: "listening" };
   Object.assign(globals, {
-    console: { info: noop, warn: noop }, Date, Promise, Set, Map, Error, exports: {}, importMeta: { env: { DEV: false } },
+    console: { info: noop, warn: noop }, Date, Promise, Set, Map, Error, structuredClone, exports: {}, importMeta: { env: { DEV: false } },
+    artifactReuseSettingsRef: { current: { useMemory: false } },
+    manualCorrectionRevisionRef: { current: 0 },
+    preparationRuntimeContextRef: { current: { preparationContextRevision: 0 } },
     latestTraces: [], timer: undefined, previousObservationTracesRef: { current: [] }, selectAffectedEvaluationTraces,
     interviewPreparationConversationExecutionService: { cancelAndWait: async () => {} },
     window: { setTimeout: (callback: () => void, delay: number) => {
@@ -123,7 +127,7 @@ async function harness(owner: "meeting" | "system" = "meeting") {
     microphoneAudioQueueTrackerRef: { current: { getDepth: () => 0 } },
     traceStoreRef: { current: traces }, sessionRecordingManagerRef: { current: recording },
     sessionRecordedTraceIdsRef: { current: new Set() },
-    contextManagerRef: { current: { getState: () => ({}), clearInterviewSessionContext: noop } },
+    contextManagerRef: { current: { getState: () => ({ sessionId: "meeting-A", transcriptTurns: [], screenObservations: [] }), clearInterviewSessionContext: noop } },
     semanticTaxonomyRuntimeRef: { current: { releaseSession: noop } },
     traceMetricsPersistQueueRef: { current: Promise.resolve() },
     sttEvaluationCaptureManagerRef: { current: {

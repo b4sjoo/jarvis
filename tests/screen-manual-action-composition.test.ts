@@ -45,6 +45,9 @@ import {
   commitStableArtifactOnlyRevision,
 } from "../src/lib/meeting/stable-answer.js";
 import { parseMeetingAnswer, buildMeetingAnswerSummary } from "../src/lib/meeting/meeting-answer.js";
+import { ManualAdviseDisplay } from "../src/lib/meeting/manual-advise-display.js";
+import { buildMeetingAnswerDisplayModel } from "../src/lib/meeting/meeting-answer-display.js";
+import { resolveSuggestionQuestionLineage } from "../src/lib/meeting/human-evaluation.js";
 import {
   prepareBoundedGeneratedContinuity,
   type BoundedGeneratedContinuityState,
@@ -300,6 +303,8 @@ function actionHarness(f = screenFixture()) {
   const context = f.context;
   const environment: any = {
     ...responseTargets, ...phase, ...history, ...manual, ...phaseDecisions, ...artifacts,
+    resolveSuggestionQuestionLineage,
+    manualAdviseDisplayRef: { current: new ManualAdviseDisplay() },
     projectObservedAdvisorAttempt,
     state: { status: "listening", activeMeetingTask: context.activeMeetingTask },
     currentSuggestionText: "Answer: Use a sliding window.",
@@ -829,9 +834,20 @@ test("Focus Regenerate adapter reaches the same visible-source callback as norma
   visit(source);
   assert.ok(adapter);
   let pending: Promise<void> | undefined;
-  const dispatch = evaluate(`(${adapter.getText(source)})`, { meeting: { regenerateSuggestion: () => { pending = h.regenerate(); } } });
+  const stable = h.stableRef.current;
+  const displayed = { stable, streaming: false,
+    target: { sessionId: h.context.sessionId, suggestionId: stable.suggestion.id,
+      generationId: stable.suggestion.id, traceId: stable.suggestion.sourceTraceId, stableRevision: stable.revision },
+    sections: buildMeetingAnswerDisplayModel({ content: stable.suggestion.content }),
+  };
+  h.environment.manualAdviseDisplayRef.current.select(displayed, displayed);
+  const dispatch = evaluate(`(${adapter.getText(source)})`, { meeting: { regenerateSuggestion: (invocation: manual.ManualRuntimeActionInvocation) => {
+    assert.deepEqual(invocation.displayTarget, displayed.target);
+    assert.equal(invocation.uiSurface, "focus-mode");
+    pending = h.regenerate(invocation);
+  } } });
   h.currentRef.current = { ...h.f.unit, id: "ambient-question" };
-  dispatch({ type: "regenerate" });
+  dispatch({ type: "regenerate", displayTarget: displayed.target });
   await pending;
   assert.equal(h.plans.length, 1);
   assert.equal(h.plans[0].logicalQuestionUnitId, h.f.unit.id);
@@ -949,6 +965,8 @@ test(`real Regenerate callback ${sourceKind === "voice" ? "accepts exact current
   const events: any[] = [];
   const environment: any = {
     ...responseTargets, ...manual, projectObservedAdvisorAttempt,
+    resolveSuggestionQuestionLineage,
+    manualAdviseDisplayRef: { current: new ManualAdviseDisplay() },
     contextManagerRef: { current: { getState: () => f.context, clearExpiredActiveMeetingTask: () => false } },
     logicalQuestionUnitRef: { current: f.unit },
     stableAnswerRevisionRef: { current: f.stable },

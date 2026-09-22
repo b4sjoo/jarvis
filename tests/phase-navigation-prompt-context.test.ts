@@ -2,6 +2,8 @@ import type { AdvisorPromptContext } from "../src/lib/meeting/meeting-context-co
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import ts from "typescript";
+import vm from "node:vm";
 import { composePhaseNavigationPromptContext } from "../src/lib/meeting/phase-navigation-prompt-context.js";
 
 
@@ -118,8 +120,22 @@ test("first-time phase navigation shares one trace with its manual action", () =
   assert.match(genericAction, /stage: "terminal",\s*traceId: genericActionTrace\.id/);
   assert.match(
     genericAction,
-    /logicalQuestionUnit: responseActionLogicalQuestionUnit/
+    /logicalQuestionUnit: genericVisibleTarget\?\.logicalQuestionUnit \?\? responseActionLogicalQuestionUnit/
   );
+  const ast = ts.createSourceFile("hook.ts", source, ts.ScriptTarget.Latest, true);
+  let visibleTarget: ts.Expression | undefined;
+  const visit = (node: ts.Node) => {
+    if (ts.isVariableDeclaration(node) && node.name.getText(ast) === "genericVisibleTarget") visibleTarget = node.initializer;
+    ts.forEachChild(node, visit);
+  };
+  visit(ast);
+  assert.ok(visibleTarget);
+  for (const responseAction of ["next-phase", "previous-phase"]) {
+    const selected = vm.runInNewContext(ts.transpileModule(`(${visibleTarget.getText(ast)})`, {
+      compilerOptions: { target: ts.ScriptTarget.ES2020 },
+    }).outputText, { responseAction, resolveVisibleAnswerResponseActionTarget: () => assert.fail("phase navigation must not read the pinned answer") });
+    assert.equal(selected, undefined);
+  }
   assert.match(
     source,
     /responseActionTarget:\s*advisorJob\.source === "response-action"\s*\? advisorJob\.logicalQuestionUnit/

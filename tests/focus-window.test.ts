@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import ts from "typescript";
+import vm from "node:vm";
 import { createMeetingFocusDisplayModel, readMeetingFocusDisplay } from "../src/lib/meeting/focus-display.js";
 import {
   EMPTY_MEETING_FOCUS_SNAPSHOT,
@@ -18,7 +20,22 @@ test("phase output notice crosses Focus as optional plain display text only", ()
 test("Normal and inline/native Focus read the shared notice only in answer areas", () => {
   const normal = readFileSync("src/pages/app/components/meeting/index.tsx", "utf8");
   const native = readFileSync("src/pages/app/components/meeting/focus-window.tsx", "utf8");
-  assert.match(normal, /phaseOutputNotice: meeting\.phaseOutputNotice/);
+  assert.match(normal, /phaseOutputNotice: adviseDisplay\.locked \? undefined : meeting\.phaseOutputNotice/);
+  const ast = ts.createSourceFile("meeting.tsx", normal, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  let notice: ts.Expression | undefined;
+  const visit = (node: ts.Node) => {
+    if (ts.isPropertyAssignment(node) && node.name.getText(ast) === "phaseOutputNotice" &&
+        node.initializer.getText(ast).includes("meeting.phaseOutputNotice")) notice = node.initializer;
+    ts.forEachChild(node, visit);
+  };
+  visit(ast);
+  assert.ok(notice);
+  for (const locked of [false, true]) {
+    const selected = vm.runInNewContext(ts.transpileModule(`(${notice.getText(ast)})`, {
+      compilerOptions: { target: ts.ScriptTarget.ES2020 },
+    }).outputText, { adviseDisplay: { locked }, meeting: { phaseOutputNotice: "Current phase output pending" } });
+    assert.equal(selected, locked ? undefined : "Current phase output pending");
+  }
   assert.match(normal, /phaseOutputNotice=\{focusSnapshot\.phaseOutputNotice\}/);
   assert.equal((normal.match(/<PhaseOutputNotice notice=\{focusSnapshot\.phaseOutputNotice\}/g) ?? []).length, 2);
   assert.match(normal, /<PhaseOutputNotice notice=\{phaseOutputNotice\}/);
