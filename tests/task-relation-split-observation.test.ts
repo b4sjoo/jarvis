@@ -21,6 +21,7 @@ import * as response from "../src/lib/meeting/runtime-inference-response.js";
 import * as admission from "../src/lib/meeting/runtime-inference-provider-admission.js";
 import * as route from "../src/lib/meeting/meeting-model-route.js";
 import * as taxonomy from "../src/lib/meeting/task-taxonomy.js";
+import { requestTaskRelationProviderCandidates } from "../src/lib/meeting/task-relation-provider-candidates.js";
 import { RuntimeInferenceOperationRuntime } from "../src/lib/meeting/runtime-inference-runtime.js";
 import {
   buildTaskRelationAdjudicationRequest,
@@ -101,9 +102,9 @@ class Clock {
   async flush() { for (let i = 0; i < 60; i++) await Promise.resolve(); }
   async startPending() {
     await this.flush();
-    for (const [id, timer] of [...this.timers]) {
+    for (const [id, timer] of [...this.timers].filter(([, timer]) => timer.at <= this.now)) {
+      if (!this.timers.has(id)) continue;
       this.timers.delete(id);
-      this.now = Math.max(this.now, timer.at);
       timer.callback();
       await this.flush();
     }
@@ -224,18 +225,40 @@ async function harness(options: { mode?: Mode; child?: boolean; source?: string;
   const refreshed: unknown[] = [];
   const callbackMs: number[] = [];
   const serializationMs: number[] = [];
+  // Three logical operations own recorder decisions; each has two physical candidates.
   const executions: any[] = [];
+  const physicalExecutions: any[] = [];
+  const sharedAdmission = new admission.RuntimeInferenceProviderAdmissionCoordinator();
+  const admissionReceipts: admission.RuntimeInferenceSharedAdmissionReceipt[] = [];
+  const admit = sharedAdmission.run.bind(sharedAdmission);
+  sharedAdmission.run = (input: any) => admit({ ...input, onAdmitted: (receipt) => {
+    admissionReceipts.push(receipt);
+    input.onAdmitted?.(receipt);
+  } });
+  const providerSnapshot = {
+    providers: [{ id: "test-provider", curl: "curl https://fixture.invalid/{{MODEL}}" }],
+    selectedProvider: { provider: "test-provider", variables: { MODEL: "test-intelligent" } },
+    taxonomyAdjudicationProvider: { provider: "test-provider", variables: { MODEL: "test-fast" } },
+    codingProvider: { provider: "", variables: {} },
+  } as unknown as route.MeetingModelProviderSnapshot;
+  sharedAdmission.configureProviderGroups({
+    fastFingerprint: route.resolveRuntimeInferenceModelRouteFromSnapshot({ snapshot: providerSnapshot,
+      operationKind: "task-relation-parent-affinity", providerTier: "fast" }).configFingerprint,
+    intelligentFingerprint: route.resolveRuntimeInferenceModelRouteFromSnapshot({ snapshot: providerSnapshot,
+      operationKind: "task-relation-parent-affinity", providerTier: "intelligent" }).configFingerprint,
+  });
   const environment: Record<string, any> = {
     ...split, ...operation, ...response, ...admission, ...route, ...taxonomy, isRuntimeTaskRelation,
+    requestTaskRelationProviderCandidates,
     Date, Promise, Error, DOMException, console,
     debugModeRef: { current: false },
     contextManagerRef: { current: { getState: () => state, clearExpiredActiveMeetingTask: () => false } },
     runtimeEpochRef: { current: 1 }, manualCorrectionRevisionRef: { current: 0 },
-    meetingModelProviderSnapshotRef: { current: {} },
+    meetingModelProviderSnapshotRef: { current: providerSnapshot },
+    runtimeInferenceProviderAdmissionRef: { current: sharedAdmission },
     sessionRecordingManagerRef: { current: disk.manager },
     taskRelationSplitShadowCircuitRef: { current: { read: () => ({ open: false }), open: () => {} } },
-    resolveRuntimeInferenceModelRouteFromSnapshot: () => ({ provider: { id: "test-provider" }, selectedProvider: { provider: "test-provider", variables: {} }, missingRequiredVariables: [] }),
-    readSelectedProviderModelId: () => "test-model",
+    readSelectedProviderModelId: (selected: any) => selected.variables.MODEL,
     traceStoreRef: { current: {
       updateMetadata: (id: string, update: Record<string, unknown>) => {
         Object.assign(metadata, update);
@@ -269,7 +292,7 @@ async function harness(options: { mode?: Mode; child?: boolean; source?: string;
   environment.fetchAIResponseEvents = (input: any) => {
     const completion = gate<Fault>();
     const execution = { input, completion, kind: "", raw: "", firstAt: undefined as number | undefined, completedAt: 0 };
-    executions.push(execution);
+    physicalExecutions.push(execution);
     input.signal.addEventListener("abort", () => completion.resolve("cancel"), { once: true });
     return (async function* () {
       const fault = await completion.promise;
@@ -292,9 +315,16 @@ async function harness(options: { mode?: Mode; child?: boolean; source?: string;
   environment.requestRuntimeInferenceResponse = compile([
     declaration(commonRequestSource, "requestRuntimeInferenceResponse"), "requestRuntimeInferenceResponse",
   ].join("\n"), environment);
-  environment.requestTaskRelationSplitShadow = compile([
+  const requestCandidate = compile([
     declaration(requestSource, "requestTaskRelationSplitShadow"), "requestTaskRelationSplitShadow",
   ].join("\n"), environment);
+  environment.requestTaskRelationSplitShadow = (input: any) => {
+    const promise = requestCandidate(input);
+    const execution = physicalExecutions.find((item) => item.input.executionIdentity.requestId === input.executionIdentity.requestId);
+    assert.ok(execution);
+    execution.kind = input.request.operationKind;
+    return promise.then((result: any) => { execution.result = result; return result; });
+  };
   for (const [name, kind] of [
     ["taskRelationChildAffinityRuntimeRef", "task-relation-child-affinity"],
     ["taskRelationParentAffinityRuntimeRef", "task-relation-parent-affinity"],
@@ -305,13 +335,15 @@ async function harness(options: { mode?: Mode; child?: boolean; source?: string;
     runtime.schedule = (scheduled, delay) => schedule({
       ...scheduled,
       execute: (job, signal) => {
-        const promise = scheduled.execute(job, signal);
-        executions[executions.length - 1].kind = kind;
-        return promise;
+        executions.push({ kind, operationId: job.operationId });
+        return scheduled.execute(job, signal);
       },
       onSettled: (settlement) => {
-        const execution = executions.find(({ input }) => input.executionIdentity.requestId === settlement.job.operationId);
-        if (execution) execution.result = settlement.result;
+        const execution = executions.find((item) => item.operationId === settlement.job.operationId);
+        const physical = physicalExecutions.find(({ input }) => input.executionIdentity.requestId ===
+          `${settlement.job.operationId}:${settlement.result?.selectedProviderTier ?? "intelligent"}`);
+        if (execution) Object.assign(execution, { result: settlement.result, firstAt: physical?.firstAt,
+          completedAt: physical?.completedAt, selectedRequestId: physical?.input.executionIdentity.requestId });
         const before = performance.now();
         scheduled.onSettled(settlement);
         callbackMs.push(performance.now() - before);
@@ -328,19 +360,26 @@ async function harness(options: { mode?: Mode; child?: boolean; source?: string;
     authorizeSourceOperation: () => ({ authorized: true, reason: "source-operation-current" }) });
   await clock.startPending();
   return {
-    root, disk, clock, trace, state, metadata, effects, refreshed, callbackMs, serializationMs, executions, environment, handle,
+    root, disk, clock, trace, state, metadata, effects, refreshed, callbackMs, serializationMs, executions, physicalExecutions, admissionReceipts, environment, handle,
     async affinities(fault: Fault = "success") {
-      for (const execution of executions) execution.completion.resolve(fault);
+      if (fault === "cancel") {
+        environment.taskRelationChildAffinityRuntimeRef.current.cancelAll("fixture-cancel");
+        environment.taskRelationParentAffinityRuntimeRef.current.cancelAll("fixture-cancel");
+      }
+      for (const execution of physicalExecutions) execution.completion.resolve(fault);
       await clock.flush();
       return handle.affinityOutcome;
     },
     async canonical(fault: Fault = "success", beforeComplete?: () => void) {
+      const previousPhysicalCount = physicalExecutions.length;
       const result = handle.startCanonical({ foreground: true });
       await clock.startPending();
-      const execution = executions[executions.length - 1];
-      assert.equal(execution.kind, "task-relation-canonical-shadow");
+      const candidates = physicalExecutions.slice(previousPhysicalCount);
+      assert.equal(candidates.length, 2);
+      for (const execution of candidates) assert.equal(execution.kind, "task-relation-canonical-shadow");
       beforeComplete?.();
-      execution.completion.resolve(fault);
+      if (fault === "cancel") environment.taskRelationCanonicalShadowRuntimeRef.current.cancelAll("fixture-cancel");
+      for (const execution of candidates) execution.completion.resolve(fault);
       await clock.flush();
       return result;
     },
@@ -394,7 +433,7 @@ test("D5 request bytes -> real parser/runtime callbacks -> recorder files -> cur
     assert.equal(report.metrics.currentOperations, 3);
     assert.equal(report.metrics.legacyOperations, 0);
     for (const execution of h.executions) {
-        const row = report.rows.find((item) => item.operationId === execution.input.executionIdentity.requestId);
+        const row = report.rows.find((item) => item.operationId === execution.operationId);
         assert.ok(row);
         assert.equal(row.rawCandidate, execution.kind === "task-relation-canonical-shadow" ? "new-parent"
           : execution.kind === "task-relation-child-affinity" ? "unrelated" : "independent");
@@ -580,11 +619,13 @@ test("D6 paired completion effects match with disabled, slow and failing disk; b
           // No disk drain has occurred: even a indefinitely blocked native write
           // cannot delay either production completion or change its decision.
           const actual = business({ affinity, canonical, metadata: h.metadata, effects: h.effects,
-            requests: h.executions.map(({ input, kind }) => ({ kind, ...input, signal: { aborted: input.signal.aborted } })),
+            requests: h.physicalExecutions.map(({ input, kind }) => ({ kind, ...input, signal: { aborted: input.signal.aborted } })),
             state: h.state, authorization: h.handle.authorizeOperation() });
           if (expected === undefined) expected = actual;
           else assert.deepEqual(actual, expected, `${fault}/${mode}/${source === hookSource ? "candidate" : "baseline"}`);
           assert.equal(h.executions.length, 3);
+          assert.equal(h.physicalExecutions.length, 6);
+          assert.equal(h.admissionReceipts.length, 6);
           await h.disk.stop();
           if (mode === "failing") {
             assert.equal(h.disk.failures, 3);

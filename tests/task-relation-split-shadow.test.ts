@@ -959,9 +959,12 @@ test("wires provider faults to finalization while stale source ownership fails c
   assert.match(meetingHookSource, /void relationResolution\?\.then/);
   assert.match(meetingHookSource, /deadline:\s*foregroundDeadline/);
   assert.match(
-    meetingHookSource,
-    /readOrderedSettlementRemainingMs\(foregroundDeadline\)/
+    resolver,
+    /readOrderedSettlementRemainingMs\(canonicalDeadline \?\? deadline\)/
   );
+  assert.match(resolver, /canonicalDeadline = createOrderedRelationCanonicalDeadline\(deadline\)/);
+  assert.match(resolver, /deadline\.deadlineAt = canonicalDeadline\.deadlineAt/);
+  assert.match(resolver, /deadlineAt: canonicalDeadline\?\.deadlineAt/);
   assert.match(meetingHookSource, /ordered-chain-internal-error/);
   assert.doesNotMatch(meetingHookSource, /ordered-chain-error-unresolved/);
   assert.match(
