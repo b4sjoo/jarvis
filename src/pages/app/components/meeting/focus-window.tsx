@@ -574,7 +574,7 @@ function MeetingFocusControlsWindow({
                   }
                 }}
                 placeholder="Correction: RAG not rec / Glean"
-                className="h-9 min-w-0 text-[12px]"
+                className="h-9 min-w-0 text-[12px] focus-visible:ring-inset"
                 disabled={!snapshot.active}
               />
               <Button

@@ -3569,7 +3569,10 @@ const SpeechCorrectionControl = ({
             }
           }}
           placeholder="Correction: RAG not rec / Glean"
-          className={cn("h-7 min-w-0 text-[10px]", compact && "h-6")}
+          className={cn(
+            "h-7 min-w-0 text-[10px]",
+            compact && "h-6 focus-visible:ring-inset"
+          )}
           disabled={disabled}
         />
         <Button
