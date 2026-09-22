@@ -668,7 +668,7 @@ export const MeetingAssistant = ({
       ),
     [displaySuggestion, meeting.latestReliableSuggestion]
   );
-  const currentEvaluationTarget = useMemo(
+  const evaluationTarget = useMemo(
     () =>
       resolveSettledAttemptEvaluationTarget({
         suggestion: meeting.latestSuggestion,
@@ -693,9 +693,6 @@ export const MeetingAssistant = ({
       adviseDisplay.streaming,
     ]
   );
-  const [frozenEvaluationTarget, setFrozenEvaluationTarget] = useState<typeof currentEvaluationTarget>();
-  useEffect(() => { setFrozenEvaluationTarget(undefined); }, [meeting.meetingSessionId]);
-  const evaluationTarget = frozenEvaluationTarget ?? currentEvaluationTarget;
   const evaluationTrace = evaluationTarget.traceId
     ? meeting.traces.find((trace) => trace.id === evaluationTarget.traceId)
     : undefined;
@@ -2767,12 +2764,9 @@ export const MeetingAssistant = ({
 
               {meeting.settings.debugMode &&
               evaluationTarget.status !== "none" ? (
-                <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3"
-                  onFocusCapture={() => setFrozenEvaluationTarget((previous) => previous ?? currentEvaluationTarget)}>
+                <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3">
                   <div className="mb-2 text-xs font-semibold">
                     Attempt evaluation
-                    {frozenEvaluationTarget && frozenEvaluationTarget.traceId !== currentEvaluationTarget.traceId ?
-                      <Button size="sm" variant="ghost" onClick={() => setFrozenEvaluationTarget(undefined)}>Current target</Button> : null}
                   </div>
                   {evaluationTrace ? (
                     <div className="mb-3 space-y-1 border-b border-border/50 pb-2 text-[10px] text-muted-foreground">

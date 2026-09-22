@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import test from "node:test";
+import ts from "typescript";
 import { build } from "esbuild";
 import { compile } from "@tailwindcss/node";
 import { Scanner } from "@tailwindcss/oxide";
@@ -10,6 +11,21 @@ import { Scanner } from "@tailwindcss/oxide";
 const root = process.cwd();
 const panelFile = path.join(root, "src/pages/app/components/meeting/index.tsx");
 const source = readFileSync(panelFile, "utf8");
+const ast = ts.createSourceFile(panelFile, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+let attemptSection;
+const visit = node => {
+  if (ts.isJsxElement(node) && node.openingElement.tagName.getText(ast) === "section" &&
+      node.getText(ast).includes("Attempt evaluation") && node.getText(ast).includes("key={evaluationTrace.id}")) {
+    attemptSection = node.getText(ast);
+  }
+  ts.forEachChild(node, visit);
+};
+visit(ast);
+assert.ok(attemptSection, "production attempt wrapper must be tested, not only its child panel");
+const selectionStart = source.search(/const (?:currentEvaluationTarget|evaluationTarget) = useMemo\(/);
+const selectionEnd = source.indexOf("const currentTranscriptTurnIds", selectionStart);
+assert.ok(selectionStart > 0 && selectionEnd > selectionStart);
+const attemptSelection = source.slice(selectionStart, selectionEnd);
 let playwright;
 try { playwright = createRequire(import.meta.url)(process.env.JARVIS_PLAYWRIGHT_MODULE ?? "playwright"); } catch {}
 
@@ -37,13 +53,16 @@ test("E167-8: real production React JSX, optional labels, specialist facts and p
       'export * from "./src/lib/meeting/task-taxonomy";',
       'export * from "./src/lib/meeting/question-type-observation";',
       'export * from "./src/lib/meeting/meeting-metadata-evaluation";',
+      'export * from "./src/lib/meeting/human-evaluation";',
+      'export * from "./src/lib/meeting/memory-evaluation";',
+      'export * from "./src/lib/meeting/preparation-runtime-provenance";',
     ].join("\n"),
     "@/components": ['export * from "./src/components/Markdown";', ...primitives.map((name) => `export { ${name} } from "./src/components/ui/${name.toLowerCase()}";`)].join("\n"),
   };
   // Only imported bindings outside the evaluation subtree receive inert stubs.
   for (const module of ["@/lib/meeting", "@/components"]) {
     const importBlock = [...source.matchAll(/import\s*\{([^}]+)\}\s*from\s*"([^"]+)"/g)].find((match) => match[2] === module)?.[1] ?? "";
-    const used = new Set(module === "@/components" ? [...primitives, "Markdown"] : ["freezeObservedTaskOwnerIdentityV2", "evaluateTaskSettlementTupleCompatibilityV2", "normalizeCanonicalQuestionType", "projectQuestionTypeObservation", "projectMeetingMetadataEvaluationObservation"]);
+    const used = new Set(module === "@/components" ? [...primitives, "Markdown"] : ["freezeObservedTaskOwnerIdentityV2", "evaluateTaskSettlementTupleCompatibilityV2", "normalizeCanonicalQuestionType", "projectQuestionTypeObservation", "projectMeetingMetadataEvaluationObservation", "resolveSettledAttemptEvaluationTarget", "findQuestionHumanEvaluationForTrace", "resolveTraceMemoryEvaluationSnapshot", "selectPreparationArtifactUseReceiptsForEvaluation"]);
     for (const name of importBlock.split(",").map((s) => s.trim()).filter(Boolean)) {
       if (!used.has(name)) mocks[module] += `\nexport const ${name} = () => null;`;
     }
@@ -62,7 +81,14 @@ test("E167-8: real production React JSX, optional labels, specialist facts and p
         contents: mocks[args.path] ?? "export const WhiteboardViewer = () => null;", loader: "tsx", resolveDir: root,
       }));
       builder.onLoad({ filter: /meeting\/index\.tsx$/ }, (args) => ({
-        contents: readFileSync(args.path, "utf8") + "\nexport { TraceHumanEvaluationPanel };", loader: "tsx", resolveDir: path.dirname(args.path),
+        contents: readFileSync(args.path, "utf8") + `
+          export { TraceHumanEvaluationPanel };
+          export function AttemptEvaluationFixture({meeting, adviseDisplay}) {
+            const displayTargetKey = JSON.stringify(adviseDisplay.target);
+            ${attemptSelection}
+            return (${attemptSection});
+          }
+        `, loader: "tsx", resolveDir: path.dirname(args.path),
       }));
     } }],
   });
@@ -71,6 +97,7 @@ test("E167-8: real production React JSX, optional labels, specialist facts and p
   const browser = await playwright.chromium.launch({ headless: true, executablePath: process.env.JARVIS_CHROMIUM_EXECUTABLE });
   try {
     const page = await browser.newPage({ viewport: { width: 1100, height: 900 } });
+    page.setDefaultTimeout(5000);
     const errors = [];
     page.on("pageerror", (error) => errors.push(error.message));
     await page.route("**/*", (route) => route.fulfill({ contentType: "text/html", body: '<div id="root"></div>' }));
@@ -205,6 +232,58 @@ test("E167-8: real production React JSX, optional labels, specialist facts and p
       assert.equal(await page.getByPlaceholder("Correct primary ask", { exact: true }).count(), 0);
       assert.equal((await snapshot()).calls.length, before);
       assert.deepEqual((await snapshot()).legacy, []);
+    });
+    await t.test("evaluating A never pins the production wrapper to A when B arrives", async () => {
+      await page.evaluate(() => window.__evaluation.showAttemptWrapper());
+      await page.getByText("trace: attempt-A", { exact: true }).waitFor();
+      await page.getByText("Human evaluation", { exact: true }).click();
+      await group("answer-quality").getByRole("button", { name: "Useful", exact: true }).click();
+      assert.equal(await page.evaluate(() => window.__attempt.calls.at(-1).traceId), "attempt-A");
+      // Publishing a new attempt does not blur the previously clicked control first.
+      await page.evaluate(() => window.__attempt.publish("B"));
+      await page.getByText("trace: attempt-B", { exact: true }).waitFor();
+      await page.getByText("Human evaluation", { exact: true }).click();
+      await group("answer-quality").getByRole("button", { name: "Useful", exact: true }).click();
+      assert.deepEqual(await page.evaluate(() => window.__attempt.calls.map(x => x.traceId)), ["attempt-A", "attempt-B"]);
+      await page.evaluate(() => window.__attempt.finishSave(0));
+      await page.getByText("trace: attempt-B", { exact: true }).waitFor();
+      assert.equal(await page.evaluate(() => window.__attempt.saved[0].traceId), "attempt-A", "late save must retain its original subject");
+    });
+    await t.test("an actual Advise pin keeps A, and unlocking follows B without a second evaluation lock", async () => {
+      await page.evaluate(() => window.__attempt.reset());
+      await page.getByText("trace: attempt-A", { exact: true }).waitFor();
+      await page.evaluate(() => window.__attempt.pin());
+      await page.getByText("Human evaluation", { exact: true }).click();
+      await group("answer-quality").getByRole("button", { name: "Useful", exact: true }).click();
+      await page.evaluate(() => window.__attempt.publish("B"));
+      await page.getByText("trace: attempt-A", { exact: true }).waitFor();
+      assert.equal(await page.getByText("trace: attempt-B", { exact: true }).count(), 0);
+      await page.evaluate(() => window.__attempt.unlock());
+      await page.getByText("trace: attempt-B", { exact: true }).waitFor();
+    });
+    await t.test("new attempt clears unsent drafts and failed/no-answer attempts remain evaluable", async () => {
+      await page.evaluate(() => window.__attempt.reset());
+      await page.getByText("trace: attempt-A", { exact: true }).waitFor();
+      await page.getByText("Human evaluation", { exact: true }).click();
+      await group("response-opportunity").getByRole("button", { name: "Correct primary ask", exact: true }).click();
+      await page.getByPlaceholder("Correct primary ask", { exact: true }).fill("Unsent A draft");
+      await page.evaluate(() => window.__attempt.publish("C", "error", false));
+      await page.getByText("trace: attempt-C", { exact: true }).waitFor();
+      await page.getByText("Human evaluation", { exact: true }).click();
+      assert.equal(await page.getByPlaceholder("Correct primary ask", { exact: true }).count(), 0);
+      assert.equal(await page.evaluate(() => window.__attempt.calls.length), 0);
+      await group("answer-quality").getByRole("button", { name: "No answer", exact: true }).click();
+      assert.equal(await page.evaluate(() => window.__attempt.calls.at(-1).traceId), "attempt-C");
+      await page.evaluate(() => window.__attempt.publish("D", "running", false));
+      await page.getByText("trace: attempt-D", { exact: true }).waitFor();
+      await page.getByText("Evaluation is available after the answer finishes.", { exact: true }).waitFor();
+      await page.evaluate(() => window.__attempt.publish("D"));
+      await page.getByText("Human evaluation", { exact: true }).click();
+      await group("answer-quality").getByRole("button", { name: "Useful", exact: true }).click();
+      assert.equal(await page.evaluate(() => window.__attempt.calls.at(-1).traceId), "attempt-D");
+      await page.setViewportSize({ width: 375, height: 900 });
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      await page.screenshot({ path: "/tmp/evaluation-target-follow-375.png", fullPage: true });
     });
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }

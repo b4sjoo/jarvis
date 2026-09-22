@@ -1,7 +1,9 @@
 import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
 // The browser test exposes this private component at build time, unchanged.
-import { TraceHumanEvaluationPanel } from "../../src/pages/app/components/meeting";
+import { TraceHumanEvaluationPanel, AttemptEvaluationFixture } from "../../src/pages/app/components/meeting";
+import { ManualAdviseDisplay } from "../../src/lib/meeting/manual-advise-display";
+import { buildMeetingAnswerDisplayModel } from "../../src/lib/meeting/meeting-answer-display";
 import { buildHumanEvaluationAttemptEvidenceV2 } from "../../src/lib/meeting/human-evaluation-attempt-projection";
 import { createHumanGroundTruthEventV2, deriveHumanEvaluationProjectionV2, findActiveHumanGroundTruthEventV2 } from "../../src/lib/meeting/human-ground-truth-v2";
 
@@ -84,4 +86,71 @@ function Fixture() {
     />
   </main>;
 }
-createRoot(document.getElementById("root")!).render(<StrictMode><Fixture /></StrictMode>);
+function AttemptFixture() {
+  const [session, setSession] = useState(1);
+  const [frame, setFrame] = useState(() => makeFrame("A", 1));
+  const [, refresh] = useState(0);
+  const [display] = useState(() => new ManualAdviseDisplay());
+  const [calls] = useState<any[]>([]);
+  const [saved] = useState<any[]>([]);
+  const current = {
+    target: { sessionId: `session-${session}`, suggestionId: frame.suggestion.id,
+      traceId: frame.suggestion.sourceTraceId, generationId: frame.suggestion.id, stableRevision: frame.revision },
+    stable: { suggestion: frame.suggestion }, streaming: false,
+    sections: buildMeetingAnswerDisplayModel({ content: frame.suggestion.content }),
+  } as any;
+  const selected = display.select(current, current);
+  const meeting = {
+    settings: { debugMode: true }, meetingSessionId: `session-${session}`,
+    status: frame.traces[0].status === "running" ? "thinking" : "listening",
+    partialSuggestion: "", latestSuggestion: frame.suggestion, traces: frame.traces,
+    questionEvaluations: [], humanEvaluationProjectionsV2: [], preparationArtifactUses: [], preparationArtifactEvaluations: [],
+    evaluationPersistence: { pending: calls.length - saved.length, error: null },
+    loadHumanEvaluationSession: async () => {}, updatePreparationArtifactEvaluation() {}, retryHumanEvaluationSave() {},
+    recordHumanGroundTruthV2(traceId: string, fact: unknown, options: unknown) {
+      calls.push(structuredClone({ traceId, fact, options }));
+      refresh(v => v + 1);
+    },
+  };
+  (window as any).__attempt = {
+    calls, saved,
+    publish(id: string, status = "success", hasAnswer = true) {
+      setFrame(previous => {
+        const next = makeFrame(id, session, status);
+        return { ...next, revision: previous.revision + 1,
+          suggestion: hasAnswer ? next.suggestion : previous.suggestion,
+          traces: [next.traces[0], ...previous.traces.filter(item => item.id !== next.traces[0].id)] };
+      });
+    },
+    pin() { display.toggle(); refresh(v => v + 1); },
+    unlock() { display.toggle(); refresh(v => v + 1); },
+    finishSave(index: number) { saved.push(structuredClone(calls[index])); refresh(v => v + 1); },
+    reset() {
+      calls.length = 0; saved.length = 0; display.clear();
+      setSession(session + 1); setFrame(makeFrame("A", session + 1));
+    },
+  };
+  return <main style={{ maxWidth: 520, margin: "0 auto", padding: 12 }}>
+    <AttemptEvaluationFixture meeting={meeting} adviseDisplay={{ ...selected, locked: display.locked }} />
+  </main>;
+}
+
+function makeFrame(id: string, session: number, status = "success") {
+  const currentTrace = { ...trace, id: `attempt-${id}`, status, metadata: { ...trace.metadata,
+    primaryAskNormalizedText: `Question ${id}`,
+    effectiveCurrentQuestionSettlementSessionId: `session-${session}`,
+    effectiveCurrentQuestionSettlementUnitId: `unit-${id}`,
+    effectiveCurrentQuestionSettlementSourceHash: `source-${id}`,
+    effectiveCurrentQuestionSettlementId: `settlement-${id}`,
+  } };
+  return { traces: [currentTrace], revision: 1, suggestion: { id: `answer-${id}`,
+    sourceTraceId: currentTrace.id, content: `Answer: Response ${id}`, kind: "answer",
+    createdAt: 1, basedOnTurnIds: [], basedOnObservationIds: [], confidence: "medium" } };
+}
+
+function RootFixture() {
+  const [attemptWrapper, setAttemptWrapper] = useState(false);
+  fixture.showAttemptWrapper = () => setAttemptWrapper(true);
+  return attemptWrapper ? <AttemptFixture /> : <Fixture />;
+}
+createRoot(document.getElementById("root")!).render(<StrictMode><RootFixture /></StrictMode>);

@@ -198,7 +198,7 @@ test("AR-C1/4 real post-commit offer consumer admits Correction G2, ignores late
   evaluate(block.getText(source),context);assert.equal(slot.present,false);
 });
 
-test("ML7 actual evaluation label handler retains the opened A subject while newest trace is B",()=>{
+test("ML7 actual evaluation label handler captures rendered A even with a newer background B trace",()=>{
   const ui=ts.createSourceFile("meeting.tsx",readFileSync("src/pages/app/components/meeting/index.tsx","utf8"),ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
   const panel=find(ui,n=>ts.isJsxSelfClosingElement(n)&&n.tagName.getText(ui)==="TraceHumanEvaluationPanel"&&n.getText(ui).includes("key={evaluationTrace.id}"));
   const attribute=panel.attributes.properties.find(n=>n.name?.getText(ui)==="onRecordGroundTruthV2");
