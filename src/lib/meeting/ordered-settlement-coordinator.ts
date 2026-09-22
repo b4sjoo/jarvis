@@ -2,6 +2,7 @@ import type { ActiveMeetingTask } from "./meeting-task-contracts.js";
 
 import {
   decideOrderedTaskRelationResolution,
+  ORDERED_RELATION_STAGE_BUDGET_MS,
   type OrderedTaskRelationResolutionDecision,
   type TaskRelationAffinityAdjudication,
 } from "./task-relation-split-shadow.js";
@@ -24,13 +25,9 @@ export interface OrderedSettlementDeadline {
   budgetMs: number;
 }
 
-// Reserve enough of the one foreground window for Canonical Relation to make
-// a decision after the parallel affinity proposals have had their first pass.
-export const ORDERED_RELATION_CANONICAL_RESERVE_MS = 2_000;
-
 export interface OrderedRelationPhaseBudget {
   affinityCutoffAt: number;
-  canonicalReserveMs: number;
+  canonicalBudgetMs: number;
 }
 
 export type OrderedSettlementReleaseSource = "settled" | "deadline";
@@ -87,17 +84,22 @@ export function readOrderedSettlementRemainingMs(
 }
 
 export function createOrderedRelationPhaseBudget(
-  deadline: OrderedSettlementDeadline,
-  canonicalReserveMs = ORDERED_RELATION_CANONICAL_RESERVE_MS
+  deadline: OrderedSettlementDeadline
 ): OrderedRelationPhaseBudget {
-  const boundedCanonicalReserveMs = Math.min(
-    deadline.budgetMs,
-    Math.max(0, canonicalReserveMs)
-  );
   return {
-    affinityCutoffAt: deadline.deadlineAt - boundedCanonicalReserveMs,
-    canonicalReserveMs: boundedCanonicalReserveMs,
+    affinityCutoffAt: Math.min(deadline.deadlineAt, deadline.startedAt + ORDERED_RELATION_STAGE_BUDGET_MS),
+    canonicalBudgetMs: ORDERED_RELATION_STAGE_BUDGET_MS,
   };
+}
+
+export function createOrderedRelationCanonicalDeadline(
+  deadline: OrderedSettlementDeadline,
+  startedAt = Date.now()
+): OrderedSettlementDeadline {
+  return createOrderedSettlementDeadline({
+    startedAt,
+    budgetMs: deadline.budgetMs > 0 ? ORDERED_RELATION_STAGE_BUDGET_MS : 0,
+  });
 }
 
 export function readOrderedRelationAffinityRemainingMs(

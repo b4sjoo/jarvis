@@ -289,6 +289,7 @@ const runtimeModule = await import(
     )
   )
 );
+const admissionModule = await import(pathToFileURL(path.join(root, ".tmp-tests", "src", "lib", "meeting", "runtime-inference-provider-admission.js")));
 const { ScreenOperationCoordinator } = await import(
   pathToFileURL(
     path.join(
@@ -357,7 +358,7 @@ class Clock {
         )[0];
       if (!next) break;
       const [id, timer] = next;
-      this.now = timer.at;
+      this.now = Math.max(this.now, timer.at);
       this.timers.delete(id);
       timer.callback();
       await this.flush();
@@ -446,7 +447,7 @@ function createHarness() {
     TypeError,
     console,
     window: clock,
-    VOICE_ORDERED_RELATION_FOREGROUND_BUDGET_MS: 4_000,
+    VOICE_ORDERED_RELATION_FOREGROUND_BUDGET_MS: 8_000,
     contextManagerRef: { current: { getState: () => state, clearExpiredActiveMeetingTask: () => false } },
     runtimeEpochRef: { current: 1 },
     manualCorrectionRevisionRef: { current: 0 },
@@ -458,6 +459,7 @@ function createHarness() {
     },
     runtimeActiveRef: { current: true },
     debugModeRef: { current: false },
+    revokeIncompleteAdvisePin: () => {},
     logicalQuestionUnitRef: { current: logicalQuestionUnit },
     responseOpportunityGenerationGateRef: {
       current: { findOperationId: () => undefined, read: () => undefined },
@@ -565,11 +567,16 @@ function productionRelationHandle(
 ) {
   const executions = [];
   harness.environment.meetingModelProviderSnapshotRef = { current: {} };
-  harness.environment.resolveRuntimeInferenceModelRouteFromSnapshot = () => ({
+  harness.environment.resolveRuntimeInferenceModelRouteFromSnapshot = ({ providerTier = "intelligent" }) => ({
     provider: {},
-    selectedProvider: {},
+    selectedProvider: { variables: { model: providerTier } },
+    providerTier,
+    configFingerprint: providerTier,
     missingRequiredVariables: [],
   });
+  const admission = new admissionModule.RuntimeInferenceProviderAdmissionCoordinator(3, 0);
+  admission.configureProviderGroups({ fastFingerprint: "fast", intelligentFingerprint: "intelligent" });
+  harness.environment.runtimeInferenceProviderAdmissionRef = { current: admission };
   harness.environment.readSelectedProviderModelId = () => "test-provider";
   harness.environment.taskRelationSplitShadowCircuitRef = {
     current: { read: () => ({ open: false }), open: () => {} },
@@ -583,9 +590,9 @@ function productionRelationHandle(
       current: new runtimeModule.RuntimeInferenceOperationRuntime(kind),
     };
   }
-  harness.environment.requestTaskRelationSplitShadow = ({ request, signal }) => {
+  harness.environment.requestTaskRelationSplitShadow = ({ request, signal, selectedProvider, timeoutMs, executionIdentity }) => {
     const result = deferred();
-    const execution = { request, signal, ...result };
+    const execution = { request, signal, selectedProvider, timeoutMs, executionIdentity, ...result };
     executions.push(execution);
     signal.addEventListener(
       "abort",
@@ -648,7 +655,7 @@ function startVoiceResolution(harness, handle, typeHandleFields = {}) {
     handle: {
       questionType: {
         enforcementWindowRequested: true,
-        waitBudgetMs: 2_000,
+        waitBudgetMs: 4_000,
         outcome: typeOutcome.promise,
         ...typeHandleFields,
       },
@@ -658,6 +665,50 @@ function startVoiceResolution(harness, handle, typeHandleFields = {}) {
     traceId: "trace",
     mode: "voice",
     triggerTurnId: "turn-current",
+  });
+}
+
+for (const sourceKind of ["voice", "screen"]) for (const eventLoopDelay of [0, 200]) {
+  test(`PA4 production ${sourceKind} gives Canonical4s after Affinity, event-loop delay=${eventLoopDelay}`, { concurrency: false }, async () => {
+    const h = createHarness();
+    try {
+      const { handle, executions } = productionRelationHandle(h, { sourceKind });
+      let resolution;
+      if (sourceKind === "voice") startVoiceResolution(h, handle);
+      else resolution = h.environment.resolveOrderedTaskRelationWithinWindow({
+        handle, traceId: "trace", currentQuestionType: "coding", sourceKind,
+        activeMeetingTask: h.environment.contextManagerRef.current.getState().activeMeetingTask,
+        screenBoundaryPrior: true, screenTypeEvidenceAuthorized: true, waitBudgetMs: 8000,
+      });
+      await h.clock.advanceTo(500);
+      assert.equal(executions.length, 2);
+      assert.equal(executions[1].selectedProvider.variables.model, "fast");
+      resolveRelationProvider(executions[1], JSON.stringify({ v: 1, d: "r", c: 0.8, q: "Implement a queue.", b: "Implement a cache." }));
+      await h.clock.advanceTo(3999);
+      assert.equal(executions.length, 2, "Fast cache does not start Canonical");
+      assert.equal(h.advisorCalls.length, 0);
+      h.clock.now = 14000 + eventLoopDelay;
+      await h.clock.advanceTo(4100 + eventLoopDelay);
+      assert.equal(executions.length, 4);
+      assert.equal(executions[0].signal.aborted, true);
+      assert.equal(executions[2].timeoutMs, 4000);
+      assert.equal(executions[3].timeoutMs, 4000);
+      resolveRelationProvider(executions[3], JSON.stringify({ schemaVersion: 3, relation: "followup-parent", confidence: 0.8,
+        currentQuestionEvidenceSpans: ["Implement a queue."], parentEvidenceSpans: ["Implement a cache."] }));
+      await h.clock.advanceTo(7999 + eventLoopDelay);
+      assert.equal(h.advisorCalls.length, 0, "no old4s/7s foreground release");
+      resolveRelationProvider(executions[2], JSON.stringify({ schemaVersion: 3, relation: "new-parent", confidence: 0.8,
+        currentQuestionEvidenceSpans: ["Implement a queue."], parentEvidenceSpans: [] }));
+      await h.clock.flush();
+      if (resolution) assert.equal((await resolution).decision.relation, "new-parent");
+      else assert.equal(h.advisorCalls.length, 1);
+      assert.equal(h.metadata.taskRelationParentAffinitySelectedProviderTier, "fast");
+      assert.equal(h.metadata.taskRelationSplitCanonicalSelectedProviderTier, "intelligent");
+      assert.equal(new Set(executions.map(e => e.executionIdentity.requestId)).size, 4);
+      assert.equal(executions[0].executionIdentity.executionPlanId, executions[1].executionIdentity.executionPlanId);
+      await h.clock.advanceTo(9000 + eventLoopDelay);
+      assert.equal(h.advisorCalls.length, sourceKind === "voice" ? 1 : 0);
+    } finally { h.restore(); }
   });
 }
 
@@ -850,7 +901,7 @@ test("retains a provisional Voice affinity result before RO publishes the LQU", 
       },
     });
     await harness.clock.advanceTo(1);
-    assert.equal(executions.length, 1);
+    assert.equal(executions.length, 2);
     resolveRelationProvider(
       executions[0],
       JSON.stringify({ v: 1, d: "i", c: 0.99, q: "Implement a queue." })
@@ -869,12 +920,12 @@ test("retains a provisional Voice affinity result before RO publishes the LQU", 
         activeMeetingTask:
           harness.environment.contextManagerRef.current.getState()
             .activeMeetingTask,
-        waitBudgetMs: 4_000,
+        waitBudgetMs: 8_000,
       });
     await harness.clock.advanceTo(2);
-    assert.equal(executions.length, 2);
+    assert.equal(executions.length, 4);
     resolveRelationProvider(
-      executions[1],
+      executions[2],
       JSON.stringify({
         schemaVersion: 3,
         relation: "new-parent",
@@ -915,10 +966,10 @@ test("uses a Screen operation's own source when no Voice LQU is current", { conc
             .activeMeetingTask,
         screenBoundaryPrior: true,
         screenTypeEvidenceAuthorized: true,
-        waitBudgetMs: 7_000,
+        waitBudgetMs: 8_000,
       });
     await harness.clock.advanceTo(1);
-    assert.equal(executions.length, 1);
+    assert.equal(executions.length, 2);
     resolveRelationProvider(
       executions[0],
       JSON.stringify({
@@ -1047,7 +1098,7 @@ test("lets the owning Screen consumer present a Relation client error and leave 
         currentQuestionType: "coding",
         sourceKind: "screen",
         activeMeetingTask: activeTask(),
-        waitBudgetMs: 7_000,
+        waitBudgetMs: 8_000,
       });
 
     assert.equal(resolution.terminalDisposition, "client-error");
@@ -1196,6 +1247,8 @@ test("ends an owned Screen after post-model Preparation staleness", { concurrenc
     screenStagedChunkCount: 0,
     screenStagedFirstChunkAt: undefined,
     screenStagedFirstVisiblePartialAt: undefined,
+    revokeIncompleteAdvisePin: () => {},
+    displayedStreamRef: { current: null },
     trace: { id: "screen-trace" },
     traceStoreRef: {
       current: {
@@ -1479,16 +1532,16 @@ test("cancels a live Split Relation operation after manual correction invalidate
     const { handle, executions } = productionRelationHandle(harness);
     startVoiceResolution(harness, handle);
     await harness.clock.advanceTo(100);
-    assert.equal(executions.length, 1);
+    assert.equal(executions.length, 2);
     resolveRelationProvider(
       executions[0],
       JSON.stringify({ v: 1, d: "i", c: 0.99, q: "Implement a queue." })
     );
     await harness.clock.advanceTo(200);
-    assert.equal(executions.length, 2);
+    assert.equal(executions.length, 4);
     harness.environment.manualCorrectionRevisionRef.current += 1;
     resolveRelationProvider(
-      executions[1],
+      executions[2],
       JSON.stringify({
         schemaVersion: 3,
         relation: "followup-parent",

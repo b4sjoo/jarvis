@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   coordinateOrderedSettlement,
   createOrderedRelationPhaseBudget,
+  createOrderedRelationCanonicalDeadline,
   createOrderedSettlementDeadline,
   createOrderedSettlementReleaseGate,
   readOrderedRelationAffinityRemainingMs,
@@ -72,29 +73,33 @@ test("shares one absolute deadline across ordered settlement stages", () => {
   assert.equal(readOrderedSettlementRemainingMs(deadline, 5_100), 0);
 });
 
-test("reserves one bounded Canonical window inside the shared relation deadline", () => {
+test("PA4 Voice and Screen give Affinity and necessary Canonical their own4s stages", () => {
   const voiceDeadline = createOrderedSettlementDeadline({
     startedAt: 1_000,
-    budgetMs: 4_000,
+    budgetMs: 8_000,
   });
   const screenDeadline = createOrderedSettlementDeadline({
     startedAt: 1_000,
-    budgetMs: 7_000,
+    budgetMs: 8_000,
   });
 
   const voicePhase = createOrderedRelationPhaseBudget(voiceDeadline);
   const screenPhase = createOrderedRelationPhaseBudget(screenDeadline);
 
   assert.deepEqual(voicePhase, {
-    affinityCutoffAt: 3_000,
-    canonicalReserveMs: 2_000,
+    affinityCutoffAt: 5_000,
+    canonicalBudgetMs: 4_000,
   });
   assert.deepEqual(screenPhase, {
-    affinityCutoffAt: 6_000,
-    canonicalReserveMs: 2_000,
+    affinityCutoffAt: 5_000,
+    canonicalBudgetMs: 4_000,
   });
-  assert.equal(readOrderedRelationAffinityRemainingMs(voicePhase, 2_500), 500);
-  assert.equal(readOrderedRelationAffinityRemainingMs(voicePhase, 3_100), 0);
+  assert.equal(readOrderedRelationAffinityRemainingMs(voicePhase, 2_500), 2_500);
+  assert.equal(readOrderedRelationAffinityRemainingMs(voicePhase, 5_100), 0);
+  assert.deepEqual(createOrderedRelationCanonicalDeadline(voiceDeadline, 2_000), { startedAt: 2_000, deadlineAt: 6_000, budgetMs: 4_000 });
+  assert.deepEqual(createOrderedRelationCanonicalDeadline(voiceDeadline, 5_000), { startedAt: 5_000, deadlineAt: 9_000, budgetMs: 4_000 });
+  assert.deepEqual(createOrderedRelationCanonicalDeadline(voiceDeadline, 5_200), { startedAt: 5_200, deadlineAt: 9_200, budgetMs: 4_000 });
+  assert.equal(createOrderedRelationCanonicalDeadline({ ...voiceDeadline, budgetMs: 0 }, 9_001).budgetMs, 0);
 });
 
 test("releases one canonical child result before the shared deadline", () => {

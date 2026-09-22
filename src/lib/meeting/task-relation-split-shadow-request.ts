@@ -4,7 +4,7 @@ import type {
   AIResponseExecutionIdentityInput,
   AIResponseTerminalOutcome,
 } from "../functions/ai-response-events.js";
-import { getRuntimeInferenceOperationDefinition } from "./runtime-inference.js";
+import { getRuntimeInferenceOperationDefinition, type RuntimeInferenceProviderTier } from "./runtime-inference.js";
 
 import {
   buildTaskRelationAffinityPrompts,
@@ -24,6 +24,9 @@ export type TaskRelationSplitShadowParseResult =
   | TaskRelationCanonicalShadowParseResult;
 
 export interface TaskRelationSplitShadowRequestResult {
+  selectedProviderTier?: RuntimeInferenceProviderTier;
+  selectedCandidateCompletedAt?: number;
+  stageDeadlineAt?: number;
   rawOutput: string;
   outputHash?: string;
   parsed: TaskRelationSplitShadowParseResult;
@@ -44,6 +47,7 @@ export async function requestTaskRelationSplitShadow(input: {
   selectedProvider: SelectedProviderState;
   signal: AbortSignal;
   executionIdentity?: AIResponseExecutionIdentityInput;
+  timeoutMs?: number;
   onFirstToken?: (at: number) => void;
 }): Promise<TaskRelationSplitShadowRequestResult> {
   const prompts =
@@ -60,7 +64,7 @@ export async function requestTaskRelationSplitShadow(input: {
     userMessage: prompts.userMessage,
     signal: input.signal,
     requestOptions: {
-      timeoutMs: operation.timeoutMs,
+      timeoutMs: input.timeoutMs ?? operation.timeoutMs,
       maxOutputTokens: operation.maxOutputTokens,
     },
     executionIdentity: {

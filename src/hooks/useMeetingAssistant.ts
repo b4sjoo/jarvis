@@ -217,6 +217,7 @@ import {
   coordinateOrderedSettlement,
   createOrderedSettlementDeadline,
   createOrderedRelationPhaseBudget,
+  createOrderedRelationCanonicalDeadline,
   createOrderedSettlementReleaseGate,
   formatOrderedSettlementCoordinatorForTrace,
   formatOrderedSettlementReleaseForTrace,
@@ -253,6 +254,7 @@ import {
   projectTaskRelationOperationCurrentIdentity,
   revalidateTaskRelationAffinityOutcome,
   SCREEN_ORDERED_RELATION_FOREGROUND_BUDGET_MS,
+  ORDERED_RELATION_STAGE_BUDGET_MS,
   VOICE_ORDERED_RELATION_FOREGROUND_BUDGET_MS,
   type FirstBatchRelationReleaseDecision,
   type OrderedTaskRelationResolutionDecision,
@@ -268,6 +270,7 @@ import {
   requestTaskRelationSplitShadow,
   type TaskRelationSplitShadowRequestResult,
 } from "@/lib/meeting/task-relation-split-shadow-request";
+import { requestTaskRelationProviderCandidates } from "@/lib/meeting/task-relation-provider-candidates";
 import type { TaskRelationAdjudicationRequest } from "@/lib/meeting/task-relation-adjudication";
 import {
   AdvisorEngine,
@@ -2412,6 +2415,7 @@ interface QuestionTypeAdjudicationScheduleHandle {
 
 interface TaskRelationAdjudicationScheduleHandle {
   releaseWindowRequested: boolean;
+  affinityDeadlineAt?: number;
   operationId?: string;
   affinityOutcome?: Promise<TaskRelationSplitAffinityOutcome>;
   readAffinityOutcome?: () => TaskRelationSplitAffinityOutcome;
@@ -2427,6 +2431,7 @@ interface TaskRelationAdjudicationScheduleHandle {
     input: {
       foreground: boolean;
       affinityOutcome?: TaskRelationSplitAffinityOutcome;
+      deadlineAt?: number;
     }
   ) => Promise<TaskRelationSplitCanonicalResult>;
   cancelForegroundWork?: () => void;
@@ -2452,6 +2457,7 @@ interface TaskRelationSplitCanonicalResult {
 
 interface TaskRelationSplitScheduleHandle {
   operationId: string;
+  affinityDeadlineAt: number;
   affinityOutcome: Promise<TaskRelationSplitAffinityOutcome>;
   readAffinityOutcome: () => TaskRelationSplitAffinityOutcome;
   freezeAffinityOutcome: (
@@ -2466,6 +2472,7 @@ interface TaskRelationSplitScheduleHandle {
     input: {
       foreground: boolean;
       affinityOutcome?: TaskRelationSplitAffinityOutcome;
+      deadlineAt?: number;
     }
   ) => Promise<TaskRelationSplitCanonicalResult>;
   cancelForegroundWork: () => void;
@@ -3351,8 +3358,7 @@ export function useMeetingAssistant() {
   if (taskRelationChildAffinityRuntimeRef.current === null) {
     taskRelationChildAffinityRuntimeRef.current =
       new RuntimeInferenceOperationRuntime(
-        "task-relation-child-affinity",
-        runtimeInferenceProviderAdmissionRef.current
+        "task-relation-child-affinity"
       );
   }
   const taskRelationParentAffinityRuntimeRef = useRef<
@@ -3364,8 +3370,7 @@ export function useMeetingAssistant() {
   if (taskRelationParentAffinityRuntimeRef.current === null) {
     taskRelationParentAffinityRuntimeRef.current =
       new RuntimeInferenceOperationRuntime(
-        "task-relation-parent-affinity",
-        runtimeInferenceProviderAdmissionRef.current
+        "task-relation-parent-affinity"
       );
   }
   const taskRelationCanonicalShadowRuntimeRef = useRef<
@@ -3377,8 +3382,7 @@ export function useMeetingAssistant() {
   if (taskRelationCanonicalShadowRuntimeRef.current === null) {
     taskRelationCanonicalShadowRuntimeRef.current =
       new RuntimeInferenceOperationRuntime(
-        "task-relation-canonical-shadow",
-        runtimeInferenceProviderAdmissionRef.current
+        "task-relation-canonical-shadow"
       );
   }
   const taskRelationSplitShadowCircuitRef = useRef(
@@ -19514,6 +19518,56 @@ export function useMeetingAssistant() {
         runtimeEpoch: splitRuntimeEpoch,
         manualCorrectionRevision: splitManualCorrectionRevision,
       });
+      const affinityDeadlineAt = startedAt + ORDERED_RELATION_STAGE_BUDGET_MS;
+      const runCandidates = (
+        job: TaskRelationSplitShadowJob<TaskRelationAffinityRequest | TaskRelationCanonicalShadowRequest>,
+        signal: AbortSignal,
+        routes: Parameters<typeof requestTaskRelationProviderCandidates>[0]["routes"],
+        deadlineAt: number,
+        lane: "critical" | "evaluation",
+        prefix: string
+      ) => requestTaskRelationProviderCandidates({
+        request: job.request, operationId: job.operationId, routes,
+        admission: runtimeInferenceProviderAdmissionRef.current!, lane, deadlineAt, signal,
+        executionIdentity: {
+          executionPlanId: job.lease.operationId, sessionId: job.sessionId,
+          runtimeEpoch: job.lease.identity.runtimeEpoch,
+          logicalQuestionUnitId: job.lease.identity.logicalQuestionUnitId,
+          logicalQuestionRevision: job.lease.identity.logicalQuestionUnitRevision,
+        },
+        onObservation: (event) => {
+          const { result, ...observation } = event;
+          const metadata = {
+            ...observation,
+            ...formatRuntimeInferenceModelRouteForTrace(routes[event.providerTier]),
+            ...formatRuntimeInferenceSharedAdmissionForTrace(event.admission),
+            ...formatRuntimeInferenceProviderOutcomeForTrace(result?.providerOutcome, prefix),
+            taskRelationCandidateEvent: event.event,
+            taskRelationCandidateOperationId: event.operationId,
+            taskRelationCandidateRequestId: event.requestId,
+            taskRelationCandidateTier: event.providerTier,
+            taskRelationCandidateDeadlineAt: deadlineAt,
+            taskRelationCandidateParseDisposition: result?.parseDisposition,
+            taskRelationCandidateParseValid: result?.parsed.ok,
+            taskRelationCandidateMutationBlocked: true,
+          };
+          if (event.event === "selected") traceStoreRef.current.updateMetadata(traceId, {
+            [`${prefix}SelectedProviderTier`]: event.providerTier,
+            [`${prefix}SelectedRequestId`]: event.requestId,
+            [`${prefix}SelectedAt`]: event.at,
+            [`${prefix}StageDeadlineAt`]: deadlineAt,
+          });
+          if (splitRecordingManager?.getState().sessionId === splitRecordingSessionId) {
+            splitRecordingManager?.recordCaptureLifecycle({ stage: "task-relation-provider-candidate", traceId, taskId, ...metadata });
+            if (event.event === "completed" && result?.rawOutput) splitRecordingManager?.recordModelOutput({
+              traceId, taskId, label: `${prefix} ${event.providerTier} candidate output`, value: result.rawOutput, metadata,
+            });
+          }
+          if (debugModeRef.current && event.event === "completed" && result?.rawOutput) {
+            traceStoreRef.current.recordOutput(traceId, `${prefix} ${event.providerTier} candidate output`, result.rawOutput, metadata);
+          }
+        },
+      }, { request: requestTaskRelationSplitShadow });
       const orderedOperationId = [
         "task-relation-ordered",
         contextState.sessionId,
@@ -19557,6 +19611,7 @@ export function useMeetingAssistant() {
         if (circuit.open) {
           return Promise.resolve({
             unavailableReason: "provider-circuit-open",
+            clientError: true,
           });
         }
         const modelRoute = resolveRuntimeInferenceModelRouteFromSnapshot({
@@ -19564,7 +19619,12 @@ export function useMeetingAssistant() {
           operationKind,
           reason: "task-relation-split-shadow",
         });
-        if (!modelRoute.provider) {
+        const fastRoute = resolveRuntimeInferenceModelRouteFromSnapshot({
+          snapshot: meetingModelProviderSnapshotRef.current, operationKind,
+          providerTier: "fast", reason: "task-relation-fast-candidate",
+        });
+        const routes = { intelligent: modelRoute, fast: fastRoute };
+        if (!modelRoute.provider || !fastRoute.provider) {
           taskRelationSplitShadowCircuitRef.current.open({
             operationKind,
             sessionId: contextState.sessionId,
@@ -19632,7 +19692,7 @@ export function useMeetingAssistant() {
             metadata: baseMetadata,
           });
         }
-        return new Promise<TaskRelationSplitAffinityResult>((resolve) => {
+        return new Promise<TaskRelationSplitAffinityResult>((resolve, reject) => {
           let stepId: string | undefined;
           runtime.schedule({
             job: {
@@ -19649,26 +19709,8 @@ export function useMeetingAssistant() {
               lease,
               request: affinityRequest,
             },
-            execute: (job, signal) =>
-              requestTaskRelationSplitShadow({
-                request: job.request,
-                provider: modelRoute.provider,
-                selectedProvider: modelRoute.selectedProvider,
-                signal,
-                executionIdentity: {
-                  requestId: job.operationId,
-                  executionPlanId: job.lease.operationId,
-                  modelId: readSelectedProviderModelId(
-                    modelRoute.selectedProvider
-                  ),
-                  sessionId: job.sessionId,
-                  runtimeEpoch: job.lease.identity.runtimeEpoch,
-                  logicalQuestionUnitId:
-                    job.lease.identity.logicalQuestionUnitId,
-                  logicalQuestionRevision:
-                    job.lease.identity.logicalQuestionUnitRevision,
-                },
-              }),
+            execute: (job, signal) => runCandidates(job, signal, routes, affinityDeadlineAt,
+              runtimeReleaseRequested ? "critical" : "evaluation", prefix),
             onStarted: (_job, operationStartedAt, budget) => {
               const metadata = {
                 ...baseMetadata,
@@ -19714,6 +19756,7 @@ export function useMeetingAssistant() {
                     : undefined;
               const metadata = {
                 ...baseMetadata,
+                ...formatRuntimeInferenceModelRouteForTrace(routes[result?.selectedProviderTier ?? "intelligent"]),
                 ...formatRuntimeInferenceSharedAdmissionForTrace(
                   settlement.sharedAdmission
                 ),
@@ -19771,15 +19814,20 @@ export function useMeetingAssistant() {
                   settlement.error
                 );
               }
+              if (settlement.disposition === "error") {
+                reject(settlement.error ?? new Error("Relation candidate execution failed"));
+                return;
+              }
               resolve({
                 operationId: lease.operationId,
                 outputHash: result?.outputHash,
                 identity: { ...lease.identity },
-                settledAt: settlement.completedAt,
+                settledAt: result?.selectedCandidateCompletedAt ?? settlement.completedAt,
                 adjudication,
                 unavailableReason,
                 clientError:
-                  result?.providerDisposition === "provider-auth-error",
+                  result?.providerDisposition === "provider-auth-error" ||
+                  ["authentication", "configuration"].includes(result?.providerOutcome?.failureClass ?? ""),
               });
             },
           });
@@ -19858,9 +19906,11 @@ export function useMeetingAssistant() {
       const startCanonical = ({
         foreground,
         affinityOutcome: frozenAffinityOutcome,
+        deadlineAt = Date.now() + ORDERED_RELATION_STAGE_BUDGET_MS,
       }: {
         foreground: boolean;
         affinityOutcome?: TaskRelationSplitAffinityOutcome;
+        deadlineAt?: number;
       }) => {
         if (foreground && foregroundClosed) {
           return Promise.resolve({
@@ -19893,7 +19943,12 @@ export function useMeetingAssistant() {
             ? "task-relation-canonical-product-fallback"
             : "task-relation-canonical-evaluation",
         });
-        if (circuit.open || !modelRoute.provider) {
+        const fastRoute = resolveRuntimeInferenceModelRouteFromSnapshot({
+          snapshot: meetingModelProviderSnapshotRef.current, operationKind,
+          providerTier: "fast", reason: "task-relation-fast-candidate",
+        });
+        const routes = { intelligent: modelRoute, fast: fastRoute };
+        if (circuit.open || !modelRoute.provider || !fastRoute.provider) {
           const unavailableReason = circuit.open
             ? "provider-circuit-open"
             : "provider-configuration-error";
@@ -19903,7 +19958,7 @@ export function useMeetingAssistant() {
           });
           resolveCanonicalOutcome?.({
             unavailableReason,
-            clientError: !modelRoute.provider,
+            clientError: true,
           });
           return;
         }
@@ -19971,26 +20026,8 @@ export function useMeetingAssistant() {
             lease,
             request: canonicalRequest,
           },
-          execute: (job, signal) =>
-            requestTaskRelationSplitShadow({
-              request: job.request,
-              provider: modelRoute.provider,
-              selectedProvider: modelRoute.selectedProvider,
-              signal,
-              executionIdentity: {
-                requestId: job.operationId,
-                executionPlanId: job.lease.operationId,
-                modelId: readSelectedProviderModelId(
-                  modelRoute.selectedProvider
-                ),
-                sessionId: job.sessionId,
-                runtimeEpoch: job.lease.identity.runtimeEpoch,
-                logicalQuestionUnitId:
-                  job.lease.identity.logicalQuestionUnitId,
-                logicalQuestionRevision:
-                  job.lease.identity.logicalQuestionUnitRevision,
-              },
-            }),
+          execute: (job, signal) => runCandidates(job, signal, routes, deadlineAt,
+            foreground ? "critical" : "evaluation", "taskRelationSplitCanonical"),
           onStarted: (_job, canonicalStartedAt) => {
             stepId = traceStoreRef.current.startStep(
               traceId,
@@ -20058,6 +20095,7 @@ export function useMeetingAssistant() {
             });
             const metadata = {
               ...baseMetadata,
+              ...formatRuntimeInferenceModelRouteForTrace(routes[result?.selectedProviderTier ?? "intelligent"]),
               ...formatRuntimeInferenceSharedAdmissionForTrace(
                 settlement.sharedAdmission
               ),
@@ -20144,6 +20182,10 @@ export function useMeetingAssistant() {
                 settlement.error
               );
             }
+            if (settlement.disposition === "error") {
+              rejectCanonicalOutcome?.(settlement.error ?? new Error("Relation candidate execution failed"));
+              return;
+            }
             resolveCanonicalOutcome?.({
               operationId: lease.operationId,
               outputHash: result?.outputHash,
@@ -20156,7 +20198,8 @@ export function useMeetingAssistant() {
                     ? predecessorAuthorization.reason
                     : result?.parseDisposition ?? settlement.disposition,
               clientError:
-                result?.providerDisposition === "provider-auth-error",
+                result?.providerDisposition === "provider-auth-error" ||
+                ["authentication", "configuration"].includes(result?.providerOutcome?.failureClass ?? ""),
             });
           },
         });
@@ -20205,6 +20248,7 @@ export function useMeetingAssistant() {
       };
       return {
         operationId: orderedOperationId,
+        affinityDeadlineAt,
         affinityOutcome,
         readAffinityOutcome,
         freezeAffinityOutcome,
@@ -20378,6 +20422,7 @@ export function useMeetingAssistant() {
       });
       const handle: TaskRelationAdjudicationScheduleHandle = {
         releaseWindowRequested,
+        affinityDeadlineAt: splitHandle?.affinityDeadlineAt,
         operationId: splitHandle?.operationId,
         affinityOutcome: splitHandle?.affinityOutcome,
         readAffinityOutcome: splitHandle?.readAffinityOutcome,
@@ -20434,16 +20479,22 @@ export function useMeetingAssistant() {
       const deadline =
         input.deadline ??
         createOrderedSettlementDeadline({
-          startedAt,
+          startedAt: input.handle.affinityDeadlineAt === undefined
+            ? startedAt
+            : input.handle.affinityDeadlineAt - ORDERED_RELATION_STAGE_BUDGET_MS,
           budgetMs: input.waitBudgetMs,
         });
       const phaseBudget = createOrderedRelationPhaseBudget(deadline);
+      if (input.handle.affinityDeadlineAt !== undefined) {
+        phaseBudget.affinityCutoffAt = Math.min(phaseBudget.affinityCutoffAt, input.handle.affinityDeadlineAt);
+      }
       let affinityOutcome = input.handle.readAffinityOutcome?.();
       let affinitySnapshotFrozen = false;
       let canonicalOutcome: TaskRelationSplitCanonicalResult | undefined;
+      let canonicalDeadline: OrderedSettlementDeadline | undefined;
       let waitDisposition = "affinity-unavailable";
       const readRemainingBudget = () =>
-        readOrderedSettlementRemainingMs(deadline);
+        readOrderedSettlementRemainingMs(canonicalDeadline ?? deadline);
       const readAffinityRemainingBudget = () =>
         readOrderedRelationAffinityRemainingMs(phaseBudget);
       const freezeAffinityOutcome = () => {
@@ -20505,11 +20556,19 @@ export function useMeetingAssistant() {
         screenTypeEvidenceAuthorized:
           input.screenTypeEvidenceAuthorized,
       });
+      const affinityClientError = Boolean(affinityOutcome?.child.clientError || affinityOutcome?.parent.clientError);
+      if (decision.status === "unresolved" && !affinityClientError) {
+        canonicalDeadline = createOrderedRelationCanonicalDeadline(deadline);
+        // The same release gate follows the active phase, including event-loop drift.
+        deadline.deadlineAt = canonicalDeadline.deadlineAt;
+        deadline.budgetMs = deadline.deadlineAt - deadline.startedAt;
+      }
       const canonicalPromise =
-        decision.status === "unresolved" && readRemainingBudget() > 0
+        decision.status === "unresolved" && !affinityClientError && readRemainingBudget() > 0
           ? input.handle.startCanonical?.({
               foreground: true,
               affinityOutcome,
+              deadlineAt: canonicalDeadline?.deadlineAt,
             })
           : undefined;
       if (decision.status === "unresolved") {
@@ -20607,8 +20666,11 @@ export function useMeetingAssistant() {
         taskRelationOrderedResolutionDeadlineAt: deadline.deadlineAt,
         taskRelationOrderedResolutionAffinityCutoffAt:
           phaseBudget.affinityCutoffAt,
-        taskRelationOrderedResolutionCanonicalReserveMs:
-          phaseBudget.canonicalReserveMs,
+        taskRelationOrderedResolutionCanonicalBudgetMs:
+          phaseBudget.canonicalBudgetMs,
+        taskRelationOrderedResolutionCanonicalDeadlineAt: canonicalDeadline?.deadlineAt,
+        orderedSettlementForegroundDeadlineAt: deadline.deadlineAt,
+        orderedSettlementForegroundBudgetMs: deadline.budgetMs,
         taskRelationOrderedResolutionRemainingMs:
           readOrderedSettlementRemainingMs(deadline),
         taskRelationOrderedResolutionSourceKind: input.sourceKind,
@@ -21032,13 +21094,17 @@ export function useMeetingAssistant() {
 
       const waitStartedAt = Date.now();
       const foregroundDeadline = createOrderedSettlementDeadline({
-        startedAt: waitStartedAt,
+        startedAt: taskRelationHandle?.affinityDeadlineAt === undefined
+          ? waitStartedAt
+          : taskRelationHandle.affinityDeadlineAt - ORDERED_RELATION_STAGE_BUDGET_MS,
         budgetMs: foregroundWaitBudgetMs,
       });
+      const firstPhaseDeadlineAt = Math.min(foregroundDeadline.deadlineAt,
+        foregroundDeadline.startedAt + (relationWindowRequested ? ORDERED_RELATION_STAGE_BUDGET_MS : questionTypeWaitBudgetMs));
       const foregroundReleaseGate = createOrderedSettlementReleaseGate(
         foregroundDeadline
       );
-      questionTypeHandle?.restrictRetryDeadlineAt?.(foregroundDeadline.deadlineAt);
+      questionTypeHandle?.restrictRetryDeadlineAt?.(firstPhaseDeadlineAt);
       const logicalQuestionLease = createLogicalQuestionUnitLease(
         input.logicalQuestionUnit
       );
@@ -21471,6 +21537,7 @@ export function useMeetingAssistant() {
           foregroundDeadline.deadlineAt,
         orderedSettlementForegroundBudgetMs:
           foregroundDeadline.budgetMs,
+        orderedSettlementFirstPhaseDeadlineAt: firstPhaseDeadlineAt,
       });
       let settledTypeOutcome:
         | QuestionTypeAdjudicationRuntimeOutcome
@@ -21678,7 +21745,7 @@ export function useMeetingAssistant() {
             },
             () => undefined
           );
-        }, readOrderedSettlementRemainingMs(foregroundDeadline));
+        }, Math.max(0, firstPhaseDeadlineAt - Date.now()));
       }
 
       if (questionTypeHandle && questionTypeWindowRequested) {
@@ -21687,7 +21754,8 @@ export function useMeetingAssistant() {
           if (
             !foregroundReleaseGate.isReleased() &&
             !deadlineFinalizationRequested &&
-            !relationFatalError
+            !relationFatalError &&
+            Date.now() < firstPhaseDeadlineAt
           ) {
             settledTypeOutcome = outcome;
             typeSettled = true;
