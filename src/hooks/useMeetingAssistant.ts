@@ -1,5 +1,6 @@
 import type { MeetingTaskDeadlineDelta } from "../lib/meeting/meeting-task-contracts.js";
 import { ManualAdviseDisplay, type AdviseDisplaySnapshot, type AdviseDisplayTarget } from "../lib/meeting/manual-advise-display.js";
+import { UnpublishedArtifactSlot, type UnpublishedArtifactOffer, type UnpublishedArtifactCandidate } from "../lib/meeting/unpublished-artifact.js";
 import { buildMeetingAnswerDisplayModel, type MeetingAnswerDisplayModel } from "../lib/meeting/meeting-answer-display.js";
 import { humanEvaluationStore } from "../lib/meeting/human-evaluation-store.js";
 import type { HumanGroundTruthEventV2, HumanEvaluationProjectionV2 } from "../lib/meeting/human-ground-truth-v2.js";
@@ -963,6 +964,7 @@ interface GenerationTaskRuntimeTransition {
 }
 
 interface PendingGenerationAnswerRevision extends PendingAnswerRevision {
+  unpublishedArtifacts?: UnpublishedArtifactOffer;
   childSummary?: string;
   deadlineDelta?: MeetingTaskDeadlineDelta;
   deadlineCalculatedAt?: number;
@@ -996,6 +998,7 @@ function resolveStableAnswerSectionOwner(input: {
 interface PreparedStableAnswerPublication {
   stable: StableAnswerRevision;
   options: {
+    unpublishedArtifacts?: UnpublishedArtifactOffer;
     clearPrevious?: boolean;
     pendingDisposition?: string;
     latestUsefulAnswerCommitted?: boolean;
@@ -3469,6 +3472,17 @@ export function useMeetingAssistant() {
   const visibleAnswerRevisionRef = useRef(0);
   const stableAnswerRevisionRef = useRef<StableAnswerRevision | null>(null);
   const manualAdviseDisplayRef = useRef(new ManualAdviseDisplay());
+  const unpublishedArtifactSlotRef = useRef(new UnpublishedArtifactSlot());
+  const artifactReuseSettingsRef = useRef(state.settings);
+  artifactReuseSettingsRef.current = state.settings;
+  const readArtifactReuseInputs = useCallback(() => ({
+    manualCorrectionRevision: manualCorrectionRevisionRef.current,
+    preparationContextRevision: preparationRuntimeContextRef.current.preparationContextRevision,
+    screenHash: latestScreenHashRef.current,
+    latestTurnId: contextManagerRef.current.getState().transcriptTurns.at(-1)?.id,
+    latestObservationId: contextManagerRef.current.getState().screenObservations.at(-1)?.id,
+    settings: structuredClone(artifactReuseSettingsRef.current),
+  }), []);
   const displayedStreamRef = useRef<{ traceId?: string; generationId: string; leaseId: string } | null>(null);
   const pinReleaseFrameRef = useRef<number | null>(null);
   const revokeIncompleteAdvisePin = useCallback((traceId: string | undefined, reason: string) => {
@@ -4093,6 +4107,7 @@ export function useMeetingAssistant() {
     (
       stable: StableAnswerRevision,
       options: {
+        unpublishedArtifacts?: UnpublishedArtifactOffer;
         clearPrevious?: boolean;
         pendingDisposition?: string;
         latestUsefulAnswerCommitted?: boolean;
@@ -4232,6 +4247,23 @@ export function useMeetingAssistant() {
         stable, streaming: false,
       });
       const activeContextState = contextManagerRef.current.getState();
+      if (!options.artifactOnly) {
+        const visibleSource = resolveVisibleAnswerResponseActionTarget({
+          stableAnswer: stable, currentLogicalQuestionUnit: logicalQuestionUnitRef.current,
+          effectiveQuestionSources: effectiveQuestionSourceLedgerRef.current.list(),
+          meetingContext: activeContextState, runtimeEpoch: runtimeEpochRef.current,
+        });
+        const target = resolveArtifactRegenerationTarget({ stableAnswer: stable, visibleSource,
+          activeMeetingTask: activeContextState.activeMeetingTask, sessionId: activeContextState.sessionId,
+          runtimeEpoch: runtimeEpochRef.current });
+        unpublishedArtifactSlotRef.current.accepted({ stable, current: stableAnswerRevisionRef.current,
+          target: visibleSource.authorized ? target.target : undefined,
+          offer: options.unpublishedArtifacts, currentInputs: readArtifactReuseInputs() });
+        sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+          stage: "unpublished-artifact-candidate", traceId: stable.suggestion.sourceTraceId,
+          suggestionId: stable.suggestion.id, available: unpublishedArtifactSlotRef.current.present,
+        });
+      }
       if (options.artifactOnly && stable.suggestion.sourceTraceId) {
         traceStoreRef.current.updateMetadata(stable.suggestion.sourceTraceId, {
           artifactOnlyParentLatestUsefulAnswerPreserved:
@@ -4771,6 +4803,7 @@ export function useMeetingAssistant() {
         publication: {
           prepare: () => {
             pendingPublication = prepareStableAnswerPublication(stable, {
+              unpublishedArtifacts: pending.unpublishedArtifacts,
               clearPrevious: pending.resetSections,
               pendingDisposition: "committed",
               childSummary: pending.childSummary,
@@ -4914,6 +4947,7 @@ export function useMeetingAssistant() {
     (input: {
       lease: AnswerGenerationLease;
       suggestion: AdvisorSuggestion;
+      unpublishedArtifacts?: UnpublishedArtifactOffer;
       authorizedArtifacts: AnswerArtifactSection[];
       taskId: string | null;
       resultTaskId: string | null;
@@ -5087,6 +5121,7 @@ export function useMeetingAssistant() {
         latestUsefulAnswerMutationAuthorized:
           input.latestUsefulAnswerMutationAuthorized,
         childSummary: input.childSummary,
+        unpublishedArtifacts: input.unpublishedArtifacts,
         deadlineDelta: input.deadlineDelta,
         deadlineCalculatedAt: input.deadlineCalculatedAt,
         advisorJobId: input.advisorJobId,
@@ -6411,6 +6446,7 @@ export function useMeetingAssistant() {
       sessionRecordingManagerRef.current?.recordCaptureLifecycle({ stage: "manual-advise-pin-cleared",
         displayTarget: manualAdviseDisplayRef.current.current?.target, reason });
       manualAdviseDisplayRef.current.clear();
+      unpublishedArtifactSlotRef.current.clear();
       displayedStreamRef.current = null;
       codingSolutionManifestCacheRef.current.clear();
       generationResultLedgerRef.current.clear();
@@ -9601,6 +9637,7 @@ export function useMeetingAssistant() {
     sessionRecordingManagerRef.current?.recordCaptureLifecycle({ stage: "manual-advise-pin-cleared",
       displayTarget: manualAdviseDisplayRef.current.current?.target, reason: "clear-task" });
     manualAdviseDisplayRef.current.clear();
+    unpublishedArtifactSlotRef.current.clear();
     displayedStreamRef.current = null;
     codingSolutionManifestCacheRef.current.clear();
     pendingAnswerRevisionRef.current = null;
@@ -10081,6 +10118,7 @@ export function useMeetingAssistant() {
   }, [buildEffectiveAdvisorBasePromptContext]);
 
   const runAdvisor = useCallback(async (options: RunAdvisorOptions = {}) => {
+    const artifactReuseInputs = readArtifactReuseInputs();
     if (shutdownRequestedRef.current) {
       if (options.traceId) traceStoreRef.current.finishTrace(options.traceId, "cancelled");
       return;
@@ -14208,6 +14246,8 @@ export function useMeetingAssistant() {
     }
 
     let finalContent = "";
+    let reusedArtifactCandidate: UnpublishedArtifactCandidate | undefined;
+    let reusedWhiteboardValidation: WhiteboardRenderValidationDecision | undefined;
     let advisorResponseCandidate:
       | Readonly<MeetingAIResponseCandidate>
       | undefined;
@@ -14346,7 +14386,56 @@ export function useMeetingAssistant() {
     }
 
     try {
-
+      if (options.artifactRegenerationTarget) {
+        const candidatePresent = unpublishedArtifactSlotRef.current.present;
+        const reuse = unpublishedArtifactSlotRef.current.take({
+          target: options.artifactRegenerationTarget, stable: stableAnswerRevisionRef.current,
+          inputs: readArtifactReuseInputs(),
+        });
+        reusedArtifactCandidate = reuse.candidate;
+        if (options.artifactRegenerationTarget.artifactFamilies.includes("whiteboard") && reusedArtifactCandidate?.sections.whiteboard) {
+          reusedWhiteboardValidation = await validateWhiteboardRenderCandidate({
+            whiteboard: reusedArtifactCandidate.sections.whiteboard,
+          });
+          if (!reusedWhiteboardValidation.valid) reusedArtifactCandidate = undefined;
+        }
+        if (rejectStaleCommit("artifact-reuse-validation")) return;
+        if (traceId) traceStoreRef.current.updateMetadata(traceId, {
+          artifactReuseCandidatePresent: candidatePresent,
+          artifactReuseMatchReason: reuse.reason,
+          artifactReuseOriginalSuggestionId: reuse.candidate?.suggestionId,
+          artifactReuseOriginalTraceId: reuse.candidate?.traceId,
+          artifactReuseValidationPassed: reusedWhiteboardValidation?.valid,
+          artifactCandidateSource: reusedArtifactCandidate ? "reused" : "generated",
+          artifactReuseMainAdvisorCalled: false,
+        });
+        if (reusedArtifactCandidate) {
+          const base = parseMeetingAnswer(options.currentSuggestion ?? "", { expectedProfile: advisorAnswerProfile });
+          finalContent = serializeMeetingAnswer({ ...base, sections: { ...base.sections,
+            ...Object.fromEntries(options.artifactRegenerationTarget.artifactFamilies.map((family) =>
+              [family, reusedArtifactCandidate!.sections[family]])) } });
+          const target = options.artifactRegenerationTarget;
+          const suitability = commitStableArtifactOnlyRevision({
+            current: stableAnswerRevisionRef.current,
+            candidate: advisorEngineRef.current.toSuggestion(requestId, finalContent, [], [], {},
+              parseMeetingAnswer(finalContent, { expectedProfile: advisorAnswerProfile })),
+            authorizedArtifacts: target.artifactFamilies,
+            expectedVisibleAnswerRevision: target.visibleAnswerRevision, expectedTaskId: target.parentId,
+            expectedLogicalQuestionUnitId: target.logicalQuestionUnitId,
+            expectedLogicalQuestionRevision: target.logicalQuestionRevision, expectedSettlementId: target.settlementId,
+            sectionOwner: target.sectionOwner,
+          });
+          if (suitability.disposition !== "committed") {
+            reusedArtifactCandidate = undefined;
+            finalContent = "";
+          }
+          if (traceId) traceStoreRef.current.updateMetadata(traceId, {
+            artifactReuseSuitability: suitability.reason,
+            artifactCandidateSource: reusedArtifactCandidate ? "reused" : "generated",
+          });
+        }
+      }
+      if (!reusedArtifactCandidate) {
       for await (const event of advisorEngineRef.current.streamSuggestion({
         requestId,
         mode: advisorPromptMode,
@@ -14366,6 +14455,9 @@ export function useMeetingAssistant() {
         trace: traceId
           ? {
               onRequest: (input) => {
+                if (options.artifactRegenerationTarget) traceStoreRef.current.updateMetadata(traceId, {
+                  artifactReuseMainAdvisorCalled: true,
+                });
                 const modelRequestStartedAt = Date.now();
                 advisorModelRequestStartedAt = modelRequestStartedAt;
                 advisorModelPromptText = formatTraceModelInput(
@@ -14658,6 +14750,7 @@ export function useMeetingAssistant() {
               partialSuggestion: stagedPartialContent,
             }));
           }
+      }
       }
 
       if (mode === "response-action") {
@@ -15094,7 +15187,7 @@ export function useMeetingAssistant() {
             )
           : undefined;
         whiteboardRenderValidation =
-          await validateWhiteboardRenderCandidate({
+          (reusedArtifactCandidate ? reusedWhiteboardValidation : undefined) ?? await validateWhiteboardRenderCandidate({
             whiteboard: parsedMeetingAnswer.sections.whiteboard,
           });
         const whiteboardValidationMetadata =
@@ -15705,6 +15798,8 @@ export function useMeetingAssistant() {
           ? queuePendingAnswerRevision({
               lease: answerGenerationLease,
               suggestion: nextSuggestion,
+              unpublishedArtifacts: { parsed: parsedMeetingAnswer, authorizedArtifacts: generationAuthorizedArtifacts,
+                inputs: artifactReuseInputs },
               authorizedArtifacts: generationAuthorizedArtifacts,
               taskId: contextState.activeMeetingTask?.parent.id ?? null,
               resultTaskId:
@@ -15788,7 +15883,7 @@ export function useMeetingAssistant() {
             currentTaskRuntimeRevision:
               advisorCommitTaskRuntimeState.revision,
             candidateAccepted: Boolean(
-              advisorResponseCandidate
+              advisorResponseCandidate || reusedArtifactCandidate
             ),
             visibleAnswerRevision: candidateStableAnswer.revision,
             transition: preparedAdvisorTransition.transition
@@ -15815,6 +15910,8 @@ export function useMeetingAssistant() {
                 advisorPublication = prepareStableAnswerPublication(
                   candidateStableAnswer,
                   {
+                    unpublishedArtifacts: { parsed: parsedMeetingAnswer, authorizedArtifacts: generationAuthorizedArtifacts,
+                      inputs: artifactReuseInputs },
                     clearPrevious: resetVisibleSections,
                     childSummary: continuity.childSummary,
                     deadlineDelta: continuity.deadlineDelta,
@@ -15892,6 +15989,8 @@ export function useMeetingAssistant() {
               ? "committed"
               : "rejected",
             artifactOnlyCommitReason: generationCommit.reason,
+            artifactReuseCommitted: Boolean(reusedArtifactCandidate && generationCommit.committed),
+            artifactReuseHiddenByManualPin: Boolean(reusedArtifactCandidate && manualAdviseDisplayRef.current.locked),
             artifactOnlyCanonicalParentCommitDisposition:
               canonicalWhiteboardRegeneration?.required
                 ? generationCommit.committed
@@ -28851,6 +28950,7 @@ export function useMeetingAssistant() {
           screenGenerationLease,
           trace.id
         );
+        const screenArtifactReuseInputs = readArtifactReuseInputs();
         const screenLeaseStartAuthorization =
           authorizeAnswerGenerationLease(screenGenerationLease, {
             sessionId: screenGenerationContext.sessionId,
@@ -30191,6 +30291,8 @@ export function useMeetingAssistant() {
                   screenPublication = prepareStableAnswerPublication(
                     candidateStableAnswer,
                     {
+                      unpublishedArtifacts: { parsed: nextSuggestion.meetingAnswer!,
+                        authorizedArtifacts: screenPresentationAuthorizedArtifacts, inputs: screenArtifactReuseInputs },
                       clearPrevious: screenStartedNewInterviewParent,
                       childSummary: screenGenerationContinuity?.childSummary,
                       deadlineDelta: screenGenerationContinuity?.deadlineDelta,
@@ -30996,6 +31098,7 @@ export function useMeetingAssistant() {
         observedLogicalQuestionUnitId: correctionLogicalQuestionUnit.id,
         observedLogicalQuestionUnitRevision: correctionLogicalQuestionUnit.revision });
       manualCorrectionRevisionRef.current += 1;
+      unpublishedArtifactSlotRef.current.clear();
       settleAwaitingVisualEvidenceRecovery(
         "cancelled",
         "manual-question-type-correction"
@@ -34578,6 +34681,7 @@ export function useMeetingAssistant() {
       }
 
       manualCorrectionRevisionRef.current += 1;
+      unpublishedArtifactSlotRef.current.clear();
       settleAwaitingVisualEvidenceRecovery(
         "cancelled",
         "manual-term-correction",
@@ -35851,6 +35955,7 @@ export function useMeetingAssistant() {
       }
 
       manualCorrectionRevisionRef.current += 1;
+      unpublishedArtifactSlotRef.current.clear();
       settleAwaitingVisualEvidenceRecovery(
         "cancelled",
         "manual-term-correction-reversal",

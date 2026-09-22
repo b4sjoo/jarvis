@@ -199,6 +199,7 @@ const { authorizeResponseArtifactMutation } = await import(pathToFileURL(
   path.join(compiledRoot, "src/lib/meeting/response-artifact-authorization.js")
 ));
 const { ManualAdviseDisplay } = await import(pathToFileURL(path.join(compiledRoot, "src/lib/meeting/manual-advise-display.js")));
+const { UnpublishedArtifactSlot } = await import(pathToFileURL(path.join(compiledRoot, "src/lib/meeting/unpublished-artifact.js")));
 
 function suggestion(id, content) {
   return {
@@ -240,6 +241,7 @@ function createHarness(options = {}) {
     manualAdviseDisplayRef: { current: new ManualAdviseDisplay() },
     displayedStreamRef: { current: null },
     pinReleaseFrameRef: { current: null },
+    unpublishedArtifactSlotRef: { current: new UnpublishedArtifactSlot() },
     effectiveQuestionSourceLedgerRef: { current: { list: () => [] } },
     stableAnswerRevisionRef: { current: initialStable },
     visibleAnswerRevisionRef: { current: initialStable.revision },
@@ -324,6 +326,8 @@ function createHarness(options = {}) {
     ...refs,
     state: uiState,
     recordManualRuntimeAction: (event) => manualEvents.push(event),
+    readArtifactReuseInputs: () => ({ manualCorrectionRevision: refs.manualCorrectionRevisionRef.current,
+      preparationContextRevision: refs.preparationRuntimeContextRef.current.preparationContextRevision, settings: {} }),
     contextManagerRef: { current: manager },
     generationResultLedgerRef: {
       current: generationResultLedger,
@@ -493,6 +497,7 @@ function publishImmediate(h, candidate) {
     advisorResponseCandidate: candidate.candidate, screenResponseCandidate: candidate.candidate,
     parsedMeetingAnswer: candidate.candidate.meetingAnswer, nextSuggestion: candidate.candidate,
     generationAuthorizedArtifacts: ["answer"], screenPresentationAuthorizedArtifacts: ["answer"],
+    artifactReuseInputs: h.environment.readArtifactReuseInputs(), screenArtifactReuseInputs: h.environment.readArtifactReuseInputs(),
     preparedAdvisorTransition: candidate.preparedTransition, preparedScreenTransition: candidate.preparedTransition,
     continuity: candidate.continuity, screenGenerationContinuity: candidate.continuity,
     resetVisibleSections: false, screenStartedNewInterviewParent: false, options: {},

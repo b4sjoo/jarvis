@@ -652,6 +652,8 @@ export const MeetingAssistant = ({
   const adviseDisplay = meeting.selectAdviseDisplay(runtimeSuggestionSections);
   const displaySuggestionSections = adviseDisplay.sections;
   const displayTargetKey = JSON.stringify(adviseDisplay.target);
+  const artifactReuseNotice = meeting.traces.find(trace => trace.id === adviseDisplay.target.traceId)?.metadata?.artifactReuseCommitted === true
+    ? "Artifacts reused" : undefined;
   useEffect(() => {
     if (!open || (isFocusMode && focusWindowsVisible)) return;
     meeting.recordAdviseDisplayApplied(adviseDisplay.target, isFocusMode ? "focus-mode" : "normal-mode");
@@ -989,6 +991,7 @@ export const MeetingAssistant = ({
       error: meeting.error,
       factGuardrailNotice,
       phaseOutputNotice: adviseDisplay.locked ? undefined : meeting.phaseOutputNotice,
+      artifactReuseNotice,
       isBusy,
       audioControl: audioPauseResumeControl,
       audioInputWarning: audioWarningLabel && audioWarningDetail
@@ -1047,6 +1050,7 @@ export const MeetingAssistant = ({
       displayTargetKey,
       adviseDisplay.locked,
       adviseDisplay.backgroundUpdated,
+      artifactReuseNotice,
       clarifyingQuestion,
       clarifyingOptionDisplay.showBooleanFallback,
       activeClarifyingSelection?.label,
@@ -1822,6 +1826,7 @@ export const MeetingAssistant = ({
               effectiveQuestionType={focusSnapshot.effectiveQuestionType}
               factGuardrailNotice={focusSnapshot.factGuardrailNotice}
               phaseOutputNotice={focusSnapshot.phaseOutputNotice}
+              artifactReuseNotice={focusSnapshot.artifactReuseNotice}
               transientPersonalStatusLabel={
                 focusSnapshot.transientPersonalStatusLabel
               }
@@ -2204,7 +2209,7 @@ export const MeetingAssistant = ({
                     </div>
                     <FactGuardrailNotice notice={focusSnapshot.factGuardrailNotice} />
                     <PhaseOutputNotice notice={focusSnapshot.phaseOutputNotice} />
-
+                    {focusSnapshot.artifactReuseNotice ? <p role="status" className="text-[10px] text-muted-foreground">{focusSnapshot.artifactReuseNotice}</p> : null}
                     <MeetingMarkdownText
                       className={cn(
                         WRAP_TEXT_CLASS,
@@ -2302,7 +2307,7 @@ export const MeetingAssistant = ({
                     </div>
                     <FactGuardrailNotice notice={focusSnapshot.factGuardrailNotice} />
                     <PhaseOutputNotice notice={focusSnapshot.phaseOutputNotice} />
-
+                    {focusSnapshot.artifactReuseNotice ? <p role="status" className="text-[10px] text-muted-foreground">{focusSnapshot.artifactReuseNotice}</p> : null}
                     <MeetingMarkdownText
                       className={cn(
                         WRAP_TEXT_CLASS,
@@ -3096,6 +3101,7 @@ const FocusModePanel = ({
   effectiveQuestionType,
   factGuardrailNotice,
   phaseOutputNotice,
+  artifactReuseNotice,
   transientPersonalStatusLabel,
   answerDeliveryState,
   manualQuestionTypeCorrection,
@@ -3141,6 +3147,7 @@ const FocusModePanel = ({
   effectiveQuestionType?: CanonicalQuestionType;
   factGuardrailNotice?: AdvisorSuggestion["factGuardrailNotice"];
   phaseOutputNotice?: string;
+  artifactReuseNotice?: string;
   transientPersonalStatusLabel?: string;
   answerDeliveryState: AnswerDeliveryPresentation["state"];
   manualQuestionTypeCorrection?: MeetingFocusSnapshot["manualQuestionTypeCorrection"];
@@ -3228,7 +3235,7 @@ const FocusModePanel = ({
               </div>
               <FactGuardrailNotice notice={factGuardrailNotice} />
               <PhaseOutputNotice notice={phaseOutputNotice} />
-
+              {artifactReuseNotice ? <p role="status" className="text-[10px] text-muted-foreground">{artifactReuseNotice}</p> : null}
               <MeetingMarkdownText
                 className={cn(
                   WRAP_TEXT_CLASS,

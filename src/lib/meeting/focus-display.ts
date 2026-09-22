@@ -52,6 +52,7 @@ const readDisplay = object({
   error: (value) => value === null ? null : string(value),
   factGuardrailNotice: optional(object({ kind: string, message: string })),
   phaseOutputNotice: text,
+  artifactReuseNotice: text,
   isBusy: boolean,
   audioControl: object({
     action: string, label: string, title: string, disabled: boolean, urgent: boolean, busy: boolean,

@@ -177,7 +177,7 @@ function MeetingFocusAnswerWindow({
               </div>
               <FactGuardrailNotice notice={snapshot.factGuardrailNotice} />
               <PhaseOutputNotice notice={snapshot.phaseOutputNotice} />
-
+              {snapshot.artifactReuseNotice ? <p role="status" className="text-[10px] text-muted-foreground">{snapshot.artifactReuseNotice}</p> : null}
               <MeetingMarkdownText
                 className={cn(WRAP_TEXT_CLASS, "min-h-20 text-sm leading-6")}
                 value={focusAnswer || "Waiting for answer."}
