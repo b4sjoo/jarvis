@@ -6,6 +6,8 @@ import {
   RESPONSE_OPPORTUNITY_MAX_OUTPUT_CHARS,
   RESPONSE_OPPORTUNITY_MAX_OUTPUT_TOKENS,
   RESPONSE_OPPORTUNITY_MAX_CLARIFICATION_CHARS,
+  RESPONSE_OPPORTUNITY_MAX_DECISION_SPANS,
+  RESPONSE_OPPORTUNITY_PROMPT_VERSION,
   RESPONSE_OPPORTUNITY_SESSION_START_LIMIT,
   ResponseOpportunitySessionBudget,
   authorizeResponseOpportunityLease,
@@ -541,7 +543,33 @@ test("rejects contradictory response-opportunity decisions and reasons", () => {
   }
 });
 
+test("RO output-contract prompt examples satisfy the strict production parser", () => {
+  const request = buildResponseOpportunityRequest({ logicalQuestionUnit: logicalQuestionUnit("Explain this choice.") });
+  assert.equal(request.promptVersion, RESPONSE_OPPORTUNITY_PROMPT_VERSION);
+  assert.equal(request.promptVersion, "response-opportunity-v4-whole-current-input");
+  const { systemPrompt } = buildResponseOpportunityPrompts(request);
+  assert.doesNotMatch(systemPrompt, /d:'o'\|'n'\|'u'/);
+  assert.match(systemPrompt, /Always include c as a JSON number from 0 to 1 inclusive/);
+  assert.match(systemPrompt, /r must match d: for o use/);
+  const examples = [...systemPrompt.matchAll(/\{"v":4,[^{}]+\}/g)].map(match => match[0]);
+  assert.equal(examples.length, 3);
+  assert.deepEqual(examples.map(example => JSON.parse(example).d), ["o", "n", "u"]);
+  for (const example of examples) {
+    assert.equal(parseResponseOpportunityOutput(example, request).ok, true, example);
+    for (const field of ["v", "d", "c", "t", "r"]) {
+      const incomplete = JSON.parse(example);
+      delete incomplete[field];
+      assert.equal(parseResponseOpportunityOutput(JSON.stringify(incomplete), request).ok, false, field);
+    }
+  }
+});
+
 test("compact output contract fits its derived provider budget", () => {
+  assert.equal(
+    JSON.parse(RESPONSE_OPPORTUNITY_COMPACT_OUTPUT_WORST_CASE).t.length,
+    RESPONSE_OPPORTUNITY_MAX_DECISION_SPANS
+  );
+  assert.equal(RESPONSE_OPPORTUNITY_MAX_OUTPUT_TOKENS, 128);
   assert.ok(
     RESPONSE_OPPORTUNITY_COMPACT_OUTPUT_WORST_CASE.length <=
       RESPONSE_OPPORTUNITY_MAX_OUTPUT_CHARS
@@ -550,6 +578,42 @@ test("compact output contract fits its derived provider budget", () => {
     RESPONSE_OPPORTUNITY_MAX_OUTPUT_TOKENS >=
       Math.ceil(RESPONSE_OPPORTUNITY_MAX_OUTPUT_CHARS / 2)
   );
+});
+
+for (const count of [5, 7, RESPONSE_OPPORTUNITY_MAX_DECISION_SPANS]) {
+  test(`accepts ${count} source-bounded targets and preserves source order and meaning`, () => {
+    const text = Array.from({ length: count }, (_, i) => `Explain requirement ${i}.`).join(" ");
+    const unit = logicalQuestionUnit(text, "Earlier context is not a current target.");
+    const request = buildResponseOpportunityRequest({ logicalQuestionUnit: unit });
+    assert.equal(request.decisionSpans.length, count);
+    const parsed = parseResponseOpportunityOutput(JSON.stringify({
+      v: 4, d: "o", c: 0.95, t: Array.from({ length: count }, (_, i) => count - i - 1), r: "ask",
+    }), request);
+    assert.equal(parsed.ok, true);
+    if (!parsed.ok) return;
+    const targeted = applyResponseOpportunityDecisionTarget({ logicalQuestionUnit: unit, request, result: parsed.value });
+    assert.equal(getLogicalQuestionAnswerFocusText(targeted), text);
+    assert.deepEqual(targeted.sources, unit.sources);
+    assert.deepEqual(targeted.responseOpportunityTarget?.sourceTurnIds, ["turn-current"]);
+    const prompts = buildResponseOpportunityPrompts(request);
+    assert.doesNotMatch(prompts.systemPrompt, /one to four/);
+    assert.match(prompts.systemPrompt, /number of available decisionSpans/);
+    assert.equal(JSON.parse(prompts.userMessage).decisionSpans.length, count);
+  });
+}
+
+test("source-bounded targets still reject invalid indexes, fields and empty known decisions", () => {
+  const request = buildResponseOpportunityRequest({ logicalQuestionUnit: logicalQuestionUnit(
+    Array.from({ length: 12 }, (_, i) => `Requirement ${i}.`).join(" ")
+  ) });
+  const base = { v: 4, d: "o", c: 0.9, t: [0, 1, 2, 3, 4, 5, 6], r: "ask" };
+  for (const t of [[], [0, 0], [-1], [12], [1.5], ["0"], Array.from({ length: 13 }, (_, i) => i)]) {
+    assert.equal(parseResponseOpportunityOutput(JSON.stringify({ ...base, t }), request).ok, false);
+  }
+  for (const extra of [{ c: -1 }, { c: 1.1 }, { c: "0.9" }, { r: "logistics" }, { v: 3 }, { questionType: "coding" }]) {
+    assert.equal(parseResponseOpportunityOutput(JSON.stringify({ ...base, ...extra }), request).ok, false);
+  }
+  assert.equal(parseResponseOpportunityOutput(JSON.stringify({ v: 4, d: "u", c: 0.5, t: [], r: "bounded-source-insufficient" }), request).ok, true);
 });
 
 test("accepts fenced compact provider output and rejects truncation", () => {
@@ -733,14 +797,18 @@ test("makes a substantive current request outrank polite framing in the RO promp
 
   assert.match(
     prompts.systemPrompt,
-    /First identify whether any current decisionSpan asks the candidate/i
+    /Read ALL current decisionSpans together/i
   );
   assert.match(
     prompts.systemPrompt,
-    /use output-request even when.*greeting.*polite framing/i
+    /polite ending cannot cancel a substantive request earlier in the SAME current input/i
   );
   assert.match(
     prompts.systemPrompt,
     /Use no-output-request only when.*no request for candidate output/i
   );
+  assert.match(prompts.systemPrompt, /Then select evidence supporting that decision/);
+  assert.match(prompts.systemPrompt, /current fragment that clearly qualifies the method, scope or requested output/);
+  assert.match(prompts.systemPrompt, /request present only in older context must not trigger a new response/);
+  assert.doesNotMatch(prompts.systemPrompt, /Select the exact source-backed decision target before deciding/);
 });

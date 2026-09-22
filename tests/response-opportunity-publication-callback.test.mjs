@@ -560,6 +560,44 @@ test("RB3 shared merge accepts live Replay provenance and rejects a stale epoch"
   }
 });
 
+for (const decision of ["o", "n"]) {
+  for (const stale of [false, true]) {
+    test(`RO source-bounded target: seven spans ${decision}, stale=${stale}, use the existing publication boundary`, async () => {
+      const h = createHarness();
+      const text = Array.from({ length: 7 }, (_, i) => decision === "o"
+        ? `Please explain requirement ${i}.` : `Our team handles component ${i}.`).join(" ");
+      const item = bufferedTurn(h, "1", text);
+      h.environment.processPostBufferThemTurn(item.turn, item.segment);
+      assert.equal(h.scheduled.length, 1);
+      const operation = h.scheduled[0];
+      assert.equal(operation.job.request.decisionSpans.length, 7);
+      const rawOutput = JSON.stringify({ v: 4, d: decision, c: 0.9,
+        t: [6, 5, 4, 3, 2, 1, 0], r: decision === "o" ? "ask" : "answer-to-candidate" });
+      const parsed = h.pure.parseResponseOpportunityOutput(rawOutput, operation.job.request);
+      assert.equal(parsed.ok, true);
+      const before = h.products();
+      if (stale) h.environment.runtimeEpochRef.current += 1;
+      h.settle(operation, { rawOutput, parsed, providerDisposition: "completed-with-content", parseDisposition: "valid-json" });
+      await h.clock.flush();
+      if (stale) {
+        assert.deepEqual(h.products(), before);
+        assert.equal(h.metadata.get(item.traceId).responseOpportunityLeaseAuthorized, false);
+      } else if (decision === "o") {
+        assert.equal(h.advisorCalls.length, 1);
+        assert.equal(h.pure.getLogicalQuestionAnswerFocusText(h.advisorCalls[0][5]), text);
+        assert.equal(h.advisorCalls[0][7].responseAuthorized, true);
+      } else {
+        assert.equal(h.advisorCalls.length, 0);
+        const target = h.environment.latestForceAdviseTargetRef.current;
+        assert.equal(target.logicalQuestionUnit.responseOpportunityTarget.decision, "no-output-request");
+        assert.equal(target.presentation.text, text);
+        assert.equal(h.metadata.get(item.traceId).responseOpportunityGenerationGateDisposition, "output-suppressed");
+      }
+      h.runtime.cancelAll();
+    });
+  }
+}
+
 test("A1 original CRUD source reaches RO, settled output permission and stable Answer without Force", async () => {
   const h = createHarness();
   const item = bufferedTurn(h, "1", "Maybe to help kind of structure, we can start with like defining APIs for just the first part, which is the review CRUD, and then we can move on to the, after we finish that part with like the data models, then we can come back and then add the reward parts later, just to help you kind of think about it.");

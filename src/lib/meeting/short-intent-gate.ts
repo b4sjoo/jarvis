@@ -8,7 +8,6 @@ import {
   RESPONSE_OPPORTUNITY_MAX_CLARIFICATION_CHARS,
   RESPONSE_OPPORTUNITY_MAX_DECISION_SPANS,
   RESPONSE_OPPORTUNITY_MAX_SOURCE_CHARS,
-  RESPONSE_OPPORTUNITY_MAX_TARGET_SPANS,
   RESPONSE_OPPORTUNITY_PROMPT_VERSION,
   RESPONSE_OPPORTUNITY_SCHEMA_VERSION,
   buildResponseOpportunityRequest,
@@ -32,7 +31,6 @@ export {
   RESPONSE_OPPORTUNITY_MAX_CLARIFICATION_CHARS,
   RESPONSE_OPPORTUNITY_MAX_DECISION_SPANS,
   RESPONSE_OPPORTUNITY_MAX_SOURCE_CHARS,
-  RESPONSE_OPPORTUNITY_MAX_TARGET_SPANS,
   RESPONSE_OPPORTUNITY_PROMPT_VERSION,
   RESPONSE_OPPORTUNITY_SCHEMA_VERSION,
   buildResponseOpportunityRequest,
@@ -277,8 +275,8 @@ export function buildResponseOpportunityPrompts(
   const systemPrompt = [
       "Decide one thing only: whether the interviewer-owned source evidence currently asks the candidate for an output that Jarvis should help produce.",
       "Return one JSON object only. Do not answer the interview content.",
-      "First identify whether any current decisionSpan asks the candidate for an answer, explanation, design, code, revision, constraint response, or phase-control response. If it does, use output-request even when the same span or boundedContext also contains a greeting, acknowledgement, logistics, or polite framing.",
-      "Use no-output-request only when the current decision target contains no request for candidate output: a greeting, acknowledgement, closing, logistics, or information supplied in response to the candidate's own question without an ask back.",
+      "Read ALL current decisionSpans together, using boundedContext to interpret them. Decide whether this current input requests an answer, explanation, design, code, revision, constraint response, or phase-control response. Then select evidence supporting that decision. A greeting, acknowledgement or polite ending cannot cancel a substantive request earlier in the SAME current input.",
+      "Use no-output-request only when the current input as a whole has no request for candidate output: greeting, acknowledgement, closing, logistics, or information answering the candidate without an ask back. Do not first select a non-request tail and use only that tail to suppress a substantive current request.",
       "Use unclear when the bounded source is incomplete or does not support either conclusion.",
       ...(semanticPayload.pendingClarification
         ? [
@@ -286,12 +284,12 @@ export function buildResponseOpportunityPrompts(
           ]
         : []),
       "Do not classify question type, task relation, parent, evidence mode, context scope, playbook phase, or artifact intent.",
-      "decisionSpans are mechanically split source candidates. boundedContext is the same bounded source in its original order and is context only.",
-      "Select the exact source-backed decision target before deciding whether it requests output.",
-      "Return only this compact schema: {v:4,d:'o'|'n'|'u',c:number,t:number[],r:string}.",
-      "d means o=output-request, n=no-output-request, u=unclear. c is confidence from 0 to 1.",
-      "t contains only zero-based indexes into decisionSpans in ascending source order; never copy source text or turn IDs into the output. Use one to four indexes for o or n. Use an empty array for u when no target is supported.",
-      "r must be exactly one of: ask,directive,correction,constraint,phase-control,acknowledgement,greeting,closing,logistics,answer-to-candidate,bounded-source-insufficient.",
+      "decisionSpans are mechanically split CURRENT source candidates. boundedContext also contains earlier source context. A current fragment that clearly qualifies the method, scope or requested output of a preceding request can itself be an output-request with reason constraint, directive or correction. Unrelated background or bare acknowledgement is not automatically such a qualifier. A request present only in older context must not trigger a new response when the current input merely acknowledges it.",
+      "Select the necessary current spans that best support the overall current decision, including the substantive ask and any necessary qualifier. t is a bounded evidence selection, not an enumeration of every input span. Never select only polite framing when other current spans contain the substantive ask.",
+      'Return exactly the fields v,d,c,t,r as one compact valid JSON object, with double-quoted keys and string values. v is the number 4. Format-only examples: {"v":4,"d":"o","c":0.9,"t":[0],"r":"ask"}; {"v":4,"d":"n","c":0.9,"t":[0],"r":"greeting"}; {"v":4,"d":"u","c":0.5,"t":[],"r":"bounded-source-insufficient"}. Select the actual decision and indexes from the input; these examples do not recommend an outcome.',
+      "d means o=output-request, n=no-output-request, u=unclear. Always include c as a JSON number from 0 to 1 inclusive.",
+      "t contains only unique zero-based indexes into decisionSpans in ascending source order; never copy source text or turn IDs into the output. Select only the necessary current spans. For o or n, select at least one index and at most the number of available decisionSpans. Use an empty array for u when no target is supported.",
+      "r must match d: for o use ask, directive, correction, constraint or phase-control; for n use acknowledgement, greeting, closing, logistics or answer-to-candidate; for u use bounded-source-insufficient. r explains why the current response decision applies, not just the surface speech act. A confirmation that actually resolves pendingClarification and requests continuation must use an output-compatible reason, not acknowledgement.",
     ].join(" ");
   return buildRuntimeInferenceModelInput({
     systemPrompt,
@@ -338,7 +336,7 @@ export function parseResponseOpportunityOutput(
   }
   if (
     !Array.isArray(candidate.t) ||
-    candidate.t.length > RESPONSE_OPPORTUNITY_MAX_TARGET_SPANS ||
+    candidate.t.length > request.decisionSpans.length ||
     (candidate.d !== "u" && candidate.t.length === 0)
   ) {
     return parseFailure("invalid-decision-target", "schema");

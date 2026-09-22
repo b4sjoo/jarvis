@@ -1,12 +1,16 @@
 export const RESPONSE_OPPORTUNITY_SCHEMA_VERSION = 4;
 export const RESPONSE_OPPORTUNITY_PROMPT_VERSION =
-  "response-opportunity-v4-decision-target";
+  "response-opportunity-v4-whole-current-input";
+export const RESPONSE_OPPORTUNITY_MAX_DECISION_SPANS = 12;
 export const RESPONSE_OPPORTUNITY_COMPACT_OUTPUT_WORST_CASE =
   JSON.stringify({
     v: RESPONSE_OPPORTUNITY_SCHEMA_VERSION,
     d: "u",
     c: 1,
-    t: [0, 1, 2, 3],
+    t: Array.from(
+      { length: RESPONSE_OPPORTUNITY_MAX_DECISION_SPANS },
+      (_, index) => index
+    ),
     r: "bounded-source-insufficient",
   });
 export const RESPONSE_OPPORTUNITY_MAX_OUTPUT_CHARS =
@@ -21,8 +25,6 @@ export const RESPONSE_OPPORTUNITY_MAX_SOURCE_CHARS = 1_800;
 export const RESPONSE_OPPORTUNITY_MAX_DECISION_SOURCE_CHARS = 1_200;
 export const RESPONSE_OPPORTUNITY_MAX_CONTEXT_SOURCE_CHARS = 600;
 export const RESPONSE_OPPORTUNITY_MAX_CLARIFICATION_CHARS = 280;
-export const RESPONSE_OPPORTUNITY_MAX_DECISION_SPANS = 12;
-export const RESPONSE_OPPORTUNITY_MAX_TARGET_SPANS = 4;
 
 export interface ResponseOpportunityDecisionSpan {
   turnId: string;
