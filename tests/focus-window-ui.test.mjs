@@ -30,12 +30,12 @@ test("Task170 production React receivers, shared renderer and embedded Focus wit
   const mocks = {
     "@/hooks": "export const useMeetingAssistant = () => {}; export const useShortcuts = () => {}; export const useWindowResize = () => {};",
     "@/lib": "export const extractVariables = () => []; export const safeLocalStorage = { getItem: () => null };",
-    "@/lib/meeting": ["focus-window", "screen-task-answer", "whiteboard-viewport", "whiteboard-ascii-fallback", "task-taxonomy"].map((file) => `export * from './src/lib/meeting/${file}';`).join("\n"),
+    "@/lib/meeting": ["focus-window", "meeting-id", "screen-task-answer", "whiteboard-viewport", "whiteboard-ascii-fallback", "task-taxonomy"].map((file) => `export * from './src/lib/meeting/${file}';`).join("\n"),
     "@/components": ['export * from "./src/components/Markdown";', ...["badge", "button", "input", "label", "popover", "scroll-area", "slider", "switch", "textarea"].map((file) => `export * from './src/components/ui/${file}';`)].join("\n"),
     "@tauri-apps/api/event": "export const listen = (event, callback) => window.__focusBus.listen(event, value => callback({payload:value})); export const emit = (event, value) => window.__focusBus.emit(event, value);",
     "@tauri-apps/api/core": "export const invoke = async (command, args) => { window.__focusInvokes.push({command,args}); };",
   };
-  const real = new Set(["stripOuterCodeFence", "normalizeCanonicalQuestionType", "MEETING_FOCUS_ACTION_EVENT", "MEETING_FOCUS_SNAPSHOT_EVENT"]);
+  const real = new Set(["createMeetingId", "stripOuterCodeFence", "normalizeCanonicalQuestionType", "MEETING_FOCUS_ACTION_EVENT", "MEETING_FOCUS_SNAPSHOT_EVENT"]);
   const bindings = [...mainSource.matchAll(/import\s*\{([^}]+)\}\s*from\s*"@\/lib\/meeting"/g)][0][1];
   for (const name of bindings.split(",").map((s) => s.trim()).filter(Boolean)) {
     if (!real.has(name)) mocks["@/lib/meeting"] += `\nexport const ${name} = () => null;`;
@@ -74,6 +74,7 @@ test("Task170 production React receivers, shared renderer and embedded Focus wit
       roots['normal-technical'].render(<NormalAnswerFixture focusSnapshot={d} technical={true}/>);
       roots['normal-general'].render(<NormalAnswerFixture focusSnapshot={d} technical={false}/>);
       roots.embedded.render(<FocusModePanel suggestionSections={d.sections} codingArtifactCached={false} whiteboardArtifactCached={false}
+        advisePin={d.advisePin} onToggleAdvisePin={()=>actions.push({type:'toggle-advise-pin',displayTarget:d.advisePin?.target})}
         whiteboardViewKey={d.sections.whiteboardViewKey} hasCorrectableQuestion={d.hasCorrectableQuestion} effectiveQuestionType={d.effectiveQuestionType}
         factGuardrailNotice={d.factGuardrailNotice} phaseOutputNotice={d.phaseOutputNotice} answerDeliveryState={d.answerDelivery.state} manualQuestionTypeCorrection={d.manualQuestionTypeCorrection}
         latestTurnText={d.latestTurnText} forceAdviseAvailable={d.forceAdviseAvailable} forceAdvisePending={d.forceAdvisePending} forceAdviseCompleted={d.forceAdviseCompleted}
@@ -110,6 +111,8 @@ test("Task170 production React receivers, shared renderer and embedded Focus wit
       builder.onLoad({ filter: /meeting\/index\.tsx$/ }, (args) => ({ contents: readFileSync(args.path, "utf8") + `
         export { FocusModePanel };
         export function NormalAnswerFixture({focusSnapshot, technical}: {focusSnapshot: MeetingFocusSnapshot; technical: boolean}) {
+          const adviseDisplay = focusSnapshot.advisePin ?? {locked:false,backgroundUpdated:false,target:undefined};
+          const meeting = {toggleAdvisePin:(invocation)=>window.__focus.actions.push({type:'toggle-advise-pin',displayTarget:invocation.displayTarget})};
           const transientPersonalStatusLabel = focusSnapshot.transientPersonalStatusLabel;
           return technical ? (${normalAnswerSections[0]}) : (${normalAnswerSections[1]});
         }
@@ -278,12 +281,33 @@ test("Task170 production React receivers, shared renderer and embedded Focus wit
       await page.locator('#controls').getByRole('button',{name:'Stop correction rec',exact:true}).click();
       assert.deepEqual(await page.evaluate(()=>window.__focus.actions.at(-1)),{type:'deactivate-correction',correctionId:'term-170'});
       await page.locator('#controls').getByRole('button',{name:'Field',exact:true}).click();
-      assert.deepEqual(await page.evaluate(()=>window.__focus.actions.at(-1)),{type:'correct-question-type',correctedType:'field-knowledge',source:'focus-mode'});
+      const correctionAction = await page.evaluate(()=>window.__focus.actions.at(-1));
+      assert.match(correctionAction.actionId,/^manual_action_/);
+      assert.equal(typeof correctionAction.requestedAt,'number');
+      const {actionId, requestedAt, ...correctionIntent} = correctionAction;
+      assert.deepEqual(correctionIntent,{type:'correct-question-type',correctedType:'field-knowledge',source:'focus-mode'});
       const before=await page.evaluate(()=>window.__focus.ack('answer'));
       await page.evaluate(()=>window.__focus.inject({...window.__focus.sent.filter(m=>m.event==='meeting-focus-snapshot').at(-1).payload,schemaVersion:999}));
       assert.match(await page.locator('#answer').getByRole('alert').textContent(),/Unsupported Focus snapshot version/);
       assert.deepEqual(await page.evaluate(()=>window.__focus.ack('answer')),before);
       await page.locator('#answer').getByText('Streaming answer B',{exact:true}).waitFor();
+    });
+    await t.test("ML1/8 real Main/native/embedded pin icons carry rendered identity at narrow and wide sizes", async () => {
+      const target = {sessionId:'pin-session',suggestionId:'A',traceId:'trace-A',stableRevision:1};
+      await page.evaluate(target=>window.__focus.publish({advisePin:{locked:true,backgroundUpdated:true,target}}),target);
+      for (const width of [375,1100]) {
+        await page.setViewportSize({width,height:900});
+        for (const surface of ['answer','embedded','normal-technical','normal-general']) {
+          const button=page.locator('#'+surface).getByRole('button',{name:'Unlock Advise',exact:true});
+          await button.click();
+          assert.deepEqual(await page.evaluate(()=>window.__focus.actions.at(-1)),{type:'toggle-advise-pin',displayTarget:target});
+          const box=await button.boundingBox();
+          assert.ok(box && box.width===28 && box.height===28 && box.x>=0 && box.x+box.width<=width);
+          assert.match(await button.getAttribute('title'),/newer answer ready/);
+        }
+      }
+      assert.deepEqual(await page.evaluate(()=>window.__focus.ack('answer').displayTarget),target);
+      await page.evaluate(()=>window.__focus.publish({advisePin:undefined}));
     });
     await t.test("Clear removes old content/notice, long markdown width stays contained", async () => {
       await page.evaluate(()=>window.__focus.publish({factGuardrailNotice:undefined,showClarifyingQuestion:false,sections:{primaryAnswer:'',approach:'',code:'',complexity:''}}));

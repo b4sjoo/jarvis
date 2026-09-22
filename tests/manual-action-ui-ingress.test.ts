@@ -67,7 +67,7 @@ test("manual-action shortcuts dispatch before semantic availability checks", () 
   );
   assert.match(
     shortcutSection,
-    /meeting\.applyResponseAction\(\s*"regenerate-artifacts",\s*manualShortcutInvocation\(invocation\)/
+    /meeting\.applyResponseAction\(\s*"regenerate-artifacts",\s*\{ \.\.\.manualShortcutInvocation\(invocation\), displayTarget: resolveShortcutDisplayTarget\(\)/
   );
   assert.match(
     meetingUiSource,

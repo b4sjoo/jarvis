@@ -8,6 +8,7 @@ export type ManualRuntimeActionKind =
   | "narrow-context"
   | "enhance-context"
   | "regenerate-artifacts"
+  | "toggle-advise-pin"
   | "clear-task"
   | "regenerate";
 
@@ -32,6 +33,8 @@ export type ManualRuntimeActionIngressRejectionReason =
   | "editable-focus";
 
 export interface ManualRuntimeActionInvocation {
+  displayTarget?: import("./manual-advise-display.js").AdviseDisplayTarget;
+  uiSurface?: "meeting-response-actions" | "normal-mode" | "focus-mode";
   actionId?: string;
   ingressSource?: "ui" | "shortcut";
   ingressReceivedAt?: number;
@@ -103,6 +106,9 @@ export function decideManualRuntimeActionIngress(input: {
   hasVisibleAnswer: boolean;
   hasActiveTask: boolean;
 }): ManualRuntimeActionIngressDecision {
+  if (input.action === "toggle-advise-pin") {
+    return input.hasVisibleAnswer ? { authorized: true } : { authorized: false, reason: "no-visible-answer" };
+  }
   if (input.action === "clear-task" || input.action === "force-advise" || input.action === "type-correction") {
     return { authorized: true };
   }

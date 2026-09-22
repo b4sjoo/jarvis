@@ -76,6 +76,10 @@ const callbackSources = {
   ),
   tryCommitPendingAnswer: findCallbackSource("tryCommitPendingAnswer"),
   queuePendingAnswerRevision: findCallbackSource("queuePendingAnswerRevision"),
+  selectAdviseDisplay: findCallbackSource("selectAdviseDisplay"),
+  toggleAdvisePin: findCallbackSource("toggleAdvisePin"),
+  revokeIncompleteAdvisePin: findCallbackSource("revokeIncompleteAdvisePin"),
+  recordAdviseDisplayApplied: findCallbackSource("recordAdviseDisplayApplied"),
 };
 const helperSources = {
   updateInterviewTaskContinuityForAnswer: findFunctionSource("updateInterviewTaskContinuityForAnswer"),
@@ -142,6 +146,9 @@ for (const moduleName of [
   "interview-playbook",
   "playbook-phase",
   "whiteboard-artifact",
+  "meeting-answer-display",
+  "response-action-target",
+  "artifact-regeneration",
 ]) {
   const loaded = await import(
     pathToFileURL(
@@ -191,6 +198,7 @@ const { MeetingContextManager } = await import(pathToFileURL(
 const { authorizeResponseArtifactMutation } = await import(pathToFileURL(
   path.join(compiledRoot, "src/lib/meeting/response-artifact-authorization.js")
 ));
+const { ManualAdviseDisplay } = await import(pathToFileURL(path.join(compiledRoot, "src/lib/meeting/manual-advise-display.js")));
 
 function suggestion(id, content) {
   return {
@@ -229,6 +237,10 @@ function createHarness(options = {}) {
   const initialStable = stableAnswer();
   assert.ok(initialStable);
   const refs = {
+    manualAdviseDisplayRef: { current: new ManualAdviseDisplay() },
+    displayedStreamRef: { current: null },
+    pinReleaseFrameRef: { current: null },
+    effectiveQuestionSourceLedgerRef: { current: { list: () => [] } },
     stableAnswerRevisionRef: { current: initialStable },
     visibleAnswerRevisionRef: { current: initialStable.revision },
     pendingAnswerRevisionRef: { current: null },
@@ -294,6 +306,7 @@ function createHarness(options = {}) {
     answerDelivery: { visibleAnswerRevision: initialStable.revision },
   };
   const uiUpdates = [];
+  const manualEvents = [];
   const scheduledPendingCommits = [];
   let id = 0;
   const generationResultLedger =
@@ -309,6 +322,8 @@ function createHarness(options = {}) {
     PENDING_ANSWER_TTL_MS: 60_000,
     ANSWER_DELIVERY_IDLE_RELEASE_MS: 6_000,
     ...refs,
+    state: uiState,
+    recordManualRuntimeAction: (event) => manualEvents.push(event),
     contextManagerRef: { current: manager },
     generationResultLedgerRef: {
       current: generationResultLedger,
@@ -329,6 +344,7 @@ function createHarness(options = {}) {
     createMeetingId: (prefix) => `${prefix}-${++id}`,
     setState: (updater) => {
       uiState = updater(uiState);
+      environment.state = uiState;
       uiUpdates.push({ ...uiState });
     },
     sessionRecordingManagerRef: { current: undefined },
@@ -359,6 +375,7 @@ function createHarness(options = {}) {
       return uiState;
     },
     uiUpdates,
+    manualEvents,
     scheduledPendingCommits,
     generationResultLedger,
     unlock() {
@@ -474,6 +491,8 @@ function publishImmediate(h, candidate) {
     advisorCommitTaskRuntimeState: h.manager.getTaskRuntimeState(), screenCommitTaskRuntimeState: h.manager.getTaskRuntimeState(),
     screenGenerationTaskRuntimeRevision: candidate.taskRuntimeRevision,
     advisorResponseCandidate: candidate.candidate, screenResponseCandidate: candidate.candidate,
+    parsedMeetingAnswer: candidate.candidate.meetingAnswer, nextSuggestion: candidate.candidate,
+    generationAuthorizedArtifacts: ["answer"], screenPresentationAuthorizedArtifacts: ["answer"],
     preparedAdvisorTransition: candidate.preparedTransition, preparedScreenTransition: candidate.preparedTransition,
     continuity: candidate.continuity, screenGenerationContinuity: candidate.continuity,
     resetVisibleSections: false, screenStartedNewInterviewParent: false, options: {},
@@ -518,6 +537,89 @@ test("O1/O5.1 Voice/Screen actual commitStaged callsites install summary/Visible
       assert.equal(h.manager.getTaskDeadlineControl().parent.deadline, 660_000);
     } finally { h.restore(); }
   }
+});
+
+test("ML1/3/6 production publication and pin callbacks retain A across B/failure/D and unlock locally", () => {
+  const h = createHarness();
+  try {
+    const select = () => h.environment.selectAdviseDisplay(imports.buildMeetingAnswerDisplayModel({
+      content: h.uiState.latestSuggestion.content,
+      parsedAnswer: h.uiState.latestSuggestion.meetingAnswer,
+    }));
+    const a = select();
+    h.environment.toggleAdvisePin({ actionId: "pin-A", uiSurface: "normal-mode", displayTarget: a.target });
+    for (const id of ["B", "D"]) {
+      const s = commitStableAnswerRevision({ current: h.refs.stableAnswerRevisionRef.current,
+        candidate: suggestion(id, `Answer: answer ${id}`), authorizedArtifacts: ["answer"],
+        taskId: "parent-a", logicalQuestionUnitId: "lqu-current", logicalQuestionRevision: 1,
+        sessionId: "session-a", runtimeEpoch: 1 });
+      const p = h.environment.prepareStableAnswerPublication(s);
+      h.environment.installPreparedStableAnswerPublication(p);
+      h.environment.finalizeStableAnswerPublication(p);
+      assert.equal(select().stable.suggestion.id, "visible-a");
+      assert.equal(h.refs.stableAnswerRevisionRef.current.suggestion.id, id);
+      // A failed unrelated generation cannot revoke a completed pin or change latest.
+      assert.equal(h.refs.manualAdviseDisplayRef.current.revokeIncomplete("failed-C"), false);
+      h.setNow(100_000);
+    }
+    const before = h.manager.getTaskRuntimeState();
+    h.environment.toggleAdvisePin({ actionId: "unlock-A", ingressSource: "shortcut", displayTarget: a.target });
+    assert.equal(select().stable.suggestion.id, "D");
+    assert.deepEqual(h.manager.getTaskRuntimeState(), before);
+    assert.equal(h.manualEvents.filter(e => e.actionId === "unlock-A").map(e => e.stage).join(","), "requested,accepted,terminal");
+    h.environment.toggleAdvisePin({ actionId: "stale-focus", uiSurface: "focus-mode", displayTarget: a.target });
+    assert.equal(h.manualEvents.at(-1).terminalDisposition, "rejected");
+  } finally { h.restore(); }
+});
+
+test("ML4 production selector never exposes terminal rejected partial when no legal answer exists", () => {
+  const h=createHarness();
+  try {
+    const generation=lease();
+    h.generationResultLedger.begin({lease:generation,traceId:"invalid-stream"});
+    h.refs.stableAnswerRevisionRef.current=null;
+    h.refs.displayedStreamRef.current={traceId:"invalid-stream",generationId:"request-invalid",leaseId:generation.id};
+    h.environment.state={...h.uiState,partialSuggestion:"Answer: invalid partial"};
+    const sections=imports.buildMeetingAnswerDisplayModel({content:"Answer: invalid partial"});
+    h.environment.selectAdviseDisplay(sections);
+    h.environment.toggleAdvisePin();
+    h.generationResultLedger.terminalize({generationLeaseId:generation.id,disposition:"rejected",reason:"source-revoked",
+      source:"test",authority:"existing-lease",candidateFormed:false});
+    h.environment.revokeIncompleteAdvisePin("invalid-stream","source-revoked");
+    h.environment.state={...h.uiState,partialSuggestion:"Answer: invalid partial"};
+    const selected=h.environment.selectAdviseDisplay(sections);
+    assert.equal(selected.streaming,false);
+    assert.equal(selected.sections.primaryAnswer,"");
+    assert.equal(selected.locked,false);
+  } finally { h.restore(); }
+});
+
+test("ML3 real selector and display ACK keep D through repeated pre-paint renders while E streams", () => {
+  const h=createHarness();
+  try {
+    const initial=h.environment.selectAdviseDisplay(imports.buildMeetingAnswerDisplayModel({content:h.uiState.latestSuggestion.content}));
+    h.environment.toggleAdvisePin({displayTarget:initial.target});
+    const d=commitStableAnswerRevision({current:h.refs.stableAnswerRevisionRef.current,
+      candidate:suggestion("D","Answer: completed D"),authorizedArtifacts:["answer"],taskId:"parent-a",
+      logicalQuestionUnitId:"lqu-current",logicalQuestionRevision:1,sessionId:"session-a",runtimeEpoch:1});
+    const publication=h.environment.prepareStableAnswerPublication(d);
+    h.environment.installPreparedStableAnswerPublication(publication);h.environment.finalizeStableAnswerPublication(publication);
+    const e={...lease(),id:"lease-E"};h.generationResultLedger.begin({lease:e,traceId:"trace-E"});
+    h.refs.displayedStreamRef.current={traceId:"trace-E",generationId:"request-E",leaseId:e.id};
+    h.environment.toggleAdvisePin({displayTarget:initial.target});
+    h.environment.state={...h.uiState,partialSuggestion:"Answer: partial E"};
+    const sections=imports.buildMeetingAnswerDisplayModel({content:"Answer: partial E"});
+    const select=()=>h.environment.selectAdviseDisplay(sections);
+    for(let render=0;render<5;render++) assert.equal(select().stable.suggestion.id,"D");
+    const frames=[];h.environment.window={requestAnimationFrame:callback=>{frames.push(callback);return frames.length;}};
+    h.environment.recordAdviseDisplayApplied(select().target,"normal-mode");
+    assert.equal(select().stable.suggestion.id,"D");
+    frames.shift()();
+    assert.equal(select().stable.suggestion.id,"D","first frame paints D even after StrictMode-like retries");
+    frames.shift()();
+    assert.equal(select().sections.primaryAnswer,"partial E");
+    assert.equal(h.refs.stableAnswerRevisionRef.current.suggestion.id,"D");
+  } finally {h.restore();}
 });
 
 test("O1/O5.2 pending prepared at t60 commits at t80 with deadline660, never680", () => {

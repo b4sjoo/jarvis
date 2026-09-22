@@ -1,4 +1,5 @@
 import type { AnswerDeliveryPresentation } from "./meeting-presentation-contracts.js";
+import type { AdviseDisplayTarget } from "./manual-advise-display.js";
 import type {
   ClarifyingQuestionAnswer,
   ClarifyingQuestionOption,
@@ -109,6 +110,8 @@ export type MeetingFocusProtocolAction =
     }>
   | Readonly<{
       type: "snapshot-applied";
+      displayTarget?: AdviseDisplayTarget;
+      adviseLocked?: boolean;
       schemaVersion: typeof MEETING_FOCUS_SCHEMA_VERSION;
       windowKind: MeetingFocusWindowKind;
       requestId: string;
@@ -150,6 +153,7 @@ export type MeetingFocusActiveTaskSnapshot = ReturnType<
 export type FocusReadonly<T> = { readonly [K in keyof T]: FocusReadonly<T[K]> };
 
 export type MeetingFocusSnapshot = FocusReadonly<{
+  advisePin?: { locked: boolean; backgroundUpdated: boolean; target: AdviseDisplayTarget };
   active: boolean;
   sections: MeetingFocusSectionsSnapshot;
   latestReliableAnswer: string;
@@ -197,7 +201,9 @@ export type MeetingFocusSnapshot = FocusReadonly<{
 export type MeetingFocusAction =
   | MeetingFocusProtocolAction
   | { type: "toggle-listening" }
-  | { type: "regenerate" }
+  | { type: "regenerate"; displayTarget?: AdviseDisplayTarget }
+  | { type: "toggle-advise-pin"; displayTarget?: AdviseDisplayTarget }
+  | { type: "response-action"; action: "enhance-context" | "narrow-context" | "regenerate-artifacts"; displayTarget?: AdviseDisplayTarget }
   | { type: "force-advise" }
   | { type: "capture-screen" }
   | { type: "submit-correction"; correction: string }
@@ -212,6 +218,7 @@ export type MeetingFocusAction =
   | { type: "update-interview-types"; interviewTypes: InterviewBriefType[] }
   | {
       type: "clarifying-answer";
+      displayTarget?: AdviseDisplayTarget;
       answer: ClarifyingQuestionAnswer;
       option?: { label?: string; value?: string };
     }

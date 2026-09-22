@@ -13,6 +13,8 @@ export type MeetingFocusProtocolObservation = Readonly<{
   sequence?: number;
   windowKind?: MeetingFocusWindowKind;
   reason?: string;
+  displayTarget?: import("./manual-advise-display.js").AdviseDisplayTarget;
+  adviseLocked?: boolean;
 }>;
 type Options = {
   transport: MeetingFocusTransport;
@@ -71,12 +73,14 @@ export function createMeetingFocusPublisher(options: Options & {
         }
         const ack = message as Applied;
         applied.set(ack.windowKind, Object.freeze({ ...ack }));
-        options.observe?.({ event: "applied", publisherInstanceId, sequence: ack.sequence, windowKind: ack.windowKind });
+        options.observe?.({ event: "applied", publisherInstanceId, sequence: ack.sequence, windowKind: ack.windowKind,
+          displayTarget: ack.displayTarget, adviseLocked: ack.adviseLocked });
       }
       return;
     }
     // Product intents retain their existing payload and runtime authority checks.
     switch (message.type) {
+      case "toggle-advise-pin": case "response-action":
       case "toggle-listening": case "regenerate": case "force-advise": case "capture-screen":
       case "submit-correction": case "deactivate-correction": case "correct-question-type":
       case "update-interview-types": case "clarifying-answer": case "new-task": case "same-task":
@@ -210,6 +214,8 @@ export function createMeetingFocusConsumer(options: Options & {
       if (disposed || !currentRequestId || envelope !== current || envelope.sequence <= lastApplied) return;
       lastApplied = envelope.sequence;
       void send({ type: "snapshot-applied", schemaVersion: MEETING_FOCUS_SCHEMA_VERSION,
+        displayTarget: envelope.payload.advisePin?.target,
+        adviseLocked: envelope.payload.advisePin?.locked,
         publisherInstanceId: envelope.publisherInstanceId, sequence: envelope.sequence,
         windowKind: options.windowKind, requestId: currentRequestId });
     },

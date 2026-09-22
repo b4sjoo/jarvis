@@ -52,6 +52,7 @@ import { WhiteboardViewer } from "./whiteboard-viewer";
 import { createMeetingFocusConsumer } from "@/lib/meeting/focus-window-protocol";
 import { FactGuardrailNotice } from "./fact-guardrail-notice";
 import { PhaseOutputNotice } from "./phase-output-notice";
+import { AdvisePinButton } from "./advise-pin-button";
 import { formatChineseThinkingText } from "@/lib/meeting/meeting-display-text";
 import { MeetingMarkdownText } from "./meeting-markdown-text";
 
@@ -100,8 +101,17 @@ export function MeetingFocusWindow({ kind }: { kind: MeetingFocusWindowKind }) {
   }, [kind]);
 
   useEffect(() => {
-    // Confirms this React commit, not deferred Markdown/Mermaid rendering or pixels.
-    if (envelope) consumerRef.current?.applied(envelope);
+    if (!envelope) return;
+    if (envelope.payload.advisePin?.target.stableRevision === undefined) {
+      consumerRef.current?.applied(envelope);
+      return;
+    }
+    // A completed unlock target must survive a painted frame before streaming resumes.
+    let nextFrame: number | undefined;
+    const frame = requestAnimationFrame(() => {
+      nextFrame = requestAnimationFrame(() => consumerRef.current?.applied(envelope));
+    });
+    return () => { cancelAnimationFrame(frame); if (nextFrame !== undefined) cancelAnimationFrame(nextFrame); };
   }, [envelope]);
 
   const snapshot = envelope?.payload ?? EMPTY_MEETING_FOCUS_SNAPSHOT;
@@ -153,6 +163,9 @@ function MeetingFocusAnswerWindow({
               <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
                 <MessageSquareTextIcon className="h-3.5 w-3.5" />
                 Answer
+                <AdvisePinButton locked={snapshot.advisePin?.locked ?? false}
+                  updated={snapshot.advisePin?.backgroundUpdated}
+                  onClick={() => sendFocusAction({ type: "toggle-advise-pin", displayTarget: snapshot.advisePin?.target })} />
                 {snapshot.answerDelivery.state === "update-ready" ? (
                   <Badge
                     variant="outline"
@@ -164,6 +177,7 @@ function MeetingFocusAnswerWindow({
               </div>
               <FactGuardrailNotice notice={snapshot.factGuardrailNotice} />
               <PhaseOutputNotice notice={snapshot.phaseOutputNotice} />
+
               <MeetingMarkdownText
                 className={cn(WRAP_TEXT_CLASS, "min-h-20 text-sm leading-6")}
                 value={focusAnswer || "Waiting for answer."}
@@ -675,7 +689,7 @@ function FocusClarifyingActionButtons({
   sendFocusAction: (action: MeetingFocusUserAction) => void;
 }) {
   const sendClarifyingAnswer = (answer: ClarifyingQuestionAnswer, option?: { label?: string; value?: string }) =>
-    sendFocusAction({ type: "clarifying-answer", answer, option });
+    sendFocusAction({ type: "clarifying-answer", answer, option, displayTarget: snapshot.advisePin?.target });
   const options = snapshot.sections.clarifyingOptions;
   const selectedAnswerLabel = snapshot.selectedClarifyingAnswerLabel;
   const selectionPending = snapshot.clarifyingSelectionState === "pending";

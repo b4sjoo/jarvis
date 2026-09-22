@@ -82,6 +82,12 @@ export const DEFAULT_SHORTCUT_ACTIONS: ShortcutAction[] = [
     },
   },
   {
+    id: "meeting_toggle_advise_pin",
+    name: "Meeting Lock Advise",
+    description: "Lock or unlock the displayed Advise",
+    defaultKey: { macos: "cmd+shift+s", windows: "ctrl+shift+s", linux: "ctrl+shift+s" },
+  },
+  {
     id: "meeting_regenerate_artifacts",
     name: "Meeting Regenerate Artifacts",
     description: "Regenerate the current phase-owned meeting artifacts",

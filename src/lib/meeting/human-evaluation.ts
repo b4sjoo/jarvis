@@ -100,7 +100,18 @@ export function resolveSettledAttemptEvaluationTarget(input: {
   answerInProgress?: boolean;
   traces: MeetingTrace[];
   currentSessionId?: string;
+  pinnedDisplay?: { suggestion: AdvisorSuggestion | null; streaming: boolean; traceId?: string };
 }): VisibleAnswerEvaluationTarget {
+  if (input.pinnedDisplay) {
+    if (input.pinnedDisplay.streaming) return {
+      status: "pending", traceId: input.pinnedDisplay.traceId,
+      reason: "partial-answer-in-progress",
+    };
+    return resolveVisibleAnswerEvaluationTarget({
+      suggestion: input.pinnedDisplay.suggestion,
+      traces: input.traces,
+    });
+  }
   const attempt = input.traces.find((trace) => {
     const identity = resolveHumanEvaluationAttemptIdentityV2(trace);
     return Boolean(

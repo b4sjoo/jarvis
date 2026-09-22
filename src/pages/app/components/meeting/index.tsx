@@ -152,6 +152,7 @@ import { WhiteboardViewer } from "./whiteboard-viewer";
 import { createMeetingFocusPublisher } from "@/lib/meeting/focus-window-protocol";
 import { FactGuardrailNotice } from "./fact-guardrail-notice";
 import { PhaseOutputNotice } from "./phase-output-notice";
+import { AdvisePinButton } from "./advise-pin-button";
 import { createMeetingFocusDisplayModel } from "@/lib/meeting/focus-display";
 import { formatChineseThinkingText } from "@/lib/meeting/meeting-display-text";
 import { MeetingMarkdownText } from "./meeting-markdown-text";
@@ -635,7 +636,7 @@ export const MeetingAssistant = ({
     activeTaskKind,
     meeting.activeMeetingTask?.parent.whiteboardArtifact,
   ]);
-  const displaySuggestionSections = useMemo(
+  const runtimeSuggestionSections = useMemo(
     () => overlayMeetingAnswerArtifacts(suggestionSections, {
       whiteboard: whiteboardArtifactDisplay.whiteboard,
       code: codingArtifactDisplay.code,
@@ -648,8 +649,15 @@ export const MeetingAssistant = ({
       whiteboardArtifactDisplay.whiteboard,
     ]
   );
+  const adviseDisplay = meeting.selectAdviseDisplay(runtimeSuggestionSections);
+  const displaySuggestionSections = adviseDisplay.sections;
+  const displayTargetKey = JSON.stringify(adviseDisplay.target);
+  useEffect(() => {
+    if (!open || (isFocusMode && focusWindowsVisible)) return;
+    meeting.recordAdviseDisplayApplied(adviseDisplay.target, isFocusMode ? "focus-mode" : "normal-mode");
+  }, [displayTargetKey, adviseDisplay.locked, open, isFocusMode, focusWindowsVisible, meeting.recordAdviseDisplayApplied]);
   const factGuardrailNotice =
-    meeting.latestSuggestion?.factGuardrailNotice;
+    (adviseDisplay.locked ? adviseDisplay.stable?.suggestion : meeting.latestSuggestion)?.factGuardrailNotice;
   const latestReliableAnswerPreview = useMemo(
     () =>
       formatLatestReliableAnswerPreview(
@@ -658,7 +666,7 @@ export const MeetingAssistant = ({
       ),
     [displaySuggestion, meeting.latestReliableSuggestion]
   );
-  const evaluationTarget = useMemo(
+  const currentEvaluationTarget = useMemo(
     () =>
       resolveSettledAttemptEvaluationTarget({
         suggestion: meeting.latestSuggestion,
@@ -667,6 +675,10 @@ export const MeetingAssistant = ({
           Boolean(meeting.partialSuggestion.trim()),
         traces: meeting.traces,
         currentSessionId: meeting.meetingSessionId,
+        pinnedDisplay: adviseDisplay.locked ? {
+          suggestion: adviseDisplay.stable?.suggestion ?? null,
+          streaming: adviseDisplay.streaming, traceId: adviseDisplay.target.traceId,
+        } : undefined,
       }),
     [
       meeting.latestSuggestion,
@@ -674,8 +686,14 @@ export const MeetingAssistant = ({
       meeting.meetingSessionId,
       meeting.status,
       meeting.traces,
+      displayTargetKey,
+      adviseDisplay.locked,
+      adviseDisplay.streaming,
     ]
   );
+  const [frozenEvaluationTarget, setFrozenEvaluationTarget] = useState<typeof currentEvaluationTarget>();
+  useEffect(() => { setFrozenEvaluationTarget(undefined); }, [meeting.meetingSessionId]);
+  const evaluationTarget = frozenEvaluationTarget ?? currentEvaluationTarget;
   const evaluationTrace = evaluationTarget.traceId
     ? meeting.traces.find((trace) => trace.id === evaluationTarget.traceId)
     : undefined;
@@ -779,11 +797,12 @@ export const MeetingAssistant = ({
         )
         .filter((trace): trace is MeetingTrace => Boolean(trace))
     : [];
-  const clarifyingQuestion = suggestionSections.clarifyingQuestion.trim();
-  const rawClarifyingOptions = suggestionSections.clarifyingOptions ?? [];
-  const clarifyingSourceTrace = meeting.latestSuggestion?.sourceTraceId
+  const clarifyingQuestion = displaySuggestionSections.clarifyingQuestion.trim();
+  const rawClarifyingOptions = displaySuggestionSections.clarifyingOptions ?? [];
+  const displayedSuggestion = adviseDisplay.stable?.suggestion;
+  const clarifyingSourceTrace = displayedSuggestion?.sourceTraceId
     ? meeting.traces.find(
-        (trace) => trace.id === meeting.latestSuggestion?.sourceTraceId
+        (trace) => trace.id === displayedSuggestion?.sourceTraceId
       )
     : undefined;
   const projectBindingClarifyingCandidates = useMemo(
@@ -794,10 +813,10 @@ export const MeetingAssistant = ({
     [clarifyingSourceTrace?.metadata]
   );
   const clarifyingQuestionOwner =
-    meeting.latestSuggestion?.questionLineage?.questionInstanceId ??
-    meeting.latestSuggestion?.parentTaskId ??
-    meeting.latestSuggestion?.id ??
-    displaySuggestion;
+    displayedSuggestion?.questionLineage?.questionInstanceId ??
+    displayedSuggestion?.parentTaskId ??
+    displayedSuggestion?.id ??
+    adviseDisplay.target.generationId;
   const clarifyingQuestionKey = clarifyingQuestion
     ? `${clarifyingQuestionOwner}:${clarifyingQuestion}`
     : "";
@@ -905,7 +924,7 @@ export const MeetingAssistant = ({
     : statusLabel[meeting.status];
   const hasMeetingContext =
     meeting.transcriptTurns.length > 0 || meeting.screenObservations.length > 0;
-  const hasSuggestion = Boolean(displaySuggestion.trim());
+  const hasSuggestion = Boolean(displaySuggestionSections.primaryAnswer.trim());
   const focusModeActive = open && isFocusMode;
   const editableBriefForFocus = useMemo(
     () => getEditableInterviewSessionBrief(meeting.interviewSessionBrief),
@@ -944,13 +963,15 @@ export const MeetingAssistant = ({
   const focusSnapshot = useMemo<MeetingFocusSnapshot>(
     () => createMeetingFocusDisplayModel({
       active: focusModeActive,
+      advisePin: { locked: adviseDisplay.locked, backgroundUpdated: adviseDisplay.backgroundUpdated,
+        target: adviseDisplay.target },
       sections: {
         chineseThinking: displaySuggestionSections.chineseThinking,
         primaryAnswer: displaySuggestionSections.primaryAnswer,
         focusedQuestion: displaySuggestionSections.focusedQuestion,
         approach: displaySuggestionSections.approach,
         whiteboard: displaySuggestionSections.whiteboard,
-        whiteboardViewKey: whiteboardArtifactDisplay.viewKey,
+        whiteboardViewKey: adviseDisplay.locked ? `${adviseDisplay.target.suggestionId ?? adviseDisplay.target.generationId}:${adviseDisplay.stable?.sections.whiteboard.revision ?? 0}` : whiteboardArtifactDisplay.viewKey,
         code: displaySuggestionSections.code,
         complexity: displaySuggestionSections.complexity,
         clarifyingQuestion: displaySuggestionSections.clarifyingQuestion,
@@ -958,7 +979,7 @@ export const MeetingAssistant = ({
         profile: displaySuggestionSections.profile,
         hasTechnicalDetails: displaySuggestionSections.hasTechnicalDetails,
       },
-      latestReliableAnswer: latestReliableAnswerPreview,
+      latestReliableAnswer: adviseDisplay.locked ? "" : latestReliableAnswerPreview,
       latestTurnText: latestInterviewerTurnText,
       forceAdviseAvailable,
       forceAdvisePending,
@@ -967,7 +988,7 @@ export const MeetingAssistant = ({
       statusLabel: meetingStatusLabel,
       error: meeting.error,
       factGuardrailNotice,
-      phaseOutputNotice: meeting.phaseOutputNotice,
+      phaseOutputNotice: adviseDisplay.locked ? undefined : meeting.phaseOutputNotice,
       isBusy,
       audioControl: audioPauseResumeControl,
       audioInputWarning: audioWarningLabel && audioWarningDetail
@@ -1023,6 +1044,9 @@ export const MeetingAssistant = ({
       })),
     }),
     [
+      displayTargetKey,
+      adviseDisplay.locked,
+      adviseDisplay.backgroundUpdated,
       clarifyingQuestion,
       clarifyingOptionDisplay.showBooleanFallback,
       activeClarifyingSelection?.label,
@@ -1084,6 +1108,11 @@ export const MeetingAssistant = ({
         send: (snapshot) => emit(MEETING_FOCUS_SNAPSHOT_EVENT, snapshot),
       },
       onAction: (action) => focusActionHandlerRef.current(action),
+      observe: (observation) => {
+        if (observation.event === "applied" && observation.displayTarget) {
+          meeting.recordAdviseDisplayApplied(observation.displayTarget, "focus-mode", observation.adviseLocked);
+        }
+      },
       onError: (error) => setFocusProtocolError(error.message),
     });
     focusPublisherRef.current = publisher;
@@ -1351,14 +1380,20 @@ export const MeetingAssistant = ({
     meeting.status,
   ]);
 
+  const resolveShortcutDisplayTarget = useCallback(() =>
+    focusModeActive && focusWindowsVisible
+      ? focusPublisherRef.current?.getLatestApplied("answer")?.displayTarget ?? { sessionId: "" }
+      : adviseDisplay.target,
+  [focusModeActive, focusWindowsVisible, displayTargetKey]);
+
   const handleRegenerateShortcut = useCallback((
     invocation: GlobalShortcutInvocation
   ) => {
     setOpen(true);
     void meeting.regenerateSuggestion(
-      manualShortcutInvocation(invocation)
+      { ...manualShortcutInvocation(invocation), displayTarget: resolveShortcutDisplayTarget() }
     );
-  }, [meeting.regenerateSuggestion]);
+  }, [meeting.regenerateSuggestion, resolveShortcutDisplayTarget]);
 
   const handleNextPhaseShortcut = useCallback((
     invocation: GlobalShortcutInvocation
@@ -1376,9 +1411,9 @@ export const MeetingAssistant = ({
     setOpen(true);
     void meeting.applyResponseAction(
       "regenerate-artifacts",
-      manualShortcutInvocation(invocation)
+      { ...manualShortcutInvocation(invocation), displayTarget: resolveShortcutDisplayTarget() }
     );
-  }, [meeting.applyResponseAction]);
+  }, [meeting.applyResponseAction, resolveShortcutDisplayTarget]);
 
   const handleScopedResponseActionShortcut = useCallback(
     (
@@ -1388,10 +1423,10 @@ export const MeetingAssistant = ({
       setOpen(true);
       void meeting.applyResponseAction(
         action,
-        manualShortcutInvocation(invocation)
+        { ...manualShortcutInvocation(invocation), displayTarget: resolveShortcutDisplayTarget() }
       );
     },
-    [meeting.applyResponseAction]
+    [meeting.applyResponseAction, resolveShortcutDisplayTarget]
   );
 
   const meetingShortcutCallbacks = useMemo(
@@ -1410,6 +1445,10 @@ export const MeetingAssistant = ({
         });
       },
       meeting_regenerate: handleRegenerateShortcut,
+      meeting_toggle_advise_pin: (invocation: GlobalShortcutInvocation) => {
+        meeting.toggleAdvisePin({ ...manualShortcutInvocation(invocation), displayTarget: resolveShortcutDisplayTarget(),
+          uiSurface: focusModeActive ? "focus-mode" : "normal-mode" });
+      },
       meeting_regenerate_artifacts: handleRegenerateArtifactsShortcut,
       meeting_enhance_context: (invocation: GlobalShortcutInvocation) => {
         handleScopedResponseActionShortcut("enhance-context", invocation);
@@ -1438,6 +1477,10 @@ export const MeetingAssistant = ({
       handleRegenerateArtifactsShortcut,
       handleScopedResponseActionShortcut,
       meeting.toggleMicrophoneContext,
+      meeting.toggleAdvisePin,
+      resolveShortcutDisplayTarget,
+      focusModeActive,
+      displayTargetKey,
       toggleFocusMode,
     ]
   );
@@ -1449,7 +1492,8 @@ export const MeetingAssistant = ({
   const handleClarifyingAnswer = useCallback(
     (
       answer: ClarifyingQuestionAnswer,
-      option?: { label?: string; value?: string }
+      option?: { label?: string; value?: string },
+      displayTarget = adviseDisplay.target
     ) => {
       if (!clarifyingQuestion) return;
 
@@ -1473,6 +1517,7 @@ export const MeetingAssistant = ({
       setDismissedQuestionKey(null);
       void meeting
         .answerClarifyingQuestion(clarifyingQuestion, answer, option, {
+          displayTarget,
           questionKey: clarifyingQuestionKey,
           optionSource: clarifyingOptionDisplay.source,
           optionCount: clarifyingOptions.length,
@@ -1516,6 +1561,7 @@ export const MeetingAssistant = ({
       clarifyingOptions.length,
       clarifyingQuestion,
       clarifyingQuestionKey,
+      displayTargetKey,
       meeting.answerClarifyingQuestion,
     ]
   );
@@ -1585,7 +1631,13 @@ export const MeetingAssistant = ({
         void handlePauseResume();
         break;
       case "regenerate":
-        void meeting.regenerateSuggestion();
+        void meeting.regenerateSuggestion({ uiSurface: "focus-mode", displayTarget: action.displayTarget ?? { sessionId: "" } });
+        break;
+      case "toggle-advise-pin":
+        meeting.toggleAdvisePin({ uiSurface: "focus-mode", displayTarget: action.displayTarget ?? { sessionId: "" } });
+        break;
+      case "response-action":
+        void meeting.applyResponseAction(action.action, { uiSurface: "focus-mode", displayTarget: action.displayTarget ?? { sessionId: "" } });
         break;
       case "force-advise":
         void meeting.forceAdviseLatestTurn();
@@ -1610,7 +1662,7 @@ export const MeetingAssistant = ({
         updateFocusInterviewTypes(action.interviewTypes);
         break;
       case "clarifying-answer":
-        handleClarifyingAnswer(action.answer, action.option);
+        handleClarifyingAnswer(action.answer, action.option, action.displayTarget ?? { sessionId: "" });
         break;
       case "new-task":
         handleNewTaskConfirmation();
@@ -1760,6 +1812,8 @@ export const MeetingAssistant = ({
           ) : null}
           {isFocusMode ? (
               <FocusModePanel
+              advisePin={focusSnapshot.advisePin}
+              onToggleAdvisePin={() => meeting.toggleAdvisePin({ uiSurface: "focus-mode", displayTarget: adviseDisplay.target })}
               suggestionSections={focusSnapshot.sections}
               codingArtifactCached={codingArtifactDisplay.isCached}
               whiteboardArtifactCached={whiteboardArtifactDisplay.isCached}
@@ -2134,6 +2188,8 @@ export const MeetingAssistant = ({
                     <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
                       <BrainIcon className="h-3.5 w-3.5" />
                       Answer
+                      <AdvisePinButton locked={adviseDisplay.locked} updated={adviseDisplay.backgroundUpdated}
+                        onClick={() => meeting.toggleAdvisePin({ uiSurface: "normal-mode", displayTarget: adviseDisplay.target })} />
                       {transientPersonalStatusLabel ? (
                         <Badge
                           variant="outline"
@@ -2148,6 +2204,7 @@ export const MeetingAssistant = ({
                     </div>
                     <FactGuardrailNotice notice={focusSnapshot.factGuardrailNotice} />
                     <PhaseOutputNotice notice={focusSnapshot.phaseOutputNotice} />
+
                     <MeetingMarkdownText
                       className={cn(
                         WRAP_TEXT_CLASS,
@@ -2229,6 +2286,8 @@ export const MeetingAssistant = ({
                     <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
                       <MessageSquareTextIcon className="h-3.5 w-3.5" />
                       Answer
+                      <AdvisePinButton locked={adviseDisplay.locked} updated={adviseDisplay.backgroundUpdated}
+                        onClick={() => meeting.toggleAdvisePin({ uiSurface: "normal-mode", displayTarget: adviseDisplay.target })} />
                       {transientPersonalStatusLabel ? (
                         <Badge
                           variant="outline"
@@ -2243,6 +2302,7 @@ export const MeetingAssistant = ({
                     </div>
                     <FactGuardrailNotice notice={focusSnapshot.factGuardrailNotice} />
                     <PhaseOutputNotice notice={focusSnapshot.phaseOutputNotice} />
+
                     <MeetingMarkdownText
                       className={cn(
                         WRAP_TEXT_CLASS,
@@ -2313,7 +2373,7 @@ export const MeetingAssistant = ({
                     )}
                     title="Regenerate with the current Meeting Assistant response settings"
                     onClick={() => {
-                      void meeting.regenerateSuggestion();
+                      void meeting.regenerateSuggestion({ uiSurface: "normal-mode", displayTarget: adviseDisplay.target });
                     }}
                     aria-disabled={isBusy || !hasMeetingContext}
                   >
@@ -2333,7 +2393,7 @@ export const MeetingAssistant = ({
                       )}
                       title={action.title}
                       onClick={() => {
-                        void meeting.applyResponseAction(action.id);
+                        void meeting.applyResponseAction(action.id, { uiSurface: "normal-mode", displayTarget: adviseDisplay.target });
                       }}
                       aria-disabled={
                         isBusy ||
@@ -2357,7 +2417,7 @@ export const MeetingAssistant = ({
                     title="Regenerate artifacts"
                     onClick={() => {
                       void meeting.applyResponseAction(
-                        "regenerate-artifacts"
+                        "regenerate-artifacts", { uiSurface: "normal-mode", displayTarget: adviseDisplay.target }
                       );
                     }}
                     aria-disabled={
@@ -2702,9 +2762,12 @@ export const MeetingAssistant = ({
 
               {meeting.settings.debugMode &&
               evaluationTarget.status !== "none" ? (
-                <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3">
+                <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3"
+                  onFocusCapture={() => setFrozenEvaluationTarget((previous) => previous ?? currentEvaluationTarget)}>
                   <div className="mb-2 text-xs font-semibold">
                     Attempt evaluation
+                    {frozenEvaluationTarget && frozenEvaluationTarget.traceId !== currentEvaluationTarget.traceId ?
+                      <Button size="sm" variant="ghost" onClick={() => setFrozenEvaluationTarget(undefined)}>Current target</Button> : null}
                   </div>
                   {evaluationTrace ? (
                     <div className="mb-3 space-y-1 border-b border-border/50 pb-2 text-[10px] text-muted-foreground">
@@ -3023,6 +3086,8 @@ export const MeetingAssistant = ({
 };
 
 const FocusModePanel = ({
+  advisePin,
+  onToggleAdvisePin,
   suggestionSections,
   codingArtifactCached,
   whiteboardArtifactCached,
@@ -3067,6 +3132,8 @@ const FocusModePanel = ({
   onBriefChange,
 }: {
   suggestionSections: MeetingFocusSnapshot["sections"];
+  advisePin?: MeetingFocusSnapshot["advisePin"];
+  onToggleAdvisePin: () => void;
   codingArtifactCached: boolean;
   whiteboardArtifactCached: boolean;
   whiteboardViewKey?: string;
@@ -3148,6 +3215,7 @@ const FocusModePanel = ({
               <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
                 <MessageSquareTextIcon className="h-3.5 w-3.5" />
                 Answer
+                <AdvisePinButton locked={advisePin?.locked ?? false} updated={advisePin?.backgroundUpdated} onClick={onToggleAdvisePin} />
                 {transientPersonalStatusLabel ? (
                   <Badge
                     variant="outline"
@@ -3160,6 +3228,7 @@ const FocusModePanel = ({
               </div>
               <FactGuardrailNotice notice={factGuardrailNotice} />
               <PhaseOutputNotice notice={phaseOutputNotice} />
+
               <MeetingMarkdownText
                 className={cn(
                   WRAP_TEXT_CLASS,

@@ -28,9 +28,12 @@ const object = (fields: Record<string, Reader>): Reader => (value) => {
 };
 const text = optional(string);
 const flag = optional(boolean);
+const displayTarget = object({ sessionId: string, suggestionId: text, traceId: text,
+  generationId: text, stableRevision: optional(number) });
 
 // Display-only whitelist. Never spread a runtime object across the window boundary.
 const readDisplay = object({
+  advisePin: optional(object({ locked: boolean, backgroundUpdated: boolean, target: displayTarget })),
   active: boolean,
   sections: object({
     chineseThinking: string, primaryAnswer: string, focusedQuestion: string,
