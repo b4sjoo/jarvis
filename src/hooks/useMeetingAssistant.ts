@@ -18877,6 +18877,9 @@ export function useMeetingAssistant() {
       const modelRoute = resolveRuntimeInferenceModelRouteFromSnapshot({
         snapshot: meetingModelProviderSnapshotRef.current,
         operationKind: "question-type-adjudication",
+        providerTier: sourceKind === "voice" && request.reviewScope === "full" && !forceRuntimeExecution
+          ? "fast"
+          : undefined,
         reason:
           effectiveQuestionTypeMode === "enforcement"
             ? "question-type-settlement-proposal"
@@ -19070,6 +19073,7 @@ export function useMeetingAssistant() {
         job: {
           operationId: lease.operationId,
           operationKind: "question-type-adjudication",
+          providerTier: modelRoute.providerTier,
           sessionId: contextState.sessionId,
           budgetKey: `${logicalQuestionUnit.id}:${logicalQuestionUnit.revision}`,
           budgetSlot: budgetSlotOverride ?? "type",

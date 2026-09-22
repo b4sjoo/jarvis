@@ -355,13 +355,15 @@ export function resolveTaxonomyAdjudicationModelRouteFromSnapshot({
 export function resolveRuntimeInferenceModelRouteFromSnapshot({
   snapshot,
   operationKind,
+  providerTier: providerTierOverride,
   reason = `runtime-inference-${operationKind}`,
 }: {
   snapshot: MeetingModelProviderSnapshot;
   operationKind: RuntimeInferenceOperationKind;
+  providerTier?: RuntimeInferenceProviderTier;
   reason?: string;
 }): RuntimeInferenceModelRouteResolution {
-  const providerTier = getRuntimeInferenceOperationDefinition(
+  const providerTier = providerTierOverride ?? getRuntimeInferenceOperationDefinition(
     operationKind
   ).providerTier;
   if (providerTier === "intelligent") {

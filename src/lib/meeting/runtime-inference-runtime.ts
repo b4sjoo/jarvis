@@ -2,6 +2,7 @@ import {
   getRuntimeInferenceOperationDefinition,
   type RuntimeInferenceLane,
   type RuntimeInferenceOperationKind,
+  type RuntimeInferenceProviderTier,
 } from "./runtime-inference.js";
 import type {
   RuntimeInferenceProviderAdmissionCoordinator,
@@ -16,6 +17,7 @@ export interface RuntimeInferenceRuntimeJob {
   budgetSlot: string;
   budgetReason: string;
   admissionLane?: RuntimeInferenceLane;
+  providerTier?: RuntimeInferenceProviderTier;
 }
 
 export interface RuntimeInferenceBudgetSnapshot {
@@ -223,7 +225,7 @@ export class RuntimeInferenceOperationRuntime<
       ? this.admissionCoordinator.run({
           operationId: active.job.operationId,
           lane: active.job.admissionLane ?? this.definition.lane,
-          providerTier: this.definition.providerTier,
+          providerTier: active.job.providerTier ?? this.definition.providerTier,
           signal: controller.signal,
           execute,
           onAdmitted: (receipt) => {
