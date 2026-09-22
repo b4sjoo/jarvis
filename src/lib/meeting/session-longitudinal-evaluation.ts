@@ -7,7 +7,11 @@ import {
   resolveCriticalMomentExpectedFacts,
   type CriticalMomentExpectedFacts,
 } from "./critical-moment-ground-truth.js";
-import type { HumanEvaluationProjectionV2 } from "./human-ground-truth-v2.js";
+import {
+  deriveHumanEvaluationProjectionV2,
+  type HumanEvaluationProjectionV2,
+} from "./human-ground-truth-v2.js";
+import { partitionHumanEvaluationProjectionsForPrecisionV2 } from "./human-evaluation-v2-consumers.js";
 import type { TaskRelationAdjudicationReflectionReport } from "./task-relation-adjudication-reflection.js";
 import type { TaskRelationAuthorityConvergenceReportV1 } from "./task-relation-authority-convergence.js";
 import {
@@ -227,12 +231,21 @@ export interface LongitudinalQuestionEvaluation {
   traceIds: string[];
   questionType?: string;
   correctedQuestionType?: string;
+  expectedQuestionType?: string;
   manualQuestionTypeCorrectionId?: string;
   relation?: string;
   correctedRelation?: string;
   classification?: {
     verdict?: string;
   };
+  answer?: { verdict?: string };
+  playbook?: { verdict?: string };
+  playbookPhase?: { verdict?: string };
+  memory?: { verdict?: string };
+  whiteboard?: { verdict?: string };
+  guardrail?: { verdict?: string };
+  diagramOverlay?: { verdict?: string };
+  manualPhaseTransition?: { verdict?: string };
   advisorIntent?: {
     verdict?: "ok" | "false-positive" | "false-negative";
     expectedAction?: "advise" | "append-context" | "buffer" | "ignore";
@@ -255,6 +268,7 @@ export interface LongitudinalSessionInput {
   manifest: LongitudinalSessionManifest;
   transcriptTurns: LongitudinalTranscriptTurn[];
   traceSummaries: LongitudinalTraceSummary[];
+  /** Legacy-only labels; V2 compatibility copies are excluded by the offline reader. */
   questionEvaluations: LongitudinalQuestionEvaluation[];
   criticalMomentCandidates?: LongitudinalCriticalMomentCandidate[];
   criticalMomentEvaluations?: LongitudinalCriticalMomentEvaluation[];
@@ -305,6 +319,19 @@ type TypeStage =
   | "runtime";
 
 export interface SessionLongitudinalEvaluationReport {
+  humanDenominatorDerivationVersion: "task152-longitudinal-human-v1";
+  humanEvidence: LongitudinalHumanEvidence[];
+  humanProjectionDiagnostics: Array<{
+    directory: string;
+    projectionId: string;
+    attemptId?: string;
+    traceIds: string[];
+    precisionEligible: boolean;
+    conflicts: HumanEvaluationProjectionV2["conflicts"];
+    unconfirmedEventIds: string[];
+    interventionOnlyEventIds: string[];
+  }>;
+  answerQuality: { humanLabeled: number; usefulRate: RateMetric };
   adjudicationEvidence: Array<{ directory: string; questionType?: import("./question-type-adjudication-outcome.js").QuestionTypeAdjudicationOutcomeReport; relation?: TaskRelationAdjudicationReflectionReport }>;
   version: 2;
   generatedAt: number;
@@ -316,6 +343,8 @@ export interface SessionLongitudinalEvaluationReport {
     build: LongitudinalSessionManifest["build"];
     productionTraceCount: number;
     labeledTraceCount: number;
+    observedProjectionCount: number;
+    observedTraceCount: number;
   }>;
   excludedSessions: Array<{
     sessionId: string;
@@ -338,6 +367,8 @@ export interface SessionLongitudinalEvaluationReport {
     interviewerTurnCount: number;
     buildProvenanceCoverage: RateMetric;
     labeledTraceCoverage: RateMetric;
+    observedProjectionCount: number;
+    observedTraceCoverage: RateMetric;
   };
   productOutcomes: {
     candidateCount: number;
@@ -531,6 +562,21 @@ interface JoinedTrace {
   session: LongitudinalSessionInput;
   trace: LongitudinalTraceSummary;
   evaluation?: LongitudinalQuestionEvaluation;
+  humanLabeled: boolean;
+}
+
+interface LongitudinalHumanEvidence {
+  directory: string;
+  traceId: string;
+  projectionId?: string;
+  legacyEvaluationId?: string;
+  eventIds: string[];
+  factKinds: string[];
+  humanLabeled: boolean;
+  expectedQuestionType?: string;
+  expectedRelation?: string;
+  expectedParentAction?: string;
+  answerVerdict?: string;
 }
 
 interface JoinedCriticalMoment {
@@ -566,13 +612,15 @@ export function buildSessionLongitudinalEvaluationReport(
   let interviewerTurnCount = 0;
   let labelsWithoutMatchingTrace = 0;
   let evaluationsWithoutCandidate = 0;
+  const humanEvidence: LongitudinalHumanEvidence[] = [];
+  const humanProjectionDiagnostics: SessionLongitudinalEvaluationReport["humanProjectionDiagnostics"] = [];
   const sessionRows = productInputs.map((session) => {
-    const evaluationsByTrace = indexLatestEvaluations(session.questionEvaluations);
+    const human = readLongitudinalHumanEvidence(session);
+    humanProjectionDiagnostics.push(...human.diagnostics);
+    const evaluationsByTrace = human.evaluationsByTrace;
     const traceIds = new Set(session.traceSummaries.map((trace) => trace.traceId));
-    labelsWithoutMatchingTrace += session.questionEvaluations.filter(
-      (evaluation) =>
-        evaluation.traceIds.length > 0 &&
-        !evaluation.traceIds.some((traceId) => traceIds.has(traceId))
+    labelsWithoutMatchingTrace += [...human.evidenceByTrace.values()].filter(
+      (evidence) => evidence.humanLabeled && !traceIds.has(evidence.traceId)
     ).length;
     interviewerTurnCount += session.transcriptTurns.filter(
       (turn) => turn.speaker === "them"
@@ -614,6 +662,7 @@ export function buildSessionLongitudinalEvaluationReport(
     }
     let productionTraceCount = 0;
     let labeledTraceCount = 0;
+    let observedTraceCount = 0;
     for (const trace of session.traceSummaries) {
       if (trace.syntheticValidation) {
         syntheticTraceCount += 1;
@@ -621,8 +670,12 @@ export function buildSessionLongitudinalEvaluationReport(
       }
       productionTraceCount += 1;
       const evaluation = evaluationsByTrace.get(trace.traceId);
-      if (evaluation) labeledTraceCount += 1;
-      production.push({ session, trace, evaluation });
+      const evidence = human.evidenceByTrace.get(trace.traceId);
+      const humanLabeled = evidence?.humanLabeled ?? false;
+      if (humanLabeled) labeledTraceCount += 1;
+      if (human.observedTraceIds.has(trace.traceId)) observedTraceCount += 1;
+      if (evidence) humanEvidence.push(evidence);
+      production.push({ session, trace, evaluation, humanLabeled });
     }
     return {
       sessionId:
@@ -635,6 +688,8 @@ export function buildSessionLongitudinalEvaluationReport(
       build: session.manifest.build,
       productionTraceCount,
       labeledTraceCount,
+      observedProjectionCount: human.observedProjectionCount,
+      observedTraceCount,
     };
   });
 
@@ -913,6 +968,16 @@ export function buildSessionLongitudinalEvaluationReport(
   }
 
   return {
+    humanDenominatorDerivationVersion: "task152-longitudinal-human-v1",
+    humanEvidence,
+    humanProjectionDiagnostics,
+    answerQuality: {
+      humanLabeled: production.filter(({ evaluation }) => hasHumanVerdict(evaluation?.answer)).length,
+      usefulRate: rate(
+        production.filter(({ evaluation }) => evaluation?.answer?.verdict === "ok").length,
+        production.filter(({ evaluation }) => hasHumanVerdict(evaluation?.answer)).length
+      ),
+    },
     version: 2,
     generatedAt: Date.now(),
     adjudicationEvidence: inputs.map(input => ({ directory: input.directory, questionType: input.questionTypeAdjudicationReport, relation: input.taskRelationAdjudicationReport })),
@@ -947,9 +1012,11 @@ export function buildSessionLongitudinalEvaluationReport(
         sessionRows.length
       ),
       labeledTraceCoverage: rate(
-        production.filter(({ evaluation }) => Boolean(evaluation)).length,
+        production.filter(({ humanLabeled }) => humanLabeled).length,
         production.length
       ),
+      observedProjectionCount: sum(sessionRows.map((session) => session.observedProjectionCount)),
+      observedTraceCoverage: rate(sum(sessionRows.map((session) => session.observedTraceCount)), production.length),
     },
     productOutcomes,
     typeFunnel: {
@@ -1371,7 +1438,7 @@ export function buildSessionLongitudinalEvaluationReport(
     },
     evidenceGaps: {
       unlabeledProductionTraces: production.filter(
-        ({ evaluation }) => !evaluation
+        ({ humanLabeled }) => !humanLabeled
       ).length,
       tracesWithoutBuildProvenance,
       tracesWithoutIntentCommitEvidence: intentObserved.filter(
@@ -1788,7 +1855,13 @@ export function renderSessionLongitudinalEvaluationMarkdown(
     `Excluded scripted sessions / traces: ${report.cohort.excludedScriptedSessionCount} / ${report.cohort.excludedScriptedTraceCount}`,
     `Incomplete evidence sessions: ${report.evidenceScope.incompleteSessionCount}`,
     `Production traces: ${report.cohort.productionTraceCount}`,
+    `Human denominator derivation: ${report.humanDenominatorDerivationVersion}`,
+    `System-observed V2 projections: ${report.cohort.observedProjectionCount}`,
+    `System-observed trace coverage: ${formatRate(report.cohort.observedTraceCoverage)}`,
     `Human-labeled trace coverage: ${formatRate(report.cohort.labeledTraceCoverage)}`,
+    "Human coverage requires effective confirmed semantic facts (or explicit legacy labels), counted once per trace. Observed-only projections, suggestions and intervention-only events do not supply truth.",
+    "Earlier reports counted evaluation objects as human coverage and are not directly comparable. Each semantic metric uses only its own labeled field; missing truth remains N/A. JSON humanEvidence records the fact event IDs and expected fields.",
+    `Human Answer quality labels: ${report.answerQuality.humanLabeled}; useful share: ${formatRate(report.answerQuality.usefulRate)} (human quality judgment, not model accuracy)`,
     "",
     "## Product Outcomes",
     "",
@@ -1963,6 +2036,7 @@ function expectedQuestionType(
   evaluation: LongitudinalQuestionEvaluation | undefined
 ) {
   if (!evaluation) return undefined;
+  if (evaluation.expectedQuestionType) return normalizeCanonicalQuestionType(evaluation.expectedQuestionType);
   const detected = normalizeCanonicalQuestionType(evaluation.questionType);
   const corrected = normalizeCanonicalQuestionType(
     evaluation.correctedQuestionType
@@ -2000,6 +2074,104 @@ function indexLatestEvaluations(
     }
   }
   return byTrace;
+}
+
+function hasHumanVerdict(block: { verdict?: string } | undefined) {
+  return ["ok", "partial", "wrong", "missing", "forbidden"].includes(block?.verdict ?? "");
+}
+
+function hasLegacySemanticLabel(evaluation: LongitudinalQuestionEvaluation) {
+  return Boolean(
+    expectedQuestionType(evaluation) || evaluation.expectedRelation ||
+    evaluation.expectedParentAction || evaluation.expectedContextTurnIds?.length ||
+    evaluation.advisorIntent?.expectedAction ||
+    [evaluation.classification, evaluation.answer, evaluation.playbook,
+      evaluation.playbookPhase, evaluation.memory, evaluation.whiteboard,
+      evaluation.guardrail, evaluation.diagramOverlay, evaluation.manualPhaseTransition].some(hasHumanVerdict)
+  );
+}
+
+function readLongitudinalHumanEvidence(session: LongitudinalSessionInput) {
+  const evaluationsByTrace = indexLatestEvaluations(session.questionEvaluations);
+  const evidenceByTrace = new Map<string, LongitudinalHumanEvidence>();
+  const observedTraceIds = new Set<string>();
+  const latest = new Map<string, HumanEvaluationProjectionV2>();
+  for (const projection of session.humanEvaluationProjectionsV2 ?? []) {
+    const previous = latest.get(projection.projectionId);
+    if (!previous || projection.computedAt >= previous.computedAt) latest.set(projection.projectionId, projection);
+  }
+  const projections = [...latest.values()];
+  for (const [traceId, evaluation] of evaluationsByTrace) {
+    evidenceByTrace.set(traceId, {
+      directory: session.directory, traceId, legacyEvaluationId: evaluation.id,
+      eventIds: [], factKinds: [], humanLabeled: hasLegacySemanticLabel(evaluation),
+      expectedQuestionType: expectedQuestionType(evaluation),
+      expectedRelation: evaluation.expectedRelation, expectedParentAction: evaluation.expectedParentAction,
+      answerVerdict: hasHumanVerdict(evaluation.answer) ? evaluation.answer?.verdict : undefined,
+    });
+  }
+  for (const projection of projections) {
+    if (projection.observed?.traceId) observedTraceIds.add(projection.observed.traceId);
+    // V2 owns these subjects even when truth is missing, conflicted or ineligible.
+    // A compatibility snapshot must not restore an obsolete human field.
+    for (const traceId of projection.subject.traceIds) {
+      evaluationsByTrace.delete(traceId);
+      evidenceByTrace.delete(traceId);
+    }
+  }
+  const { eligible } = partitionHumanEvaluationProjectionsForPrecisionV2(projections);
+  const diagnostics = projections.map((projection) => ({
+    directory: session.directory, projectionId: projection.projectionId,
+    attemptId: projection.subject.attemptId, traceIds: projection.subject.traceIds,
+    precisionEligible: eligible.includes(projection), conflicts: projection.conflicts,
+    unconfirmedEventIds: Object.values(projection.activeFacts).filter((event) => event.confirmation !== "confirmed").map((event) => event.eventId),
+    interventionOnlyEventIds: projection.interventionOnlyEventIds,
+  }));
+  for (const projection of eligible.sort((a, b) => a.computedAt - b.computedAt)) {
+    const traceIds = projection.subject.traceIds.filter((traceId) =>
+      (!projection.subject.attemptId || projection.subject.attemptId === traceId) &&
+      (!projection.observed?.traceId || projection.observed.traceId === traceId)
+    );
+    // Arbitration and provenance remain in the V2 owner. Only confirmed active
+    // facts can enter this report; suggestions never acquire legacy authority.
+    const effective = deriveHumanEvaluationProjectionV2({
+      sessionId: projection.sessionId, subject: projection.subject, observed: projection.observed,
+      events: Object.values(projection.activeFacts).filter((event) =>
+        event.confirmation === "confirmed" &&
+        !projection.conflicts.some((conflict) => conflict.factKind === event.fact.kind) &&
+        (!event.provenance.sourceTraceId || traceIds.includes(event.provenance.sourceTraceId))
+      ),
+      now: projection.computedAt,
+    });
+    const facts = effective.activeFacts;
+    const settlement = facts["expected-task-settlement"]?.fact;
+    const type = facts["expected-question-type"]?.fact;
+    const runtime = facts["expected-runtime-action"]?.fact;
+    const answer = facts["answer-quality"]?.fact;
+    const evaluation: LongitudinalQuestionEvaluation = {
+      id: projection.projectionId, questionId: projection.subject.questionId ?? projection.projectionId,
+      traceIds, updatedAt: projection.computedAt,
+      expectedQuestionType: settlement?.kind === "expected-task-settlement" ? settlement.expectedQuestionType :
+        type?.kind === "expected-question-type" ? type.expectedQuestionType : undefined,
+      expectedRelation: settlement?.kind === "expected-task-settlement" ? settlement.expectedRelation : undefined,
+      expectedParentAction: settlement?.kind === "expected-task-settlement" ? settlement.expectedParentAction : undefined,
+      advisorIntent: runtime?.kind === "expected-runtime-action" ? { expectedAction: runtime.expectedAction } : undefined,
+      answer: answer?.kind === "answer-quality" ? { verdict: { useful: "ok", partial: "partial", wrong: "wrong", "no-answer": "missing" }[answer.outcome] } : undefined,
+      expectedContextTurnIds: answer?.kind === "answer-quality" ? answer.expectedContextTurnIds : undefined,
+    };
+    for (const traceId of traceIds) {
+      evaluationsByTrace.set(traceId, evaluation);
+      evidenceByTrace.set(traceId, {
+        directory: session.directory, traceId, projectionId: projection.projectionId,
+        eventIds: Object.values(facts).map((event) => event.eventId), factKinds: Object.keys(facts),
+        humanLabeled: Object.keys(facts).length > 0,
+        expectedQuestionType: evaluation.expectedQuestionType, expectedRelation: evaluation.expectedRelation,
+        expectedParentAction: evaluation.expectedParentAction, answerVerdict: evaluation.answer?.verdict,
+      });
+    }
+  }
+  return { evaluationsByTrace, evidenceByTrace, observedTraceIds, diagnostics,
+    observedProjectionCount: projections.filter((projection) => projection.observed).length };
 }
 
 function buildConfusion(

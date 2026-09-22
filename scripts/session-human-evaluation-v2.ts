@@ -93,7 +93,11 @@ export async function loadSessionHumanEvaluationConsumerView(
   return {
     ...consumerView,
     legacyEvaluations: v1Payload.evaluations ?? [],
+    legacyOnlyEvaluations: (v1Payload.evaluations ?? []).filter((evaluation) =>
+      consumerView.report.unmatchedV1EvaluationIds.includes(evaluation.id)
+    ),
     projections: precisionPartition.eligible,
+    allProjections: projections,
     materialization,
     evaluationProvenance,
   };

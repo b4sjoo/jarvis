@@ -207,12 +207,12 @@ async function readSession(
     transcriptTurns,
     traceSummaries: Array.from(compactByTrace.values()),
     questionEvaluations:
-      evaluationView.evaluations as LongitudinalQuestionEvaluation[],
+      evaluationView.legacyOnlyEvaluations as LongitudinalQuestionEvaluation[],
     criticalMomentCandidates:
       criticalMomentCandidatesPayload.candidates ?? [],
     criticalMomentEvaluations:
       criticalMomentEvaluationsPayload.evaluations ?? [],
-    humanEvaluationProjectionsV2: evaluationView.projections,
+    humanEvaluationProjectionsV2: evaluationView.allProjections,
     taskRelationAdjudicationReport,
     questionTypeAdjudicationReport,
     taskRelationConvergenceReport,
