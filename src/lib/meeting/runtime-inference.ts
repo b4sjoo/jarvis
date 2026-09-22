@@ -218,7 +218,7 @@ const DEFINITIONS: Record<
     providerTier: "fast",
     lane: "background",
     timeoutMs: 1_500,
-    maxOutputTokens: 256,
+    maxOutputTokens: 512,
     quiescenceMs: 0,
     maxStartsPerBudgetSlot: 1,
   },

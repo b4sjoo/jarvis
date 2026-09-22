@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  ANSWER_RESOLUTION_PROMPT_VERSION,
   buildAnswerRecoveryAdjudicationPrompts,
   buildVisualEvidenceCheckRequest,
   type AnswerRecoveryAdjudicationRequest,
@@ -181,7 +182,7 @@ test("keeps envelope fields out of every runtime LLM prompt", () => {
   };
   const answerRecovery: AnswerRecoveryAdjudicationRequest = {
     schemaVersion: 2,
-    promptVersion: "answer-resolution-adjudication-v2-request-specific",
+    promptVersion: ANSWER_RESOLUTION_PROMPT_VERSION,
     operationKind: "answer-resolution",
     logicalQuestionUnitId: "question-current",
     logicalQuestionUnitRevision: 2,

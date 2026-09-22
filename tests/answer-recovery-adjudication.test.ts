@@ -36,9 +36,10 @@ test("AR1/AR2 exact long quotes remain evidence without weakening other operatio
 test("AR3 prompt distinguishes the requested object from a useful hypothetical replacement", () => {
   const request = buildAnswerRecoveryAdjudicationRequest({ operationKind: "answer-resolution", logicalQuestionUnitId: "q", logicalQuestionUnitRevision: 1, answerRevision: 1, questionText: question, answerText: answer })!;
   const prompt = buildAnswerRecoveryAdjudicationPrompts(request);
-  assert.match(prompt.systemPrompt, /exact requested object and deliverable/);
-  assert.match(prompt.systemPrompt, /illustrative replacement/);
-  assert.match(prompt.systemPrompt, /whole answer/);
+  assert.match(prompt.systemPrompt, /requested object and deliverable/);
+  assert.match(prompt.systemPrompt, /an assumed substitute does not resolve the request/);
+  assert.match(prompt.systemPrompt, /WHOLE answer/);
+  assert.match(prompt.systemPrompt, /already sufficient answer is optional/);
   assert.deepEqual(JSON.parse(prompt.userMessage), { questionText: question, answerText: answer });
 });
 
@@ -96,7 +97,7 @@ test("keeps post-answer resolution separate from question-only visual evidence",
   assert.notEqual(resolution.sourceHash, evidence.sourceHash);
   const resolutionPrompt = buildAnswerRecoveryAdjudicationPrompts(resolution);
   const evidencePrompt = buildAnswerRecoveryAdjudicationPrompts(evidence);
-  assert.match(resolutionPrompt.systemPrompt, /resolves the substantive request/);
+  assert.match(resolutionPrompt.systemPrompt, /resolves the request in questionText/);
   assert.doesNotMatch(resolutionPrompt.systemPrompt, /visual-required/);
   assert.match(evidencePrompt.systemPrompt, /already-existing visible artifact/);
   assert.doesNotMatch(evidencePrompt.userMessage, /don.t have those lines/i);
@@ -443,4 +444,40 @@ test("lease rejects stale answer and correction revisions", () => {
     }).authorized,
     false
   );
+});
+
+test("RC3 all seven decisions retain strict schema, count, quote and output limits", () => {
+  const resolution = buildAnswerRecoveryAdjudicationRequest({ operationKind: "answer-resolution", logicalQuestionUnitId: "q", logicalQuestionUnitRevision: 1, answerRevision: 1, questionText: question, answerText: answer })!;
+  const visual = buildVisualEvidenceCheckRequest({ logicalQuestionUnitId: "q", logicalQuestionUnitRevision: 1, questionSourceHash: "source", questionText: question, screenEvidenceSummary: "Lines 46 through 49 are visible." })!;
+  for (const request of [resolution, visual]) {
+    const field = request.operationKind === "answer-resolution" ? "answerEvidenceSpans" : "visualEvidenceSpans";
+    const quote = field === "answerEvidenceSpans" ? "I don't have those lines visible" : "Lines 46 through 49";
+    const decisions = field === "answerEvidenceSpans" ? ["resolved", "unresolved", "unclear"] : ["visual-sufficient", "visual-missing", "not-visual", "unclear"];
+    for (const decision of decisions) {
+      const output = {
+        schemaVersion: 2, decision,
+        questionEvidenceSpans: decision === "unclear" ? [] : ["lines 46 through 49"],
+        [field]: decision === "resolved" || decision === "unresolved" || decision === "visual-sufficient" ? [quote] : [],
+        ...(decision === "unclear" ? { ambiguityReason: "Insufficient evidence." } : {}),
+      };
+      assert.equal(parseAnswerRecoveryAdjudicationOutput(JSON.stringify(output), request).ok, true, decision);
+      for (const bad of [
+        { ...output, questionText: "echo" },
+        { ...output, schemaVersion: 3 },
+        { ...output, questionEvidenceSpans: ["lines 46 through 49", "lines 46 through 49"] },
+        { ...output, [field]: [quote, quote] },
+        { ...output, [field]: "not an array" },
+        { ...output, questionEvidenceSpans: ["not a source quote"] },
+        { ...output, [field]: ["not a source quote"] },
+        { ...output, ambiguityReason: decision === "unclear" ? "" : "forbidden" },
+      ]) assert.equal(parseAnswerRecoveryAdjudicationOutput(JSON.stringify(bad), request).ok, false, decision);
+      assert.equal(parseAnswerRecoveryAdjudicationOutput(JSON.stringify(output).slice(0, -1), request).ok, false);
+      assert.equal(parseAnswerRecoveryAdjudicationOutput(JSON.stringify({ ...output, [field]: ["x".repeat(2049)] }), request).ok, false);
+    }
+  }
+  for (const length of [160, 161]) {
+    const quote = "x".repeat(length);
+    const request = { ...visual, questionText: quote, screenEvidenceSummary: quote };
+    assert.equal(parseAnswerRecoveryAdjudicationOutput(JSON.stringify({ schemaVersion: 2, decision: "visual-sufficient", questionEvidenceSpans: [quote], visualEvidenceSpans: [quote] }), request).ok, length === 160);
+  }
 });
