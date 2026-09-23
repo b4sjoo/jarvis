@@ -9,7 +9,7 @@ import ts from "typescript";
 const root = path.resolve(process.env.JARVIS_TEST_OUTPUT_DIR ?? ".tmp-tests");
 const modules = {};
 for (const name of ["manual-advise-display", "unpublished-artifact", "meeting-answer", "meeting-answer-display",
-  "stable-answer", "response-action-target", "artifact-regeneration", "human-evaluation", "manual-runtime-action", "current-question-settlement"]) {
+  "stable-answer", "response-action-target", "artifact-regeneration", "human-evaluation", "manual-runtime-action", "current-question-settlement", "staged-answer-delivery"]) {
   Object.assign(modules, await import(pathToFileURL(path.join(root, `src/lib/meeting/${name}.js`))));
 }
 const source = ts.createSourceFile("hook.ts", readFileSync("src/hooks/useMeetingAssistant.ts", "utf8"), ts.ScriptTarget.Latest, true);
@@ -23,6 +23,78 @@ function evaluate(text, context) {
   return vm.runInContext(ts.transpileModule(text, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText, context);
 }
 function callback(name, context) { return evaluate(`(${declaration(name).initializer.arguments[0].getText(source)})`, context); }
+
+function screenStreamHarness({ pinPrevious = false, revokeDuringStream = false } = {}) {
+  const capture = declaration("captureScreenContext").initializer.arguments[0];
+  const local = name => find(capture, n => ts.isVariableDeclaration(n) && n.name.getText(source) === name);
+  const solve = find(capture, n => ts.isCallExpression(n) && n.expression.getText(source) === "solveScreenAnchoredTask");
+  const partial = solve.arguments[0].properties.find(n => n.name?.getText(source) === "onPartialContent").initializer;
+  const display = new modules.ManualAdviseDisplay();
+  const ref = {current:null}, controller = {}, abortRef = {current:controller};
+  let state = {partialSuggestion:""}, ids = 0, authorized = true;
+  const metadata = [], revoked = [];
+  const previous = {target:{sessionId:"session",traceId:"old",generationId:"old",suggestionId:"old",stableRevision:1},
+    stable:{revision:1},streaming:false,sections:modules.buildMeetingAnswerDisplayModel({content:"Answer: previous"})};
+  if (pinPrevious) { display.select(previous,previous); display.toggle(); }
+  const env = {...modules,Date,structuredClone, trace:{id:"screen"}, screenGenerationLease:{id:"screen-lease"},
+    displayedStreamRef:ref, manualAdviseDisplayRef:{current:display}, stableAnswerRevisionRef:{current:previous.stable},
+    screenAnalysisAbortRef:abortRef, analysisController:controller, boundVisualRecoveryFact:undefined,
+    screenFactAnchorDecision:{}, holdScreenPartialForFactAnchor:false, screenModelCompletedAt:undefined,
+    readScreenAuthorization:()=>({authorized}),formatRuntimeCommitAuthorizationForTrace:()=>({}),
+    projectFactAnchorStreamingPartial:({content})=>({visibleContent:content}),formatModelGenerationTimingForTrace:()=>({}),
+    traceStoreRef:{current:{updateMetadata:(_id,m)=>metadata.push(m)}},setState:update=>{state=update(state);},
+    createMeetingId:kind=>`${kind}-${++ids}`,
+    revokeIncompleteAdvisePin:(id,reason)=>{revoked.push({id,reason});display.revokeIncomplete(id);},
+  };
+  const context = vm.createContext(env);
+  env.driveStream = async onPartial => {
+    onPartial("Answer: screen partial");
+    const stream = {target:{sessionId:"session",traceId:"screen",generationId:ref.current.generationId},
+      stable:null,streaming:true,sections:modules.buildMeetingAnswerDisplayModel({content:state.partialSuggestion})};
+    display.select(stream,previous);
+    if (!pinPrevious) display.toggle();
+    if (revokeDuringStream) authorized = false;
+    onPartial("Answer: screen final");
+    display.select({...stream,sections:modules.buildMeetingAnswerDisplayModel({content:state.partialSuggestion})},previous);
+    return "Answer: screen final";
+  };
+  // Retain production declaration order and the entire production partial/clear
+  // callbacks. Only provider IO and unrelated parse/commit work are omitted.
+  const nodes = ["requestId","screenStagedChunkCount","screenStagedFirstChunkAt","screenStagedFirstVisiblePartialAt",
+    "screenModelRequestStartedAt","screenModelFirstContentAt","screenStagedVisible","clearScreenStagedPartial"]
+    .map(name=>local(name).parent.parent);
+  const model = local("screenTaskContent").parent.parent;
+  nodes.push(model);nodes.sort((a,b)=>a.pos-b.pos);
+  const body = nodes.map(n=>n===model ? `let screenTaskContent = await driveStream(${partial.getText(source)});` : n.getText(source)).join("\n");
+  return {display,ref,metadata,revoked,get state(){return state;},get ids(){return ids;},
+    async run(){return evaluate(`(async()=>{${body}\nreturn {id:requestId,content:screenTaskContent,clear:clearScreenStagedPartial};})()`,context);}};
+}
+
+test("Screen stream creates one result ID before the real partial callback, then completes its pin",async()=>{
+  const h=screenStreamHarness(); const result=await h.run();
+  assert.equal(h.ids,1);assert.equal(result.id,h.ref.current.generationId);
+  assert.equal(h.display.current.sections.primaryAnswer,"screen final");
+  const completed={...h.display.current,streaming:false,stable:{revision:2},
+    target:{...h.display.current.target,suggestionId:result.id,stableRevision:2}};
+  h.display.complete(completed);h.display.select(completed,completed);
+  assert.equal(h.display.current.streaming,false);assert.equal(h.display.locked,true);
+  assert.equal(h.display.current.target.suggestionId,result.id);
+});
+
+test("Screen stream behind an existing pin does not replace that display or mark its partial visible",async()=>{
+  const h=screenStreamHarness({pinPrevious:true});const result=await h.run();
+  assert.equal(result.id,h.ref.current.generationId);assert.equal(h.display.current.target.traceId,"old");
+  assert.equal(h.display.current.sections.primaryAnswer,"previous");
+  assert.equal(h.metadata.some(m=>m.stagedAnswerDeliveryFirstVisiblePartialAt!==undefined),false);
+});
+
+test("Screen source revocation stops later partial; existing clear callback revokes its incomplete pin",async()=>{
+  const h=screenStreamHarness({revokeDuringStream:true});const result=await h.run();
+  assert.equal(h.state.partialSuggestion,"Answer: screen partial");
+  result.clear("stale-post-model");
+  assert.equal(h.state.partialSuggestion,"");assert.equal(h.display.locked,false);
+  assert.equal(h.revoked[0].reason,"stale-post-model");
+});
 
 function fixture() {
   // Reuse the characterized source-owner fixture, not a second authority implementation.

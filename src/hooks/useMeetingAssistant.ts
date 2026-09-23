@@ -29048,6 +29048,7 @@ export function useMeetingAssistant() {
             screenGenerationLease.baseVisibleAnswerRevision + 1,
           generationLeaseId: screenGenerationLease.id,
         });
+        const requestId = createMeetingId("screen_task");
         let screenStagedChunkCount = 0;
         let screenStagedFirstChunkAt: number | undefined;
         let screenStagedFirstVisiblePartialAt: number | undefined;
@@ -29699,7 +29700,6 @@ export function useMeetingAssistant() {
         const basedOnTurnIds = updatedContextState.transcriptTurns
           .slice(-6)
           .map((turn) => turn.id);
-        const requestId = createMeetingId("screen_task");
         traceStoreRef.current.updateMetadata(
           trace.id,
           {
