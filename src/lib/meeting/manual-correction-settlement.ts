@@ -47,7 +47,8 @@ export function authorizeManualCorrectionLifecycle(input: {
   );
   const relationSupportsCorrectionRetype =
     input.settlement.relation === "new-parent" ||
-    input.settlement.relation === "followup-parent";
+    input.settlement.relation === "followup-parent" ||
+    input.settlement.relation === "resume-parent";
   if (
     input.scope !== "same-question-retype" ||
     !relationSupportsCorrectionRetype ||

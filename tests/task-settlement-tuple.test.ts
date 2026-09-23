@@ -80,3 +80,12 @@ test("A1: none accepts a confirmed preserve without recommending it away", () =>
     assert.equal(tuple.recommendedParentAction, parentAction);
   }
 });
+
+test("A2 shared tuple: resume-parent accepts a receipt-backed retype", () => {
+  assert.equal(evaluateTaskSettlementTupleCompatibilityV2({ relation: "resume-parent", parentAction: "retype" }).compatible, true);
+  assert.equal(projectObservedParentAction({ relation: "resume-parent", currentOnly: true,
+    lifecycleCommand: "resume-parent", committedLifecycleEvidence: {
+      command: "replace-parent", authority: "source-transition-durable-receipt",
+      parentBeforeId: "parent-1", parentAfterId: "parent-1", parentBeforeType: "coding", parentAfterType: "field-knowledge",
+    } }), "retype");
+});

@@ -1010,6 +1010,61 @@ test("retypes a related parent when the corrected type cannot be its child", () 
   assert.equal(transition.parent.whiteboardArtifact, undefined);
 });
 
+for (const source of ["voice", "screen"] as const) {
+  test(`retypes an already resumed parent mainline for ${source}`, () => {
+    const task = makeActiveTask({ questionType: "ai-ml-system-design" });
+    const decision = decideManualQuestionTypeCorrection(task, "general-system-design");
+    const scope = decideManualCorrectionScope({
+      task,
+      decision,
+      lineage: makeLineage("turn_resume"),
+      latestQuestionText: "Back to the RAG architecture and serving path.",
+      currentQuestionRelation: "resume-parent",
+      currentQuestionSource: source,
+    });
+    assert.equal(scope.currentQuestionIsParentOrigin, false);
+    assert.equal(scope.currentQuestionIsChild, false);
+    assert.equal(scope.scope, "same-question-retype");
+    assert.equal(scope.reason, "related-corrected-type-reclassifies-active-parent");
+  });
+}
+
+test("authorizes a same-parent retype without rewriting historical resume topology", () => {
+  const currentQuestion = createProvisionalCurrentQuestion({
+    logicalQuestionUnit: makeLogicalQuestion("lqu-resume", "turn-resume", "Back to the RAG architecture."),
+    sourceKind: "voice",
+  });
+  const { settlement } = settleManualQuestionTypeCorrection({
+    operationId: "correction-resume",
+    currentQuestion,
+    correctedType: "general-system-design",
+    activeParentId: "parent-rag",
+    activeParentRevision: 4,
+    manualCorrectionRevision: 1,
+    revisionStableRelation: "resume-parent",
+  });
+  const authorized = authorizeManualCorrectionLifecycle({
+    settlement,
+    scope: "same-question-retype",
+    activeParentId: "parent-rag",
+    activeParentType: "ai-ml-system-design",
+  });
+  assert.equal(settlement.parentMutationAuthorized, false);
+  assert.equal(authorized.parentMutationAuthorized, true);
+  assert.equal(authorized.relation, "resume-parent");
+  assert.equal(authorized.sourceHash, settlement.sourceHash);
+  assert.equal(authorized.manualCorrectionRevision, 1);
+  assert.equal(authorized.activeParentRevision, 4);
+  for (const scope of ["current-only", "resume-parent", "child-retype"] as const) {
+    assert.equal(authorizeManualCorrectionLifecycle({
+      settlement, scope, activeParentId: "parent-rag", activeParentType: "ai-ml-system-design",
+    }), settlement);
+  }
+  assert.equal(authorizeManualCorrectionLifecycle({
+    settlement, scope: "same-question-retype", activeParentId: "different-parent", activeParentType: "ai-ml-system-design",
+  }), settlement);
+});
+
 test("uses an authorized new-parent settlement instead of retyping a stale parent", () => {
   const task = makeActiveTask({ questionType: "coding" });
   task.parent.topic = "Implement a multiset data structure";

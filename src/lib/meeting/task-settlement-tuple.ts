@@ -180,6 +180,9 @@ function allowedParentActionsForRelation(
   if (relation === "none") {
     return ["none", "preserve"];
   }
+  if (relation === "resume-parent") {
+    return ["resume", "retype"];
+  }
   return [recommendedParentActionForRelation(relation)];
 }
 

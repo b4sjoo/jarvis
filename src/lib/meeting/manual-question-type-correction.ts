@@ -465,7 +465,26 @@ export function decideManualCorrectionScope({
     currentQuestionIsChild,
   };
 
-  if (currentQuestionRelation === "resume-parent") {
+  // A resumed mainline keeps its historical relation after the child exits.
+  // Resolve an eligible related retype before interpreting that relation as a command.
+  const correctedTypeReclassifiesRelatedParent = Boolean(
+    task &&
+      !task.child &&
+      decision.target === "parent" &&
+      decision.correctedType !== decision.parentType &&
+      isParentCanonicalQuestionType(decision.correctedType) &&
+      !canParentQuestionTypeOwnChild(
+        decision.parentType,
+        decision.correctedType
+      ) &&
+      (currentQuestionRelation === "followup-parent" ||
+        currentQuestionRelation === "resume-parent")
+  );
+
+  if (
+    currentQuestionRelation === "resume-parent" &&
+    !correctedTypeReclassifiesRelatedParent
+  ) {
     return {
       ...base,
       scope: "resume-parent",
@@ -508,18 +527,6 @@ export function decideManualCorrectionScope({
     };
   }
 
-  const correctedTypeReclassifiesRelatedParent = Boolean(
-    task &&
-      !task.child &&
-      decision.target === "parent" &&
-      decision.correctedType !== decision.parentType &&
-      isParentCanonicalQuestionType(decision.correctedType) &&
-      !canParentQuestionTypeOwnChild(
-        decision.parentType,
-        decision.correctedType
-      ) &&
-      currentQuestionRelation === "followup-parent"
-  );
   if (correctedTypeReclassifiesRelatedParent) {
     return {
       ...base,
