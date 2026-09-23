@@ -153,7 +153,7 @@ import { createMeetingFocusPublisher } from "@/lib/meeting/focus-window-protocol
 import { FactGuardrailNotice } from "./fact-guardrail-notice";
 import { PhaseOutputNotice } from "./phase-output-notice";
 import { AdvisePinButton } from "./advise-pin-button";
-import { createMeetingFocusDisplayModel } from "@/lib/meeting/focus-display";
+import { createMeetingFocusDisplayModel, projectSelectedFocusTask } from "@/lib/meeting/focus-display";
 import { formatChineseThinkingText } from "@/lib/meeting/meeting-display-text";
 import { MeetingMarkdownText } from "./meeting-markdown-text";
 import {
@@ -929,31 +929,50 @@ export const MeetingAssistant = ({
     () => getEditableInterviewSessionBrief(meeting.interviewSessionBrief),
     [meeting.interviewSessionBrief]
   );
-  const currentQuestionTrace = meeting.latestSuggestion?.sourceTraceId
+  const currentQuestionSuggestion = adviseDisplay.locked
+    ? adviseDisplay.stable?.suggestion : meeting.latestSuggestion;
+  const currentQuestionTraceId = adviseDisplay.locked
+    ? adviseDisplay.target.traceId : currentQuestionSuggestion?.sourceTraceId;
+  const currentQuestionTrace = currentQuestionTraceId
     ? meeting.traces.find(
-        (trace) => trace.id === meeting.latestSuggestion?.sourceTraceId
+        (trace) => trace.id === currentQuestionTraceId
       )
     : undefined;
-  const currentQuestionTypeObservation = projectQuestionTypeObservation({
+  const selectedTaskDisplay = adviseDisplay.locked
+    ? projectSelectedFocusTask({ stable: adviseDisplay.stable, trace: currentQuestionTrace, activeTask: meeting.activeMeetingTask })
+    : undefined;
+  const currentQuestionTraceObservation = projectQuestionTypeObservation({
     metadata: currentQuestionTrace?.metadata,
     fallbackCurrentQuestionType:
-      meeting.latestSuggestion?.questionType ??
-      meeting.activeMeetingTask?.child?.questionType ??
-      activeTaskKind,
-    fallbackParentType: activeTaskKind,
-    fallbackParentId: meeting.activeMeetingTask?.parent.id,
+      currentQuestionSuggestion?.questionType ??
+      (adviseDisplay.locked ? undefined : meeting.activeMeetingTask?.child?.questionType ?? activeTaskKind),
+    fallbackParentType: adviseDisplay.locked ? undefined : activeTaskKind,
+    fallbackParentId: adviseDisplay.locked ? undefined : meeting.activeMeetingTask?.parent.id,
   });
+  const currentQuestionTypeObservation = selectedTaskDisplay?.task ? {
+    ...currentQuestionTraceObservation,
+    observedCurrentQuestionType: selectedTaskDisplay.currentOwnerQuestionType ??
+      currentQuestionTraceObservation.observedCurrentQuestionType,
+    observedParentType: normalizeCanonicalQuestionType(selectedTaskDisplay.task.questionType),
+    observedParentId: selectedTaskDisplay.task.id,
+  } : currentQuestionTraceObservation;
+  const displayHasCorrectableQuestion = adviseDisplay.locked
+    ? Boolean(adviseDisplay.target.logicalQuestionUnitId) : hasCorrectableQuestion;
+  const currentQuestionId = adviseDisplay.locked
+    ? readStringMetadata(currentQuestionTrace?.metadata, "questionInstanceId") ??
+      currentQuestionSuggestion?.questionLineage?.questionInstanceId
+    : meeting.currentQuestionLineage?.questionInstanceId;
   const effectiveQuestionType =
     currentQuestionTypeObservation.observedCurrentQuestionType ??
-    (hasCorrectableQuestion ? "unknown" : undefined);
+    (displayHasCorrectableQuestion ? "unknown" : undefined);
   const transientPersonalStatusLabel =
-    meeting.latestSuggestion?.transientPersonalStatus?.label;
+    currentQuestionSuggestion?.transientPersonalStatus?.label;
   const activeManualQuestionTypeCorrection =
     meeting.manualQuestionTypeCorrection &&
-    (meeting.manualQuestionTypeCorrection.taskId ===
-      meeting.activeMeetingTask?.id ||
+    ((!adviseDisplay.locked && meeting.manualQuestionTypeCorrection.taskId ===
+      meeting.activeMeetingTask?.id) ||
       meeting.manualQuestionTypeCorrection.questionId ===
-        meeting.currentQuestionLineage?.questionInstanceId)
+        currentQuestionId)
       ? meeting.manualQuestionTypeCorrection
       : undefined;
   const audioWarningLabel = meeting.audioInputLiveness?.severity === "warning"
@@ -987,7 +1006,8 @@ export const MeetingAssistant = ({
       statusLabel: meetingStatusLabel,
       error: meeting.error,
       factGuardrailNotice,
-      phaseOutputNotice: adviseDisplay.locked ? undefined : meeting.phaseOutputNotice,
+      phaseOutputNotice: adviseDisplay.locked && selectedTaskDisplay?.affiliated === false
+        ? undefined : meeting.phaseOutputNotice,
       artifactReuseNotice,
       isBusy,
       audioControl: audioPauseResumeControl,
@@ -1022,15 +1042,15 @@ export const MeetingAssistant = ({
       durableOwnerMissingReason:
         currentQuestionTypeObservation.durableOwnerMissingReason,
       transientPersonalStatusLabel,
-      currentQuestionId: meeting.currentQuestionLineage?.questionInstanceId,
+      currentQuestionId,
       questionTypeCorrected:
         Boolean(activeManualQuestionTypeCorrection) ||
-        meeting.taskRuntime.screenAttachment?.classifier?.overrideSource ===
-          "interview-type-selector",
+        (!adviseDisplay.locked && meeting.taskRuntime.screenAttachment?.classifier?.overrideSource ===
+          "interview-type-selector"),
       manualQuestionTypeCorrection: activeManualQuestionTypeCorrection,
-      activeTask: getActiveMeetingTaskFocusSummary(meeting.activeMeetingTask),
+      activeTask: adviseDisplay.locked ? selectedTaskDisplay?.task : getActiveMeetingTaskFocusSummary(meeting.activeMeetingTask),
       hasActiveMeetingTask,
-      hasCorrectableQuestion,
+      hasCorrectableQuestion: displayHasCorrectableQuestion,
       hasActiveScreenTask: hasActiveMeetingScreenContext,
       speechCorrections: meeting.speechCorrections.slice(-4).map((item) => ({
         id: item.id,
@@ -1068,6 +1088,9 @@ export const MeetingAssistant = ({
       meeting.activeMeetingTask,
       meeting.currentQuestionLineage,
       currentQuestionTrace,
+      selectedTaskDisplay?.affiliated,
+      currentQuestionId,
+      displayHasCorrectableQuestion,
       activeTaskKind,
       activeManualQuestionTypeCorrection,
       effectiveQuestionType,
@@ -1381,11 +1404,14 @@ export const MeetingAssistant = ({
     meeting.status,
   ]);
 
-  const resolveShortcutDisplayTarget = useCallback(() =>
-    focusModeActive && focusWindowsVisible
-      ? focusPublisherRef.current?.getLatestApplied("answer")?.displayTarget ?? { sessionId: "" }
-      : adviseDisplay.target,
-  [focusModeActive, focusWindowsVisible, displayTargetKey]);
+  const resolveShortcutDisplayTarget = useCallback((lockedOnly = false) => {
+    if (focusModeActive && focusWindowsVisible) {
+      const applied = focusPublisherRef.current?.getLatestApplied("answer");
+      return lockedOnly && !applied?.adviseLocked
+        ? undefined : applied?.displayTarget ?? { sessionId: "" };
+    }
+    return lockedOnly && !adviseDisplay.locked ? undefined : adviseDisplay.target;
+  }, [focusModeActive, focusWindowsVisible, displayTargetKey, adviseDisplay.locked]);
 
   const handleRegenerateShortcut = useCallback((
     invocation: GlobalShortcutInvocation
@@ -1400,11 +1426,12 @@ export const MeetingAssistant = ({
     invocation: GlobalShortcutInvocation
   ) => {
     setOpen(true);
+    const displayTarget = resolveShortcutDisplayTarget(true);
     void meeting.applyResponseAction(
       "next-phase",
-      manualShortcutInvocation(invocation)
+      { ...manualShortcutInvocation(invocation), ...(displayTarget ? { displayTarget } : {}) }
     );
-  }, [meeting.applyResponseAction]);
+  }, [meeting.applyResponseAction, resolveShortcutDisplayTarget]);
 
   const handleRegenerateArtifactsShortcut = useCallback((
     invocation: GlobalShortcutInvocation
@@ -1422,9 +1449,10 @@ export const MeetingAssistant = ({
       invocation: GlobalShortcutInvocation
     ) => {
       setOpen(true);
+      const displayTarget = resolveShortcutDisplayTarget(action === "previous-phase");
       void meeting.applyResponseAction(
         action,
-        { ...manualShortcutInvocation(invocation), displayTarget: resolveShortcutDisplayTarget() }
+        { ...manualShortcutInvocation(invocation), ...(displayTarget ? { displayTarget } : {}) }
       );
     },
     [meeting.applyResponseAction, resolveShortcutDisplayTarget]
@@ -1637,9 +1665,13 @@ export const MeetingAssistant = ({
       case "toggle-advise-pin":
         meeting.toggleAdvisePin({ uiSurface: "focus-mode", displayTarget: action.displayTarget ?? { sessionId: "" } });
         break;
-      case "response-action":
-        void meeting.applyResponseAction(action.action, { uiSurface: "focus-mode", displayTarget: action.displayTarget ?? { sessionId: "" } });
+      case "response-action": {
+        const displayTarget = action.displayTarget ??
+          (action.action === "next-phase" || action.action === "previous-phase" ? undefined : { sessionId: "" });
+        void meeting.applyResponseAction(action.action, { uiSurface: "focus-mode",
+          ...(displayTarget ? { displayTarget } : {}) });
         break;
+      }
       case "force-advise":
         void meeting.forceAdviseLatestTurn();
         break;
@@ -1656,7 +1688,8 @@ export const MeetingAssistant = ({
         void meeting.correctActiveQuestionType(
           action.correctedType,
           action.source,
-          { actionId: action.actionId, ingressReceivedAt: action.requestedAt, ingressSource: "ui" }
+          { actionId: action.actionId, ingressReceivedAt: action.requestedAt, ingressSource: "ui",
+            ...(action.displayTarget ? { displayTarget: action.displayTarget } : {}) }
         );
         break;
       case "update-interview-types":
@@ -1834,7 +1867,8 @@ export const MeetingAssistant = ({
               onCorrectQuestionType={(correctedType) => {
                 void meeting.correctActiveQuestionType(
                   correctedType,
-                  "focus-mode"
+                  "focus-mode",
+                  adviseDisplay.locked ? { displayTarget: adviseDisplay.target } : {}
                 );
               }}
                 latestTurnText={focusSnapshot.latestTurnText}
@@ -2346,7 +2380,7 @@ export const MeetingAssistant = ({
                   <SlidersHorizontalIcon className="h-3.5 w-3.5" />
                   Response actions
                 </div>
-                {hasCorrectableQuestion ? (
+                {displayHasCorrectableQuestion ? (
                   <div className="mb-2 min-w-0 border-b border-border/50 pb-2">
                     <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
                       Current question type
@@ -2358,7 +2392,8 @@ export const MeetingAssistant = ({
                       onCorrect={(correctedType) => {
                         void meeting.correctActiveQuestionType(
                           correctedType,
-                          "normal-mode"
+                          "normal-mode",
+                          adviseDisplay.locked ? { displayTarget: adviseDisplay.target } : {}
                         );
                       }}
                     />
@@ -2395,7 +2430,10 @@ export const MeetingAssistant = ({
                       )}
                       title={action.title}
                       onClick={() => {
-                        void meeting.applyResponseAction(action.id, { uiSurface: "normal-mode", displayTarget: adviseDisplay.target });
+                        const displayTarget = adviseDisplay.locked || (action.id !== "next-phase" && action.id !== "previous-phase")
+                          ? adviseDisplay.target : undefined;
+                        void meeting.applyResponseAction(action.id, { uiSurface: "normal-mode",
+                          ...(displayTarget ? { displayTarget } : {}) });
                       }}
                       aria-disabled={
                         isBusy ||

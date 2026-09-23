@@ -1,4 +1,61 @@
-import type { MeetingFocusSnapshot } from "./focus-window.js";
+import type { MeetingFocusActiveTaskSnapshot, MeetingFocusSnapshot } from "./focus-window.js";
+import type { ActiveMeetingTask } from "./meeting-task-contracts.js";
+import type { StableAnswerRevision } from "./stable-answer.js";
+import type { InterviewPlaybookPhase, InterviewSubtaskIntent, MeetingTrace } from "./types.js";
+import { getActiveMeetingTaskFocusSummary } from "./active-meeting-task.js";
+import { projectQuestionTypeObservation } from "./question-type-observation.js";
+import { normalizeCanonicalQuestionType } from "./task-taxonomy.js";
+
+/** Read-only display DTO. Owner identity can select committed fields, never authorize a command. */
+export function projectSelectedFocusTask(input: {
+  stable: StableAnswerRevision | null;
+  trace?: MeetingTrace;
+  activeTask?: ActiveMeetingTask;
+}) {
+  const owner = input.stable?.sections.answer.owner;
+  if (!owner) return { task: undefined, currentOwnerQuestionType: undefined, affiliated: undefined };
+  const metadata = input.trace?.metadata ?? {};
+  const readText = (key: string) => typeof metadata[key] === "string" ? metadata[key] as string : undefined;
+  const settlement = input.stable?.settlementSnapshot as { relation?: unknown } | undefined;
+  const relation = metadata.settledExecutionPlanRelation ?? metadata.effectiveCurrentQuestionSettlementRelation ??
+    settlement?.relation ?? metadata.currentQuestionSettlementRelation;
+  const affiliated = metadata.settledExecutionPlanRelationApplicable !== false &&
+    metadata.effectiveAdvisorRelationApplicable !== false &&
+    (owner.kind === "active-child" ? relation === "child-probe" :
+      relation === "new-parent" || relation === "followup-parent" || relation === "resume-parent" || relation === "linked-parent-extension");
+  if (!affiliated) return { task: undefined, currentOwnerQuestionType: undefined, affiliated: false };
+  const parent = input.activeTask?.parent.id === owner.parentId ? input.activeTask : undefined;
+  const currentSummary = getActiveMeetingTaskFocusSummary(parent);
+  const observation = projectQuestionTypeObservation({ metadata });
+  const phase = input.stable?.sections.answer.phase ?? input.stable?.suggestion.generationPhase;
+  const historicalParent: NonNullable<MeetingFocusActiveTaskSnapshot> = {
+    id: owner.parentId,
+    source: input.stable?.suggestion.taskSource ?? (input.trace?.kind === "screen" ? "screen" : "voice"),
+    questionType: observation.observedParentType ?? "unknown",
+    topic: readText("activeMeetingParentTopic") ?? readText("currentQuestionPreview") ?? "",
+    playbookPhase: (owner.kind === "parent-mainline" ? phase : undefined) ??
+      readText("activeMeetingParentPhase") as InterviewPlaybookPhase | undefined,
+    hasScreenContext: input.trace?.kind === "screen",
+    child: undefined,
+  };
+  const currentChild = owner.kind === "active-child" && currentSummary?.child?.id === owner.childId
+    ? currentSummary.child : undefined;
+  const historicalChildMatches = owner.kind === "active-child" && metadata.activeMeetingChildId === owner.childId;
+  const child = owner.kind === "active-child" ? currentChild ?? {
+    id: owner.childId,
+    questionType: normalizeCanonicalQuestionType(input.stable?.suggestion.questionType) ?? "unknown",
+    intent: (historicalChildMatches ? readText("activeMeetingChildIntent") : undefined) as InterviewSubtaskIntent | undefined ?? "unknown",
+    question: readText("currentQuestionPreview") ?? "",
+    playbookPhase: phase ?? (historicalChildMatches ? readText("activeMeetingChildPhase") : undefined) as InterviewPlaybookPhase | undefined,
+  } : undefined;
+  return {
+    affiliated: true,
+    task: { ...(currentSummary ?? historicalParent), child },
+    currentOwnerQuestionType: normalizeCanonicalQuestionType(
+      owner.kind === "parent-mainline" ? parent?.parent.questionType : currentChild?.questionType
+    ),
+  };
+}
 
 type Reader = (value: unknown) => unknown;
 const string: Reader = (value) => {
@@ -29,7 +86,8 @@ const object = (fields: Record<string, Reader>): Reader => (value) => {
 const text = optional(string);
 const flag = optional(boolean);
 const displayTarget = object({ sessionId: string, suggestionId: text, traceId: text,
-  generationId: text, stableRevision: optional(number) });
+  generationId: text, stableRevision: optional(number),
+  logicalQuestionUnitId: text, logicalQuestionRevision: optional(number) });
 
 // Display-only whitelist. Never spread a runtime object across the window boundary.
 const readDisplay = object({

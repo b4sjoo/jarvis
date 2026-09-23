@@ -218,6 +218,18 @@ test("display whitelist freezes a detached serializable DTO without full runtime
   assert.throws(() => createMeetingFocusDisplayModel({ ...empty, latestTurnText: 7 } as any));
 });
 
+test("locked display identity retains the exact LQU and revision through the Focus whitelist", () => {
+  const target = { sessionId: "session-a", logicalQuestionUnitId: "lqu-a", logicalQuestionRevision: 3,
+    suggestionId: "answer-a", traceId: "trace-a", generationId: "generation-a", stableRevision: 8 };
+  const display = createMeetingFocusDisplayModel({ ...empty,
+    advisePin: { locked: true, backgroundUpdated: true, target },
+  });
+  assert.deepEqual(display.advisePin?.target, target);
+  assert.notEqual(display.advisePin?.target, target);
+  assert.ok(Object.isFrozen(display.advisePin?.target));
+  assert.deepEqual(createMeetingFocusDisplayModel(JSON.parse(JSON.stringify(display))).advisePin?.target, target);
+});
+
 test("shared text formatting retains fenced code and the established main-window math normalization", () => {
   assert.equal(formatChineseThinkingText("  一\r\n\n 二  "), "一\n二");
   assert.equal(normalizeMeetingMarkdown("$\\mathrm{n} \\leq 3$\n```ts\nconst cost = '$x$';\n```"), "n <= 3\n```ts\nconst cost = '$x$';\n```");

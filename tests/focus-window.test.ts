@@ -20,7 +20,7 @@ test("phase output notice crosses Focus as optional plain display text only", ()
 test("Normal and inline/native Focus read the shared notice only in answer areas", () => {
   const normal = readFileSync("src/pages/app/components/meeting/index.tsx", "utf8");
   const native = readFileSync("src/pages/app/components/meeting/focus-window.tsx", "utf8");
-  assert.match(normal, /phaseOutputNotice: adviseDisplay\.locked \? undefined : meeting\.phaseOutputNotice/);
+  assert.match(normal, /phaseOutputNotice: adviseDisplay\.locked && selectedTaskDisplay\?\.affiliated === false/);
   const ast = ts.createSourceFile("meeting.tsx", normal, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   let notice: ts.Expression | undefined;
   const visit = (node: ts.Node) => {
@@ -30,11 +30,11 @@ test("Normal and inline/native Focus read the shared notice only in answer areas
   };
   visit(ast);
   assert.ok(notice);
-  for (const locked of [false, true]) {
+  for (const locked of [false, true]) for (const affiliated of [false, true, undefined]) {
     const selected = vm.runInNewContext(ts.transpileModule(`(${notice.getText(ast)})`, {
       compilerOptions: { target: ts.ScriptTarget.ES2020 },
-    }).outputText, { adviseDisplay: { locked }, meeting: { phaseOutputNotice: "Current phase output pending" } });
-    assert.equal(selected, locked ? undefined : "Current phase output pending");
+    }).outputText, { adviseDisplay: { locked }, selectedTaskDisplay: { affiliated }, meeting: { phaseOutputNotice: "Current phase output pending" } });
+    assert.equal(selected, locked && affiliated === false ? undefined : "Current phase output pending");
   }
   assert.match(normal, /phaseOutputNotice=\{focusSnapshot\.phaseOutputNotice\}/);
   assert.equal((normal.match(/<PhaseOutputNotice notice=\{focusSnapshot\.phaseOutputNotice\}/g) ?? []).length, 2);

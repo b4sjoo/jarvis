@@ -146,9 +146,14 @@ export type MeetingFocusSpeechCorrectionSnapshot = Pick<
   | "deactivatedAt"
 > & { activeQuestion?: Pick<NonNullable<SpeechCorrection["activeQuestion"]>, "disposition" | "regenerationStatus" | "error"> };
 
-export type MeetingFocusActiveTaskSnapshot = ReturnType<
+type ActiveTaskFocusSummary = NonNullable<ReturnType<
   typeof getActiveMeetingTaskFocusSummary
->;
+>>;
+export type MeetingFocusActiveTaskSnapshot =
+  | (Omit<ActiveTaskFocusSummary, "playbookPhase"> & {
+      playbookPhase?: ActiveTaskFocusSummary["playbookPhase"];
+    })
+  | undefined;
 
 export type FocusReadonly<T> = { readonly [K in keyof T]: FocusReadonly<T[K]> };
 
@@ -204,13 +209,14 @@ export type MeetingFocusAction =
   | { type: "toggle-listening" }
   | { type: "regenerate"; displayTarget?: AdviseDisplayTarget }
   | { type: "toggle-advise-pin"; displayTarget?: AdviseDisplayTarget }
-  | { type: "response-action"; action: "enhance-context" | "narrow-context" | "regenerate-artifacts"; displayTarget?: AdviseDisplayTarget }
+  | { type: "response-action"; action: "enhance-context" | "narrow-context" | "regenerate-artifacts" | "previous-phase" | "next-phase"; displayTarget?: AdviseDisplayTarget }
   | { type: "force-advise" }
   | { type: "capture-screen" }
   | { type: "submit-correction"; correction: string }
   | { type: "deactivate-correction"; correctionId: string }
   | {
       type: "correct-question-type";
+      displayTarget?: AdviseDisplayTarget;
       actionId?: string;
       requestedAt?: number;
       correctedType: CanonicalQuestionType;

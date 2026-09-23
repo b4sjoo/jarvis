@@ -6,7 +6,7 @@ export function AdvisePinButton({ locked, updated, onClick }: {
   locked: boolean; updated?: boolean; onClick: () => void;
 }) {
   const binding = getShortcutsConfig().bindings.meeting_toggle_advise_pin;
-  const label = locked ? "Unlock Advise" : "Lock Advise";
+  const label = locked ? "Unlock question" : "Lock question";
   const Icon = locked ? LockIcon : LockOpenIcon;
   return <Button size="icon" variant="ghost" className="ml-auto h-7 w-7 shrink-0"
     aria-label={label} aria-pressed={locked}

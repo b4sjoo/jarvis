@@ -128,6 +128,7 @@ export function decideManualRuntimeActionIngress(input: {
 }
 
 export function projectManualRuntimeActionAdvisorTerminal(input: {
+  answerCommitted?: boolean;
   traceStatus?: "running" | "success" | "error" | "cancelled";
   advisorOutcome?:
     | "suppressed"
@@ -142,6 +143,9 @@ export function projectManualRuntimeActionAdvisorTerminal(input: {
 }): ManualRuntimeActionAdvisorTerminalDecision {
   if (input.advisorOutcome === "visible-committed") {
     return { disposition: "completed", reason: "visible-answer-committed" };
+  }
+  if (input.answerCommitted === true) {
+    return { disposition: "completed", reason: "answer-committed-not-yet-displayed" };
   }
   if (input.advisorOutcome === "delivery-pending") {
     return { reason: "delivery-pending" };

@@ -1,4 +1,5 @@
 import type { AnswerDeliveryPresentation } from "./meeting-presentation-contracts.js";
+import type { MeetingAnswerDisplayModel } from "./meeting-answer-display.js";
 import {
   toAnswerArtifactFamily,
   type AnswerArtifactSection,
@@ -34,6 +35,8 @@ export interface StableAnswerRevision {
   settlementId?: string;
   settlementSnapshot?: StableAnswerSettlementSnapshot;
   suggestion: AdvisorSuggestion;
+  // Captured from the same authorized publication, not a later ambient Artifact overlay.
+  display?: MeetingAnswerDisplayModel;
   sections: Record<AnswerArtifactSection, StableAnswerSectionRevision>;
   committedAt: number;
 }
@@ -307,6 +310,7 @@ export function commitStableArtifactOnlyRevision(input: {
   expectedLogicalQuestionRevision: number | null;
   expectedSettlementId?: string;
   sectionOwner?: StableAnswerSectionOwner;
+  revision?: number;
   committedAt?: number;
 }): StableArtifactOnlyCommitDecision {
   const authorizedArtifacts = Array.from(
@@ -396,7 +400,7 @@ export function commitStableArtifactOnlyRevision(input: {
     settlementId: current.settlementId,
     settlementSnapshot: current.settlementSnapshot,
     sectionOwner: input.sectionOwner,
-    revision: current.revision + 1,
+    revision: input.revision ?? current.revision + 1,
     committedAt: input.committedAt,
   });
   if (!stable) return reject("artifact-candidate-invalid");

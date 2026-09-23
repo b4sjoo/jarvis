@@ -8,6 +8,7 @@ import * as ownership from "../src/lib/meeting/logical-question-ownership.js";
 import { composeCanonicalTurnCandidate, getLogicalQuestionSemanticEvidenceText } from "../src/lib/meeting/logical-question-unit.js";
 import { resolveCurrentQuestionSourceKind } from "../src/lib/meeting/current-question-settlement.js";
 import { createManualRuntimeActionEvent } from "../src/lib/meeting/manual-runtime-action.js";
+import { ManualAdviseDisplay } from "../src/lib/meeting/manual-advise-display.js";
 
 const source = ts.createSourceFile("hook.ts", readFileSync("src/hooks/useMeetingAssistant.ts", "utf8"), ts.ScriptTarget.Latest, true);
 let callback: ts.Node | undefined;
@@ -37,6 +38,7 @@ for (const uiSurface of ["normal-mode", "focus-mode"] as const) {
       const env = {
         ...correction, ...ownership,
         createMeetingId: () => "new-request",
+        manualAdviseDisplayRef: { current: new ManualAdviseDisplay() },
         latestManualCorrectionTargetRef: { current: target },
         manualCorrectionTargetHistoryRef: { current: target ? [target] : [] },
         runtimeEpochRef: { current: 1 }, state: ui,
@@ -82,6 +84,7 @@ test("actual no-op and duplicate Correction requests receive terminals without a
     const revision = { current: 7 };
     const env = { ...correction, ...ownership, getLogicalQuestionSemanticEvidenceText, resolveCurrentQuestionSourceKind,
       createMeetingId: () => "new-id", runtimeEpochRef: { current: 1 }, manualCorrectionRevisionRef: revision,
+      manualAdviseDisplayRef: { current: new ManualAdviseDisplay() },
       latestManualCorrectionTargetRef: { current: target }, manualCorrectionTargetHistoryRef: { current: [target] },
       manualCorrectionOperationCoordinatorRef: { current: coordinator },
       state: { currentQuestionLineage: lineage },

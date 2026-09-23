@@ -484,9 +484,17 @@ function withRegenerateExecution(h: ReturnType<typeof actionHarness>) {
   const callbackNode = declaration("buildAdvisorJob") as ts.VariableDeclaration;
   env.buildAdvisorJob = evaluate(`(${(callbackNode.initializer as ts.CallExpression).arguments[0].getText(hook)})`, env);
   env.activateAdvisorJob = (job: any) => { env.activeAdvisorJobRef.current = job; return true; };
+  const runAdvisorNode = declaration("runAdvisor") as ts.VariableDeclaration;
+  const runAdvisorBody = (runAdvisorNode.initializer as ts.CallExpression).arguments[0];
   const initializer = (name: string, scope: any) => {
-    const node = declaration(name) as ts.VariableDeclaration;
-    return evaluate(`(${node.initializer!.getText(hook)})`, scope);
+    let local: ts.VariableDeclaration | undefined;
+    const visit = (node: ts.Node) => {
+      if (ts.isVariableDeclaration(node) && node.name.getText(hook) === name) local ??= node;
+      if (!local) ts.forEachChild(node, visit);
+    };
+    visit(runAdvisorBody);
+    assert.ok(local, `production runAdvisor local ${name}`);
+    return evaluate(`(${local.initializer!.getText(hook)})`, scope);
   };
   for (const name of ["hasAdvisorActiveTask", "evaluateThemTurnForAdvisor"]) {
     env[name] = evaluate(`(${declaration(name).getText(hook)})`, env);
@@ -517,7 +525,11 @@ function withRegenerateExecution(h: ReturnType<typeof actionHarness>) {
         env.traceStoreRef.current.updateMetadata(job.traceId, { advisorJobOutcome: outcome });
       },
     };
-    for (const name of ["force", "logicalQuestionLease", "readLogicalQuestionAuthorizationTarget", "readCommitDecision", "rejectStaleCommit"]) {
+    for (const name of ["isSelectedHistoricalQuestion", "readStableAnswerForQuestion", "isQuestionHiddenByPin"]) {
+      const collaborator = declaration(name) as ts.VariableDeclaration;
+      scope[name] = evaluate(`(${(collaborator.initializer as ts.CallExpression).arguments[0].getText(hook)})`, scope);
+    }
+    for (const name of ["selectedQuestionOnly", "readPublicationBase", "force", "logicalQuestionLease", "readLogicalQuestionAuthorizationTarget", "readCommitDecision", "rejectStaleCommit"]) {
       scope[name] = initializer(name, scope);
     }
     if (scope.rejectStaleCommit("pre-execution")) return;
@@ -837,6 +849,8 @@ test("Focus Regenerate adapter reaches the same visible-source callback as norma
   const stable = h.stableRef.current;
   const displayed = { stable, streaming: false,
     target: { sessionId: h.context.sessionId, suggestionId: stable.suggestion.id,
+      logicalQuestionUnitId: stable.logicalQuestionUnitId ?? undefined,
+      logicalQuestionRevision: stable.logicalQuestionRevision ?? undefined,
       generationId: stable.suggestion.id, traceId: stable.suggestion.sourceTraceId, stableRevision: stable.revision },
     sections: buildMeetingAnswerDisplayModel({ content: stable.suggestion.content }),
   };

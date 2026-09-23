@@ -116,9 +116,15 @@ export function MeetingFocusWindow({ kind }: { kind: MeetingFocusWindowKind }) {
 
   const snapshot = envelope?.payload ?? EMPTY_MEETING_FOCUS_SNAPSHOT;
   const sendFocusAction = (action: MeetingFocusUserAction) => {
-    const requested = action.type === "correct-question-type"
-      ? { ...action, actionId: action.actionId ?? createMeetingId("manual_action"), requestedAt: Date.now() }
+    const scoped = (action.type === "correct-question-type" ||
+      (action.type === "response-action" &&
+        (action.action === "previous-phase" || action.action === "next-phase"))) &&
+      snapshot.advisePin?.locked && !action.displayTarget
+      ? { ...action, displayTarget: snapshot.advisePin.target }
       : action;
+    const requested = scoped.type === "correct-question-type"
+      ? { ...scoped, actionId: scoped.actionId ?? createMeetingId("manual_action"), requestedAt: Date.now() }
+      : scoped;
     if (requested.type === "correct-question-type") console.info("[type-correction-focus-requested]", requested);
     void consumerRef.current?.dispatch(requested);
   };
@@ -342,6 +348,7 @@ function MeetingFocusControlsWindow({
     `parent: ${parentTypeLabel}${
       snapshot.parentTaskId ? ` (${snapshot.parentTaskId})` : ""
     }`,
+    `phase: ${snapshot.activeTask?.child?.playbookPhase ?? snapshot.activeTask?.playbookPhase ?? "unknown"}`,
     `applied: response=${formatFocusBoolean(
       snapshot.typeAppliedToResponse
     )}, settlement=${formatFocusBoolean(

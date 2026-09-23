@@ -56,6 +56,9 @@ function findFunctionSource(name) {
 }
 
 const callbackSources = {
+  readStableAnswerForQuestion: findCallbackSource("readStableAnswerForQuestion"),
+  isSelectedHistoricalQuestion: findCallbackSource("isSelectedHistoricalQuestion"),
+  isQuestionHiddenByPin: findCallbackSource("isQuestionHiddenByPin"),
   prepareStableAnswerPublication: findCallbackSource(
     "prepareStableAnswerPublication"
   ),
@@ -554,9 +557,10 @@ test("ML1/3/6 production publication and pin callbacks retain A across B/failure
     const a = select();
     h.environment.toggleAdvisePin({ actionId: "pin-A", uiSurface: "normal-mode", displayTarget: a.target });
     for (const id of ["B", "D"]) {
+      h.refs.logicalQuestionUnitRef.current = { id: `lqu-${id}`, revision: 1 };
       const s = commitStableAnswerRevision({ current: h.refs.stableAnswerRevisionRef.current,
         candidate: suggestion(id, `Answer: answer ${id}`), authorizedArtifacts: ["answer"],
-        taskId: "parent-a", logicalQuestionUnitId: "lqu-current", logicalQuestionRevision: 1,
+        taskId: "parent-a", logicalQuestionUnitId: `lqu-${id}`, logicalQuestionRevision: 1,
         sessionId: "session-a", runtimeEpoch: 1 });
       const p = h.environment.prepareStableAnswerPublication(s);
       h.environment.installPreparedStableAnswerPublication(p);
@@ -583,7 +587,8 @@ test("ML4 production selector never exposes terminal rejected partial when no le
     const generation=lease();
     h.generationResultLedger.begin({lease:generation,traceId:"invalid-stream"});
     h.refs.stableAnswerRevisionRef.current=null;
-    h.refs.displayedStreamRef.current={traceId:"invalid-stream",generationId:"request-invalid",leaseId:generation.id};
+    h.refs.displayedStreamRef.current={traceId:"invalid-stream",generationId:"request-invalid",leaseId:generation.id,
+      logicalQuestionUnitId:generation.logicalQuestionUnitId,logicalQuestionRevision:generation.logicalQuestionRevision};
     h.environment.state={...h.uiState,partialSuggestion:"Answer: invalid partial"};
     const sections=imports.buildMeetingAnswerDisplayModel({content:"Answer: invalid partial"});
     h.environment.selectAdviseDisplay(sections);
@@ -604,13 +609,15 @@ test("ML3 real selector and display ACK keep D through repeated pre-paint render
   try {
     const initial=h.environment.selectAdviseDisplay(imports.buildMeetingAnswerDisplayModel({content:h.uiState.latestSuggestion.content}));
     h.environment.toggleAdvisePin({displayTarget:initial.target});
+    h.refs.logicalQuestionUnitRef.current={id:"lqu-D",revision:1};
     const d=commitStableAnswerRevision({current:h.refs.stableAnswerRevisionRef.current,
       candidate:suggestion("D","Answer: completed D"),authorizedArtifacts:["answer"],taskId:"parent-a",
-      logicalQuestionUnitId:"lqu-current",logicalQuestionRevision:1,sessionId:"session-a",runtimeEpoch:1});
+      logicalQuestionUnitId:"lqu-D",logicalQuestionRevision:1,sessionId:"session-a",runtimeEpoch:1});
     const publication=h.environment.prepareStableAnswerPublication(d);
     h.environment.installPreparedStableAnswerPublication(publication);h.environment.finalizeStableAnswerPublication(publication);
-    const e={...lease(),id:"lease-E"};h.generationResultLedger.begin({lease:e,traceId:"trace-E"});
-    h.refs.displayedStreamRef.current={traceId:"trace-E",generationId:"request-E",leaseId:e.id};
+    const e={...lease(),id:"lease-E",logicalQuestionUnitId:"lqu-E"};h.generationResultLedger.begin({lease:e,traceId:"trace-E"});
+    h.refs.displayedStreamRef.current={traceId:"trace-E",generationId:"request-E",leaseId:e.id,
+      logicalQuestionUnitId:e.logicalQuestionUnitId,logicalQuestionRevision:e.logicalQuestionRevision};
     h.environment.toggleAdvisePin({displayTarget:initial.target});
     h.environment.state={...h.uiState,partialSuggestion:"Answer: partial E"};
     const sections=imports.buildMeetingAnswerDisplayModel({content:"Answer: partial E"});

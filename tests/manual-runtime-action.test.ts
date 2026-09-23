@@ -122,6 +122,12 @@ test("keeps presentation availability separate from runtime authorization", () =
 test("projects Regenerate terminal from visible delivery rather than promise completion", () => {
   assert.deepEqual(
     projectManualRuntimeActionAdvisorTerminal({
+      traceStatus: "success", advisorOutcome: "model-completed", answerCommitted: true,
+    }),
+    { disposition: "completed", reason: "answer-committed-not-yet-displayed" }
+  );
+  assert.deepEqual(
+    projectManualRuntimeActionAdvisorTerminal({
       traceStatus: "success",
       advisorOutcome: "visible-committed",
     }),

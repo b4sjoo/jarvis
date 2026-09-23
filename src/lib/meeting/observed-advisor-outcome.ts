@@ -65,15 +65,19 @@ export function projectObservedAdvisorAttempt(
       outputDisposition === "output-commit-not-authorized"
   );
   const answerCommitted =
+    readBoolean(metadata.advisorStablePublicationCommitted) === true ||
     advisorVisible === true ||
     screenVisible === true ||
     visibleRevisionGrew ||
     commitDisposition === "committed" ||
     projectionDisposition === "current-visible";
   if (answerCommitted) {
+    const publicationWithoutDisplay =
+      readBoolean(metadata.advisorStablePublicationCommitted) === true &&
+      readBoolean(metadata.advisorOutputAppliedToDisplay) !== true;
     return {
       runtimeAction: "advise",
-      outcome: "visible-committed",
+      outcome: publicationWithoutDisplay ? "model-completed" : "visible-committed",
       answerCommitted: true,
       candidateFormed,
       modelExecuted: true,

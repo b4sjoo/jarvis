@@ -109,8 +109,12 @@ function AttemptFixture() {
   const [saved] = useState<any[]>([]);
   const current = {
     target: { sessionId: `session-${session}`, suggestionId: frame.suggestion.id,
-      traceId: frame.suggestion.sourceTraceId, generationId: frame.suggestion.id, stableRevision: frame.revision },
-    stable: { suggestion: frame.suggestion }, streaming: false,
+      traceId: frame.suggestion.sourceTraceId, generationId: frame.suggestion.id, stableRevision: frame.revision,
+      logicalQuestionUnitId: frame.traces.find(item => item.id === frame.suggestion.sourceTraceId)!.metadata.effectiveCurrentQuestionSettlementUnitId,
+      logicalQuestionRevision: 1 },
+    stable: { suggestion: frame.suggestion, sessionId: `session-${session}`, revision: frame.revision,
+      logicalQuestionUnitId: frame.traces.find(item => item.id === frame.suggestion.sourceTraceId)!.metadata.effectiveCurrentQuestionSettlementUnitId,
+      logicalQuestionRevision: 1 }, streaming: false,
     sections: buildMeetingAnswerDisplayModel({ content: frame.suggestion.content }),
   } as any;
   const selected = display.select(current, current);

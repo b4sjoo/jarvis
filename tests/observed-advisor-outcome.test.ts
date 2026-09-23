@@ -17,6 +17,24 @@ test("projects a visible commit as observed advice", () => {
   assert.equal(projection.answerCommitted, true);
 });
 
+test("a pinned background commit is complete but not displayed until the real ACK", () => {
+  const metadata = {
+    advisorStablePublicationCommitted: true,
+    advisorOutputCommittedToUi: false,
+    publicationHiddenByManualPin: true,
+    generationResultCommitDisposition: "committed",
+    generationResultProjectionDisposition: "current-visible",
+    visibleAnswerRevisionBefore: 4,
+    visibleAnswerRevisionAfter: 5,
+  };
+  const hidden = projectObservedAdvisorAttempt(metadata);
+  assert.equal(hidden.answerCommitted, true);
+  assert.equal(hidden.outcome, "model-completed");
+  assert.equal(hidden.runtimeAction, "advise");
+  const displayed = projectObservedAdvisorAttempt({...metadata, advisorOutputAppliedToDisplay:true});
+  assert.equal(displayed.outcome, "visible-committed");
+});
+
 test("projects current pending delivery as observed advice", () => {
   const projection = projectObservedAdvisorAttempt({
     advisorOutputDisposition: "pending-delivery",
