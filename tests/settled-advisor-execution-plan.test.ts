@@ -41,7 +41,7 @@ const providers: MeetingModelProviderSnapshot = {
   codingProvider: { provider: "coding", variables: {} },
 };
 
-test("C4 resolved conflict stays Answer-only through settlement, plan, stable answer and evaluation", () => {
+test("C4 resolved conflict stays Advise-only through settlement, plan, stable answer and evaluation", () => {
   const task: ActiveMeetingTask = { ...activeTask("ai-ml-system-design"), child: {
     id: "child-code", questionType: "coding", relation: "child-probe", intent: "implementation-probe",
     question: "Implement the API.", createdAt: 20, updatedAt: 20, basedOnTurnIds: ["old"], basedOnObservationIds: [],
@@ -91,11 +91,23 @@ test("C4 resolved conflict stays Answer-only through settlement, plan, stable an
   assert.match(stable.suggestion.content, /documented project evidence/);
   assert.doesNotMatch(stable.suggestion.content, /forbidden/);
   assert.equal(JSON.stringify(task), before);
+  const authorization = authorizeSettledAdvisorExecutionPlan({
+    plan,
+    currentSettlement: view.effectiveSettlement,
+    currentSessionId: current.sessionId,
+    currentRuntimeEpoch: current.runtimeEpoch,
+    currentLogicalQuestionUnitId: current.logicalQuestionUnitId,
+    currentLogicalQuestionRevision: current.revision,
+    currentSourceHash: current.sourceHash,
+    currentActiveMeetingTask: task,
+  });
+  assert.equal(authorization.authorized, true);
   const observed = buildHumanEvaluationObservedSnapshotV2({ id: "trace", kind: "voice", status: "success",
     startedAt: 100, steps: [], inputs: [], outputs: [], metadata: { ...formatEffectiveAdvisorSettlementViewForTrace(view),
-      ...formatSettledAdvisorExecutionPlanForTrace(plan) } });
+      ...formatSettledAdvisorExecutionPlanForTrace(plan, authorization) } });
   assert.equal(observed.relation, "none");
-  assert.equal(observed.parentAction, "none");
+  assert.equal(observed.parentAction, "preserve");
+  assert.equal(observed.adviseOnly, true);
   assert.equal(observed.settledParentId, undefined);
 });
 

@@ -233,6 +233,72 @@ test("E167-8: real production React JSX, optional labels, specialist facts and p
       assert.equal((await snapshot()).calls.length, before);
       assert.deepEqual((await snapshot()).legacy, []);
     });
+    await t.test("A1: recorded HNSW is visibly Advise-only none/preserve; drafts and confirmed facts survive refresh", async () => {
+      await page.evaluate(() => window.__evaluation.loadTrace(structuredClone(window.__evaluation.hnsw)));
+      await page.getByText("Human evaluation", { exact: true }).click();
+      assert.match(await group("task-settlement").textContent(), /settlement: N\/A\s*\/\s*preserve/);
+      assert.match(await page.locator("[data-evaluation-advise-only]").textContent(), /Advise-only: canonical-topology-incompatible/);
+      assert.equal((await snapshot()).calls.length, 0);
+      for (const width of [1100, 375]) {
+        await page.setViewportSize({ width, height: 900 });
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+        await page.screenshot({ path: `/tmp/jarvis-a1-tests/advise-only-${width}.png`, fullPage: true });
+      }
+      await group("task-settlement").getByRole("button", { name: "Correct", exact: true }).click();
+      assert.equal((await lastFact()).expectedRelation, "none");
+      assert.equal((await lastFact()).expectedParentAction, "preserve");
+      await page.evaluate(() => window.__evaluation.commit());
+      assert.equal((await snapshot()).projection.verdicts.taskSettlementCorrect, true);
+      await group("task-settlement").getByRole("button", { name: "Fix", exact: true }).click();
+      await choose(group("task-settlement"), "Expected relation", "child-probe");
+      await choose(group("task-settlement"), "Expected parent action", "attach-child");
+      await page.evaluate(() => window.__evaluation.updateTrace({ ...window.__evaluation.hnsw.metadata,
+        settledExecutionPlanRelation: "new-parent", settledExecutionPlanTaskMutationCommand: "create-parent" }));
+      await group("task-settlement").getByRole("button", { name: "Save settlement", exact: true }).click();
+      assert.equal((await lastFact()).expectedRelation, "child-probe");
+      assert.equal((await lastFact()).expectedParentAction, "attach-child");
+      await page.evaluate(() => window.__evaluation.commit());
+      assert.equal((await snapshot()).projection.activeFacts["expected-task-settlement"].fact.expectedRelation, "child-probe");
+      await page.evaluate(() => window.__evaluation.newAttempt());
+      await page.getByText("Human evaluation", { exact: true }).click();
+      await group("answer-quality").getByRole("button", { name: "Useful", exact: true }).click();
+      assert.equal((await snapshot()).calls.at(-1).subject.attemptId, "attempt-168");
+    });
+    await t.test("A1: existing human child-probe expectation stays unchanged while Observed becomes none/preserve", async () => {
+      await page.evaluate(() => { window.__evaluation.loadTrace(structuredClone(window.__evaluation.hnsw)); window.__evaluation.loadHnswFacts(); });
+      await page.getByText("Human evaluation", { exact: true }).click();
+      assert.match(await group("task-settlement").textContent(), /expected: field-knowledge \/ child-probe \/ attach-child/);
+      assert.equal((await snapshot()).calls.length, 0);
+      await group("task-settlement").getByRole("button", { name: "Fix", exact: true }).click();
+      await page.evaluate(() => window.__evaluation.updateTrace({ ...window.__evaluation.hnsw.metadata, taskRelationSplitCanonicalDisposition: "timeout" }));
+      await group("task-settlement").getByRole("button", { name: "Save settlement", exact: true }).click();
+      assert.equal((await lastFact()).expectedRelation, "child-probe");
+      assert.equal((await lastFact()).expectedParentAction, "attach-child");
+    });
+    await t.test("A1: real UI distinguishes final fallback, no-parent, artifact-only, receipt and missing evidence", async () => {
+      const base = await page.evaluate(() => window.__evaluation.hnsw);
+      const noParent = { ...base.metadata };
+      for (const key of Object.keys(noParent)) {
+        if (/Parent|Child/.test(key) && !/ParentMutation|ParentScope/.test(key)) delete noParent[key];
+      }
+      const cases = [
+        ["ordinary-followup", { ...base.metadata, settledExecutionPlanRelation: "followup-parent", settledExecutionPlanContextReadScope: "active-parent-read", settledExecutionPlanRelationApplicable: true }, "followup-parent", "preserve", false],
+        ["first-parent", { ...base.metadata, settledExecutionPlanRelation: "new-parent", settledExecutionPlanTaskMutationCommand: "create-parent" }, "new-parent", "create", false],
+        ["no-parent", { ...noParent, taskRelationOrderedResolutionReason: "no-parent-current-question" }, "N/A", "none", true],
+        ["fallback", { ...base.metadata, currentQuestionSettlementRelation: "unknown", taskRelationSplitCanonicalDisposition: "timeout" }, "N/A", "preserve", true, "error"],
+        ["receipt", { ...base.metadata, sourceTransitionRuntimeKind: "replace-parent", sourceTransitionDurableAuthorized: true, sourceTransitionDurableMutationApplied: true,
+          sourceTransitionParentBeforeId: "p", sourceTransitionParentAfterId: "p", sourceTransitionParentBeforeType: "coding", sourceTransitionParentAfterType: "field-knowledge" }, "N/A", "retype", false],
+        ["missing", { effectiveAdvisorCurrentOnly: true, currentQuestionSettlementRelation: "unknown", activeMeetingParentId: "p" }, "N/A", "ERROR: unresolved action", false],
+        ["cancelled", { effectiveAdvisorCurrentOnly: true, currentQuestionSettlementRelation: "unknown", activeMeetingParentId: "p" }, "N/A", "N/A", false, "cancelled"],
+      ];
+      for (const [id, metadata, relation, action, adviseOnly, status = "success"] of cases) {
+        await page.evaluate(trace => window.__evaluation.loadTrace(trace), { ...base, id, metadata, status });
+        await page.getByText("Human evaluation", { exact: true }).click();
+        assert.ok((await group("task-settlement").textContent()).includes(`settlement: ${relation} / ${action}`), id);
+        assert.equal(await page.locator("[data-evaluation-advise-only]").count(), adviseOnly ? 1 : 0, id);
+        assert.equal((await snapshot()).calls.length, 0, id);
+      }
+    });
     await t.test("evaluating A never pins the production wrapper to A when B arrives", async () => {
       await page.evaluate(() => window.__evaluation.showAttemptWrapper());
       await page.getByText("trace: attempt-A", { exact: true }).waitFor();

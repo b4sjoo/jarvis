@@ -6,6 +6,7 @@ import { ManualAdviseDisplay } from "../../src/lib/meeting/manual-advise-display
 import { buildMeetingAnswerDisplayModel } from "../../src/lib/meeting/meeting-answer-display";
 import { buildHumanEvaluationAttemptEvidenceV2 } from "../../src/lib/meeting/human-evaluation-attempt-projection";
 import { createHumanGroundTruthEventV2, deriveHumanEvaluationProjectionV2, findActiveHumanGroundTruthEventV2 } from "../../src/lib/meeting/human-ground-truth-v2";
+import { hnswTrace, hnswHumanFacts } from "./task-167-evaluation-ui-hnsw";
 
 const fixture = (window as any).__evaluation = {
   calls: [] as any[], events: [] as any[], legacyCalls: [] as any[], preparationCalls: [] as any[], retries: 0,
@@ -14,6 +15,9 @@ const trace = {
   id: "attempt-167", kind: "voice", status: "success", startedAt: 1,
   inputs: [], outputs: [], steps: [],
   metadata: {
+    questionTypeAdjudicationCandidateType: "coding",
+    questionTypeAdjudicationDisposition: "abstained",
+    questionTypeAdjudicationWouldRepair: true,
     currentQuestionSettlementId: "settlement-167",
     effectiveCurrentQuestionSettlementMaterialized: true,
     effectiveCurrentQuestionSettlementId: "settlement-167",
@@ -25,6 +29,9 @@ const trace = {
     currentQuestionSettlementType: "project-deep-dive",
     currentQuestionSettlementRelation: "followup-parent",
     currentQuestionSettlementDisposition: "committed",
+    settledExecutionPlanTaskMutationCommand: "preserve",
+    settledExecutionPlanExpectedParentId: "parent-167",
+    settledExecutionPlanPostMutationParentId: "parent-167",
     primaryAskNormalizedText: "Explain the original project.",
     meetingMetadataInferenceCommittedCompany: "Google",
     meetingMetadataInferenceCommittedSource: "runtime-inference",
@@ -45,20 +52,25 @@ function Fixture() {
   const [version, refresh] = useState(0);
   const [persistence, setPersistence] = useState({ pending: 0, error: null as string | null });
   const [currentTrace, setTrace] = useState(trace);
+  const sessionId = currentTrace.metadata.effectiveCurrentQuestionSettlementSessionId ?? "session-167";
   const subject = { attemptId: currentTrace.id, traceIds: [currentTrace.id], sourceTurnIds: ["turn-167"] };
   const observed = buildHumanEvaluationAttemptEvidenceV2({ trace: currentTrace, traces: [currentTrace] }).observed;
-  const projection = deriveHumanEvaluationProjectionV2({ sessionId: "session-167", subject, events: fixture.events, observed });
+  const projection = deriveHumanEvaluationProjectionV2({ sessionId, subject, events: fixture.events, observed });
   fixture.projection = projection;
   fixture.persistence = setPersistence;
   fixture.rerender = () => refresh((v) => v + 1);
   fixture.newAttempt = () => setTrace({ ...trace, id: "attempt-168" });
+  fixture.hnsw = hnswTrace;
+  fixture.loadTrace = (next: any) => { fixture.events = []; fixture.calls = []; setTrace(next); };
+  fixture.updateTrace = (metadata: any, status = "success") => setTrace((previous: any) => ({ ...previous, status, metadata }));
+  fixture.loadHnswFacts = () => { fixture.events = structuredClone(hnswHumanFacts); refresh((v) => v + 1); };
   fixture.reset = () => { fixture.events = []; fixture.calls = []; setTrace(trace); refresh((v) => v + 1); };
   fixture.commit = () => {
     fixture.events = [];
-    for (const [index, { fact, options, subject: frozenSubject }] of fixture.calls.entries()) {
+    for (const [index, { fact, options, subject: frozenSubject, sessionId: frozenSessionId }] of fixture.calls.entries()) {
       const previous = findActiveHumanGroundTruthEventV2(fixture.events, frozenSubject, fact.kind);
       fixture.events.push(createHumanGroundTruthEventV2({
-        sessionId: "session-167", subject: frozenSubject, fact, source: "explicit-ui", confirmation: "confirmed",
+        sessionId: frozenSessionId, subject: frozenSubject, fact, source: "explicit-ui", confirmation: "confirmed",
         interaction: options.interaction, supersedesEventId: previous?.eventId,
         eventId: `fixture-event-${index}`, now: index + 1,
       }));
@@ -68,9 +80,11 @@ function Fixture() {
   return <main data-version={version} style={{ maxWidth: 520, margin: "0 auto", padding: 12 }}>
     <TraceHumanEvaluationPanel
       key={currentTrace.id}
-      trace={currentTrace} traces={[currentTrace]} detectedQuestionType="project-deep-dive"
-      detectedPlaybook="project_deep_dive" taxonomyAdjudicationCandidateType="coding"
-      taxonomyAdjudicationDisposition="abstained" taxonomyAdjudicationWouldRepair={true}
+      trace={currentTrace} traces={[currentTrace]} detectedQuestionType={currentTrace.metadata.effectiveCurrentQuestionSettlementQuestionType}
+      detectedPlaybook={currentTrace.metadata.settledExecutionPlanPlaybookId ?? "project_deep_dive"}
+      taxonomyAdjudicationCandidateType={currentTrace.metadata.questionTypeAdjudicationCandidateType}
+      taxonomyAdjudicationDisposition={currentTrace.metadata.questionTypeAdjudicationDisposition}
+      taxonomyAdjudicationWouldRepair={currentTrace.metadata.questionTypeAdjudicationWouldRepair}
       projectionV2={projection}
       memorySnapshot={{ status: "available", snapshot: { entries: [
         { id: "memory-167", title: "Project reliability", score: 1, matchReason: ["project"] },
@@ -81,7 +95,7 @@ function Fixture() {
       onUpdatePreparationArtifactEvaluation={(receiptId: string, label: string) => fixture.preparationCalls.push({ receiptId, label })}
       evaluationPersistence={persistence}
       onRetrySave={() => { fixture.retries++; }}
-      onRecordGroundTruthV2={(fact: any, options: any) => { fixture.calls.push({ fact, options, subject }); }}
+      onRecordGroundTruthV2={(fact: any, options: any) => { fixture.calls.push({ fact, options, subject, sessionId }); }}
       {...{ onUpdate: (...args: any[]) => fixture.legacyCalls.push(args), onUpdateQuestion: (...args: any[]) => fixture.legacyCalls.push(args) }}
     />
   </main>;

@@ -48,7 +48,7 @@ export type ObservedQuestionSourceKind = "voice" | "screen" | "mixed";
 
 export const HUMAN_GROUND_TRUTH_SCHEMA_VERSION = 2 as const;
 export const HUMAN_EVALUATION_DERIVATION_VERSION =
-  "human-evaluation-v2.11";
+  "human-evaluation-v2.12";
 
 export type HumanGroundTruthConfirmation = "confirmed" | "suggested";
 
@@ -204,6 +204,8 @@ export interface HumanEvaluationObservedSnapshotV2 {
   questionType?: CanonicalQuestionType;
   relation?: HumanEvaluationTaskRelation;
   parentAction?: HumanExpectedParentAction;
+  adviseOnly?: boolean;
+  adviseOnlyReason?: string;
   questionSourceKind?: ObservedQuestionSourceKind;
   settledParentId?: string;
   settledChildId?: string;
@@ -680,15 +682,25 @@ export function projectHumanEvaluationObservedFieldsV2(
       "current-only" &&
       readBoolean(metadata.settledExecutionPlanRelationApplicable) ===
         false);
-  const relation: HumanEvaluationTaskRelation | undefined = currentOnly
-    ? "none"
-    : normalizeRelation(
-        metadata.effectiveCurrentQuestionSettlementRelation ??
-          metadata.currentQuestionSettlementRelation ??
-          metadata.settledExecutionPlanTaskRelation ??
-          metadata.taskRelation ??
-          metadata.relationToActiveTask
-      );
+  const planId = readString(metadata.settledExecutionPlanId);
+  const authorizedPlanPresent = Boolean(planId) &&
+    metadata.settledExecutionPlanAuthorized === true;
+  const lifecycleCommitted = metadata.taskLifecycleAuthorized === true &&
+    metadata.taskLifecycleMutationApplied === true &&
+    (!planId || !metadata.taskLifecycleExecutionPlanId ||
+      metadata.taskLifecycleExecutionPlanId === planId);
+  const planUsable = metadata.settledExecutionPlanAuthorized === true ||
+    (!planId && metadata.settledExecutionPlanAuthorized === undefined &&
+      trace.status === "success");
+  const relation = normalizeRelation(
+    (planUsable
+      ? metadata.settledExecutionPlanRelation ?? metadata.settledExecutionPlanTaskRelation
+      : undefined) ??
+    metadata.effectiveCurrentQuestionSettlementRelation ??
+    metadata.currentQuestionSettlementRelation ??
+    metadata.taskRelation ??
+    metadata.relationToActiveTask
+  );
   const parentAction = projectObservedParentAction({
     relation,
     mutationAuthorized: readBoolean(
@@ -708,37 +720,69 @@ export function projectHumanEvaluationObservedFieldsV2(
         childBeforeId: metadata.sourceTransitionChildBeforeId,
         childAfterId: metadata.sourceTransitionChildAfterId,
       }),
-    lifecycleCommand: readString(
-      metadata.settledExecutionPlanTaskMutationCommand
-    ),
+    lifecycleCommand: planUsable || lifecycleCommitted
+      ? readString(metadata.settledExecutionPlanTaskMutationCommand)
+      : undefined,
     currentOnly,
     parentBeforeId: readString(
-      metadata.taskLifecycleParentBeforeId ??
-        metadata.correctionOwnedParentBeforeId ??
-        metadata.currentQuestionSettlementParentBeforeId ??
-        metadata.parentBeforeId ??
-        metadata.previousParentId
-    ),
+      lifecycleCommitted
+        ? metadata.taskLifecycleParentBeforeId ??
+          metadata.correctionOwnedParentBeforeId
+        : metadata.settledExecutionPlanExpectedParentId ??
+          metadata.taskLifecycleParentBeforeId ??
+          metadata.correctionOwnedParentBeforeId ??
+          metadata.currentQuestionSettlementParentBeforeId ??
+          metadata.parentBeforeId ??
+          metadata.previousParentId ??
+          metadata.currentQuestionSettlementActiveParentId ??
+          metadata.activeMeetingParentId
+    ) ?? (authorizedPlanPresent && !lifecycleCommitted ? null : undefined),
     parentAfterId: readString(
-      metadata.taskLifecycleParentAfterId ??
-        metadata.correctionOwnedParentAfterId ??
-        metadata.currentQuestionSettlementParentAfterId ??
-        metadata.parentAfterId ??
-        metadata.nextParentId
-    ),
+      lifecycleCommitted
+        ? metadata.taskLifecycleParentAfterId ??
+          metadata.correctionOwnedParentAfterId
+        : metadata.settledExecutionPlanPostMutationParentId ??
+          metadata.taskLifecycleParentAfterId ??
+          metadata.correctionOwnedParentAfterId ??
+          metadata.currentQuestionSettlementParentAfterId ??
+          metadata.parentAfterId ??
+          metadata.nextParentId
+    ) ?? (authorizedPlanPresent && !lifecycleCommitted ? null : undefined),
     parentBeforeType: normalizeCanonicalQuestionType(
-      metadata.taskLifecycleParentBeforeType ??
-        metadata.correctionOwnedParentBeforeType ??
-        metadata.currentQuestionSettlementParentBeforeType ??
-        metadata.parentBeforeType
+      lifecycleCommitted
+        ? metadata.taskLifecycleParentBeforeType ??
+          metadata.correctionOwnedParentBeforeType
+        : metadata.taskLifecycleParentBeforeType ??
+          metadata.correctionOwnedParentBeforeType ??
+          metadata.currentQuestionSettlementParentBeforeType ??
+          metadata.parentBeforeType
     ),
     parentAfterType: normalizeCanonicalQuestionType(
-      metadata.taskLifecycleParentAfterType ??
-        metadata.correctionOwnedParentAfterType ??
-        metadata.currentQuestionSettlementParentAfterType ??
-        metadata.parentAfterType
+      lifecycleCommitted
+        ? metadata.taskLifecycleParentAfterType ??
+          metadata.correctionOwnedParentAfterType
+        : metadata.taskLifecycleParentAfterType ??
+          metadata.correctionOwnedParentAfterType ??
+          metadata.currentQuestionSettlementParentAfterType ??
+          metadata.parentAfterType
     ),
   });
+  // This describes the existing execution Plan, never artifact Answer-only policy.
+  const adviseOnly = authorizedPlanPresent &&
+    metadata.settledExecutionPlanResponseAuthorized === true &&
+    metadata.settledExecutionPlanResponseIntent === "advise" &&
+    metadata.settledExecutionPlanContextReadScope === "current-only" &&
+    metadata.settledExecutionPlanRelationApplicable === false &&
+    relation === "none" &&
+    metadata.settledExecutionPlanTaskMutationCommand === "preserve" &&
+    (parentAction === "preserve" || parentAction === "none") &&
+    (metadata.settledExecutionPlanResponseOwnerSource === "current-question" ||
+      metadata.settledExecutionPlanResponseOwnerSource === "transient-personal-status");
+  const adviseOnlyReason = adviseOnly ? readString(
+    metadata.settledExecutionPlanTransientPersonalStatusDisposition ??
+      metadata.taskRelationOrderedResolutionReason ??
+      metadata.effectiveAdvisorNullHypothesisReason
+  ) : undefined;
   const advisorAttempt = projectObservedAdvisorAttempt(metadata);
   const runtimeAction = advisorAttempt.runtimeAction;
   const runtimeOperationId = readString(
@@ -759,7 +803,7 @@ export function projectHumanEvaluationObservedFieldsV2(
     metadata,
     answerCommitted
   );
-  const settledParentId = currentOnly
+  const settledParentId = currentOnly && relation === "none"
     ? undefined
     : readString(
         metadata.effectiveCurrentQuestionSettlementParentId ??
@@ -767,7 +811,7 @@ export function projectHumanEvaluationObservedFieldsV2(
           metadata.activeMeetingParentId ??
           metadata.currentQuestionSettlementParentAfterId
       );
-  const settledChildId = currentOnly
+  const settledChildId = currentOnly && relation === "none"
     ? undefined
     : readString(
         metadata.effectiveCurrentQuestionSettlementChildId ??
@@ -820,6 +864,7 @@ export function projectHumanEvaluationObservedFieldsV2(
     questionType,
     relation,
     parentAction,
+    ...(adviseOnly ? { adviseOnly: true, adviseOnlyReason } : {}),
     questionSourceKind,
     settledParentId,
     settledChildId,

@@ -6297,6 +6297,17 @@ const TraceHumanEvaluationPanel = ({
                 (trace.status === "success"
                   ? "ERROR: unresolved action"
                   : "N/A")}
+              {observedSnapshotV2.adviseOnly ? (
+                <span
+                  data-evaluation-advise-only
+                  className="ml-2 font-semibold text-amber-700 dark:text-amber-300"
+                >
+                  Advise-only
+                  {observedSnapshotV2.adviseOnlyReason
+                    ? `: ${observedSnapshotV2.adviseOnlyReason}`
+                    : ""}
+                </span>
+              ) : null}
             </div>
             <div>
               execution: {currentQuestionSettlementDisposition ?? "N/A"}
@@ -6308,13 +6319,6 @@ const TraceHumanEvaluationPanel = ({
                 ? ` / ${trace.metadata.responseOnlyContextReadScope}`
                 : ""}
             </div>
-            {observedRelation === "none" ? (
-              <div>
-                Answer-only / no lifecycle action
-                {typeof trace.metadata?.taskRelationOrderedResolutionReason === "string"
-                  ? `: ${trace.metadata.taskRelationOrderedResolutionReason}` : ""}
-              </div>
-            ) : null}
             <div>parent owner: {observedSnapshotV2.settledParentId ?? "none"}</div>
             <div>branch owner: {observedSnapshotV2.settledBranchId ?? "none"}</div>
             <div>context owner: {observedSnapshotV2.contextOwnerId ?? "none"}</div>
@@ -6366,12 +6370,17 @@ const TraceHumanEvaluationPanel = ({
               variant={taskFixOpen ? "default" : "outline"}
               className="h-7 px-2 text-[10px]"
               onClick={() => {
-                setExpectedQuestionType(
-                  observedQuestionType
+                const saved = activeSettlementFact?.kind === "expected-task-settlement"
+                  ? activeSettlementFact
+                  : undefined;
+                setExpectedQuestionType((current) =>
+                  current ?? saved?.expectedQuestionType ?? observedQuestionType
                 );
-                setExpectedRelation(observedRelation);
-                setExpectedParentAction(
-                  observedParentAction
+                setExpectedRelation((current) =>
+                  current ?? saved?.expectedRelation ?? observedRelation
+                );
+                setExpectedParentAction((current) =>
+                  current ?? saved?.expectedParentAction ?? observedParentAction
                 );
                 setTaskFixOpen((open) => !open);
               }}

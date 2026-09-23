@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type {
-  HumanEvaluationProjectionV2,
-  HumanGroundTruthEventV2,
+import {
+  HUMAN_EVALUATION_DERIVATION_VERSION,
+  type HumanEvaluationProjectionV2,
+  type HumanGroundTruthEventV2,
 } from "../src/lib/meeting/human-ground-truth-v2.js";
 import {
   buildSessionProcedureV1,
@@ -792,7 +793,7 @@ function projection(
     projectionId: `projection:${event.eventId}`,
     sessionId: "meeting-1",
     subject,
-    derivationVersion: "human-evaluation-v2.11",
+    derivationVersion: HUMAN_EVALUATION_DERIVATION_VERSION,
     inputEventIds: [event.eventId],
     semanticInputEventIds: [event.eventId],
     interventionOnlyEventIds: [],

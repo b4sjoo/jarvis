@@ -72,3 +72,11 @@ test("accepts a same-parent retype for a related follow-up", () => {
     }
   );
 });
+
+test("A1: none accepts a confirmed preserve without recommending it away", () => {
+  for (const parentAction of ["none", "preserve"] as const) {
+    const tuple = evaluateTaskSettlementTupleCompatibilityV2({ relation: "none", parentAction });
+    assert.equal(tuple.compatible, true);
+    assert.equal(tuple.recommendedParentAction, parentAction);
+  }
+});

@@ -984,6 +984,7 @@ test("projects the observed runtime tuple from trace metadata", () => {
       advisorOutputCommittedToUi: true,
       primaryAskNormalizedText: "How would retrieval work?",
       settledExecutionPlanContextReadScope: "active-parent-read",
+      settledExecutionPlanTaskMutationCommand: "attach-child",
       settledExecutionPlanArtifactIntent: "revise-whiteboard",
     },
   } as MeetingTrace;
@@ -1136,6 +1137,8 @@ test("prefers a committed source transition over provisional parent authorizatio
     effectiveCurrentQuestionSettlementParentMutationAuthorized: false,
     settledExecutionPlanTaskMutationCommand: "preserve",
     sourceTransitionRuntimeKind: "resume-parent",
+    settledExecutionPlanExpectedParentId: "parent-design",
+    settledExecutionPlanPostMutationParentId: "parent-design",
     sourceTransitionDurableAuthorized: true,
     sourceTransitionDurableMutationApplied: true,
     sourceTransitionParentBeforeId: "parent-design",
@@ -1174,6 +1177,8 @@ test("projects replacement identity only from the coherent committed receipt", (
     effectiveCurrentQuestionSettlementParentMutationAuthorized: true,
     settledExecutionPlanTaskMutationCommand: "preserve",
     taskLifecycleParentBeforeId: "stale-parent-before",
+    settledExecutionPlanExpectedParentId: "parent-design",
+    settledExecutionPlanPostMutationParentId: "parent-design",
     taskLifecycleParentAfterId: "stale-parent-after",
     taskLifecycleParentBeforeType: "coding",
     taskLifecycleParentAfterType: "behavioral",
@@ -1225,6 +1230,9 @@ test("uses the effective settlement while retaining raw abstention diagnostics",
     effectiveCurrentQuestionSettlementRelation: "followup-parent",
     effectiveCurrentQuestionSettlementParentMutationAuthorized: false,
     effectiveCurrentQuestionContextReadScope: "active-parent-read",
+    settledExecutionPlanTaskMutationCommand: "preserve",
+    settledExecutionPlanExpectedParentId: "parent-design",
+    settledExecutionPlanPostMutationParentId: "parent-design",
   };
 
   const observed = buildHumanEvaluationObservedSnapshotV2(trace);
@@ -1234,7 +1242,7 @@ test("uses the effective settlement while retaining raw abstention diagnostics",
   assert.equal(observed.contextReadScope, "active-parent-read");
 });
 
-test("projects current-only execution as no lifecycle action without borrowing an owner", () => {
+test("does not infer an action from current-only with missing Plan parent evidence", () => {
   const trace = buildSettledAttemptTrace({
     id: "trace_current_only",
     status: "success",
@@ -1254,7 +1262,8 @@ test("projects current-only execution as no lifecycle action without borrowing a
   const observed = buildHumanEvaluationObservedSnapshotV2(trace);
   assert.equal(observed.questionType, "behavioral");
   assert.equal(observed.relation, "none");
-  assert.equal(observed.parentAction, "none");
+  assert.equal(observed.parentAction, undefined);
+  assert.equal(observed.adviseOnly, undefined);
   assert.equal(observed.settledParentId, undefined);
   assert.equal(observed.settledChildId, undefined);
   assert.equal(observed.contextReadScope, "current-only");
@@ -1298,6 +1307,9 @@ test("does not pass settlement when relation is right but parent owner is wrong"
     effectiveCurrentQuestionSettlementRelation: "followup-parent",
     effectiveCurrentQuestionSettlementParentMutationAuthorized: false,
     effectiveCurrentQuestionSettlementParentId: "parent_coding",
+    settledExecutionPlanTaskMutationCommand: "preserve",
+    settledExecutionPlanExpectedParentId: "parent_coding",
+    settledExecutionPlanPostMutationParentId: "parent_coding",
     effectiveCurrentQuestionContextReadScope: "active-parent-read",
   };
   const observed = buildHumanEvaluationObservedSnapshotV2(trace);
@@ -1434,6 +1446,30 @@ test("joins explicit correction lifecycle evidence into the terminal attempt pro
       `durable lifecycle receipt should survive ${status} trace status`
     );
   }
+
+  for (const field of ["BeforeId", "AfterId", "BeforeType", "AfterType"]) {
+    correction.metadata[`correctionOwnedParent${field}`] =
+      correction.metadata[`taskLifecycleParent${field}`];
+    delete correction.metadata[`taskLifecycleParent${field}`];
+  }
+  correction.metadata.currentQuestionSettlementParentBeforeId = "uncommitted-parent";
+  correction.metadata.currentQuestionSettlementParentAfterId = "another-uncommitted-parent";
+  correction.metadata.currentQuestionSettlementParentAfterType = "coding";
+  for (const status of ["success", "running", "error", "cancelled"] as const) {
+    correction.status = status;
+    const aliasedReceipt = materializeHumanEvaluationAttemptProjectionV2({
+      trace: regeneration, traces: [regeneration, correction],
+      currentSessionId: "session_retry", events: [], projections: [],
+    });
+    assert.equal(aliasedReceipt.projection?.observed?.parentAction, "retype",
+      `committed correction aliases should survive ${status} trace status`);
+  }
+  delete correction.metadata.correctionOwnedParentAfterType;
+  assert.equal(materializeHumanEvaluationAttemptProjectionV2({
+    trace: regeneration, traces: [regeneration, correction],
+    currentSessionId: "session_retry", events: [], projections: [],
+  }).projection?.observed?.parentAction, undefined,
+  "an incomplete committed receipt must not borrow an uncommitted type");
 });
 
 test("does not guess a replacement action from an incoherent correction trace", () => {

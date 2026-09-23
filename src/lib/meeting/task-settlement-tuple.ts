@@ -48,10 +48,12 @@ export function evaluateTaskSettlementTupleCompatibilityV2(input: {
   relation: TaskSettlementRelationValue;
   parentAction: ParentActionValue;
 }): TaskSettlementTupleCompatibilityV2 {
-  const recommendedParentAction =
-    recommendedParentActionForRelation(input.relation);
   const allowed = allowedParentActionsForRelation(input.relation);
   const compatible = allowed.includes(input.parentAction);
+  const recommendedParentAction =
+    input.relation === "none" && input.parentAction === "preserve"
+      ? "preserve"
+      : recommendedParentActionForRelation(input.relation);
   return {
     compatible,
     relation: input.relation,
@@ -69,8 +71,9 @@ export function projectObservedParentAction(input: {
   committedLifecycleEvidence?: CommittedLifecycleEvidence;
   lifecycleCommand?: string;
   currentOnly: boolean;
-  parentBeforeId?: string;
-  parentAfterId?: string;
+  // null denotes an explicitly absent parent in an authorized Plan snapshot.
+  parentBeforeId?: string | null;
+  parentAfterId?: string | null;
   parentBeforeType?: unknown;
   parentAfterType?: unknown;
 }): ParentActionValue | undefined {
@@ -79,7 +82,6 @@ export function projectObservedParentAction(input: {
       input.committedLifecycleEvidence
     );
   }
-  if (input.currentOnly) return "none";
   const lifecycleCommand = input.lifecycleCommand;
   if (lifecycleCommand === "create-parent") return "create";
   if (lifecycleCommand === "replace-parent") {
@@ -100,29 +102,15 @@ export function projectObservedParentAction(input: {
     lifecycleCommand === "update-parent-context" ||
     lifecycleCommand === "set-phase"
   ) {
-    return "preserve";
+    if (input.parentBeforeId && input.parentBeforeId === input.parentAfterId) {
+      return "preserve";
+    }
+    return input.parentBeforeId === null && input.parentAfterId === null
+      ? "none"
+      : undefined;
   }
-  if (!input.relation) return undefined;
-  if (input.relation === "new-parent") {
-    return input.mutationAuthorized === false ? "none" : "create";
-  }
-  if (input.relation === "child-probe") {
-    return input.mutationAuthorized === false
-      ? "preserve"
-      : "attach-child";
-  }
-  if (input.relation === "resume-parent") {
-    return input.mutationAuthorized === false ? "preserve" : "resume";
-  }
-  if (
-    input.relation === "followup-parent" ||
-    input.relation === "correction" ||
-    input.relation === "logistics"
-  ) {
-    return "preserve";
-  }
-  if (input.relation === "none") return "none";
-  return input.mutationAuthorized === false ? "none" : undefined;
+  // A relation proposal cannot stand in for a lifecycle receipt or final Plan.
+  return undefined;
 }
 
 export function resolveCommittedSourceTransitionLifecycleEvidence(input: {
@@ -189,12 +177,15 @@ function allowedParentActionsForRelation(
   if (relation === "followup-parent") {
     return ["preserve", "retype"];
   }
+  if (relation === "none") {
+    return ["none", "preserve"];
+  }
   return [recommendedParentActionForRelation(relation)];
 }
 
 function isSameParentRetype(input: {
-  parentBeforeId?: string;
-  parentAfterId?: string;
+  parentBeforeId?: string | null;
+  parentAfterId?: string | null;
   parentBeforeType?: unknown;
   parentAfterType?: unknown;
 }) {
