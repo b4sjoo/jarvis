@@ -37150,6 +37150,7 @@ export function useMeetingAssistant() {
     };
   }, []);
 
+  const emptyAdviseDisplay = useMemo(() => buildMeetingAnswerDisplayModel({ content: "" }), []);
   const selectAdviseDisplay = useCallback((sections: MeetingAnswerDisplayModel) => {
     const sessionId = contextManagerRef.current.getState().sessionId;
     const stable = stableAnswerRevisionRef.current;
@@ -37181,14 +37182,14 @@ export function useMeetingAssistant() {
         generationId: displayedStreamRef.current!.generationId,
         logicalQuestionUnitId: displayedStreamRef.current!.logicalQuestionUnitId,
         logicalQuestionRevision: displayedStreamRef.current!.logicalQuestionRevision } : latest?.target ?? { sessionId },
-      sections: streaming ? streamSections : latest?.sections ?? buildMeetingAnswerDisplayModel({ content: "" }),
+      sections: streaming ? streamSections : latest?.sections ?? emptyAdviseDisplay,
       stable: streaming ? null : stable, streaming,
     };
     const selected = manualAdviseDisplayRef.current.select(current, latest);
     return { ...selected, locked: manualAdviseDisplayRef.current.locked,
       backgroundUpdated: manualAdviseDisplayRef.current.locked && Boolean(stable &&
         (selected.stable?.revision !== stable.revision || selected.stable?.suggestion.id !== stable.suggestion.id)) };
-  }, [state.partialSuggestion, state.latestSuggestion]);
+  }, [state.partialSuggestion, state.latestSuggestion, emptyAdviseDisplay]);
 
   const recordAdviseDisplayApplied = useCallback((target: AdviseDisplayTarget, surface: "normal-mode" | "focus-mode", locked?: boolean) => {
     if (surface === "focus-mode" && locked !== undefined) {

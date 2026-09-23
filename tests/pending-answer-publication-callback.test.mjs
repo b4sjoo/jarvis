@@ -363,6 +363,9 @@ function createHarness(options = {}) {
     },
   };
   const context = vm.createContext(environment);
+  environment.emptyAdviseDisplay = vm.runInContext(
+    transpile(`(${findCallbackSource("emptyAdviseDisplay")})()`), context
+  );
   for (const source of Object.values(helperSources)) {
     vm.runInContext(transpile(source), context);
   }

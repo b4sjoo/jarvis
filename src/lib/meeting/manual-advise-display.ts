@@ -51,8 +51,43 @@ function hasConsistentStable(snapshot: AdviseDisplaySnapshot) {
     stable.revision === target.stableRevision);
 }
 
+// Display DTOs contain only scalar values, arrays and plain objects.
+function sameDisplayValue(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return Array.isArray(a) && Array.isArray(b) && a.length === b.length &&
+      a.every((value, index) => sameDisplayValue(value, b[index]));
+  }
+  if (!a || !b || typeof a !== "object" || typeof b !== "object") return false;
+  const left = a as Record<string, unknown>, right = b as Record<string, unknown>;
+  const keys = Object.keys(left);
+  return keys.length === Object.keys(right).length &&
+    keys.every(key => Object.hasOwn(right, key) && sameDisplayValue(left[key], right[key]));
+}
+
+function sameDisplaySnapshot(a: AdviseDisplaySnapshot | null, b: AdviseDisplaySnapshot) {
+  if (!a || !sameAdviseDisplayTarget(a.target, b.target) ||
+      a.streaming !== b.streaming || a.stable !== b.stable) return false;
+  const { parsedAnswer: parsedA, ...sectionsA } = a.sections;
+  const { parsedAnswer: parsedB, ...sectionsB } = b.sections;
+  // The Hook may reparse the same stream on a recorder render. Time is not display content.
+  const { parsedAt: _timeA, ...contentA } = parsedA;
+  const { parsedAt: _timeB, ...contentB } = parsedB;
+  return sameDisplayValue(sectionsA, sectionsB) && sameDisplayValue(contentA, contentB);
+}
+
+function freezeDisplayCopy<T>(value: T): T {
+  if (value && typeof value === "object") {
+    Object.values(value).forEach(freezeDisplayCopy);
+    Object.freeze(value);
+  }
+  return value;
+}
+
 function copyDisplaySnapshot(snapshot: AdviseDisplaySnapshot): AdviseDisplaySnapshot {
-  return { ...snapshot, target: { ...snapshot.target }, sections: structuredClone(snapshot.sections) };
+  // Stable is already owned immutably by the publisher; freeze only our detached display copy.
+  return Object.freeze({ ...snapshot, target: Object.freeze({ ...snapshot.target }),
+    sections: freezeDisplayCopy(structuredClone(snapshot.sections)) });
 }
 
 /** One LQU selection with its last completion/preview; latest stays with the caller. */
@@ -110,8 +145,10 @@ export class ManualAdviseDisplay {
       if (latestInSession) this.complete(latestInSession);
       if (current.streaming && current.target.generationId && this.accepts(current.target) &&
           !(this.completed && sameGeneration(current.target, this.completed.target))) {
-        this.selection = { ...current.target };
-        this.pinned = copyDisplaySnapshot(current);
+        if (!sameDisplaySnapshot(this.pinned, current)) {
+          this.selection = { ...current.target };
+          this.pinned = copyDisplaySnapshot(current);
+        }
       }
     }
     this.displayed = this.pinned ?? (this.showCompletedUntilApplied ? latestInSession ?? current : current);

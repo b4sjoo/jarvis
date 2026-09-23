@@ -366,3 +366,105 @@ test("B-C5/8 independent sections and stable provenance survive A updates and un
   assert.deepEqual(unlocked.stable!.sections, originals[1].stable!.sections);
   assert.deepEqual([a, b, replacement], originals);
 });
+
+function lockedStream() {
+  const display = new ManualAdviseDisplay();
+  const current = snapshot("A", 1, true);
+  current.sections.clarifyingOptions = [{ id: "a", label: "First", value: "first" }];
+  current.sections.parsedAnswer.sections.clarifyingOptions = structuredClone(current.sections.clarifyingOptions);
+  display.select(current, null);
+  assert.equal(display.toggle().accepted, true);
+  return { display, current, selected: display.select(current, null) };
+}
+
+test("BF1 unchanged locked stream reads reuse the snapshot and nested options, including reparsed input", () => {
+  const { display, current, selected } = lockedStream();
+  for (let render = 0; render < 10; render++) {
+    const reparsed = structuredClone(current);
+    reparsed.sections.parsedAnswer.parsedAt += render + 1;
+    assert.equal(display.select(reparsed, snapshot("B", 2)), selected);
+    assert.equal(display.current?.sections.clarifyingOptions, selected.sections.clarifyingOptions);
+    assert.equal(display.current?.sections.parsedAnswer, selected.sections.parsedAnswer);
+  }
+});
+
+test("BF1 cached stream is isolated from input mutation and capture mutation, and remains read-only", () => {
+  const { display, current, selected } = lockedStream();
+  const original = structuredClone(selected);
+  current.sections.clarifyingOptions[0].label = "Changed input";
+  current.sections.parsedAnswer.sections.code = "changed parsed code";
+  current.target.generationId = "A-prime";
+  assert.deepEqual(selected, original);
+  const captured = display.capture()!;
+  captured.sections.clarifyingOptions[0].value = "changed capture";
+  captured.sections.parsedAnswer.recognizedLabels.push("changed capture");
+  assert.deepEqual(display.current, original);
+  assert.throws(() => { selected.sections.clarifyingOptions[0].label = "changed output"; }, TypeError);
+  assert.throws(() => { selected.sections.parsedAnswer.sections.code = "changed output"; }, TypeError);
+  assert.throws(() => { selected.target.generationId = "changed output"; }, TypeError);
+  const next = display.select(current, null);
+  assert.notEqual(next, selected);
+  assert.equal(next.sections.clarifyingOptions[0].label, "Changed input");
+  assert.equal(next.target.generationId, "A-prime");
+});
+
+test("BF1 every display field, option detail and parser content invalidates an unchanged stream read", () => {
+  const changes: Array<(s: AdviseDisplaySnapshot) => void> = [
+    ...(["primaryAnswer", "chineseThinking", "focusedQuestion", "approach", "whiteboard", "code", "complexity", "clarifyingQuestion"] as const)
+      .map(key => (s: AdviseDisplaySnapshot) => { s.sections[key] += " changed"; }),
+    s => { s.sections.profile = "compact-spoken"; },
+    s => { s.sections.hasTechnicalDetails = !s.sections.hasTechnicalDetails; },
+    ...(["id", "label", "value"] as const).map(key => (s: AdviseDisplaySnapshot) => { s.sections.clarifyingOptions[0][key] += " changed"; }),
+    s => { s.sections.clarifyingOptions.push({ id: "b", label: "Second", value: "second" }); },
+    s => { s.sections.clarifyingOptions = []; },
+    s => { s.sections.parsedAnswer.rawContent += "\nraw-only chunk"; },
+    s => { s.sections.parsedAnswer.profile = "compact-spoken"; },
+    s => { s.sections.parsedAnswer.sections.code += " changed"; },
+    s => { s.sections.parsedAnswer.sections.clarifyingOptions[0].value += " changed"; },
+    s => { s.sections.parsedAnswer.supportingAnchorIds.push("anchor"); },
+    s => { s.sections.parsedAnswer.recognizedLabels.push("label"); },
+    s => { s.sections.parsedAnswer.missingExpectedSections.push("code"); },
+  ];
+  for (const change of changes) {
+    const { display, current, selected } = lockedStream();
+    change(current);
+    const next = display.select(current, null);
+    assert.notEqual(next, selected, change.toString());
+    assert.deepEqual(next.sections, current.sections, change.toString());
+    assert.equal(display.select(structuredClone(current), null), next, change.toString());
+  }
+  const { display, current, selected } = lockedStream();
+  current.sections.clarifyingOptions = [
+    ...current.sections.clarifyingOptions, { id: "b", label: "Second", value: "second" },
+  ];
+  const two = display.select(current, null);
+  current.sections.clarifyingOptions.reverse();
+  assert.notEqual(display.select(current, null), two);
+  assert.equal(selected.sections.clarifyingOptions.length, 1);
+});
+
+test("BF1 complete target identity and partial-to-final transitions retain the selection rules", () => {
+  for (const change of [
+    { generationId: "A-prime" }, { traceId: "trace-A-prime" }, { logicalQuestionRevision: 2 },
+    { suggestionId: "new-id" }, { stableRevision: 2 },
+  ]) {
+    const { display, current, selected } = lockedStream();
+    Object.assign(current.target, change);
+    const next = display.select(current, null);
+    assert.notEqual(next, selected);
+    assert.deepEqual(next.target, current.target);
+    assert.equal(display.select(structuredClone(current), null), next);
+  }
+  const { display, current, selected } = lockedStream();
+  const other = { ...current, target: { ...current.target, logicalQuestionUnitId: "B" } };
+  assert.equal(display.select(other, null), selected, "a different LQU cannot displace the lock");
+  const completed = snapshot("A");
+  const final = display.select(completed, completed);
+  assert.notEqual(final, selected);
+  assert.equal(final.streaming, false);
+  assert.equal(final.stable, completed.stable);
+  assert.equal(display.select(current, completed), final, "late partial cannot replace final");
+  const nextSession = { ...current, target: { ...current.target, sessionId: "next-session" } };
+  assert.equal(display.select(nextSession, null), nextSession);
+  assert.equal(display.locked, false);
+});
