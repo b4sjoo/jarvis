@@ -85,6 +85,8 @@ import {
   getActiveMeetingTaskId,
   hasManualQuestionTypeCorrectionPresentationTarget,
   buildMeetingAnswerDisplayModel,
+  buildHumanEvaluationSelectionSnapshot,
+  captureHumanGroundTruthEvaluationTarget,
   decideForceAdviseEligibility,
   evaluateTaskSettlementTupleCompatibilityV2,
   findQuestionHumanEvaluationForTrace,
@@ -668,13 +670,15 @@ export const MeetingAssistant = ({
       ),
     [displaySuggestion, meeting.latestReliableSuggestion]
   );
+  const currentEvaluationQuestionKey = JSON.stringify(meeting.currentQuestionForEvaluation);
   const evaluationTarget = useMemo(
     () =>
       resolveSettledAttemptEvaluationTarget({
         suggestion: meeting.latestSuggestion,
-        answerInProgress:
+        currentQuestion: meeting.currentQuestionForEvaluation,
+        answerInProgress: meeting.evaluationQuestionPending || (
           meeting.status === "thinking" &&
-          Boolean(meeting.partialSuggestion.trim()),
+          Boolean(meeting.partialSuggestion.trim())),
         traces: meeting.traces,
         currentSessionId: meeting.meetingSessionId,
         pinnedDisplay: adviseDisplay.locked ? {
@@ -686,6 +690,8 @@ export const MeetingAssistant = ({
       meeting.latestSuggestion,
       meeting.partialSuggestion,
       meeting.meetingSessionId,
+      currentEvaluationQuestionKey,
+      meeting.evaluationQuestionPending,
       meeting.status,
       meeting.traces,
       displayTargetKey,
@@ -696,6 +702,26 @@ export const MeetingAssistant = ({
   const evaluationTrace = evaluationTarget.traceId
     ? meeting.traces.find((trace) => trace.id === evaluationTarget.traceId)
     : undefined;
+  const evaluationSelection = buildHumanEvaluationSelectionSnapshot({
+    currentSessionId: meeting.meetingSessionId,
+    currentQuestion: meeting.currentQuestionForEvaluation,
+    locked: adviseDisplay.locked,
+    displayTarget: adviseDisplay.target,
+    target: evaluationTarget,
+    trace: evaluationTrace,
+  });
+  const evaluationSelectionKey = JSON.stringify({
+    recordingSessionId: meeting.sessionRecording?.sessionId,
+    selection: evaluationSelection,
+  });
+  const lastRecordedEvaluationSelectionRef = useRef<string | undefined>(undefined);
+  const evaluationPanelShown = open && !isFocusMode && meeting.settings.debugMode &&
+    evaluationTarget.status !== "none";
+  useEffect(() => {
+    if (!evaluationPanelShown || lastRecordedEvaluationSelectionRef.current === evaluationSelectionKey) return;
+    lastRecordedEvaluationSelectionRef.current = evaluationSelectionKey;
+    meeting.recordHumanEvaluationSelection(evaluationSelection);
+  }, [evaluationPanelShown, evaluationSelectionKey, meeting.recordHumanEvaluationSelection]);
   const evaluationSessionId = typeof evaluationTrace?.metadata?.effectiveCurrentQuestionSettlementSessionId === "string"
     ? evaluationTrace.metadata.effectiveCurrentQuestionSettlementSessionId : meeting.meetingSessionId;
   useEffect(() => { void meeting.loadHumanEvaluationSession(evaluationSessionId); }, [evaluationSessionId, meeting.loadHumanEvaluationSession]);
@@ -2923,6 +2949,11 @@ export const MeetingAssistant = ({
                             fact,
                             {
                               ...options,
+                              evaluationTarget: captureHumanGroundTruthEvaluationTarget({
+                                trace: evaluationTrace,
+                                evaluation: answerQuestionEvaluation,
+                                frozenAt: Date.now(),
+                              }),
                               uiSurface: "normal-debug-evaluation",
                             }
                           );

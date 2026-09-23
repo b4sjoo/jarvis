@@ -15,7 +15,15 @@ import type {
   PersonalStatusDomain,
 } from "./types";
 import { normalizeMemoryRetrievalEvaluationSnapshot } from "./memory-evaluation.js";
-import { resolveHumanEvaluationAttemptIdentityV2 } from "./human-evaluation-attempt.js";
+import {
+  resolveHumanEvaluationAttemptIdentityV2,
+  resolveHumanEvaluationAttemptRevisionV2,
+} from "./human-evaluation-attempt.js";
+import {
+  buildHumanGroundTruthSubjectV2,
+  type HumanGroundTruthEvaluationTargetV2,
+} from "./human-ground-truth-v2.js";
+import type { AdviseDisplayTarget } from "./manual-advise-display.js";
 import { projectObservedAdvisorAttempt } from "./observed-advisor-outcome.js";
 import {
   fromHumanEvalQuestionType,
@@ -84,6 +92,93 @@ export interface VisibleAnswerEvaluationTarget {
     | "no-evaluation-target";
 }
 
+export interface CurrentQuestionEvaluationIdentity {
+  sessionId: string;
+  logicalQuestionUnitId: string;
+  logicalQuestionRevision: number;
+}
+
+export interface HumanEvaluationSelectionSnapshot {
+  currentSessionId?: string;
+  currentQuestion?: CurrentQuestionEvaluationIdentity;
+  locked: boolean;
+  displayTarget: AdviseDisplayTarget;
+  target: VisibleAnswerEvaluationTarget;
+  attempt?: {
+    attemptId: string;
+    sessionId: string;
+    logicalQuestionUnitId: string;
+    logicalQuestionRevision?: number;
+    status: MeetingTrace["status"];
+  };
+}
+
+export function buildHumanEvaluationSelectionSnapshot(input: {
+  target: VisibleAnswerEvaluationTarget;
+  currentSessionId?: string;
+  currentQuestion?: CurrentQuestionEvaluationIdentity;
+  locked: boolean;
+  displayTarget: AdviseDisplayTarget;
+  trace?: MeetingTrace;
+}): HumanEvaluationSelectionSnapshot {
+  const { currentQuestion, displayTarget, target } = input;
+  const trace = input.trace?.id === target.traceId ? input.trace : undefined;
+  const identity = trace && resolveHumanEvaluationAttemptIdentityV2(trace);
+  // Whitelist identity fields so token/text updates cannot change the observation.
+  return {
+    currentSessionId: input.currentSessionId,
+    currentQuestion: currentQuestion && {
+      sessionId: currentQuestion.sessionId,
+      logicalQuestionUnitId: currentQuestion.logicalQuestionUnitId,
+      logicalQuestionRevision: currentQuestion.logicalQuestionRevision,
+    },
+    locked: input.locked,
+    displayTarget: {
+      sessionId: displayTarget.sessionId,
+      logicalQuestionUnitId: displayTarget.logicalQuestionUnitId,
+      logicalQuestionRevision: displayTarget.logicalQuestionRevision,
+      suggestionId: displayTarget.suggestionId,
+      traceId: displayTarget.traceId,
+      generationId: displayTarget.generationId,
+      stableRevision: displayTarget.stableRevision,
+    },
+    target: {
+      status: target.status,
+      reason: target.reason,
+      traceId: target.traceId,
+    },
+    attempt: identity && trace ? {
+      attemptId: identity.attemptId,
+      sessionId: identity.sessionId,
+      logicalQuestionUnitId: identity.logicalQuestionUnitId,
+      logicalQuestionRevision: resolveHumanEvaluationAttemptRevisionV2(trace),
+      status: trace.status,
+    } : undefined,
+  };
+}
+
+export function captureHumanGroundTruthEvaluationTarget(input: {
+  trace: MeetingTrace;
+  evaluation?: QuestionHumanEvaluation;
+  frozenAt: number;
+}): HumanGroundTruthEvaluationTargetV2 {
+  const subject = buildHumanGroundTruthSubjectV2(input);
+  const identity = resolveHumanEvaluationAttemptIdentityV2(input.trace);
+  return {
+    attemptId: input.trace.id,
+    questionId: subject.questionId,
+    taskId: subject.taskId,
+    logicalQuestionUnitId: identity?.logicalQuestionUnitId,
+    logicalQuestionUnitRevision: resolveHumanEvaluationAttemptRevisionV2(input.trace),
+    currentTurnId:
+      readMetadataString(input.trace.metadata, "currentTurnId") ??
+      readMetadataString(input.trace.metadata, "logicalQuestionCurrentTurnId"),
+    sourceTurnIds: [...subject.sourceTurnIds],
+    sourceTraceId: input.trace.id,
+    frozenAt: input.frozenAt,
+  };
+}
+
 export function findQuestionHumanEvaluationForTrace(
   evaluations: QuestionHumanEvaluation[],
   traceId: string
@@ -100,6 +195,7 @@ export function resolveSettledAttemptEvaluationTarget(input: {
   answerInProgress?: boolean;
   traces: MeetingTrace[];
   currentSessionId?: string;
+  currentQuestion?: CurrentQuestionEvaluationIdentity;
   pinnedDisplay?: { suggestion: AdvisorSuggestion | null; streaming: boolean; traceId?: string };
 }): VisibleAnswerEvaluationTarget {
   if (input.pinnedDisplay) {
@@ -112,21 +208,32 @@ export function resolveSettledAttemptEvaluationTarget(input: {
       traces: input.traces,
     });
   }
-  const attempt = input.traces.find((trace) => {
+  const current = input.currentQuestion;
+  if (!current && !input.suggestion && !input.answerInProgress) {
+    return { status: "none", reason: "no-evaluation-target" };
+  }
+  if (current && (
+    !current.sessionId.trim() ||
+    !current.logicalQuestionUnitId.trim() ||
+    !Number.isSafeInteger(current.logicalQuestionRevision) ||
+    current.logicalQuestionRevision < 0 ||
+    (input.currentSessionId && current.sessionId !== input.currentSessionId)
+  )) {
+    return { status: "unavailable", reason: "no-evaluation-target" };
+  }
+  const attempt = current ? input.traces.find((trace) => {
     const identity = resolveHumanEvaluationAttemptIdentityV2(trace);
     return Boolean(
       identity &&
-        (!input.currentSessionId ||
-          identity.sessionId === input.currentSessionId)
+        identity.sessionId === current.sessionId &&
+        identity.logicalQuestionUnitId === current.logicalQuestionUnitId &&
+        resolveHumanEvaluationAttemptRevisionV2(trace) === current.logicalQuestionRevision
     );
-  });
+  }) : undefined;
   if (!attempt) {
-    return resolveVisibleAnswerEvaluationTarget({
-      suggestion: input.suggestion,
-      answerInProgress: input.answerInProgress,
-      traces: input.traces,
-      latestTraceId: input.traces[0]?.id,
-    });
+    return input.answerInProgress
+      ? { status: "pending", reason: "partial-answer-in-progress" }
+      : { status: "unavailable", reason: "no-evaluation-target" };
   }
 
   if (attempt.status === "running") {

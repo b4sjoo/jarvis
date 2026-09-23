@@ -55,6 +55,9 @@ function buildSettledTrace(
       effectiveCurrentQuestionSettlementUnitId: questionId,
       effectiveCurrentQuestionSettlementSessionId: "session_1",
       effectiveCurrentQuestionSettlementSourceHash: `hash:${id}`,
+      effectiveCurrentQuestionSettlementRevision: 2,
+      effectiveCurrentQuestionSettlementUnitRevision: 1,
+      currentQuestionSettlementRevision: 1,
     },
   };
 }
@@ -93,6 +96,9 @@ test("binds evaluation to a newer failed screen attempt instead of an old visibl
         ),
       ],
       currentSessionId: "session_1",
+      currentQuestion: {
+        sessionId: "session_1", logicalQuestionUnitId: "question_screen", logicalQuestionRevision: 1,
+      },
     }),
     {
       status: "trace-only",
@@ -115,11 +121,13 @@ test("uses runtime meeting identity rather than recording identity for attempt s
         ),
       ],
       currentSessionId: "session_recording_1",
+      currentQuestion: {
+        sessionId: "session_1", logicalQuestionUnitId: "question_current", logicalQuestionRevision: 1,
+      },
     }),
     {
       status: "unavailable",
-      traceId: "trace_old",
-      reason: "suggestion-source-trace-missing",
+      reason: "no-evaluation-target",
     }
   );
 
@@ -135,6 +143,9 @@ test("uses runtime meeting identity rather than recording identity for attempt s
         ),
       ],
       currentSessionId: "session_1",
+      currentQuestion: {
+        sessionId: "session_1", logicalQuestionUnitId: "question_current", logicalQuestionRevision: 1,
+      },
     }).traceId,
     "trace_current"
   );
@@ -159,6 +170,9 @@ test("keeps a cancelled screen attempt as an independent evaluation target", () 
         ),
       ],
       currentSessionId: "session_1",
+      currentQuestion: {
+        sessionId: "session_1", logicalQuestionUnitId: "question_screen", logicalQuestionRevision: 1,
+      },
     }).traceId,
     "trace_screen"
   );
@@ -178,6 +192,9 @@ test("shows a settled running attempt as pending without falling back", () => {
         ),
       ],
       currentSessionId: "session_1",
+      currentQuestion: {
+        sessionId: "session_1", logicalQuestionUnitId: "question_running", logicalQuestionRevision: 1,
+      },
     }),
     {
       status: "pending",
@@ -208,6 +225,9 @@ test("ignores newer traces that do not yet have a stable settlement", () => {
       suggestion: buildSuggestion("suggestion_settled", "trace_settled"),
       traces: [unsettled, settled],
       currentSessionId: "session_1",
+      currentQuestion: {
+        sessionId: "session_1", logicalQuestionUnitId: "question_settled", logicalQuestionRevision: 1,
+      },
     }),
     {
       status: "ready",

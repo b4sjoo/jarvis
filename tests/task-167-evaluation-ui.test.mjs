@@ -22,7 +22,7 @@ const visit = node => {
 };
 visit(ast);
 assert.ok(attemptSection, "production attempt wrapper must be tested, not only its child panel");
-const selectionStart = source.search(/const (?:currentEvaluationTarget|evaluationTarget) = useMemo\(/);
+const selectionStart = source.indexOf("const currentEvaluationQuestionKey =");
 const selectionEnd = source.indexOf("const currentTranscriptTurnIds", selectionStart);
 assert.ok(selectionStart > 0 && selectionEnd > selectionStart);
 const attemptSelection = source.slice(selectionStart, selectionEnd);
@@ -62,7 +62,7 @@ test("E167-8: real production React JSX, optional labels, specialist facts and p
   // Only imported bindings outside the evaluation subtree receive inert stubs.
   for (const module of ["@/lib/meeting", "@/components"]) {
     const importBlock = [...source.matchAll(/import\s*\{([^}]+)\}\s*from\s*"([^"]+)"/g)].find((match) => match[2] === module)?.[1] ?? "";
-    const used = new Set(module === "@/components" ? [...primitives, "Markdown"] : ["freezeObservedTaskOwnerIdentityV2", "evaluateTaskSettlementTupleCompatibilityV2", "normalizeCanonicalQuestionType", "projectQuestionTypeObservation", "projectMeetingMetadataEvaluationObservation", "resolveSettledAttemptEvaluationTarget", "findQuestionHumanEvaluationForTrace", "resolveTraceMemoryEvaluationSnapshot", "selectPreparationArtifactUseReceiptsForEvaluation"]);
+    const used = new Set(module === "@/components" ? [...primitives, "Markdown"] : ["freezeObservedTaskOwnerIdentityV2", "evaluateTaskSettlementTupleCompatibilityV2", "normalizeCanonicalQuestionType", "projectQuestionTypeObservation", "projectMeetingMetadataEvaluationObservation", "resolveSettledAttemptEvaluationTarget", "buildHumanEvaluationSelectionSnapshot", "captureHumanGroundTruthEvaluationTarget", "findQuestionHumanEvaluationForTrace", "resolveTraceMemoryEvaluationSnapshot", "selectPreparationArtifactUseReceiptsForEvaluation"]);
     for (const name of importBlock.split(",").map((s) => s.trim()).filter(Boolean)) {
       if (!used.has(name)) mocks[module] += `\nexport const ${name} = () => null;`;
     }
@@ -83,10 +83,11 @@ test("E167-8: real production React JSX, optional labels, specialist facts and p
       builder.onLoad({ filter: /meeting\/index\.tsx$/ }, (args) => ({
         contents: readFileSync(args.path, "utf8") + `
           export { TraceHumanEvaluationPanel };
-          export function AttemptEvaluationFixture({meeting, adviseDisplay}) {
+          export function AttemptEvaluationFixture({meeting, adviseDisplay, open = true}) {
+            const isFocusMode = false;
             const displayTargetKey = JSON.stringify(adviseDisplay.target);
             ${attemptSelection}
-            return (${attemptSection});
+            return open ? (${attemptSection}) : null;
           }
         `, loader: "tsx", resolveDir: path.dirname(args.path),
       }));
@@ -326,6 +327,50 @@ test("E167-8: real production React JSX, optional labels, specialist facts and p
       assert.equal(await page.getByText("trace: attempt-B", { exact: true }).count(), 0);
       await page.evaluate(() => window.__attempt.unlock());
       await page.getByText("trace: attempt-B", { exact: true }).waitFor();
+    });
+    await t.test("B survives historical A regeneration/enhancement through unlock, evaluation and delayed save", async () => {
+      await page.evaluate(() => window.__attempt.reset());
+      await page.getByText("trace: attempt-A", { exact: true }).waitFor();
+      await page.evaluate(() => window.__attempt.pin());
+      await page.evaluate(() => window.__attempt.publish("B"));
+      await page.evaluate(() => window.__attempt.amendSelected("A-regenerate"));
+      await page.getByText("trace: attempt-A-regenerate", { exact: true }).waitFor();
+      await page.evaluate(() => window.__attempt.amendSelected("A-enhance"));
+      await page.getByText("trace: attempt-A-enhance", { exact: true }).waitFor();
+      await page.getByText("Human evaluation", { exact: true }).click();
+      await group("answer-quality").getByRole("button", { name: "Useful", exact: true }).click();
+      await page.evaluate(() => window.__attempt.unlock());
+      await page.getByText("trace: attempt-B", { exact: true }).waitFor();
+      await page.getByText("Human evaluation", { exact: true }).click();
+      await group("answer-quality").getByRole("button", { name: "Useful", exact: true }).click();
+      const calls = await page.evaluate(() => window.__attempt.calls);
+      assert.deepEqual(calls.map(call => call.traceId), ["attempt-A-enhance", "attempt-B"]);
+      assert.equal(calls[0].options.evaluationTarget.logicalQuestionUnitId, "unit-A");
+      assert.equal(calls[1].options.evaluationTarget.logicalQuestionUnitId, "unit-B");
+      assert.equal(calls[1].options.evaluationTarget.attemptId, "attempt-B");
+      await page.evaluate(() => window.__attempt.publish("C", "error", false));
+      await page.getByText("trace: attempt-C", { exact: true }).waitFor();
+      await page.evaluate(() => window.__attempt.finishSave(1));
+      assert.equal(await page.evaluate(() => window.__attempt.saved[0].options.evaluationTarget.attemptId), "attempt-B");
+    });
+    await t.test("selection observation quiesces across recorder rerenders and only records a shown changed target", async () => {
+      await page.evaluate(() => window.__attempt.reset());
+      await page.getByText("trace: attempt-A", { exact: true }).waitFor();
+      const count = await page.evaluate(() => window.__attempt.observations.length);
+      await page.evaluate(() => { for (let i = 0; i < 20; i++) window.__attempt.rerender(); });
+      assert.equal(await page.evaluate(() => window.__attempt.observations.length), count);
+      await page.evaluate(() => window.__attempt.showPanel(false));
+      await page.evaluate(() => window.__attempt.publish("B"));
+      assert.equal(await page.evaluate(() => window.__attempt.observations.length), count);
+      await page.evaluate(() => window.__attempt.showPanel(true));
+      await page.getByText("trace: attempt-B", { exact: true }).waitFor();
+      const observations = await page.evaluate(() => window.__attempt.observations);
+      assert.equal(observations.length, count + 1);
+      assert.equal(observations.at(-1).currentQuestion.logicalQuestionUnitId, "unit-B");
+      assert.equal(observations.at(-1).attempt.attemptId, "attempt-B");
+      assert.equal(JSON.stringify(observations).includes("Response B"), false);
+      await page.evaluate(() => window.__attempt.rerender());
+      assert.equal(await page.evaluate(() => window.__attempt.observations.length), count + 1);
     });
     await t.test("new attempt clears unsent drafts and failed/no-answer attempts remain evaluable", async () => {
       await page.evaluate(() => window.__attempt.reset());

@@ -4,6 +4,7 @@ import { UnpublishedArtifactSlot, type UnpublishedArtifactOffer, type Unpublishe
 import { buildMeetingAnswerDisplayModel, overlayMeetingAnswerArtifacts, type MeetingAnswerDisplayModel } from "../lib/meeting/meeting-answer-display.js";
 import { humanEvaluationStore } from "../lib/meeting/human-evaluation-store.js";
 import type { HumanGroundTruthEventV2, HumanEvaluationProjectionV2 } from "../lib/meeting/human-ground-truth-v2.js";
+import type { CurrentQuestionEvaluationIdentity, HumanEvaluationSelectionSnapshot } from "../lib/meeting/human-evaluation.js";
 import {
   useCallback,
   useEffect,
@@ -8696,6 +8697,14 @@ export function useMeetingAssistant() {
     },
     []
   );
+
+  const recordHumanEvaluationSelection = useCallback((selection: HumanEvaluationSelectionSnapshot) => {
+    sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+      stage: "human-evaluation-target-selected",
+      surface: "normal-debug-evaluation",
+      ...selection,
+    });
+  }, []);
 
   const recordHumanGroundTruthV2 = useCallback(
     (
@@ -37253,12 +37262,27 @@ export function useMeetingAssistant() {
   }, [recordManualRuntimeAction, tryCommitPendingAnswer]);
 
   const presentationSessionId = contextManagerRef.current.getState().sessionId;
+  // This source is published before generation and is not replaced by a pinned historical job.
+  const evaluationSettlement = currentQuestionSettlementRef.current;
+  const currentQuestionForEvaluation: CurrentQuestionEvaluationIdentity | undefined =
+    evaluationSettlement?.sessionId === presentationSessionId
+      ? {
+          sessionId: evaluationSettlement.sessionId,
+          logicalQuestionUnitId: evaluationSettlement.logicalQuestionUnitId,
+          logicalQuestionRevision: evaluationSettlement.revision,
+        }
+      : undefined;
+  const evaluationQuestionPending = !currentQuestionForEvaluation &&
+    logicalQuestionUnitRef.current?.sessionId === presentationSessionId;
   return {
     ...state,
     selectAdviseDisplay,
     recordAdviseDisplayApplied,
     toggleAdvisePin,
     meetingSessionId: presentationSessionId,
+    currentQuestionForEvaluation,
+    evaluationQuestionPending,
+    recordHumanEvaluationSelection,
     phaseOutputNotice: buildBranchPhaseOutputNotice({
       parent: state.taskRuntime.parent,
       stable: manualAdviseDisplayRef.current.selectedStable ?? stableAnswerRevisionRef.current,

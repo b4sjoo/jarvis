@@ -886,12 +886,14 @@ test("ML7 actual evaluation label handler captures rendered A even with a newer 
   const panel=find(ui,n=>ts.isJsxSelfClosingElement(n)&&n.tagName.getText(ui)==="TraceHumanEvaluationPanel"&&n.getText(ui).includes("key={evaluationTrace.id}"));
   const attribute=panel.attributes.properties.find(n=>n.name?.getText(ui)==="onRecordGroundTruthV2");
   const writes=[];
-  const context=vm.createContext({evaluationTrace:{id:"trace-A"},meeting:{traces:[{id:"trace-B"},{id:"trace-A"}],
+  const context=vm.createContext({captureHumanGroundTruthEvaluationTarget:modules.captureHumanGroundTruthEvaluationTarget,
+    answerQuestionEvaluation:undefined,evaluationTrace:{id:"trace-A",metadata:{}},meeting:{traces:[{id:"trace-B"},{id:"trace-A"}],
     recordHumanGroundTruthV2:(...args)=>writes.push(args)}});
   const handler=evaluate(`(${attribute.initializer.expression.getText(ui)})`,context);
   handler({kind:"answer-quality",outcome:"ok"},{source:"human"});
   assert.equal(writes[0][0],"trace-A");
   assert.equal(writes[0][2].uiSurface,"normal-debug-evaluation");
+  assert.equal(writes[0][2].evaluationTarget.attemptId,"trace-A");
 });
 
 test("ML1 actual shortcut callback reaches the same pin handler with frontend receipt identity and debounce",()=>{

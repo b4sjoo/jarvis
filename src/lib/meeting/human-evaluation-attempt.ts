@@ -44,6 +44,21 @@ export function resolveHumanEvaluationAttemptIdentityV2(
   };
 }
 
+export function resolveHumanEvaluationAttemptRevisionV2(
+  trace: HumanEvaluationAttemptTraceLike
+): number | undefined {
+  const metadata = trace.metadata ?? {};
+  // Settlement "Revision" is the task runtime revision; "UnitRevision" owns the LQU.
+  const revision =
+    metadata.effectiveCurrentQuestionSettlementUnitRevision ??
+    metadata.currentQuestionSettlementRevision ??
+    metadata.logicalQuestionUnitRevision;
+  return typeof revision === "number" &&
+    Number.isSafeInteger(revision) && revision >= 0
+    ? revision
+    : undefined;
+}
+
 export function validateHumanEvaluationAttemptSubjectV2(input: {
   subject: HumanEvaluationAttemptSubjectLike;
   sourceTraceId?: string;

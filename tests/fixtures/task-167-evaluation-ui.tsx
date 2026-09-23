@@ -107,6 +107,8 @@ function AttemptFixture() {
   const [display] = useState(() => new ManualAdviseDisplay());
   const [calls] = useState<any[]>([]);
   const [saved] = useState<any[]>([]);
+  const [observations] = useState<any[]>([]);
+  const [panelShown, setPanelShown] = useState(true);
   const current = {
     target: { sessionId: `session-${session}`, suggestionId: frame.suggestion.id,
       traceId: frame.suggestion.sourceTraceId, generationId: frame.suggestion.id, stableRevision: frame.revision,
@@ -122,16 +124,25 @@ function AttemptFixture() {
     settings: { debugMode: true }, meetingSessionId: `session-${session}`,
     status: frame.traces[0].status === "running" ? "thinking" : "listening",
     partialSuggestion: "", latestSuggestion: frame.suggestion, traces: frame.traces,
+    currentQuestionForEvaluation: frame.currentQuestion,
+    evaluationQuestionPending: false,
+    sessionRecording: { sessionId: `recording-${session}`, active: true },
     questionEvaluations: [], humanEvaluationProjectionsV2: [], preparationArtifactUses: [], preparationArtifactEvaluations: [],
     evaluationPersistence: { pending: calls.length - saved.length, error: null },
     loadHumanEvaluationSession: async () => {}, updatePreparationArtifactEvaluation() {}, retryHumanEvaluationSave() {},
+    recordHumanEvaluationSelection(selection: unknown) {
+      observations.push(structuredClone(selection));
+      refresh(v => v + 1);
+    },
     recordHumanGroundTruthV2(traceId: string, fact: unknown, options: unknown) {
       calls.push(structuredClone({ traceId, fact, options }));
       refresh(v => v + 1);
     },
   };
   (window as any).__attempt = {
-    calls, saved,
+    calls, saved, observations,
+    rerender() { refresh(v => v + 1); },
+    showPanel: setPanelShown,
     publish(id: string, status = "success", hasAnswer = true) {
       setFrame(previous => {
         const next = makeFrame(id, session, status);
@@ -142,14 +153,28 @@ function AttemptFixture() {
     },
     pin() { display.toggle(); refresh(v => v + 1); },
     unlock() { display.toggle(); refresh(v => v + 1); },
+    amendSelected(id: string) {
+      const selected = display.selectedTarget!;
+      const original = frame.traces.find(item => item.id === selected.traceId)!;
+      const next = makeFrame(id, session);
+      next.traces[0].metadata = { ...original.metadata, primaryAskNormalizedText: `Question A (${id})` };
+      const revision = Math.max(frame.revision, display.selectedStable?.revision ?? 0) + 1;
+      display.complete({
+        target: { ...selected, generationId: next.suggestion.id, suggestionId: next.suggestion.id,
+          traceId: next.traces[0].id, stableRevision: revision },
+        stable: { ...display.selectedStable!, revision, suggestion: next.suggestion }, streaming: false,
+        sections: buildMeetingAnswerDisplayModel({ content: next.suggestion.content }),
+      });
+      setFrame(previous => ({ ...previous, traces: [next.traces[0], ...previous.traces] }));
+    },
     finishSave(index: number) { saved.push(structuredClone(calls[index])); refresh(v => v + 1); },
     reset() {
-      calls.length = 0; saved.length = 0; display.clear();
+      calls.length = 0; saved.length = 0; observations.length = 0; display.clear(); setPanelShown(true);
       setSession(session + 1); setFrame(makeFrame("A", session + 1));
     },
   };
   return <main style={{ maxWidth: 520, margin: "0 auto", padding: 12 }}>
-    <AttemptEvaluationFixture meeting={meeting} adviseDisplay={{ ...selected, locked: display.locked }} />
+    <AttemptEvaluationFixture meeting={meeting} adviseDisplay={{ ...selected, locked: display.locked }} open={panelShown} />
   </main>;
 }
 
@@ -158,10 +183,14 @@ function makeFrame(id: string, session: number, status = "success") {
     primaryAskNormalizedText: `Question ${id}`,
     effectiveCurrentQuestionSettlementSessionId: `session-${session}`,
     effectiveCurrentQuestionSettlementUnitId: `unit-${id}`,
+    currentQuestionSettlementRevision: 1,
+    effectiveCurrentQuestionSettlementRevision: 7,
     effectiveCurrentQuestionSettlementSourceHash: `source-${id}`,
     effectiveCurrentQuestionSettlementId: `settlement-${id}`,
   } };
-  return { traces: [currentTrace], revision: 1, suggestion: { id: `answer-${id}`,
+  return { traces: [currentTrace], revision: 1,
+    currentQuestion: { sessionId: `session-${session}`, logicalQuestionUnitId: `unit-${id}`, logicalQuestionRevision: 1 },
+    suggestion: { id: `answer-${id}`,
     sourceTraceId: currentTrace.id, content: `Answer: Response ${id}`, kind: "answer",
     createdAt: 1, basedOnTurnIds: [], basedOnObservationIds: [], confidence: "medium" } };
 }
