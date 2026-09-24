@@ -317,7 +317,14 @@ struct Run {
     id: String,
     folder: PathBuf,
     active: AtomicBool,
+    observer_epoch: AtomicU64,
     state: Mutex<RunState>,
+}
+
+impl Run {
+    fn is_active(&self, epoch: u64) -> bool {
+        self.active.load(Ordering::Acquire) && self.observer_epoch.load(Ordering::Acquire) == epoch
+    }
 }
 
 #[derive(Default)]
@@ -340,18 +347,36 @@ impl NativeStallDiagnostics {
             fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))
                 .map_err(|error| format!("Cannot restrict diagnostics directory: {error}"))?;
         }
-        let capture = self.capture.lock().map_err(|_| "Capture diagnostics lock failed")?;
+        let capture = self
+            .capture
+            .lock()
+            .map_err(|_| "Capture diagnostics lock failed")?;
         let mut current = self.current.lock().map_err(|_| "Diagnostics lock failed")?;
         if let Some(existing) = current.as_ref() {
-            if existing.folder == dir && existing.active.load(Ordering::Acquire) {
+            if existing.folder == dir {
+                if existing.active.load(Ordering::Acquire) {
+                    return Ok(existing.id.clone());
+                }
+                if let Ok(mut state) = existing.state.lock() {
+                    state.pending = None;
+                    state.last_tick = Instant::now();
+                }
+                let epoch = existing.observer_epoch.fetch_add(1, Ordering::AcqRel) + 1;
+                existing.active.store(true, Ordering::Release);
+                if let Err(error) = start_observer(existing.clone(), epoch) {
+                    existing.active.store(false, Ordering::Release);
+                    return Err(error);
+                }
                 return Ok(existing.id.clone());
             }
             existing.active.store(false, Ordering::Release);
+            existing.observer_epoch.fetch_add(1, Ordering::AcqRel);
         }
         let run = Arc::new(Run {
             id: Uuid::new_v4().to_string(),
             folder: dir,
             active: AtomicBool::new(true),
+            observer_epoch: AtomicU64::new(1),
             state: Mutex::new(RunState::new(Instant::now())),
         });
         if let Some((session_id, generation, counters)) = capture.as_ref() {
@@ -359,20 +384,20 @@ impl NativeStallDiagnostics {
                 state.set_capture(session_id, *generation, counters.clone());
             }
         }
-        let observer = run.clone();
-        thread::Builder::new()
-            .name("native-stall-observer".into())
-            .spawn(move || observe(observer))
-            .map_err(|error| format!("Cannot start diagnostics observer: {error}"))?;
+        start_observer(run.clone(), 1)?;
         let id = run.id.clone();
         *current = Some(run);
         Ok(id)
     }
 
     pub fn disarm(&self) {
-        if let Ok(mut current) = self.current.lock() {
-            if let Some(run) = current.take() {
+        if let Ok(current) = self.current.lock() {
+            if let Some(run) = current.as_ref() {
                 run.active.store(false, Ordering::Release);
+                run.observer_epoch.fetch_add(1, Ordering::AcqRel);
+                if let Ok(mut state) = run.state.lock() {
+                    state.pending = None;
+                }
             }
         }
     }
@@ -474,10 +499,18 @@ impl NativeStallDiagnostics {
     }
 }
 
-fn observe(run: Arc<Run>) {
-    while run.active.load(Ordering::Acquire) {
+fn start_observer(run: Arc<Run>, epoch: u64) -> Result<(), String> {
+    thread::Builder::new()
+        .name("native-stall-observer".into())
+        .spawn(move || observe(run, epoch))
+        .map(|_| ())
+        .map_err(|error| format!("Cannot start diagnostics observer: {error}"))
+}
+
+fn observe(run: Arc<Run>, epoch: u64) {
+    while run.is_active(epoch) {
         thread::sleep(Duration::from_secs(1));
-        if !run.active.load(Ordering::Acquire) {
+        if !run.is_active(epoch) {
             break;
         }
         let incident = run
@@ -491,7 +524,7 @@ fn observe(run: Arc<Run>) {
             let result = thread::Builder::new()
                 .name("native-stall-sample".into())
                 .spawn(move || {
-                    sample_incident(&sampling_run, worker_incident);
+                    sample_incident(&sampling_run, epoch, worker_incident);
                     if let Ok(mut state) = sampling_run.state.lock() {
                         state.sampling = false;
                     }
@@ -507,7 +540,7 @@ fn observe(run: Arc<Run>) {
     }
 }
 
-fn sample_incident(run: &Run, incident: DiagnosticIncident) {
+fn sample_incident(run: &Run, epoch: u64, incident: DiagnosticIncident) {
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
     struct Report<'a> {
@@ -530,7 +563,7 @@ fn sample_incident(run: &Run, incident: DiagnosticIncident) {
     let started = wall_ms();
     let mut status;
     let mut exit_code = None;
-    if run.active.load(Ordering::Acquire)
+    if run.is_active(epoch)
         && session_bytes(&run.folder).saturating_add(MAX_STACK_BYTES) <= MAX_SESSION_BYTES
     {
         #[cfg(target_os = "macos")]
@@ -552,10 +585,10 @@ fn sample_incident(run: &Run, incident: DiagnosticIncident) {
                 Ok(mut child) => {
                     let deadline = Instant::now() + Duration::from_secs(5);
                     loop {
-                        if !run.active.load(Ordering::Acquire) || Instant::now() >= deadline {
+                        if !run.is_active(epoch) || Instant::now() >= deadline {
                             let _ = child.kill();
                             let _ = child.wait();
-                            status = if run.active.load(Ordering::Acquire) {
+                            status = if run.is_active(epoch) {
                                 "timeout"
                             } else {
                                 "cancelled"
@@ -801,10 +834,40 @@ mod tests {
             id: "run-a".into(),
             folder: std::env::temp_dir(),
             active: AtomicBool::new(true),
+            observer_epoch: AtomicU64::new(1),
             state: Mutex::new(state),
         }));
         assert!(!diagnostics.acknowledge("run-b", marker(1)));
         assert!(diagnostics.acknowledge("run-a", marker(1)));
+    }
+
+    #[test]
+    fn toggling_within_one_recording_preserves_quota_and_retires_old_observer() {
+        let root = std::env::temp_dir().join(format!("jarvis-stall-test-{}", Uuid::new_v4()));
+        let first = root.join("first");
+        let second = root.join("second");
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir_all(&second).unwrap();
+        fs::write(first.join("manifest.json"), "{}").unwrap();
+        fs::write(second.join("manifest.json"), "{}").unwrap();
+
+        let diagnostics = NativeStallDiagnostics::default();
+        let first_id = diagnostics.arm(first.clone()).unwrap();
+        let run = diagnostics.run().unwrap();
+        run.state.lock().unwrap().attempts = 1;
+        let first_epoch = run.observer_epoch.load(Ordering::Acquire);
+        diagnostics.disarm();
+        assert!(!run.is_active(first_epoch));
+        assert_eq!(diagnostics.arm(first).unwrap(), first_id);
+        assert_eq!(run.state.lock().unwrap().attempts, 1);
+        assert!(!run.is_active(first_epoch));
+        assert!(run.is_active(run.observer_epoch.load(Ordering::Acquire)));
+
+        diagnostics.disarm();
+        assert_ne!(diagnostics.arm(second).unwrap(), first_id);
+        assert_eq!(diagnostics.run().unwrap().state.lock().unwrap().attempts, 0);
+        diagnostics.disarm();
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
