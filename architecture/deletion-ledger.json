@@ -555,6 +555,49 @@
         "import type { PlaybookPhaseDecision } from \"./playbook-phase.js\"",
         "import type { ActiveMeetingTask } from \"./active-meeting-task.js\""
       ]
+    },
+    {
+      "id": "unused-native-ipc-and-input-enumeration",
+      "symbolOrSurface": "Four uncalled native IPC wrappers and the orphaned platform input-device enumeration chain",
+      "verdict": "delete",
+      "ownerTaskId": 172,
+      "replacement": "Active Meeting audio status/control, native output enumeration, window shortcut handlers and browser microphone enumeration",
+      "persistedDataImpact": "none",
+      "proofCommands": ["cargo check --tests", "npm run verify:architecture", "npm test"],
+      "deletionGate": "All registrations and uncalled definitions are gone while the real shortcut and audio entry points still compile and pass consumer tests.",
+      "rollbackBoundary": "Native IPC and platform helper removal is independent of the retained capture and window handlers.",
+      "status": "deleted",
+      "forbiddenPatterns": [
+        "pub async fn get_capture_status(",
+        "pub fn get_audio_sample_rate(",
+        "pub fn toggle_dashboard(",
+        "pub fn move_window(",
+        "pub(crate) fn list_input_devices(",
+        "pub fn get_input_devices("
+      ]
+    },
+    {
+      "id": "retired-runtime-inference-and-v1-producers",
+      "symbolOrSurface": "Uncalled correction resolver, generic inference builders and validators, old sufficiency adjudicator, V1 recording writers and no-LQU gate",
+      "verdict": "delete",
+      "ownerTaskId": 168,
+      "replacement": "Correction-owned Type settlement, operation-specific cross-source validation, Task 139 observer, V2 recording projection and canonical Advisor execution authorization",
+      "persistedDataImpact": "recording",
+      "historicalReader": "Existing historical evaluation files and versioned readers remain unchanged.",
+      "proofCommands": ["npm test", "npm run verify:architecture", "npm run build"],
+      "deletionGate": "Live Type, Source Linkage, V2 and historical-reader tests pass; no retired producer or validator is reachable.",
+      "rollbackBoundary": "Each dead owner was removed without adding a compatibility writer or changing the live settlement authority.",
+      "status": "deleted",
+      "forbiddenPatterns": [
+        "export function resolveCorrectionOwnedResettlement(",
+        "export function createRuntimeInferenceInvocation(",
+        "export function validateSameSourceInferenceLease(",
+        "export function validateSameArtifactRepairLease(",
+        "export interface LlmTaxonomyAdjudication",
+        "recordHumanEvaluations(evaluations:",
+        "recordQuestionHumanEvaluations(evaluations:",
+        "shouldRequestSuggestion(turn:"
+      ]
     }
   ]
 }
