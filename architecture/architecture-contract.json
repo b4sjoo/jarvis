@@ -26,15 +26,6 @@
   "imports": {
     "allowedCycles": [
       [
-        "src/components/DragButton.tsx",
-        "src/components/Empty/index.tsx",
-        "src/components/Header/index.tsx",
-        "src/components/Selection/index.tsx",
-        "src/components/Sidebar.tsx",
-        "src/components/TextInput/index.tsx",
-        "src/components/index.ts"
-      ],
-      [
         "src/config/index.ts",
         "src/config/shortcuts.ts",
         "src/lib/storage/ai-providers.ts",
@@ -45,44 +36,11 @@
         "src/lib/storage/stt-providers.ts",
         "src/types/context.type.ts",
         "src/types/index.ts"
-      ],
-      [
-        "src/hooks/index.ts",
-        "src/hooks/useApp.ts",
-        "src/hooks/useCompletion.ts"
-      ],
-      [
-        "src/lib/database/memory.action.ts",
-        "src/lib/memory/index.ts",
-        "src/lib/memory/retrieval.ts"
-      ],
-      [
-        "src/pages/chats/components/View.tsx",
-        "src/pages/chats/components/index.ts"
       ]
     ],
     "allowedCycleEdges": [
-      "src/components/DragButton.tsx -> src/components/index.ts",
-      "src/components/Empty/index.tsx -> src/components/index.ts",
-      "src/components/Header/index.tsx -> src/components/index.ts",
-      "src/components/Selection/index.tsx -> src/components/index.ts",
-      "src/components/Sidebar.tsx -> src/components/index.ts",
-      "src/components/TextInput/index.tsx -> src/components/index.ts",
-      "src/components/index.ts -> src/components/DragButton.tsx",
-      "src/components/index.ts -> src/components/Empty/index.tsx",
-      "src/components/index.ts -> src/components/Header/index.tsx",
-      "src/components/index.ts -> src/components/Selection/index.tsx",
-      "src/components/index.ts -> src/components/Sidebar.tsx",
-      "src/components/index.ts -> src/components/TextInput/index.tsx",
       "src/config/index.ts -> src/config/shortcuts.ts",
       "src/config/shortcuts.ts -> src/types/index.ts",
-      "src/hooks/index.ts -> src/hooks/useApp.ts",
-      "src/hooks/index.ts -> src/hooks/useCompletion.ts",
-      "src/hooks/useApp.ts -> src/hooks/index.ts",
-      "src/hooks/useCompletion.ts -> src/hooks/index.ts",
-      "src/lib/database/memory.action.ts -> src/lib/memory/index.ts",
-      "src/lib/memory/index.ts -> src/lib/memory/retrieval.ts",
-      "src/lib/memory/retrieval.ts -> src/lib/database/memory.action.ts",
       "src/lib/storage/ai-providers.ts -> src/config/index.ts",
       "src/lib/storage/ai-providers.ts -> src/types/index.ts",
       "src/lib/storage/customizable.storage.ts -> src/config/index.ts",
@@ -96,10 +54,7 @@
       "src/lib/storage/shortcuts.storage.ts -> src/types/index.ts",
       "src/lib/storage/stt-providers.ts -> src/config/index.ts",
       "src/lib/storage/stt-providers.ts -> src/types/index.ts",
-      "src/pages/chats/components/View.tsx -> src/pages/chats/components/index.ts",
-      "src/pages/chats/components/index.ts -> src/pages/chats/components/View.tsx",
       "src/types/context.type.ts -> src/lib/storage/index.ts",
-      "src/types/context.type.ts -> src/types/index.ts",
       "src/types/index.ts -> src/types/context.type.ts"
     ],
     "broadMeetingBarrelAllowedConsumers": [

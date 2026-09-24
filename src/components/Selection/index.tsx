@@ -4,7 +4,7 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components";
+} from "@/components/ui/select";
 import { Loader2 } from "lucide-react";
 
 export const Selection = ({

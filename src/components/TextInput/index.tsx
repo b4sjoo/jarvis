@@ -1,4 +1,5 @@
-import { Input, Label } from "@/components";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 export const TextInput = ({
   label,

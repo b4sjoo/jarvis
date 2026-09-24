@@ -1,4 +1,5 @@
-import { Button, Label } from "@/components";
+import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { ArrowLeftIcon } from "lucide-react";
 import { useNavigate } from "react-router-dom";

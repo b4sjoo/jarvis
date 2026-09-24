@@ -4,7 +4,7 @@ import {
   EmptyHeader,
   EmptyMedia,
   EmptyTitle,
-} from "@/components";
+} from "@/components/ui/empty";
 import { Loader2 } from "lucide-react";
 
 export const Empty = ({

@@ -1,9 +1,6 @@
 import { Dispatch, SetStateAction } from "react";
-import {
-  ScreenshotConfig,
-  SelectedAiProviderConfig,
-  TYPE_PROVIDER,
-} from "@/types";
+import type { ScreenshotConfig } from "./settings";
+import type { SelectedAiProviderConfig, TYPE_PROVIDER } from "./provider.type";
 import { CursorType, CustomizableState } from "@/lib/storage";
 
 export type IContextType = {

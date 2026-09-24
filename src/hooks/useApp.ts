@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useTitles } from "@/hooks";
+import { useTitles } from "./useTitles";
 import { listen } from "@tauri-apps/api/event";
 import { getShortcutsConfig } from "@/lib/storage";
 import { invoke } from "@tauri-apps/api/core";

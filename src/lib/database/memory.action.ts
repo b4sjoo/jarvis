@@ -16,7 +16,7 @@ import type {
   MemoryImportSummary,
   MemoryProject,
   MemorySource,
-} from "@/lib/memory";
+} from "@/lib/memory/types";
 import { getDatabase } from "./config";
 
 interface MemorySourceRow {

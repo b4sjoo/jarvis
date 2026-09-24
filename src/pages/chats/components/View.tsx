@@ -25,13 +25,11 @@ import { useParams, useNavigate } from "react-router-dom";
 import { PageLayout } from "@/layouts";
 import { useHistory, useChatCompletion } from "@/hooks";
 import { useApp } from "@/contexts";
-import {
-  DeleteConfirmationDialog,
-  ChatAudio,
-  ChatScreenshot,
-  ChatFiles,
-  AudioRecorder,
-} from ".";
+import { DeleteConfirmationDialog } from "./DeleteConfirmation";
+import { ChatAudio } from "./ChatAudio";
+import { ChatScreenshot } from "./ChatScreenshot";
+import { ChatFiles } from "./ChatFiles";
+import { AudioRecorder } from "./AudioRecorder";
 
 const View = () => {
   const { conversationId } = useParams();

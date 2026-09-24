@@ -1,5 +1,5 @@
 import { GripVerticalIcon } from "lucide-react";
-import { Button } from "@/components";
+import { Button } from "@/components/ui/button";
 
 export const DragButton = () => {
   return (

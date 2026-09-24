@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { useWindowResize } from "./useWindow";
-import { useGlobalShortcuts } from "@/hooks";
+import { useGlobalShortcuts } from "./useGlobalShortcuts";
 import { MAX_FILES, STORAGE_KEYS } from "@/config";
 import { useApp } from "@/contexts";
 import {

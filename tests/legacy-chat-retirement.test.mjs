@@ -58,7 +58,7 @@ for (const blob of [null, "", "{broken", "[]", '[{"id":"legacy","title":"Old cha
       };
       const api = loadModule(hookSource, {
         react: { useEffect: (fn) => effects.push(fn), useState: (value) => [value, () => {}] },
-        "@/hooks": { useTitles: () => { titles++; } },
+        "./useTitles": { useTitles: () => { titles++; } },
         "@tauri-apps/api/event": { listen: async () => () => {} },
         "@/lib": { safeLocalStorage, migrateLocalStorageToSQLite: async () => { migrations++; return { success: true, migratedCount: 0 }; } },
         "@/lib/storage": { getShortcutsConfig: () => config },
