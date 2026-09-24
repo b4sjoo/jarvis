@@ -12,8 +12,7 @@ import { decideFirstBatchRelationRelease } from "../src/lib/meeting/task-relatio
 import type { LogicalQuestionUnit } from "../src/lib/meeting/logical-question-unit.js";
 import { RuntimeInferenceOperationRuntime } from "../src/lib/meeting/runtime-inference-runtime.js";
 import { MeetingAIResponseOutcomeError } from "../src/lib/meeting/meeting-ai-response.js";
-import { createTaxonomyAdjudicationLease, authorizeTaxonomyAdjudicationLease, hashTaxonomyTaskBoundary } from "../src/lib/meeting/taxonomy-adjudication.js";
-import { normalizeCanonicalQuestionType } from "../src/lib/meeting/task-taxonomy.js";
+import { createTaxonomyAdjudicationLease, authorizeTaxonomyAdjudicationLease } from "../src/lib/meeting/taxonomy-adjudication.js";
 
 function productionFunction(file: string, name: string, env: Record<string, unknown>): any {
   const source = ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true);
@@ -228,10 +227,10 @@ test("production Type lease accepts its provisional source and rejects newer man
   assert.ok(declaration?.initializer);
   const operationRef = { current: { getCurrentOperationId: () => "type-op" } };
   const correctionRef = { current: 0 };
-  const lease = createTaxonomyAdjudicationLease({ operationId: "type-op", sessionId: "meeting", runtimeEpoch: 1, logicalQuestionUnit: unit, taskBoundaryEpoch: hashTaxonomyTaskBoundary({ relation: "unknown" }), manualCorrectionRevision: 0 });
+  const lease = createTaxonomyAdjudicationLease({ operationId: "type-op", sessionId: "meeting", runtimeEpoch: 1, logicalQuestionUnit: unit, manualCorrectionRevision: 0 });
   const authorize = vm.runInNewContext(ts.transpileModule(`(${declaration.initializer.getText(file)})`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, {
     contextManagerRef: { current: { getState: () => ({ sessionId: "meeting" }) } },
-    lease, authorizeTaxonomyAdjudicationLease, hashTaxonomyTaskBoundary, normalizeCanonicalQuestionType,
+    lease, authorizeTaxonomyAdjudicationLease,
     questionTypeAdjudicationRuntimeRef: operationRef, runtimeEpochRef: { current: 1 },
     authorizationLogicalQuestionUnit: unit, logicalQuestionUnitRef: { current: { ...unit, id: "older-global-unit" } },
     manualCorrectionRevisionRef: correctionRef,

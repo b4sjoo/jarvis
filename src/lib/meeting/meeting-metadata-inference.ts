@@ -56,8 +56,8 @@ export interface MeetingMetadataInferenceLease {
   sessionId: string;
   runtimeEpoch: number;
   operationRevision: number;
-  sourceHash: string;
-  authoritativeCompanyHash: string;
+  openingEvidenceTurns: MeetingMetadataEvidenceTurn[];
+  authoritativeCompany?: MeetingMetadataAuthoritativeCompany;
   mode: MeetingMetadataInferenceMode;
   createdAt: number;
 }
@@ -372,8 +372,19 @@ export function createMeetingMetadataInferenceLease(input: {
     sessionId: input.sessionId,
     runtimeEpoch: input.runtimeEpoch,
     operationRevision: input.request.operationRevision,
-    sourceHash: input.request.openingEvidence.sourceHash,
-    authoritativeCompanyHash,
+    openingEvidenceTurns: input.request.openingEvidence.turns.map((turn) => ({
+      id: turn.id,
+      text: turn.text,
+      startedAt: turn.startedAt,
+      endedAt: turn.endedAt,
+    })),
+    authoritativeCompany: input.request.authoritativeCompany
+      ? {
+          value: input.request.authoritativeCompany.value,
+          normalized: input.request.authoritativeCompany.normalized,
+          source: input.request.authoritativeCompany.source,
+        }
+      : undefined,
     mode: input.mode,
     createdAt: input.createdAt ?? Date.now(),
   };
@@ -406,20 +417,29 @@ export function authorizeMeetingMetadataInferenceLease(
   if (lease.operationRevision !== current.evidence.revision) {
     return reject("operation-revision-mismatch");
   }
-  if (lease.sourceHash !== current.evidence.sourceHash) {
+  if (
+    lease.openingEvidenceTurns.length !== current.evidence.turns.length ||
+    lease.openingEvidenceTurns.some((turn, index) => {
+      const latest = current.evidence.turns[index];
+      return (
+        turn.id !== latest.id ||
+        turn.text !== latest.text ||
+        turn.startedAt !== latest.startedAt ||
+        turn.endedAt !== latest.endedAt
+      );
+    })
+  ) {
     return reject("source-hash-mismatch");
   }
   if (
-    lease.authoritativeCompanyHash !==
-    hashAuthoritativeCompany(
-      current.authoritativeCompany
-        ? {
-            value: current.authoritativeCompany.value,
-            normalized: current.authoritativeCompany.normalized,
-            source: current.authoritativeCompany.source,
-          }
-        : undefined
-    )
+    (lease.authoritativeCompany === undefined) !==
+      (current.authoritativeCompany === undefined) ||
+    (lease.authoritativeCompany !== undefined &&
+      current.authoritativeCompany !== undefined &&
+      (lease.authoritativeCompany.value !== current.authoritativeCompany.value ||
+        lease.authoritativeCompany.normalized !==
+          current.authoritativeCompany.normalized ||
+        lease.authoritativeCompany.source !== current.authoritativeCompany.source))
   ) {
     return reject("authoritative-company-changed");
   }

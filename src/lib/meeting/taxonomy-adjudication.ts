@@ -27,10 +27,8 @@ export interface TaxonomyAdjudicationLease {
   runtimeEpoch: number;
   logicalQuestionUnitId: string;
   logicalQuestionUnitRevision: number;
-  sourceTurnIdsHash: string;
   sourceSettlementId?: string;
   questionSourceHash?: string;
-  taskBoundaryEpoch: number;
   manualCorrectionRevision: number;
   expectedParentId?: string;
   expectedParentRevision?: number;
@@ -44,9 +42,7 @@ export type TaxonomyAdjudicationLeaseRejectionReason =
   | "logical-unit-missing"
   | "logical-unit-id-mismatch"
   | "logical-unit-revision-mismatch"
-  | "source-turn-hash-mismatch"
   | "source-settlement-mismatch"
-  | "task-boundary-epoch-mismatch"
   | "manual-correction-revision-mismatch"
   | "expected-parent-mismatch"
   | "expected-parent-revision-mismatch"
@@ -58,7 +54,6 @@ export interface TaxonomyAdjudicationLeaseSnapshot {
   sessionId: string;
   runtimeEpoch: number;
   logicalQuestionUnit?: LogicalQuestionUnit;
-  taskBoundaryEpoch: number;
   sourceSettlementId?: string;
   questionSourceHash?: string;
   manualCorrectionRevision: number;
@@ -151,7 +146,6 @@ export function createTaxonomyAdjudicationLease(input: {
   sessionId: string;
   runtimeEpoch: number;
   logicalQuestionUnit: LogicalQuestionUnit;
-  taskBoundaryEpoch: number;
   manualCorrectionRevision: number;
   sourceSettlementId?: string;
   questionSourceHash?: string;
@@ -166,12 +160,8 @@ export function createTaxonomyAdjudicationLease(input: {
     runtimeEpoch: input.runtimeEpoch,
     logicalQuestionUnitId: input.logicalQuestionUnit.id,
     logicalQuestionUnitRevision: input.logicalQuestionUnit.revision,
-    sourceTurnIdsHash: hashTaxonomySourceTurnIds(
-      input.logicalQuestionUnit.sourceTurnIds
-    ),
     sourceSettlementId: input.sourceSettlementId,
     questionSourceHash: input.questionSourceHash,
-    taskBoundaryEpoch: input.taskBoundaryEpoch,
     manualCorrectionRevision: input.manualCorrectionRevision,
     expectedParentId: input.expectedParentId,
     expectedParentRevision: input.expectedParentRevision,
@@ -204,17 +194,11 @@ export function authorizeTaxonomyAdjudicationLease(
   if (lease.logicalQuestionUnitRevision !== unit.revision) {
     return reject("logical-unit-revision-mismatch");
   }
-  if (lease.sourceTurnIdsHash !== hashTaxonomySourceTurnIds(unit.sourceTurnIds)) {
-    return reject("source-turn-hash-mismatch");
-  }
   if (
     lease.sourceSettlementId !== undefined &&
     lease.sourceSettlementId !== current.sourceSettlementId
   ) {
     return reject("source-settlement-mismatch");
-  }
-  if (lease.taskBoundaryEpoch !== current.taskBoundaryEpoch) {
-    return reject("task-boundary-epoch-mismatch");
   }
   if (lease.manualCorrectionRevision !== current.manualCorrectionRevision) {
     return reject("manual-correction-revision-mismatch");

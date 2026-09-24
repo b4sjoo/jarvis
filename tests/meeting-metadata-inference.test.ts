@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
+import ts from "typescript";
 import {
   authorizeMeetingMetadataInferenceLease,
   buildMeetingMetadataInferencePrompts,
@@ -264,6 +266,248 @@ test("lease rejects newer evidence, epochs, and authoritative company changes", 
   );
 });
 
+test("lease owns bounded evidence and company snapshots independently of request mutation", () => {
+  const company: InterviewTargetCompany = {
+    value: "Oracle",
+    normalized: "oracle",
+    confidence: 1,
+    source: "brief",
+    evidence: "Preparation Snapshot",
+    updatedAt: 1_000,
+  };
+  const request = requestFrom(
+    [turn("them-1", "I am the recruiter from Oracle.")],
+    company
+  );
+  const evidence = structuredClone(request.openingEvidence);
+  const lease = createMeetingMetadataInferenceLease({
+    sessionId: request.sessionId,
+    runtimeEpoch: 3,
+    mode: "shadow",
+    request,
+  });
+  request.openingEvidence.turns[0].text = "Changed after dispatch";
+  request.authoritativeCompany!.value = "Changed after dispatch";
+
+  assert.equal(lease.openingEvidenceTurns[0].text, evidence.turns[0].text);
+  assert.equal(lease.authoritativeCompany?.value, company.value);
+  assert.deepEqual(
+    authorizeMeetingMetadataInferenceLease(lease, {
+      currentOperationId: lease.operationId,
+      sessionId: request.sessionId,
+      runtimeEpoch: 3,
+      evidence,
+      authoritativeCompany: company,
+      mode: "shadow",
+    }),
+    { authorized: true }
+  );
+});
+
+test("lease compares every selected opening turn field in order", () => {
+  const turns = [
+    turn("them-1", "Welcome to the interview.", "them", 1_000),
+    turn("them-2", "We are hiring for this role.", "them", 2_000),
+  ];
+  const request = requestFrom(turns);
+  const lease = createMeetingMetadataInferenceLease({
+    sessionId: request.sessionId,
+    runtimeEpoch: 3,
+    mode: "enforcement",
+    request,
+  });
+  const changedTurns = [
+    [...turns].reverse(),
+    [{ ...turns[0], id: "them-other" }, turns[1]],
+    [{ ...turns[0], text: "Welcome to another interview." }, turns[1]],
+    [{ ...turns[0], startedAt: 1_001 }, turns[1]],
+    [{ ...turns[0], endedAt: 1_501 }, turns[1]],
+  ];
+  for (const transcriptTurns of changedTurns) {
+    const evidence = projectMeetingMetadataOpeningEvidence({
+      transcriptTurns,
+      sessionStartedAt: 500,
+    });
+    assert.equal(evidence.turns.length, request.openingEvidence.turns.length);
+    assert.deepEqual(
+      authorizeMeetingMetadataInferenceLease(lease, {
+        currentOperationId: lease.operationId,
+        sessionId: request.sessionId,
+        runtimeEpoch: 3,
+        evidence,
+        mode: "enforcement",
+      }),
+      { authorized: false, reason: "source-hash-mismatch" }
+    );
+  }
+
+  const windowTurns = Array.from({ length: 7 }, (_, index) =>
+    turn(`window-${index}`, `Opening turn ${index}.`, "them", 1_000 + index * 1_000)
+  );
+  const windowRequest = requestFrom(windowTurns);
+  const windowLease = createMeetingMetadataInferenceLease({
+    sessionId: windowRequest.sessionId,
+    runtimeEpoch: 3,
+    mode: "enforcement",
+    request: windowRequest,
+  });
+  const shiftedWindow = projectMeetingMetadataOpeningEvidence({
+    transcriptTurns: [
+      { ...windowTurns[0], startedAt: 700_000 },
+      ...windowTurns.slice(1),
+    ],
+    sessionStartedAt: 500,
+  });
+  assert.equal(shiftedWindow.turns.length, windowRequest.openingEvidence.turns.length);
+  assert.deepEqual(
+    authorizeMeetingMetadataInferenceLease(windowLease, {
+      currentOperationId: windowLease.operationId,
+      sessionId: windowRequest.sessionId,
+      runtimeEpoch: 3,
+      evidence: shiftedWindow,
+      mode: "enforcement",
+    }),
+    { authorized: false, reason: "source-hash-mismatch" }
+  );
+});
+
+test("lease distinguishes opening evidence hidden by the old delimiter hash", () => {
+  const first = requestFrom([turn("a\u001fb", "c")]);
+  const alias = requestFrom([turn("a", "b\u001fc")]);
+  assert.equal(first.openingEvidence.sourceHash, alias.openingEvidence.sourceHash);
+  const lease = createMeetingMetadataInferenceLease({
+    sessionId: first.sessionId,
+    runtimeEpoch: 3,
+    mode: "shadow",
+    request: first,
+  });
+  assert.equal(
+    lease.operationId,
+    createMeetingMetadataInferenceLease({
+      sessionId: alias.sessionId,
+      runtimeEpoch: 3,
+      mode: "shadow",
+      request: alias,
+    }).operationId
+  );
+  assert.deepEqual(
+    authorizeMeetingMetadataInferenceLease(lease, {
+      currentOperationId: lease.operationId,
+      sessionId: first.sessionId,
+      runtimeEpoch: 3,
+      evidence: alias.openingEvidence,
+      mode: "shadow",
+    }),
+    { authorized: false, reason: "source-hash-mismatch" }
+  );
+});
+
+test("lease compares authoritative company presence, value, normalization, and source", () => {
+  const company: InterviewTargetCompany = {
+    value: "Oracle",
+    normalized: "oracle",
+    confidence: 1,
+    source: "brief",
+    evidence: "Preparation Snapshot",
+    updatedAt: 1_000,
+  };
+  const request = requestFrom([turn("them-1", "Oracle interview")], company);
+  const lease = createMeetingMetadataInferenceLease({
+    sessionId: request.sessionId,
+    runtimeEpoch: 3,
+    mode: "enforcement",
+    request,
+  });
+  const base = {
+    currentOperationId: lease.operationId,
+    sessionId: request.sessionId,
+    runtimeEpoch: 3,
+    evidence: request.openingEvidence,
+    mode: "enforcement" as const,
+  };
+  for (const authoritativeCompany of [
+    undefined,
+    { ...company, value: "Amazon" },
+    { ...company, normalized: "amazon" },
+    { ...company, source: "manual" as const },
+  ]) {
+    assert.deepEqual(
+      authorizeMeetingMetadataInferenceLease(lease, {
+        ...base,
+        authoritativeCompany,
+      }),
+      { authorized: false, reason: "authoritative-company-changed" }
+    );
+  }
+  assert.deepEqual(
+    authorizeMeetingMetadataInferenceLease(lease, {
+      ...base,
+      authoritativeCompany: { ...company, confidence: 0.8, updatedAt: 2_000 },
+    }),
+    { authorized: true }
+  );
+
+  const noCompany = requestFrom([turn("them-1", "Oracle interview")]);
+  const noCompanyLease = createMeetingMetadataInferenceLease({
+    sessionId: noCompany.sessionId,
+    runtimeEpoch: 3,
+    mode: "enforcement",
+    request: noCompany,
+  });
+  assert.deepEqual(
+    authorizeMeetingMetadataInferenceLease(noCompanyLease, {
+      ...base,
+      currentOperationId: noCompanyLease.operationId,
+      authoritativeCompany: company,
+    }),
+    { authorized: false, reason: "authoritative-company-changed" }
+  );
+});
+
+test("lease rejects company delimiter alias while retaining operation identity", () => {
+  const company: InterviewTargetCompany = {
+    value: "a\u001fb",
+    normalized: "c",
+    confidence: 1,
+    source: "brief",
+    evidence: "Preparation Snapshot",
+    updatedAt: 1_000,
+  };
+  const alias: InterviewTargetCompany = {
+    ...company,
+    value: "a",
+    normalized: "b\u001fc",
+  };
+  const request = requestFrom([turn("them-1", "Welcome to the interview")], company);
+  const aliasRequest = requestFrom([turn("them-1", "Welcome to the interview")], alias);
+  const lease = createMeetingMetadataInferenceLease({
+    sessionId: request.sessionId,
+    runtimeEpoch: 3,
+    mode: "shadow",
+    request,
+  });
+  assert.equal(
+    lease.operationId,
+    createMeetingMetadataInferenceLease({
+      sessionId: aliasRequest.sessionId,
+      runtimeEpoch: 3,
+      mode: "shadow",
+      request: aliasRequest,
+    }).operationId
+  );
+  assert.deepEqual(
+    authorizeMeetingMetadataInferenceLease(lease, {
+      currentOperationId: lease.operationId,
+      sessionId: request.sessionId,
+      runtimeEpoch: 3,
+      evidence: request.openingEvidence,
+      authoritativeCompany: alias,
+      mode: "shadow",
+    }),
+    { authorized: false, reason: "authoritative-company-changed" }
+  );
+});
+
 test("formats the latest authoritative company instead of the scheduled request snapshot", () => {
   const request = requestFrom([
     turn("them-1", "I am the recruiter from Oracle."),
@@ -482,4 +726,141 @@ test("context manager atomically fills only an unresolved company", () => {
     manager.getState().interviewSessionContext?.targetCompany?.source,
     "brief"
   );
+});
+
+test("production Metadata settlement commits only while its captured evidence and company remain current", () => {
+  const source = ts.createSourceFile(
+    "hook.ts",
+    readFileSync("src/hooks/useMeetingAssistant.ts", "utf8"),
+    ts.ScriptTarget.Latest,
+    true
+  );
+  let scheduler: ts.VariableDeclaration | undefined;
+  const visit = (node: ts.Node) => {
+    if (
+      ts.isVariableDeclaration(node) &&
+      node.name.getText(source) === "scheduleMeetingMetadataInference"
+    ) scheduler = node;
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  assert.ok(scheduler?.initializer);
+  const callback = (scheduler.initializer as ts.CallExpression)
+    .arguments[0] as ts.ArrowFunction;
+  let settled: ts.PropertyAssignment | undefined;
+  const findSettled = (node: ts.Node) => {
+    if (ts.isPropertyAssignment(node) && node.name.getText(source) === "onSettled") {
+      settled = node;
+    }
+    ts.forEachChild(node, findSettled);
+  };
+  findSettled(callback);
+  assert.ok(settled);
+  const statements = [
+    ...((settled.initializer as ts.ArrowFunction).body as ts.Block).statements,
+  ];
+  const end = statements.findIndex(
+    (node) =>
+      ts.isVariableStatement(node) &&
+      node.declarationList.declarations.some(
+        (declaration) => declaration.name.getText(source) === "observationDisposition"
+      )
+  );
+  assert.ok(end > 0);
+  const block = statements.slice(0, end).map((node) => node.getText(source)).join("\n");
+
+  const run = (change: (manager: MeetingContextManager) => void, initialCompany = false) => {
+    const manager = new MeetingContextManager();
+    const sessionId = manager.getState().sessionId;
+    manager.addTranscriptTurn(turn("them-1", "I am the recruiter from Oracle."));
+    if (initialCompany) {
+      manager.setInterviewSessionBrief({
+        targetCompany: "Google",
+        targetCompanyNormalized: "google",
+        companyLocked: true,
+        interviewTypes: [],
+      });
+    }
+    const scheduled = manager.getState();
+    const evidence = projectMeetingMetadataOpeningEvidence({
+      transcriptTurns: scheduled.transcriptTurns,
+      sessionStartedAt: scheduled.startedAt,
+    });
+    const request = buildMeetingMetadataInferenceRequest({
+      sessionId,
+      evidence,
+      authoritativeCompany: scheduled.interviewSessionContext?.targetCompany,
+    });
+    const lease = createMeetingMetadataInferenceLease({
+      sessionId,
+      runtimeEpoch: 3,
+      mode: "enforcement",
+      request,
+    });
+    const parsed = parseMeetingMetadataInferenceOutput(
+      JSON.stringify({
+        schemaVersion: 1,
+        company: "Oracle",
+        confidence: 0.98,
+        evidenceSpans: ["recruiter from Oracle"],
+        abstainReason: null,
+      }),
+      request
+    );
+    assert.equal(parsed.ok, true);
+    change(manager);
+    const env = {
+      contextManagerRef: { current: manager },
+      projectMeetingMetadataOpeningEvidence,
+      authorizeMeetingMetadataInferenceLease,
+      meetingMetadataInferenceRuntimeRef: {
+        current: { getCurrentOperationId: () => lease.operationId },
+      },
+      runtimeEpochRef: { current: 3 },
+      taxonomyAdjudicationSettingsRef: { current: { meetingMetadataMode: "enforcement" } },
+      meetingMetadataInferenceCircuitRef: { current: { open() { throw Error("unexpected provider error"); } } },
+      compareMeetingMetadataInference,
+      decideMeetingMetadataInferenceCommit,
+      setState: (update: (previous: Record<string, unknown>) => unknown) => update({}),
+    };
+    const code = ts.transpileModule(
+      `${block}\nreturn {authorization,commitDecision,commitResult,committed};`,
+      { compilerOptions: { target: ts.ScriptTarget.ES2022 } }
+    ).outputText;
+    const result = Function(...Object.keys(env), "settlement", code)(
+      ...Object.values(env),
+      {
+        job: { lease, request },
+        result: { parsed, providerDisposition: "completed-with-content" },
+        disposition: "completed",
+        completedAt: 4_000,
+      }
+    );
+    return { result, company: manager.getState().interviewSessionContext?.targetCompany };
+  };
+
+  const current = run(() => {});
+  assert.equal(current.result.authorization.authorized, true);
+  assert.equal(current.result.committed, true);
+  assert.equal(current.company?.value, "Oracle");
+
+  const edited = run((manager) => {
+    assert.equal(manager.updateTranscriptTurnText("them-1", "Changed interviewer text."), true);
+  });
+  assert.deepEqual(edited.result.authorization, {
+    authorized: false,
+    reason: "source-hash-mismatch",
+  });
+  assert.equal(edited.result.committed, false);
+  assert.equal(edited.company, undefined);
+
+  const clearedBrief = run((manager) => {
+    manager.setInterviewSessionBrief(undefined);
+  }, true);
+  assert.deepEqual(clearedBrief.result.authorization, {
+    authorized: false,
+    reason: "authoritative-company-changed",
+  });
+  assert.equal(clearedBrief.result.committed, false);
+  assert.equal(clearedBrief.company, undefined);
 });

@@ -73,14 +73,13 @@ test("preserves first anchor and latest constraint when projecting overflow", ()
   assert.equal(projection.projectionReason, "anchor-switch-latest-constraint");
 });
 
-test("lease authorization drops stale revisions, boundaries, and corrections", () => {
+test("lease authorization retains revision, parent, and correction guards", () => {
   const logicalUnit = unit("Design an Uber-like service.", 2);
   const lease = createTaxonomyAdjudicationLease({
     operationId: "operation-a",
     sessionId: "session-a",
     runtimeEpoch: 2,
     logicalQuestionUnit: logicalUnit,
-    taskBoundaryEpoch: 11,
     manualCorrectionRevision: 4,
     sourceSettlementId: "question-source-a",
     questionSourceHash: "question-hash-a",
@@ -92,7 +91,6 @@ test("lease authorization drops stale revisions, boundaries, and corrections", (
     sessionId: "session-a",
     runtimeEpoch: 2,
     logicalQuestionUnit: logicalUnit,
-    taskBoundaryEpoch: 11,
     sourceSettlementId: "question-source-a",
     questionSourceHash: "question-hash-a",
     manualCorrectionRevision: 4,
@@ -104,6 +102,8 @@ test("lease authorization drops stale revisions, boundaries, and corrections", (
   assert.deepEqual(authorizeTaxonomyAdjudicationLease(lease, current), {
     authorized: true,
   });
+  assert.equal("sourceTurnIdsHash" in lease, false);
+  assert.equal("taskBoundaryEpoch" in lease, false);
   assert.deepEqual(
     authorizeTaxonomyAdjudicationLease(lease, {
       ...current,
@@ -133,5 +133,12 @@ test("lease authorization drops stale revisions, boundaries, and corrections", (
       authorized: false,
       reason: "source-settlement-mismatch",
     }
+  );
+  assert.deepEqual(
+    authorizeTaxonomyAdjudicationLease(lease, {
+      ...current,
+      activeParentId: "parent-b",
+    }),
+    { authorized: false, reason: "expected-parent-mismatch" }
   );
 });

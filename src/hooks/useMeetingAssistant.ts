@@ -19238,12 +19238,14 @@ export function useMeetingAssistant() {
         questionType: activeParentQuestionType,
         relation: activeRelation,
       });
+      const sourceTurnIdsHash = hashTaxonomySourceTurnIds(
+        logicalQuestionUnit.sourceTurnIds
+      );
       const lease = createTaxonomyAdjudicationLease({
         operationId: operationIdOverride,
         sessionId: contextState.sessionId,
         runtimeEpoch: runtimeEpochRef.current,
         logicalQuestionUnit,
-        taskBoundaryEpoch,
         manualCorrectionRevision: manualCorrectionRevisionRef.current,
         expectedParentId: activeParent?.id,
         expectedParentRevision: activeParent?.revisions,
@@ -19255,11 +19257,6 @@ export function useMeetingAssistant() {
           sessionId: latestContext.sessionId,
           runtimeEpoch: runtimeEpochRef.current,
           logicalQuestionUnit: authorizationLogicalQuestionUnit ?? logicalQuestionUnitRef.current,
-          taskBoundaryEpoch: hashTaxonomyTaskBoundary({
-            parentId: latestParent?.id,
-            questionType: normalizeCanonicalQuestionType(latestParent?.questionType),
-            relation: latestContext.activeMeetingTask?.child ? "child-probe" : latestParent ? "followup-parent" : "unknown",
-          }),
           manualCorrectionRevision: manualCorrectionRevisionRef.current,
           activeParentId: latestParent?.id,
           activeParentRevision: latestParent?.revisions,
@@ -19308,9 +19305,9 @@ export function useMeetingAssistant() {
           lease.sessionId,
         questionTypeAdjudicationOriginTraceId: traceId,
         questionTypeAdjudicationSourceTurnIdsHash:
-          lease.sourceTurnIdsHash,
+          sourceTurnIdsHash,
         questionTypeAdjudicationTaskBoundaryEpoch:
-          lease.taskBoundaryEpoch,
+          taskBoundaryEpoch,
         questionTypeAdjudicationRuntimeEpoch:
           lease.runtimeEpoch,
         questionTypeAdjudicationManualCorrectionRevision:
