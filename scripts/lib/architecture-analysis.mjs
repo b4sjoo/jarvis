@@ -270,43 +270,29 @@ export function loadArchitectureContract(
   return { ...value, repositoryRoot };
 }
 
-export function createArchitectureContractBaseline(analysis, sourceCommit) {
-  return {
-    version: 1,
-    sourceCommit,
-    taskMutation: {
-      methodNames: [...TASK_MUTATION_METHODS].sort(),
-      allowedModules: groupCallsiteCounts(analysis.taskMutationCalls),
-    },
-    legacyReaders: {
-      roots: ["src/lib/legacy-readers"],
-      allowedImporterRoots: [
-        "src/lib/legacy-readers",
-        "src/lib/replay",
-        "tests",
-      ],
-    },
-    imports: {
-      allowedCycles: analysis.importCycles,
-      allowedCycleEdges: analysis.importCycleEdges,
-      broadMeetingBarrelAllowedConsumers:
-        analysis.broadMeetingBarrelConsumers,
-      broadMeetingBarrelMaxConsumers:
-        analysis.broadMeetingBarrelConsumers.length,
-    },
-    ipc: {
-      ...analysis.ipc,
-      reconciliation: createIpcReconciliationBaseline(analysis.ipc),
-    },
-  };
+export function createArchitectureContractBaseline(existingContract, sourceCommit) {
+  const errors = [];
+  validateContract(existingContract, errors);
+  if (errors.length > 0) {
+    throw new Error(`Invalid architecture contract: ${errors.join("; ")}`);
+  }
+  const baseline = structuredClone(existingContract);
+  delete baseline.repositoryRoot;
+  delete baseline.taskMutation.methodNames;
+  baseline.sourceCommit = sourceCommit;
+  return baseline;
 }
 
 const TASK_MUTATION_METHODS = new Set([
   "clearTaskRuntime",
   "commitTaskRuntimeTransition",
+  "commitPreparedTaskRuntimeTransition",
   "clearActiveInterviewTask",
   "clearActiveMeetingTask",
   "clearActiveScreenTask",
+  "installPreparedTaskDeadlineUpdate",
+  "rollbackPreparedTaskDeadlineUpdate",
+  "rollbackPreparedTaskRuntimeTransition",
   "setActiveInterviewTask",
   "setActiveMeetingTaskState",
   "setActiveScreenTask",
@@ -635,14 +621,37 @@ function collectCycleEdges(graph, cycles) {
 }
 
 function validateContract(contract, errors) {
-  if (!contract || typeof contract !== "object") {
+  if (!contract || typeof contract !== "object" || Array.isArray(contract)) {
     errors.push("architecture contract must be an object");
     return;
   }
   if (contract.version !== 1) errors.push("architecture contract version must equal 1");
   for (const key of ["taskMutation", "legacyReaders", "imports", "ipc"]) {
-    if (!contract[key] || typeof contract[key] !== "object") {
+    if (!contract[key] || typeof contract[key] !== "object" || Array.isArray(contract[key])) {
       errors.push(`architecture contract is missing ${key}`);
+    }
+  }
+  if (!contract.imports || typeof contract.imports !== "object" || Array.isArray(contract.imports)) return;
+  if (
+    !Array.isArray(contract.imports.acyclicModules) ||
+    contract.imports.acyclicModules.some((module) => typeof module !== "string" || !module.trim())
+  ) {
+    errors.push("architecture contract imports.acyclicModules must be a string array");
+  }
+  if (
+    !contract.imports.contractDependencies ||
+    typeof contract.imports.contractDependencies !== "object" ||
+    Array.isArray(contract.imports.contractDependencies)
+  ) {
+    errors.push("architecture contract imports.contractDependencies must be an object");
+  } else {
+    for (const [file, dependencies] of Object.entries(contract.imports.contractDependencies)) {
+      if (
+        !Array.isArray(dependencies) ||
+        dependencies.some((dependency) => typeof dependency !== "string" || !dependency.trim())
+      ) {
+        errors.push(`architecture contract imports.contractDependencies.${file} must be a string array`);
+      }
     }
   }
 }
@@ -768,33 +777,6 @@ function validateIpc(analysis, contract, errors) {
   validateIpcReconciliation(analysis.ipc, contract.ipc.reconciliation, errors);
 }
 
-function createIpcReconciliationBaseline(ipc) {
-  const calledCommands = uniqueSorted([
-    ...(ipc.staticFrontendInvokes ?? []),
-    ...(ipc.wrappedFrontendInvokes ?? []),
-  ]);
-  return {
-    allowedFrontendCommandsWithoutNativeRegistration: annotateExceptions(
-      difference(calledCommands, ipc.registeredCommands)
-    ),
-    allowedNativeCommandsWithoutFrontendCall: annotateExceptions(
-      difference(ipc.registeredCommands, calledCommands)
-    ),
-    allowedNativeEventsWithoutFrontendListener: annotateExceptions(
-      difference(ipc.nativeEmittedEvents, ipc.staticFrontendListenedEvents)
-    ),
-    allowedFrontendListenersWithoutNativeEmitter: annotateExceptions(
-      difference(ipc.staticFrontendListenedEvents, ipc.nativeEmittedEvents)
-    ),
-    allowedFrontendEventsWithoutNativeListener: annotateExceptions(
-      difference(ipc.staticFrontendEmittedEvents, ipc.nativeListenedEvents)
-    ),
-    allowedNativeListenersWithoutFrontendEmitter: annotateExceptions(
-      difference(ipc.nativeListenedEvents, ipc.staticFrontendEmittedEvents)
-    ),
-  };
-}
-
 function validateIpcReconciliation(ipc, reconciliation, errors) {
   if (!reconciliation || typeof reconciliation !== "object") {
     errors.push("ipc.reconciliation: missing explicit mismatch registry");
@@ -863,11 +845,13 @@ function validateDeletedPatterns(repositoryRoot, ledger, errors) {
     ...walkFiles(path.join(repositoryRoot, "src"), SOURCE_EXTENSIONS),
     ...walkFiles(path.join(repositoryRoot, "src-tauri", "src"), new Set([RUST_EXTENSION])),
   ];
+  const sourceTexts = new Map();
   for (const entry of ledger.entries ?? []) {
     if (entry.status !== "deleted") continue;
     for (const pattern of entry.forbiddenPatterns ?? []) {
       for (const file of searchableFiles) {
-        if (fs.readFileSync(file, "utf8").includes(pattern)) {
+        if (!sourceTexts.has(file)) sourceTexts.set(file, fs.readFileSync(file, "utf8"));
+        if (sourceTexts.get(file).includes(pattern)) {
           errors.push(
             `deleted-surface: ${entry.id} pattern ${JSON.stringify(pattern)} ` +
               `reappeared in ${relative(repositoryRoot, file)}`
@@ -989,13 +973,6 @@ function uniqueSorted(values) {
 function difference(left, right) {
   const rightSet = new Set(right ?? []);
   return uniqueSorted((left ?? []).filter((value) => !rightSet.has(value)));
-}
-
-function annotateExceptions(values) {
-  return values.map((name) => ({
-    name,
-    reason: "Known baseline exception; review before changing this registry.",
-  }));
 }
 
 function canonicalComponent(component) {

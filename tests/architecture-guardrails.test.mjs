@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { spawnSync } from "node:child_process";
+import test, { after } from "node:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
   collectRustEmittedEvents,
+  createArchitectureContractBaseline,
   discoverArchitecture,
   evaluateArchitectureAnalysis,
   loadArchitectureContract,
@@ -15,6 +17,17 @@ const repositoryRoot = process.cwd();
 const baselineAnalysis = discoverArchitecture(repositoryRoot);
 const baselineContract = loadArchitectureContract(repositoryRoot);
 const baselineLedger = loadDeletionLedger(repositoryRoot);
+// Targeted validator cases pin unrelated IPC facts; the tracked-baseline test uses live discovery.
+const controlledAnalysis = structuredClone(baselineAnalysis);
+controlledAnalysis.ipc = structuredClone(baselineContract.ipc);
+delete controlledAnalysis.ipc.reconciliation;
+const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "jarvis-architecture-"));
+fs.mkdirSync(path.join(fixtureRoot, "src"), { recursive: true });
+fs.mkdirSync(path.join(fixtureRoot, "src-tauri/src"), { recursive: true });
+fs.writeFileSync(path.join(fixtureRoot, "src/fixture.ts"), "export const fixture = 1;\n");
+fs.writeFileSync(path.join(fixtureRoot, "src-tauri/src/lib.rs"), "");
+const fixtureContract = { ...baselineContract, repositoryRoot: fixtureRoot };
+after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
 
 test("Rust targeted emission records the event, not the recipient window", () => {
   assert.deepEqual(collectRustEmittedEvents(`
@@ -29,7 +42,7 @@ test("Rust targeted emission records the event, not the recipient window", () =>
   assert.deepEqual(collectRustEmittedEvents('app.emit(REQUEST_EVENT, value);'), []);
 });
 
-function evaluate({ analysis = baselineAnalysis, contract = baselineContract, ledger = baselineLedger } = {}) {
+function evaluate({ analysis = controlledAnalysis, contract = fixtureContract, ledger = baselineLedger } = {}) {
   return evaluateArchitectureAnalysis({ analysis, contract, ledger });
 }
 
@@ -43,14 +56,19 @@ function expectFailure(result, fragment) {
 }
 
 test("accepts the tracked architecture baseline", () => {
-  const result = evaluate();
+  const result = evaluate({ analysis: baselineAnalysis, contract: baselineContract });
   assert.equal(result.ok, true, result.errors.join("\n"));
-  assert.equal(result.metrics.taskWriterCallsites, 2);
-  assert.equal(result.metrics.taskWriterModules, 1);
+  assert.equal(result.metrics.taskWriterCallsites, 11);
+  assert.equal(result.metrics.taskWriterModules, 2);
   assert.equal(result.metrics.liveLegacyImports, 0);
   assert.equal(result.metrics.importCycles, 5);
   assert.equal(result.metrics.importCycleEdges, 39);
   assert.equal(result.metrics.frontendCommandsWithoutNativeRegistration, 0);
+});
+
+test("small validator fixture passes before targeted negatives", () => {
+  const result = evaluate();
+  assert.equal(result.ok, true, result.errors.join("\n"));
 });
 
 test("all retired Meeting cycles and moved contracts remain acyclic", () => {
@@ -77,16 +95,23 @@ for (const [name, source] of [
       fs.mkdirSync(directory, { recursive: true });
       fs.mkdirSync(path.join(root, "src-tauri/src"), { recursive: true });
       fs.writeFileSync(path.join(root, "src-tauri/src/lib.rs"), "");
-      fs.writeFileSync(path.join(directory, "meeting-task-contracts.ts"), source);
+      fs.writeFileSync(path.join(directory, "meeting-task-contracts.ts"), "export interface State {}\n");
       fs.writeFileSync(path.join(directory, "runtime.ts"), 'import type { State } from "./meeting-task-contracts"; export interface Runtime { state: State }');
       fs.writeFileSync(path.join(directory, "index.ts"), 'export * from "./runtime";');
-      const analysis = discoverArchitecture(root);
       const contract = structuredClone(baselineContract);
       contract.repositoryRoot = root;
+      assert.equal(evaluate({ contract }).ok, true);
+      fs.writeFileSync(path.join(directory, "meeting-task-contracts.ts"), source);
+      const discovered = discoverArchitecture(root);
+      const analysis = structuredClone(controlledAnalysis);
+      analysis.importDependencies.push(...discovered.importDependencies);
+      analysis.importCycles.push(...discovered.importCycles);
+      analysis.importCycleEdges.push(...discovered.importCycleEdges);
       const result = evaluate({ analysis, contract });
       expectFailure(result, "contract-dependency:");
+      assert.equal(result.errors.every((error) => /^(contract-dependency|protected-module|import-cycle)/.test(error)), true, result.errors.join("\n"));
       if (name !== "computed module") {
-        assert.ok(analysis.importCycles.some(group => group.includes("src/lib/meeting/meeting-task-contracts.ts")));
+        assert.ok(discovered.importCycles.some(group => group.includes("src/lib/meeting/meeting-task-contracts.ts")));
         expectFailure(result, "protected-module-cycle:");
       }
     } finally {
@@ -97,14 +122,14 @@ for (const [name, source] of [
 
 test("the ID leaf cannot reacquire a Context Manager or Hook dependency", () => {
   for (const target of ["src/lib/meeting/context-manager.ts", "src/hooks/useMeetingAssistant.ts"]) {
-    const analysis = structuredClone(baselineAnalysis);
+    const analysis = structuredClone(controlledAnalysis);
     analysis.importDependencies.push({ file: "src/lib/meeting/meeting-id.ts", target });
     expectFailure(evaluate({ analysis }), "contract-dependency:");
   }
 });
 
 test("rejects a task mutation from a new module", () => {
-  const analysis = structuredClone(baselineAnalysis);
+  const analysis = structuredClone(controlledAnalysis);
   analysis.taskMutationCalls.push({
     file: "src/lib/example/new-task-writer.ts",
     line: 1,
@@ -114,7 +139,7 @@ test("rejects a task mutation from a new module", () => {
 });
 
 test("rejects a live import of a legacy reader", () => {
-  const analysis = structuredClone(baselineAnalysis);
+  const analysis = structuredClone(controlledAnalysis);
   analysis.legacyReaderImports.push({
     file: "src/lib/meeting/live-producer.ts",
     target: "src/lib/legacy-readers/old-recording.ts",
@@ -123,12 +148,12 @@ test("rejects a live import of a legacy reader", () => {
 });
 
 test("rejects a new import cycle and a new edge inside a known cycle", () => {
-  const newCycle = structuredClone(baselineAnalysis);
+  const newCycle = structuredClone(controlledAnalysis);
   newCycle.importCycles.push(["src/example/a.ts", "src/example/b.ts"]);
   newCycle.importCycleEdges.push("src/example/a.ts -> src/example/b.ts");
   expectFailure(evaluate({ analysis: newCycle }), "import-cycle:");
 
-  const newEdge = structuredClone(baselineAnalysis);
+  const newEdge = structuredClone(controlledAnalysis);
   newEdge.importCycleEdges.push(
     "src/lib/meeting/active-meeting-task.ts -> src/lib/meeting/trace.ts"
   );
@@ -136,19 +161,19 @@ test("rejects a new import cycle and a new edge inside a known cycle", () => {
 });
 
 test("rejects a new broad meeting barrel consumer", () => {
-  const analysis = structuredClone(baselineAnalysis);
+  const analysis = structuredClone(controlledAnalysis);
   analysis.broadMeetingBarrelConsumers.push("src/lib/example/barrel-consumer.ts");
   expectFailure(evaluate({ analysis }), "meeting-barrel: new consumer");
 });
 
 test("rejects command registry drift and new dynamic IPC boundaries", () => {
-  const missingHandler = structuredClone(baselineAnalysis);
+  const missingHandler = structuredClone(controlledAnalysis);
   missingHandler.ipc.registeredCommands = missingHandler.ipc.registeredCommands.filter(
     (command) => command !== "capture_to_base64"
   );
   expectFailure(evaluate({ analysis: missingHandler }), "ipc.registeredCommands");
 
-  const dynamicBoundary = structuredClone(baselineAnalysis);
+  const dynamicBoundary = structuredClone(controlledAnalysis);
   dynamicBoundary.ipc.dynamicFrontendInvokeCallsites.push({
     file: "src/lib/example/dynamic-ipc.ts",
     maxCallsites: 1,
@@ -181,7 +206,232 @@ test("resolves registered frontend-only events and wrapped command literals", ()
 
 test("rejects recurrence of a deleted ledger surface", () => {
   const ledger = structuredClone(baselineLedger);
-  ledger.entries[0].status = "deleted";
-  ledger.entries[0].forbiddenPatterns = ["useMeetingAssistant"];
-  expectFailure(evaluate({ ledger }), "deleted-surface:");
+  const pattern = "export function useMeetingAssistant()";
+  ledger.entries[0].forbiddenPatterns = [pattern];
+  ledger.entries[1].forbiddenPatterns = [pattern];
+  const result = evaluate({ contract: baselineContract, ledger });
+  assert.deepEqual(result.errors, [ledger.entries[0], ledger.entries[1]].map(
+    (entry) => `deleted-surface: ${entry.id} pattern ${JSON.stringify(pattern)} reappeared in src/hooks/useMeetingAssistant.ts`
+  ));
+});
+
+test("recurrence reads each file once per evaluation and observes source changes", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "jarvis-recurrence-"));
+  try {
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    fs.mkdirSync(path.join(root, "src-tauri/src"), { recursive: true });
+    const source = path.join(root, "src/a.ts");
+    const rust = path.join(root, "src-tauri/src/b.rs");
+    const added = path.join(root, "src/c.ts");
+    fs.writeFileSync(source, "export const active = true;\n");
+    fs.writeFileSync(rust, "fn active() {}\n");
+    const contract = { ...baselineContract, repositoryRoot: root };
+    const ledger = structuredClone(baselineLedger);
+    ledger.entries[0].forbiddenPatterns = ["RETIRED_A", "RETIRED_SHARED"];
+    ledger.entries[1].forbiddenPatterns = ["RETIRED_SHARED"];
+
+    function run() {
+      const reads = new Map();
+      const original = fs.readFileSync;
+      fs.readFileSync = function (file, ...args) {
+        if (typeof file === "string" && file.startsWith(`${root}${path.sep}`)) {
+          reads.set(file, (reads.get(file) ?? 0) + 1);
+        }
+        return original.call(this, file, ...args);
+      };
+      try {
+        return { result: evaluate({ contract, ledger }), reads };
+      } finally {
+        fs.readFileSync = original;
+      }
+    }
+
+    const base = run();
+    assert.equal(base.result.ok, true, base.result.errors.join("\n"));
+    assert.deepEqual([...base.reads.values()], [1, 1]);
+
+    fs.writeFileSync(source, "RETIRED_A RETIRED_SHARED\n");
+    fs.writeFileSync(rust, "RETIRED_SHARED\n");
+    const changed = run();
+    const expectedError = (entry, pattern, file) =>
+      `deleted-surface: ${entry.id} pattern ${JSON.stringify(pattern)} reappeared in ${file}`;
+    assert.deepEqual(changed.result.errors, [
+      expectedError(ledger.entries[0], "RETIRED_A", "src/a.ts"),
+      expectedError(ledger.entries[0], "RETIRED_SHARED", "src/a.ts"),
+      expectedError(ledger.entries[0], "RETIRED_SHARED", "src-tauri/src/b.rs"),
+      expectedError(ledger.entries[1], "RETIRED_SHARED", "src/a.ts"),
+      expectedError(ledger.entries[1], "RETIRED_SHARED", "src-tauri/src/b.rs"),
+    ]);
+    assert.deepEqual([...changed.reads.values()], [1, 1]);
+
+    fs.writeFileSync(source, "export const active = false;\n");
+    fs.rmSync(rust);
+    fs.writeFileSync(added, "RETIRED_SHARED\n");
+    const replaced = run();
+    assert.deepEqual(replaced.result.errors, [
+      expectedError(ledger.entries[0], "RETIRED_SHARED", "src/c.ts"),
+      expectedError(ledger.entries[1], "RETIRED_SHARED", "src/c.ts"),
+    ]);
+    assert.deepEqual([...replaced.reads.values()], [1, 1]);
+
+    fs.rmSync(added);
+    const removed = run();
+    assert.equal(removed.result.ok, true, removed.result.errors.join("\n"));
+    assert.deepEqual([...removed.reads.values()], [1]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("baseline update preserves policy and requires explicit protected fields", () => {
+  const existing = structuredClone(baselineContract);
+  existing.taskMutation.methodNames = ["obsolete-copy"];
+  const expected = structuredClone(existing);
+  delete expected.repositoryRoot;
+  delete expected.taskMutation.methodNames;
+  expected.sourceCommit = "updated-commit";
+  assert.deepEqual(createArchitectureContractBaseline(existing, "updated-commit"), expected);
+  assert.equal("methodNames" in baselineContract.taskMutation, false);
+
+  for (const key of ["acyclicModules", "contractDependencies"]) {
+    const contract = structuredClone(fixtureContract);
+    delete contract.imports[key];
+    expectFailure(evaluate({ contract }), `imports.${key}`);
+    assert.throws(() => createArchitectureContractBaseline(contract, "updated-commit"), new RegExp(`imports\\.${key}`));
+  }
+  for (const [key, value] of [
+    ["acyclicModules", "invalid"],
+    ["acyclicModules", [null]],
+    ["contractDependencies", []],
+    ["contractDependencies", { "src/example.ts": "invalid" }],
+  ]) {
+    const contract = structuredClone(fixtureContract);
+    contract.imports[key] = value;
+    expectFailure(evaluate({ contract }), `imports.${key}`);
+    assert.throws(() => createArchitectureContractBaseline(contract, "updated-commit"), new RegExp(`imports\\.${key}`));
+  }
+  const empty = structuredClone(fixtureContract);
+  empty.imports.acyclicModules = [];
+  empty.imports.contractDependencies = {};
+  assert.equal(evaluate({ contract: empty }).ok, true);
+});
+
+test("baseline CLI round trip cannot authorize newly discovered callers", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "jarvis-baseline-cli-"));
+  const contractPath = path.join(root, "architecture/architecture-contract.json");
+  const script = path.join(repositoryRoot, "scripts/verify-architecture.mjs");
+  const run = (...args) => spawnSync(process.execPath, [script, ...args], {
+    cwd: root,
+    encoding: "utf8",
+  });
+  try {
+    fs.mkdirSync(path.dirname(contractPath), { recursive: true });
+    const original = structuredClone(baselineContract);
+    delete original.repositoryRoot;
+    original.taskMutation.methodNames = ["obsolete-copy"];
+    fs.writeFileSync(contractPath, `${JSON.stringify(original)}\n`);
+    const before = fs.readFileSync(contractPath, "utf8");
+
+    const printed = run("--print-baseline");
+    assert.equal(printed.status, 0, printed.stderr);
+    const candidate = JSON.parse(printed.stdout);
+    const expected = structuredClone(original);
+    delete expected.taskMutation.methodNames;
+    expected.sourceCommit = candidate.sourceCommit;
+    assert.deepEqual(candidate, expected);
+    assert.equal(fs.readFileSync(contractPath, "utf8"), before);
+
+    const denied = run("--write-baseline");
+    assert.equal(denied.status, 1);
+    assert.equal(fs.readFileSync(contractPath, "utf8"), before);
+    const written = run("--write-baseline", "--force-baseline");
+    assert.equal(written.status, 0, written.stderr);
+    assert.deepEqual(JSON.parse(fs.readFileSync(contractPath, "utf8")), candidate);
+
+    fs.mkdirSync(path.join(root, "src/lib/example"), { recursive: true });
+    fs.writeFileSync(path.join(root, "src/lib/example/new-caller.ts"), "manager.commitPreparedTaskRuntimeTransition();\n");
+    const discovered = discoverArchitecture(root);
+    const analysis = structuredClone(controlledAnalysis);
+    analysis.taskMutationCalls.push(...discovered.taskMutationCalls);
+    const contract = loadArchitectureContract(root);
+    const result = evaluate({ analysis, contract });
+    assert.deepEqual(result.errors, ["task-writer: unauthorized module src/lib/example/new-caller.ts"]);
+    assert.equal(run("--write-baseline", "--force-baseline").status, 0);
+    assert.deepEqual(loadArchitectureContract(root).taskMutation.allowedModules, baselineContract.taskMutation.allowedModules);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("baseline CLI rejects missing and damaged existing contracts even with force", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "jarvis-baseline-invalid-"));
+  const contractPath = path.join(root, "architecture/architecture-contract.json");
+  const script = path.join(repositoryRoot, "scripts/verify-architecture.mjs");
+  const run = () => spawnSync(process.execPath, [script, "--write-baseline", "--force-baseline"], {
+    cwd: root,
+    encoding: "utf8",
+  });
+  try {
+    assert.equal(run().status, 1);
+    assert.equal(fs.existsSync(contractPath), false);
+    fs.mkdirSync(path.dirname(contractPath), { recursive: true });
+    for (const content of ["{broken", ...["acyclicModules", "contractDependencies"].map((key) => {
+      const contract = structuredClone(baselineContract);
+      delete contract.repositoryRoot;
+      delete contract.imports[key];
+      return `${JSON.stringify(contract)}\n`;
+    })]) {
+      fs.writeFileSync(contractPath, content);
+      const result = run();
+      assert.equal(result.status, 1, result.stderr);
+      assert.match(result.stderr, /Architecture baseline update failed:/);
+      assert.equal(fs.readFileSync(contractPath, "utf8"), content);
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("prepared and deadline API calls are discovered from source and constrained", () => {
+  const methods = [
+    "commitPreparedTaskRuntimeTransition",
+    "rollbackPreparedTaskRuntimeTransition",
+    "installPreparedTaskDeadlineUpdate",
+    "rollbackPreparedTaskDeadlineUpdate",
+  ];
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "jarvis-task-mutation-"));
+  try {
+    fs.mkdirSync(path.join(root, "src/lib/example"), { recursive: true });
+    const contract = { ...baselineContract, repositoryRoot: root };
+    assert.equal(evaluate({ contract }).ok, true);
+    const source = [
+      "const manager = {} as any;",
+      ...methods.map((method) => `manager.${method}();`),
+      `const mention = "${methods[0]}";`,
+      `function ${methods[1]}() {}`,
+      `${methods[1]}();`,
+    ].join("\n");
+    const unauthorizedFile = path.join(root, "src/lib/example/new-caller.ts");
+    fs.writeFileSync(unauthorizedFile, source);
+    const unauthorizedCalls = discoverArchitecture(root).taskMutationCalls;
+    assert.deepEqual(unauthorizedCalls.map((call) => call.method), methods);
+    const unauthorizedAnalysis = structuredClone(controlledAnalysis);
+    unauthorizedAnalysis.taskMutationCalls.push(...unauthorizedCalls);
+    assert.deepEqual(evaluate({ analysis: unauthorizedAnalysis, contract }).errors, [
+      "task-writer: unauthorized module src/lib/example/new-caller.ts",
+    ]);
+
+    fs.rmSync(unauthorizedFile);
+    fs.mkdirSync(path.join(root, "src/hooks"), { recursive: true });
+    fs.writeFileSync(path.join(root, "src/hooks/useMeetingAssistant.ts"), source);
+    const extraCalls = discoverArchitecture(root).taskMutationCalls;
+    assert.deepEqual(extraCalls.map((call) => call.method), methods);
+    const overBudget = structuredClone(controlledAnalysis);
+    overBudget.taskMutationCalls.push(...extraCalls);
+    assert.deepEqual(evaluate({ analysis: overBudget, contract }).errors, [
+      "task-writer: src/hooks/useMeetingAssistant.ts has 14 callsites; baseline allows 10",
+    ]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

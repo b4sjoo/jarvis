@@ -13,7 +13,6 @@ import { loadDeletionLedger } from "./lib/maintainability-deletion-ledger.mjs";
 
 const repositoryRoot = process.cwd();
 const verificationStartedAt = Date.now();
-const analysis = discoverArchitecture(repositoryRoot);
 
 if (
   process.argv.includes("--print-baseline") ||
@@ -28,23 +27,27 @@ if (
   } catch {
     // A source archive without Git can still print a usable baseline.
   }
-  const baseline = `${JSON.stringify(
-    createArchitectureContractBaseline(analysis, sourceCommit),
-    null,
-    2
-  )}\n`;
+  let baseline;
+  try {
+    const existingContract = loadArchitectureContract(repositoryRoot);
+    baseline = `${JSON.stringify(
+      createArchitectureContractBaseline(existingContract, sourceCommit),
+      null,
+      2
+    )}\n`;
+  } catch (error) {
+    console.error(`Architecture baseline update failed: ${error.message}`);
+    process.exit(1);
+  }
   if (process.argv.includes("--write-baseline")) {
     const contractPath = path.resolve(
       repositoryRoot,
       "architecture",
       "architecture-contract.json"
     );
-    if (
-      fs.existsSync(contractPath) &&
-      !process.argv.includes("--force-baseline")
-    ) {
+    if (!process.argv.includes("--force-baseline")) {
       console.error(
-        "Architecture contract already exists; pass --force-baseline only after reviewing an intentional boundary change."
+        "Architecture contract already exists; pass --force-baseline only after reviewing the metadata update."
       );
       process.exit(1);
     }
@@ -57,6 +60,7 @@ if (
   process.exit(0);
 }
 
+const analysis = discoverArchitecture(repositoryRoot);
 const contract = loadArchitectureContract(repositoryRoot);
 const ledger = loadDeletionLedger(repositoryRoot);
 const evaluation = evaluateArchitectureAnalysis({

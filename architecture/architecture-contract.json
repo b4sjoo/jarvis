@@ -2,20 +2,14 @@
   "version": 1,
   "sourceCommit": "43a257c",
   "taskMutation": {
-    "methodNames": [
-      "clearTaskRuntime",
-      "commitTaskRuntimeTransition",
-      "clearActiveInterviewTask",
-      "clearActiveMeetingTask",
-      "clearActiveScreenTask",
-      "setActiveInterviewTask",
-      "setActiveMeetingTaskState",
-      "setActiveScreenTask"
-    ],
     "allowedModules": [
       {
         "file": "src/hooks/useMeetingAssistant.ts",
-        "maxCallsites": 2
+        "maxCallsites": 10
+      },
+      {
+        "file": "src/lib/meeting/context-manager.ts",
+        "maxCallsites": 1
       }
     ]
   },
