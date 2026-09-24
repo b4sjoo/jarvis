@@ -7,10 +7,6 @@ import {
   type AnswerRecoveryAdjudicationRequest,
 } from "../src/lib/meeting/answer-recovery-adjudication.js";
 import {
-  buildAnswerSufficiencyAdjudicationPrompts,
-  type AnswerSufficiencyAdjudicationRequest,
-} from "../src/lib/meeting/answer-sufficiency-adjudication.js";
-import {
   buildMeetingMetadataInferencePrompts,
   type MeetingMetadataInferenceRequest,
 } from "../src/lib/meeting/meeting-metadata-inference.js";
@@ -206,21 +202,6 @@ test("keeps envelope fields out of every runtime LLM prompt", () => {
     screenEvidenceSummary: "Lines 35 through 38 are visible.",
     activeParentObjective: "Implement an LRU cache.",
   };
-  const answerSufficiency: AnswerSufficiencyAdjudicationRequest = {
-    schemaVersion: 1,
-    promptVersion: "answer-sufficiency-adjudication-prompt-v1",
-    identity: {
-      traceId: "trace-a",
-      questionId: "question-a",
-      logicalQuestionUnitId: "question-current",
-      logicalQuestionUnitRevision: 2,
-      answerRevision: 3,
-    },
-    questionText: "Explain the tradeoff.",
-    answerText: "I need more information.",
-    artifactState: { expected: ["answer"], missing: [] },
-  };
-
   const prompts = {
     questionType: buildQuestionTypeAdjudicationPrompts(questionType),
     responseOpportunity: buildResponseOpportunityPrompts(responseOpportunity),
@@ -244,8 +225,6 @@ test("keeps envelope fields out of every runtime LLM prompt", () => {
       })!
     ),
     sourceLinkage: buildSourceLinkageAdjudicationPrompts(sourceLinkage),
-    answerSufficiency:
-      buildAnswerSufficiencyAdjudicationPrompts(answerSufficiency),
   };
   const leakage = Object.fromEntries(
     Object.entries(prompts).map(([name, prompt]) => [

@@ -5,6 +5,7 @@ import {
   buildSourceLinkageAdjudicationRequest,
   authorizeSourceLinkageAdjudicationLease,
   createSourceLinkageAdjudicationLease,
+  formatSourceLinkageAdjudicationForTrace,
   parseSourceLinkageAdjudicationOutput,
   SOURCE_LINKAGE_ADJUDICATION_PROMPT_VERSION,
   SOURCE_LINKAGE_MAX_OUTPUT_CHARS,
@@ -267,6 +268,7 @@ test("validates Voice and Screen as a cross-source transition", () => {
     request,
     manualCorrectionRevision: 1,
   });
+  assert.equal("requestSourceHash" in lease, false);
   const transition = {
     operationKind: "source-linkage-adjudication" as const,
     sessionId: "session-1",
@@ -302,4 +304,20 @@ test("validates Voice and Screen as a cross-source transition", () => {
   });
   assert.equal(stale.authorized, false);
   assert.deepEqual(stale.mismatchedFacets, ["transition-to-evidence"]);
+
+  const trace = formatSourceLinkageAdjudicationForTrace({
+    request,
+    disposition: "stale",
+    leaseAuthorized: stale.authorized,
+    validationMismatchedFacets: stale.mismatchedFacets,
+  });
+  assert.equal(trace.sourceLinkageSourceHash, request.sourceHash);
+  assert.equal(trace.runtimeInferenceValidationKind, "cross-source");
+  assert.equal(trace.runtimeInferenceValidationBusinessOwner, "Task 61");
+  assert.equal(trace.runtimeInferenceValidationSupportsAuthorityRevision, false);
+  assert.equal(trace.runtimeInferenceValidationAuthorized, false);
+  assert.equal(trace.runtimeInferenceValidationReason, "identity-mismatch");
+  assert.deepEqual(trace.runtimeInferenceValidationMismatchedFacets, [
+    "transition-to-evidence",
+  ]);
 });

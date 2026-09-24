@@ -2,8 +2,6 @@ import type { RuntimeInferenceRuntimeJob } from "./runtime-inference-runtime.js"
 import { buildRuntimeInferenceModelInput } from "./runtime-inference.js";
 import { parseRuntimeJsonObject } from "./runtime-json-object.js";
 import {
-  formatRuntimeInferenceValidationForTrace,
-  getRuntimeInferenceValidationDefinition,
   validateCrossSourceTransitionLease,
   type CrossSourceTransitionLease,
   type RuntimeInferenceValidationFacet,
@@ -66,7 +64,6 @@ export type SourceLinkageAdjudicationParseResult =
 export interface SourceLinkageAdjudicationLease
   extends CrossSourceTransitionLease {
   operationId: string;
-  requestSourceHash: string;
   createdAt: number;
 }
 
@@ -274,7 +271,6 @@ export function createSourceLinkageAdjudicationLease(input: {
       input.manualCorrectionRevision,
     ].join(":"),
     ...transition,
-    requestSourceHash: input.request.sourceHash,
     createdAt: input.createdAt ?? Date.now(),
   };
 }
@@ -351,21 +347,18 @@ export function formatSourceLinkageAdjudicationForTrace(input: {
     sourceLinkageQueueWaitMs: input.queueWaitMs,
     sourceLinkageAppliedToRuntime: input.appliedToRuntime ?? false,
     sourceLinkageMode: input.mode ?? "shadow",
-    ...formatRuntimeInferenceValidationForTrace({
-      definition: getRuntimeInferenceValidationDefinition(
-        "source-linkage-adjudication"
-      ),
-      result:
-        input.leaseAuthorized === undefined
-          ? undefined
-          : {
-              authorized: input.leaseAuthorized,
-              reason: input.leaseAuthorized
-                ? "authorized"
-                : "identity-mismatch",
-              mismatchedFacets: input.validationMismatchedFacets ?? [],
-            },
-    }),
+    runtimeInferenceValidationKind: "cross-source",
+    runtimeInferenceValidationBusinessOwner: "Task 61",
+    runtimeInferenceValidationSupportsAuthorityRevision: false,
+    runtimeInferenceValidationAuthorized: input.leaseAuthorized,
+    runtimeInferenceValidationReason:
+      input.leaseAuthorized === undefined
+        ? undefined
+        : input.leaseAuthorized
+          ? "authorized"
+          : "identity-mismatch",
+    runtimeInferenceValidationMismatchedFacets:
+      input.validationMismatchedFacets ?? [],
   };
 }
 

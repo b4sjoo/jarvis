@@ -34,38 +34,6 @@ export interface RuntimeInferenceOperationDefinition {
   maxStartsPerBudgetSlot: number;
 }
 
-export interface RuntimeInferenceContextSnapshot<TPayload> {
-  id: string;
-  hash: string;
-  sessionId: string;
-  runtimeEpoch: number;
-  revision: number;
-  createdAt: number;
-  payload: Readonly<TPayload>;
-}
-
-export interface RuntimeInferenceEnvelope {
-  requestId: string;
-  workloadClass: "runtime";
-  operationKind: RuntimeInferenceOperationKind;
-  providerTier: RuntimeInferenceProviderTier;
-  lane: RuntimeInferenceLane;
-  contextSnapshotId: string;
-  contextSnapshotHash: string;
-  sessionId: string;
-  runtimeEpoch: number;
-  operationRevision: number;
-  semanticPayloadDigest: string;
-  modelInputArtifactRef?: string;
-  timeoutMs: number;
-  maxOutputTokens: number;
-}
-
-export interface RuntimeInferenceInvocation<TSemanticPayload> {
-  envelope: Readonly<RuntimeInferenceEnvelope>;
-  semanticPayload: Readonly<TSemanticPayload>;
-}
-
 export interface RuntimeInferenceModelInput {
   systemPrompt: string;
   userMessage: string;
@@ -253,62 +221,6 @@ export function getRuntimeInferenceOperationDefinition(
   return RUNTIME_INFERENCE_OPERATION_DEFINITIONS[operationKind];
 }
 
-export function createRuntimeInferenceContextSnapshot<
-  TPayload extends object,
->(input: {
-  id: string;
-  hash: string;
-  sessionId: string;
-  runtimeEpoch: number;
-  revision: number;
-  payload: TPayload;
-  createdAt?: number;
-}): RuntimeInferenceContextSnapshot<TPayload> {
-  return Object.freeze({
-    id: input.id,
-    hash: input.hash,
-    sessionId: input.sessionId,
-    runtimeEpoch: input.runtimeEpoch,
-    revision: input.revision,
-    createdAt: input.createdAt ?? Date.now(),
-    payload: Object.freeze({ ...input.payload }) as Readonly<TPayload>,
-  });
-}
-
-export function createRuntimeInferenceInvocation<TSemanticPayload>(input: {
-  requestId: string;
-  operationKind: RuntimeInferenceOperationKind;
-  contextSnapshot: RuntimeInferenceContextSnapshot<object>;
-  operationRevision: number;
-  semanticPayload: TSemanticPayload;
-}): RuntimeInferenceInvocation<TSemanticPayload> {
-  const definition = getRuntimeInferenceOperationDefinition(
-    input.operationKind
-  );
-  const semanticPayload = freezeRuntimeSemanticPayload(
-    cloneRuntimeSemanticPayload(input.semanticPayload)
-  );
-  const envelope = Object.freeze({
-    requestId: input.requestId,
-    workloadClass: "runtime",
-    operationKind: input.operationKind,
-    providerTier: definition.providerTier,
-    lane: definition.lane,
-    contextSnapshotId: input.contextSnapshot.id,
-    contextSnapshotHash: input.contextSnapshot.hash,
-    sessionId: input.contextSnapshot.sessionId,
-    runtimeEpoch: input.contextSnapshot.runtimeEpoch,
-    operationRevision: input.operationRevision,
-    semanticPayloadDigest: hashRuntimeSemanticPayload(semanticPayload),
-    timeoutMs: definition.timeoutMs,
-    maxOutputTokens: definition.maxOutputTokens,
-  } satisfies RuntimeInferenceEnvelope);
-  return Object.freeze({
-    envelope,
-    semanticPayload,
-  });
-}
-
 export function buildRuntimeInferenceModelInput<TSemanticPayload>(input: {
   systemPrompt: string;
   semanticPayload: TSemanticPayload;
@@ -377,20 +289,6 @@ function canonicalizeRuntimeSemanticValue(value: unknown): unknown {
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([key, item]) => [key, canonicalizeRuntimeSemanticValue(item)])
   );
-}
-
-function cloneRuntimeSemanticPayload<T>(value: T): T {
-  return JSON.parse(serializeRuntimeSemanticPayload(value)) as T;
-}
-
-function freezeRuntimeSemanticPayload<T>(value: T): Readonly<T> {
-  if (!value || typeof value !== "object" || Object.isFrozen(value)) {
-    return value as Readonly<T>;
-  }
-  for (const item of Object.values(value)) {
-    freezeRuntimeSemanticPayload(item);
-  }
-  return Object.freeze(value);
 }
 
 export function formatRuntimeInferenceOperationForTrace(

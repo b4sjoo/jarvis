@@ -2,8 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildRuntimeInferenceModelInput,
-  createRuntimeInferenceContextSnapshot,
-  createRuntimeInferenceInvocation,
   findRuntimeEnvelopeLeakage,
   formatRuntimeInferenceOperationForTrace,
   getRuntimeInferenceOperationDefinition,
@@ -24,15 +22,8 @@ import {
   type MeetingModelProviderSnapshot,
 } from "../src/lib/meeting/meeting-model-route.js";
 import {
-  RUNTIME_INFERENCE_VALIDATION_DEFINITIONS,
-  formatRuntimeInferenceValidationForTrace,
-  getRuntimeInferenceValidationDefinition,
   validateCrossSourceTransitionLease,
-  validateSameArtifactRepairLease,
-  validateSameSourceInferenceLease,
   type CrossSourceTransitionLease,
-  type SameArtifactRepairLease,
-  type SameSourceInferenceLease,
 } from "../src/lib/meeting/runtime-inference-validation.js";
 
 function runtimeJob(
@@ -134,78 +125,7 @@ test("registers each atomic runtime operation with an isolated policy", () => {
   assert.equal(relation.quiescenceMs, 350);
 });
 
-test("classifies every runtime operation under one validation contract", () => {
-  assert.deepEqual(
-    Object.keys(RUNTIME_INFERENCE_VALIDATION_DEFINITIONS).sort(),
-    [
-      "answer-resolution",
-      "evidence-requirement",
-      "meeting-metadata-inference",
-      "question-type-adjudication",
-      "response-opportunity-inference",
-      "source-linkage-adjudication",
-      "task-relation-adjudication",
-      "task-relation-canonical-shadow",
-      "task-relation-child-affinity",
-      "task-relation-parent-affinity",
-      "taxonomy-adjudication",
-      "whiteboard-syntax-repair",
-    ]
-  );
-  assert.equal(
-    getRuntimeInferenceValidationDefinition("source-linkage-adjudication")
-      .validationKind,
-    "cross-source"
-  );
-  assert.equal(
-    getRuntimeInferenceValidationDefinition("whiteboard-syntax-repair")
-      .validationKind,
-    "same-artifact"
-  );
-  assert.equal(
-    getRuntimeInferenceValidationDefinition("task-relation-adjudication")
-      .supportsAuthorityRevision,
-    true
-  );
-});
-
-test("validates same-source snapshots without accepting identity drift", () => {
-  const lease: SameSourceInferenceLease = {
-    operationKind: "task-relation-adjudication",
-    sessionId: "session-a",
-    runtimeEpoch: 4,
-    contextSnapshotId: "snapshot-a",
-    contextSnapshotHash: "snapshot-hash-a",
-    operationRevision: 2,
-    source: {
-      logicalQuestionUnitId: "question-a",
-      logicalQuestionRevision: 3,
-      sourceHash: "source-a",
-      correctionRevision: 1,
-    },
-  };
-
-  assert.deepEqual(
-    validateSameSourceInferenceLease({ lease, current: { ...lease } }),
-    { authorized: true, reason: "authorized", mismatchedFacets: [] }
-  );
-  assert.deepEqual(
-    validateSameSourceInferenceLease({
-      lease,
-      current: {
-        ...lease,
-        source: { ...lease.source!, sourceHash: "source-b" },
-      },
-    }),
-    {
-      authorized: false,
-      reason: "identity-mismatch",
-      mismatchedFacets: ["source-hash"],
-    }
-  );
-});
-
-test("validates cross-source transitions without comparing from and to hashes", () => {
+test("validates cross-source transitions against both source identities", () => {
   const lease: CrossSourceTransitionLease = {
     operationKind: "source-linkage-adjudication",
     sessionId: "session-a",
@@ -238,79 +158,21 @@ test("validates cross-source transitions without comparing from and to hashes", 
     }).mismatchedFacets,
     ["transition-to-evidence"]
   );
-});
-
-test("validates artifact repair against owner revision and fingerprint", () => {
-  const lease: SameArtifactRepairLease = {
-    operationKind: "whiteboard-syntax-repair",
-    sessionId: "session-a",
-    runtimeEpoch: 4,
-    ownerId: "parent-a",
-    artifactId: "whiteboard-a",
-    candidateRevision: 3,
-    candidateFingerprint: "fingerprint-a",
-  };
-  const validation = validateSameArtifactRepairLease({
-    lease,
-    current: { ...lease, candidateRevision: 4 },
-  });
-
-  assert.equal(validation.authorized, false);
-  assert.deepEqual(validation.mismatchedFacets, ["artifact-revision"]);
-  assert.equal(
-    formatRuntimeInferenceValidationForTrace({
-      definition: getRuntimeInferenceValidationDefinition(
-        "whiteboard-syntax-repair"
-      ),
-      result: validation,
-    }).runtimeInferenceValidationReason,
-    "identity-mismatch"
-  );
-});
-
-test("builds immutable shared snapshots and operation-specific requests", () => {
-  const snapshot = createRuntimeInferenceContextSnapshot({
-    id: "snapshot-a",
-    hash: "hash-a",
-    sessionId: "session-a",
-    runtimeEpoch: 3,
-    revision: 4,
-    createdAt: 100,
-    payload: { latestTurnId: "turn-a" },
-  });
-  const taxonomy = createRuntimeInferenceInvocation({
-    requestId: "request-taxonomy",
-    operationKind: "taxonomy-adjudication",
-    contextSnapshot: snapshot,
-    operationRevision: 1,
-    semanticPayload: { question: "Design a cache." },
-  });
-  const metadata = createRuntimeInferenceInvocation({
-    requestId: "request-metadata",
-    operationKind: "meeting-metadata-inference",
-    contextSnapshot: snapshot,
-    operationRevision: 1,
-    semanticPayload: { company: "Reddit" },
-  });
-
-  assert.equal(Object.isFrozen(snapshot), true);
-  assert.equal(Object.isFrozen(snapshot.payload), true);
-  assert.equal(Object.isFrozen(taxonomy), true);
-  assert.equal(Object.isFrozen(taxonomy.envelope), true);
-  assert.equal(Object.isFrozen(taxonomy.semanticPayload), true);
-  assert.equal(
-    taxonomy.envelope.contextSnapshotId,
-    metadata.envelope.contextSnapshotId
-  );
-  assert.equal(
-    taxonomy.envelope.contextSnapshotHash,
-    metadata.envelope.contextSnapshotHash
-  );
-  assert.equal(taxonomy.envelope.lane, "critical");
-  assert.equal(metadata.envelope.lane, "background");
-  assert.equal(
-    taxonomy.envelope.semanticPayloadDigest,
-    hashRuntimeSemanticPayload(taxonomy.semanticPayload)
+  assert.deepEqual(
+    validateCrossSourceTransitionLease({
+      lease,
+      current: {
+        ...lease,
+        from: { ...lease.from, sourceHash: "replaced-voice" },
+        to: { ...lease.to, evidenceHash: "replaced-screen" },
+        sourceSettlementId: "replaced-settlement",
+      },
+    }).mismatchedFacets,
+    [
+      "transition-from-source-hash",
+      "transition-to-evidence-hash",
+      "transition-source-settlement",
+    ]
   );
 });
 
