@@ -10791,14 +10791,20 @@ export function useMeetingAssistant() {
             authorizedArtifacts: generationAuthorizedArtifacts,
           }
         );
+        const leaseTrace = {
+          ...formatAnswerGenerationLeaseForTrace(
+            answerGenerationLease,
+            leaseAuthorization,
+            stage
+          ),
+          ...(stage === "generation-lease-start"
+            ? { leaseAuthorizedAtStart: leaseAuthorization.authorized }
+            : {}),
+        };
         if (traceId) {
           traceStoreRef.current.updateMetadata(
             traceId,
-            formatAnswerGenerationLeaseForTrace(
-              answerGenerationLease,
-              leaseAuthorization,
-              stage
-            )
+            leaseTrace
           );
         }
         if (!leaseAuthorization.authorized) {
@@ -10831,11 +10837,7 @@ export function useMeetingAssistant() {
                   commitAuthorizationReason: leaseAuthorization.reason,
                 }
               ),
-              ...formatAnswerGenerationLeaseForTrace(
-                answerGenerationLease,
-                leaseAuthorization,
-                stage
-              ),
+              ...leaseTrace,
             },
             leaseAuthorization.reason
           );
@@ -13595,26 +13597,6 @@ export function useMeetingAssistant() {
       lease: answerGenerationLease,
     };
     publishGenerationResultProjection(answerGenerationLease, traceId);
-    const leaseStartLogicalQuestion =
-      readLogicalQuestionAuthorizationTarget().logicalQuestionUnit;
-    const leaseStartAuthorization = authorizeAnswerGenerationLease(
-      answerGenerationLease,
-      {
-        sessionId: generationContextState.sessionId,
-        runtimeEpoch: runtimeEpochRef.current,
-        preparationContextRevision:
-          preparationRuntimeContextRef.current.preparationContextRevision,
-        taskId: generationParent?.id ?? null,
-        taskRevision: generationParent?.revisions ?? null,
-        logicalQuestionUnitId: leaseStartLogicalQuestion?.id ?? null,
-        logicalQuestionRevision: leaseStartLogicalQuestion?.revision ?? null,
-        visibleAnswerRevision: visibleAnswerRevisionRef.current,
-        manualCorrectionRevision: manualCorrectionRevisionRef.current,
-        responseActionRevision: responseActionRevisionRef.current,
-        artifactOwnerId: generationParent?.id ?? null,
-        authorizedArtifacts: generationAuthorizedArtifacts,
-      }
-    );
     if (traceId) {
       traceStoreRef.current.updateMetadata(traceId, {
         ...responseOwnerMetadata,
@@ -13625,8 +13607,8 @@ export function useMeetingAssistant() {
         ),
         ...formatAnswerGenerationLeaseForTrace(
           answerGenerationLease,
-          leaseStartAuthorization,
-          "start"
+          undefined,
+          "lease-created"
         ),
         ...manualPhaseArtifactContractMetadata,
         ...formatAdvisorArtifactGenerationAuthorityForTrace(
@@ -25959,6 +25941,18 @@ export function useMeetingAssistant() {
               }
             )
           : undefined;
+        const leaseTrace = screenGenerationLease && leaseAuthorization
+          ? {
+              ...formatAnswerGenerationLeaseForTrace(
+                screenGenerationLease,
+                leaseAuthorization,
+                stage
+              ),
+              ...(stage === "generation-lease-start"
+                ? { leaseAuthorizedAtStart: leaseAuthorization.authorized }
+                : {}),
+            }
+          : {};
         traceStoreRef.current.updateMetadata(
           trace.id,
           {
@@ -25980,13 +25974,7 @@ export function useMeetingAssistant() {
                   ),
               }
             ),
-            ...(screenGenerationLease && leaseAuthorization
-              ? formatAnswerGenerationLeaseForTrace(
-                  screenGenerationLease,
-                  leaseAuthorization,
-                  stage
-                )
-              : {}),
+            ...leaseTrace,
             ...(!decision.authorized || !boundRecoveryStillCurrent ||
             (leaseAuthorization && !leaseAuthorization.authorized)
               ? {
@@ -29095,28 +29083,6 @@ export function useMeetingAssistant() {
           trace.id
         );
         const screenArtifactReuseInputs = readArtifactReuseInputs();
-        const screenLeaseStartAuthorization =
-          authorizeAnswerGenerationLease(screenGenerationLease, {
-            sessionId: screenGenerationContext.sessionId,
-            runtimeEpoch: runtimeEpochRef.current,
-            taskId: screenGenerationParent?.id ?? null,
-            taskRevision: screenGenerationParent?.revisions ?? null,
-            logicalQuestionUnitId:
-              screenGenerationLease.logicalQuestionUnitId,
-            logicalQuestionRevision:
-              screenGenerationLease.logicalQuestionRevision,
-            visibleAnswerRevision:
-              visibleAnswerRevisionRef.current,
-            manualCorrectionRevision:
-              manualCorrectionRevisionRef.current,
-            responseActionRevision:
-              responseActionRevisionRef.current,
-            preparationContextRevision:
-              preparationRuntimeContextRef.current.preparationContextRevision,
-            artifactOwnerId: screenGenerationParent?.id ?? null,
-            authorizedArtifacts:
-              screenGenerationRequestedArtifacts,
-          });
         traceStoreRef.current.updateMetadata(
           trace.id,
           {
@@ -29127,8 +29093,8 @@ export function useMeetingAssistant() {
             ),
             ...formatAnswerGenerationLeaseForTrace(
               screenGenerationLease,
-              screenLeaseStartAuthorization,
-              "start"
+              undefined,
+              "lease-created"
             ),
             modelRequestOptions: screenModelRequestOptions,
           }
