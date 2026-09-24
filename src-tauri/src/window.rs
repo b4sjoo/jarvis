@@ -164,65 +164,6 @@ pub fn open_dashboard(app: tauri::AppHandle) -> Result<(), String> {
     show_dashboard_window(&app)
 }
 
-#[tauri::command]
-pub fn toggle_dashboard(app: tauri::AppHandle) -> Result<(), String> {
-    if let Some(dashboard_window) = app.get_webview_window("dashboard") {
-        match dashboard_window.is_visible() {
-            Ok(true) => {
-                // Window is visible, hide it
-                dashboard_window
-                    .hide()
-                    .map_err(|e| format!("Failed to hide dashboard window: {}", e))?;
-            }
-            Ok(false) => {
-                // Window is hidden, show and focus it
-                dashboard_window
-                    .show()
-                    .map_err(|e| format!("Failed to show dashboard window: {}", e))?;
-                dashboard_window
-                    .set_focus()
-                    .map_err(|e| format!("Failed to focus dashboard window: {}", e))?;
-            }
-            Err(e) => {
-                return Err(format!("Failed to check dashboard visibility: {}", e));
-            }
-        }
-    } else {
-        // Window doesn't exist, create and show it
-        show_dashboard_window(&app)?;
-    }
-
-    Ok(())
-}
-
-#[tauri::command]
-pub fn move_window(app: tauri::AppHandle, direction: String, step: i32) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window("main") {
-        let current_pos = window
-            .outer_position()
-            .map_err(|e| format!("Failed to get window position: {}", e))?;
-
-        let (new_x, new_y) = match direction.as_str() {
-            "up" => (current_pos.x, current_pos.y - step),
-            "down" => (current_pos.x, current_pos.y + step),
-            "left" => (current_pos.x - step, current_pos.y),
-            "right" => (current_pos.x + step, current_pos.y),
-            _ => return Err(format!("Invalid direction: {}", direction)),
-        };
-
-        window
-            .set_position(tauri::Position::Physical(tauri::PhysicalPosition {
-                x: new_x,
-                y: new_y,
-            }))
-            .map_err(|e| format!("Failed to set window position: {}", e))?;
-    } else {
-        return Err("Main window not found".to_string());
-    }
-
-    Ok(())
-}
-
 pub fn create_dashboard_window<R: Runtime>(
     app: &AppHandle<R>,
 ) -> Result<WebviewWindow<R>, tauri::Error> {

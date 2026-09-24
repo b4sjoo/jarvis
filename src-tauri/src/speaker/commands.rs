@@ -2733,29 +2733,6 @@ fn validate_vad_config(config: &VadConfig) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn get_capture_status(app: AppHandle) -> Result<bool, String> {
-    let state = app.state::<crate::AudioState>();
-    let control = state
-        .capture_control
-        .lock()
-        .map_err(|e| format!("Failed to get capture status: {}", e))?;
-    Ok(control.phase != NativeCapturePhase::Idle)
-}
-
-#[tauri::command]
-pub fn get_audio_sample_rate(_app: AppHandle) -> Result<u32, String> {
-    let input = SpeakerInput::new().map_err(|e| {
-        error!("Failed to create speaker input: {}", e);
-        format!("Failed to access system audio: {}", e)
-    })?;
-
-    let stream = input.stream();
-    let sr = stream.sample_rate();
-
-    Ok(sr)
-}
-
-#[tauri::command]
 pub fn get_output_devices() -> Result<Vec<AudioDevice>, String> {
     crate::speaker::list_output_devices().map_err(|e| {
         error!("Failed to get output devices: {}", e);

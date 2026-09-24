@@ -200,8 +200,6 @@
       "force_app_shutdown",
       "get_app_shutdown",
       "get_app_version",
-      "get_audio_sample_rate",
-      "get_capture_status",
       "get_meeting_audio_status",
       "get_output_devices",
       "get_registered_shortcuts",
@@ -211,7 +209,6 @@
       "log_preparation_material_import_summary",
       "memory_content_initialize",
       "memory_content_publish",
-      "move_window",
       "open_dashboard",
       "preparation_extraction_claim",
       "preparation_extraction_complete",
@@ -242,7 +239,6 @@
       "stop_meeting_audio_session",
       "stop_stt_evaluation_capture",
       "stop_system_audio_capture",
-      "toggle_dashboard",
       "update_shortcuts",
       "validate_shortcut_key",
       "write_meeting_session_recording_base64",
@@ -393,22 +389,6 @@
         {
           "name": "debug_block_main_thread_for_stall_test",
           "reason": "Debug-only bounded fault fixture for native delivery diagnostics; invoked only in isolated acceptance tests."
-        },
-        {
-          "name": "get_audio_sample_rate",
-          "reason": "Registered native diagnostic command with no current TypeScript consumer."
-        },
-        {
-          "name": "get_capture_status",
-          "reason": "Registered native diagnostic command with no current TypeScript consumer."
-        },
-        {
-          "name": "move_window",
-          "reason": "Native shortcut path moves windows directly; command remains registered for compatibility."
-        },
-        {
-          "name": "toggle_dashboard",
-          "reason": "Native shortcut path toggles the dashboard directly; command remains registered for compatibility."
         }
       ],
       "allowedNativeEventsWithoutFrontendListener": [
