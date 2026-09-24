@@ -1489,6 +1489,7 @@ const INITIAL_STATE: MeetingAssistantState = {
     personalEvidenceGuardrailMode: "enforcement",
     semanticTaxonomyMode: "shadow",
     debugMode: false,
+    nativeStallDiagnosticsEnabled: false,
     microphoneContextEnabled: true,
     response: DEFAULT_MEETING_RESPONSE_CONFIG,
     codingModel: DEFAULT_MEETING_CODING_MODEL_SETTINGS,
@@ -1557,6 +1558,10 @@ function readMeetingAssistantSettings(): MeetingAssistantSettings {
         typeof parsed.debugMode === "boolean"
           ? parsed.debugMode
           : DEFAULT_MEETING_ASSISTANT_SETTINGS.debugMode,
+      nativeStallDiagnosticsEnabled:
+        typeof parsed.nativeStallDiagnosticsEnabled === "boolean"
+          ? parsed.nativeStallDiagnosticsEnabled
+          : DEFAULT_MEETING_ASSISTANT_SETTINGS.nativeStallDiagnosticsEnabled,
       microphoneContextEnabled:
         typeof parsed.microphoneContextEnabled === "boolean"
           ? parsed.microphoneContextEnabled
@@ -8331,6 +8336,50 @@ export function useMeetingAssistant() {
     [startSessionRecording, stopSessionRecording]
   );
 
+  const [nativeStallDiagnosticsError, setNativeStallDiagnosticsError] = useState<string | null>(null);
+  const nativeStallDiagnosticsUpdateRef = useRef<Promise<void>>(Promise.resolve());
+  const queueNativeStallDiagnostics = useCallback((enabled: boolean, folderName?: string) => {
+    nativeStallDiagnosticsUpdateRef.current = nativeStallDiagnosticsUpdateRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        try {
+          const runId = await invoke<string | null>("set_native_stall_diagnostics", {
+            enabled,
+            folderName: enabled ? folderName : null,
+          });
+          setNativeStallDiagnosticsError(null);
+          sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+            stage: "native-stall-diagnostics",
+            enabled,
+            runId,
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          setNativeStallDiagnosticsError(message);
+          console.warn("Native stall diagnostics could not be armed", message);
+          sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+            stage: "native-stall-diagnostics-error",
+            enabled,
+            message,
+          });
+        }
+      });
+  }, []);
+
+  useEffect(() => {
+    const enabled = state.settings.nativeStallDiagnosticsEnabled &&
+      state.sessionRecording.active && Boolean(state.sessionRecording.folderName);
+    queueNativeStallDiagnostics(enabled, state.sessionRecording.folderName);
+    return () => {
+      if (enabled) queueNativeStallDiagnostics(false);
+    };
+  }, [
+    queueNativeStallDiagnostics,
+    state.settings.nativeStallDiagnosticsEnabled,
+    state.sessionRecording.active,
+    state.sessionRecording.folderName,
+  ]);
+
   const setSessionScriptedValidation = useCallback((enabled: boolean) => {
     const recordingState =
       sessionRecordingManagerRef.current?.getState();
@@ -9148,6 +9197,13 @@ export function useMeetingAssistant() {
         ...previous,
         debugMode,
       }));
+    },
+    [updateSettings]
+  );
+
+  const setNativeStallDiagnosticsEnabled = useCallback(
+    (nativeStallDiagnosticsEnabled: boolean) => {
+      updateSettings((previous) => ({ ...previous, nativeStallDiagnosticsEnabled }));
     },
     [updateSettings]
   );
@@ -36432,6 +36488,17 @@ export function useMeetingAssistant() {
             lastSnapshotSequence:
               lastNativeAudioLivenessSequenceRef.current,
           });
+          const marker = authorization.event;
+          if (marker?.diagnosticRunId) {
+            void invoke<boolean>("acknowledge_native_stall_marker", {
+              diagnosticRunId: marker.diagnosticRunId,
+              captureSessionId: marker.captureSessionId,
+              captureGeneration: marker.captureGeneration,
+              snapshotSequence: marker.snapshotSequence,
+            }).catch((error) => {
+              console.warn("Native stall marker ACK failed", error);
+            });
+          }
           const metadata = {
             stage: "native-audio-liveness",
             authorized: authorization.authorized,
@@ -37304,6 +37371,8 @@ export function useMeetingAssistant() {
     setPersonalEvidenceGuardrailMode,
     setSemanticTaxonomyMode,
     setDebugMode,
+    setNativeStallDiagnosticsEnabled,
+    nativeStallDiagnosticsError,
     setMicrophoneContextEnabled,
     toggleMicrophoneContext,
     setSessionRecordingEnabled,

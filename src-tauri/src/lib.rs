@@ -1,6 +1,7 @@
 mod app_shutdown;
 mod capture;
 mod db;
+mod native_stall_diagnostics;
 mod preparation_material_extraction;
 mod preparation_material_storage;
 mod preparation_ocr;
@@ -407,6 +408,7 @@ pub fn run() {
                 .build(),
         )
         .manage(AudioState::default())
+        .manage(native_stall_diagnostics::NativeStallDiagnostics::default())
         .manage(app_shutdown::AppShutdownState::default())
         .manage(stt_evaluation::SttEvaluationCaptureState::default())
         .manage(CaptureState::default())
@@ -502,6 +504,10 @@ pub fn run() {
             speaker::get_capture_status,
             speaker::get_audio_sample_rate,
             speaker::get_output_devices,
+            native_stall_diagnostics::set_native_stall_diagnostics,
+            native_stall_diagnostics::acknowledge_native_stall_marker,
+            #[cfg(debug_assertions)]
+            native_stall_diagnostics::debug_block_main_thread_for_stall_test,
         ])
         .setup(|app| {
             if let Err(error) =

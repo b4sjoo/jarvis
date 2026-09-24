@@ -67,6 +67,7 @@ export type AudioInputLivenessState =
 export interface NativeAudioLivenessEvent {
   schemaVersion: 1 | 2;
   snapshotSequence: number;
+  diagnosticRunId?: string;
   captureSessionId: string;
   captureGeneration: number;
   owner: "meeting" | "system";

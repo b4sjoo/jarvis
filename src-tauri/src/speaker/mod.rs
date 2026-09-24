@@ -170,6 +170,13 @@ impl Stream for SpeakerStream {
 }
 
 impl SpeakerStream {
+    #[cfg(target_os = "macos")]
+    pub(crate) fn callback_counters(
+        &self,
+    ) -> std::sync::Arc<crate::native_stall_diagnostics::CaptureCallbackCounters> {
+        self.inner.callback_counters()
+    }
+
     // Gets the sample rate (e.g., 16000 Hz on stub, variable on real impls).
     pub fn sample_rate(&self) -> u32 {
         #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]

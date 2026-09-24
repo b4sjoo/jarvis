@@ -1,4 +1,5 @@
 // Jarvis AI Speech Detection, and capture system audio (speaker output) as a stream of f32 samples.
+use crate::native_stall_diagnostics::NativeStallDiagnostics;
 use crate::speaker::{
     AudioDevice, SpeakerInput, SpeakerStream, SpeakerStreamTermination,
     SpeakerStreamTerminationReason,
@@ -403,6 +404,8 @@ const VAD_LIVENESS_INTERVAL_MS: u64 = 2_000;
 pub struct NativeAudioLivenessEvent {
     pub schema_version: u16,
     pub snapshot_sequence: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnostic_run_id: Option<String>,
     pub capture_session_id: String,
     pub capture_generation: u64,
     pub owner: &'static str,
@@ -475,7 +478,9 @@ impl VadLivenessAccumulator {
             self.raw_zero_sample_count = 0;
             self.last_raw_signal_observed_at_ms = Some(observed_at_ms);
         } else {
-            self.raw_zero_sample_count = self.raw_zero_sample_count.saturating_add(samples.len() as u64);
+            self.raw_zero_sample_count = self
+                .raw_zero_sample_count
+                .saturating_add(samples.len() as u64);
         }
     }
 
@@ -550,6 +555,7 @@ impl VadLivenessAccumulator {
         let event = NativeAudioLivenessEvent {
             schema_version: VAD_LIVENESS_SCHEMA_VERSION,
             snapshot_sequence: self.snapshot_sequence,
+            diagnostic_run_id: None,
             capture_session_id: capture_session_id.to_string(),
             capture_generation,
             owner: owner.as_str(),
@@ -1213,6 +1219,14 @@ async fn run_vad_capture(
     termination_request: Arc<Mutex<Option<NativeCaptureTerminationRequest>>>,
 ) -> CaptureRunOutcome {
     let mut stream = stream;
+    #[cfg(target_os = "macos")]
+    if capture_owner == NativeCaptureOwner::Meeting {
+        app.state::<NativeStallDiagnostics>().set_capture(
+            &capture_session_id,
+            capture_generation,
+            stream.callback_counters(),
+        );
+    }
     let timing = ResolvedVadTiming::resolve(&config, sr);
     let capture_started_at_ms = now_ms();
     let mut buffer: VecDeque<f32> = VecDeque::new();
@@ -2153,7 +2167,7 @@ fn emit_vad_liveness(
     config: &VadConfig,
     occurred_at_ms: u64,
 ) {
-    let event = liveness.take_snapshot(
+    let mut event = liveness.take_snapshot(
         capture_session_id,
         capture_generation,
         capture_owner,
@@ -2166,7 +2180,12 @@ fn emit_vad_liveness(
         config,
         occurred_at_ms,
     );
-    let _ = app.emit("native-audio-liveness", event);
+    let diagnostics = app.state::<NativeStallDiagnostics>();
+    event.diagnostic_run_id = diagnostics.begin_event(&event);
+    let delivered = app.emit("native-audio-liveness", event.clone()).is_ok();
+    if event.diagnostic_run_id.is_some() {
+        diagnostics.finish_event(&event, delivered);
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2314,6 +2333,8 @@ fn finish_capture_if_owner(
     sample_rate: u32,
     outcome: CaptureRunOutcome,
 ) {
+    app.state::<NativeStallDiagnostics>()
+        .clear_capture(session_id, generation);
     let state = app.state::<crate::AudioState>();
     let finished = matches!(
         release_active_capture_if_owner(&state, owner, session_id, generation),
@@ -2357,6 +2378,8 @@ async fn stop_audio_capture_for_owner(
     )
     .await?;
     if let Some(lease) = stopped_lease {
+        app.state::<NativeStallDiagnostics>()
+            .clear_capture(&lease.session_id, lease.generation);
         let _ = app.emit("capture-stopped", ());
         emit_capture_lifecycle(
             &app,
@@ -2804,17 +2827,16 @@ mod native_capture_control_tests;
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_noise_gate, samples_to_ms,
-        begin_capture_stop, claim_capture_lease, control_owns, decide_debug_audio_fault,
-        release_active_capture_if_owner, should_emit_tail_segment,
-        take_capture_termination_request, CaptureRecoverability, CaptureRunOutcome,
-        CaptureTerminationDiagnostics, CaptureTerminationReason, DebugAudioFaultDisposition,
-        DebugAudioFaultKind, NativeAudioLifecycleEvent, NativeAudioSegmentDroppedEvent,
-        NativeCaptureControl, NativeCaptureOwner, NativeCapturePhase,
-        NativeCaptureTerminationRequest, NativeSegmentEndReason, NativeSpeechDetectedEvent,
-        NativeSpeechStartEvent, NativeStopDecision, NativeTailFlushDisposition, ResolvedVadTiming,
-        SpeakerStreamTermination, SpeakerStreamTerminationReason, VadConfig,
-        VadLivenessAccumulator,
+        apply_noise_gate, begin_capture_stop, claim_capture_lease, control_owns,
+        decide_debug_audio_fault, release_active_capture_if_owner, samples_to_ms,
+        should_emit_tail_segment, take_capture_termination_request, CaptureRecoverability,
+        CaptureRunOutcome, CaptureTerminationDiagnostics, CaptureTerminationReason,
+        DebugAudioFaultDisposition, DebugAudioFaultKind, NativeAudioLifecycleEvent,
+        NativeAudioSegmentDroppedEvent, NativeCaptureControl, NativeCaptureOwner,
+        NativeCapturePhase, NativeCaptureTerminationRequest, NativeSegmentEndReason,
+        NativeSpeechDetectedEvent, NativeSpeechStartEvent, NativeStopDecision,
+        NativeTailFlushDisposition, ResolvedVadTiming, SpeakerStreamTermination,
+        SpeakerStreamTerminationReason, VadConfig, VadLivenessAccumulator,
     };
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Mutex;
@@ -2938,12 +2960,19 @@ mod tests {
     fn raw_zero_observation_is_before_noise_gate_and_tracks_exact_zero_only() {
         let mut liveness = VadLivenessAccumulator::default();
         let quiet = vec![0.000_001; 48_000];
-        assert!(apply_noise_gate(&quiet, 0.003).iter().all(|v| *v < quiet[0]));
+        assert!(apply_noise_gate(&quiet, 0.003)
+            .iter()
+            .all(|v| *v < quiet[0]));
         liveness.observe_raw_chunk(&quiet, 1_000);
         assert_eq!(liveness.raw_signal_chunk_count, 1);
         let zeros = vec![0.0; 48_000];
-        for _ in 0..90 { liveness.observe_raw_chunk(&zeros, 91_000); }
-        assert_eq!(samples_to_ms(liveness.raw_zero_sample_count, 48_000), 90_000);
+        for _ in 0..90 {
+            liveness.observe_raw_chunk(&zeros, 91_000);
+        }
+        assert_eq!(
+            samples_to_ms(liveness.raw_zero_sample_count, 48_000),
+            90_000
+        );
         liveness.observe_raw_chunk(&quiet, 92_000);
         assert_eq!(liveness.raw_zero_sample_count, 0);
         assert_eq!(liveness.last_raw_signal_observed_at_ms, Some(92_000));

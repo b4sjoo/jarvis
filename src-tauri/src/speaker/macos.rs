@@ -1,5 +1,6 @@
 // Jarvis macos speaker input and stream
 use super::{AudioDevice, SpeakerStreamTermination, SpeakerStreamTerminationReason};
+use crate::native_stall_diagnostics::CaptureCallbackCounters;
 use anyhow::Result;
 use ca::aggregate_device_keys as agg_keys;
 use cidre::{arc, av, cat, cf, core_audio as ca, ns, os};
@@ -157,11 +158,16 @@ pub struct SpeakerStream {
     _tap: ca::TapGuard,
     waker_state: Arc<Mutex<WakerState>>,
     current_sample_rate: Arc<AtomicU32>,
+    callback_counters: Arc<CaptureCallbackCounters>,
 }
 
 impl SpeakerStream {
     pub fn sample_rate(&self) -> u32 {
         self.current_sample_rate.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn callback_counters(&self) -> Arc<CaptureCallbackCounters> {
+        self.callback_counters.clone()
     }
 
     pub fn termination(&self) -> SpeakerStreamTermination {
@@ -187,6 +193,7 @@ struct Ctx {
     dropped_samples: Arc<AtomicU64>,
     termination_code: Arc<AtomicU8>,
     should_terminate: Arc<AtomicBool>,
+    callback_counters: Arc<CaptureCallbackCounters>,
 }
 
 impl SpeakerInput {
@@ -242,7 +249,12 @@ impl SpeakerInput {
             ],
         );
 
-        Ok(Self { tap, agg_desc, output_uid: output_uid.to_string(), aggregate_uid: aggregate_uid.to_string() })
+        Ok(Self {
+            tap,
+            agg_desc,
+            output_uid: output_uid.to_string(),
+            aggregate_uid: aggregate_uid.to_string(),
+        })
     }
 
     pub(crate) fn capture_diagnostics(&self) -> serde_json::Value {
@@ -269,6 +281,9 @@ impl SpeakerInput {
         ) -> os::Status {
             let ctx = ctx.unwrap();
 
+            ctx.callback_counters.observe_entry();
+            let mut input_frames = 0;
+
             ctx.current_sample_rate.store(
                 device
                     .actual_sample_rate()
@@ -280,6 +295,8 @@ impl SpeakerInput {
                 av::AudioPcmBuf::with_buf_list_no_copy(&ctx.format, input_data, None)
             {
                 if let Some(data) = view.data_f32_at(0) {
+                    input_frames = data.len();
+                    ctx.callback_counters.observe_frames(input_frames);
                     process_audio_data(ctx, data);
                 }
             } else if ctx.format.common_format() == av::audio::CommonFormat::PcmF32 {
@@ -291,8 +308,14 @@ impl SpeakerInput {
                     let data = unsafe {
                         std::slice::from_raw_parts(first_buffer.data as *const f32, float_count)
                     };
+                    input_frames = data.len();
+                    ctx.callback_counters.observe_frames(input_frames);
                     process_audio_data(ctx, data);
                 }
+            }
+
+            if input_frames == 0 {
+                ctx.callback_counters.observe_empty();
             }
 
             os::Status::NO_ERR
@@ -319,6 +342,7 @@ impl SpeakerInput {
         }));
 
         let current_sample_rate = Arc::new(AtomicU32::new(asbd.sample_rate as u32));
+        let callback_counters = Arc::new(CaptureCallbackCounters::new());
 
         let mut ctx = Box::new(Ctx {
             format,
@@ -329,6 +353,7 @@ impl SpeakerInput {
             dropped_samples: Arc::new(AtomicU64::new(0)),
             termination_code: Arc::new(AtomicU8::new(TERMINATION_NONE)),
             should_terminate: Arc::new(AtomicBool::new(false)),
+            callback_counters: callback_counters.clone(),
         });
 
         let device = self.start_device(&mut ctx).unwrap();
@@ -340,6 +365,7 @@ impl SpeakerInput {
             _tap: self.tap,
             waker_state,
             current_sample_rate,
+            callback_counters,
         }
     }
 }
@@ -350,9 +376,12 @@ fn process_audio_data(ctx: &mut Ctx, data: &[f32]) {
 
     // Consistent buffer overflow handling
     if pushed < buffer_size {
+        let dropped = buffer_size - pushed;
         ctx.dropped_samples
-            .fetch_add((buffer_size - pushed) as u64, Ordering::AcqRel);
+            .fetch_add(dropped as u64, Ordering::AcqRel);
         let consecutive = ctx.consecutive_drops.fetch_add(1, Ordering::AcqRel) + 1;
+        ctx.callback_counters
+            .observe_drop(dropped, consecutive == 51);
 
         // Only terminate after many consecutive drops (prevents temporary spikes from killing stream)
         if consecutive == 25 {

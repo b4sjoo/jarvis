@@ -1465,6 +1465,7 @@ export interface MeetingAssistantSettings {
   personalEvidenceGuardrailMode: PersonalEvidenceGuardrailMode;
   semanticTaxonomyMode: SemanticTaxonomyMode;
   debugMode: boolean;
+  nativeStallDiagnosticsEnabled: boolean;
   microphoneContextEnabled: boolean;
   response: MeetingResponseConfig;
   codingModel: MeetingCodingModelSettings;

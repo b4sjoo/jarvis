@@ -120,6 +120,9 @@ export function parseNativeAudioLivenessEvent(
   ] as const);
   const owner = readStringUnion(payload.owner, ["meeting", "system"] as const);
   const captureSessionId = readNonEmptyString(payload.captureSessionId);
+  const diagnosticRunId = payload.diagnosticRunId === undefined
+    ? undefined
+    : readNonEmptyString(payload.diagnosticRunId);
   const source =
     payload.source === "system-audio" ? "system-audio" : undefined;
 
@@ -130,6 +133,7 @@ export function parseNativeAudioLivenessEvent(
     !owner ||
     !source ||
     !captureSessionId
+    || (payload.diagnosticRunId !== undefined && !diagnosticRunId)
   ) {
     return null;
   }
@@ -214,6 +218,7 @@ export function parseNativeAudioLivenessEvent(
   return {
     schemaVersion: 1,
     snapshotSequence: integers.snapshotSequence!,
+    diagnosticRunId,
     captureSessionId,
     captureGeneration: integers.captureGeneration!,
     owner,

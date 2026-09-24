@@ -1984,6 +1984,9 @@ export const MeetingAssistant = ({
                 }
                 debugMode={meeting.settings.debugMode}
                 onDebugModeChange={meeting.setDebugMode}
+                nativeStallDiagnosticsEnabled={meeting.settings.nativeStallDiagnosticsEnabled}
+                onNativeStallDiagnosticsChange={meeting.setNativeStallDiagnosticsEnabled}
+                nativeStallDiagnosticsError={meeting.nativeStallDiagnosticsError}
                 nativeAudioFaultAvailable={Boolean(
                   import.meta.env.DEV &&
                     meeting.settings.debugMode &&
@@ -4203,6 +4206,9 @@ const ConfigurationsPanel = ({
   onMicrophoneContextEnabledChange,
   debugMode,
   onDebugModeChange,
+  nativeStallDiagnosticsEnabled,
+  onNativeStallDiagnosticsChange,
+  nativeStallDiagnosticsError,
   nativeAudioFaultAvailable,
   nativeAudioFaultFeedback,
   onNativeAudioFaultInject,
@@ -4251,6 +4257,9 @@ const ConfigurationsPanel = ({
   onMicrophoneContextEnabledChange: (enabled: boolean) => void;
   debugMode: boolean;
   onDebugModeChange: (enabled: boolean) => void;
+  nativeStallDiagnosticsEnabled: boolean;
+  onNativeStallDiagnosticsChange: (enabled: boolean) => void;
+  nativeStallDiagnosticsError: string | null;
   nativeAudioFaultAvailable: boolean;
   nativeAudioFaultFeedback: NativeAudioFaultFeedback;
   onNativeAudioFaultInject: (
@@ -4635,6 +4644,23 @@ const ConfigurationsPanel = ({
               </div>
               <Switch checked={debugMode} onCheckedChange={onDebugModeChange} />
             </div>
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <div className="text-[10px] font-medium uppercase text-muted-foreground">
+                  Native Stall Diagnostics
+                </div>
+                <div className="text-[10px] text-muted-foreground">
+                  Arms only while Session Recording is active
+                </div>
+              </div>
+              <Switch
+                checked={nativeStallDiagnosticsEnabled}
+                onCheckedChange={onNativeStallDiagnosticsChange}
+              />
+            </div>
+            {nativeStallDiagnosticsError ? (
+              <div className="text-[10px] text-red-600">{nativeStallDiagnosticsError}</div>
+            ) : null}
             {import.meta.env.DEV && debugMode ? (
               <div className="space-y-1.5 rounded-sm border border-border/60 p-2">
                 <div>

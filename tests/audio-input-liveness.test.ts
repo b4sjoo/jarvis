@@ -117,6 +117,21 @@ test("parses and authorizes a lease-qualified liveness snapshot", () => {
   );
 });
 
+test("diagnostic marker is optional and never changes liveness authorization", () => {
+  const marked = { ...FIXTURE, diagnosticRunId: "diagnostic-run-1" };
+  assert.equal(parseNativeAudioLivenessEvent(marked)?.diagnosticRunId, "diagnostic-run-1");
+  assert.equal(parseNativeAudioLivenessEvent(FIXTURE)?.diagnosticRunId, undefined);
+  assert.equal(parseNativeAudioLivenessEvent({ ...FIXTURE, diagnosticRunId: 5 }), null);
+  assert.equal(authorizeNativeAudioLivenessEvent({
+    payload: marked,
+    activeCaptureSessionId: "capture-1",
+    activeCaptureGeneration: 2,
+    expectedOwner: "meeting",
+    expectedSource: "system-audio",
+    lastSnapshotSequence: 3,
+  }).authorized, true);
+});
+
 test("rejects stale sessions and duplicate liveness snapshots", () => {
   const stale = authorizeNativeAudioLivenessEvent({
     payload: FIXTURE,

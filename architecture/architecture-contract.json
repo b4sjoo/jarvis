@@ -179,6 +179,7 @@
   },
   "ipc": {
     "registeredCommands": [
+      "acknowledge_native_stall_marker",
       "capture_screen_context_to_base64",
       "capture_selected_area",
       "capture_to_base64",
@@ -189,6 +190,7 @@
       "commit_preparation_material_storage_delete",
       "commit_preparation_workspace_storage_delete",
       "complete_app_shutdown",
+      "debug_block_main_thread_for_stall_test",
       "debug_inject_native_audio_fault",
       "delete_stt_evaluation_capture",
       "discard_preparation_material_extraction_file",
@@ -234,6 +236,7 @@
       "set_always_on_top",
       "set_app_icon_visibility",
       "set_meeting_focus_controls_geometry",
+      "set_native_stall_diagnostics",
       "set_window_height",
       "show_meeting_focus_windows",
       "stage_preparation_material_storage_delete",
@@ -255,6 +258,7 @@
       "write_preparation_trace_log"
     ],
     "staticFrontendInvokes": [
+      "acknowledge_native_stall_marker",
       "capture_screen_context_to_base64",
       "capture_selected_area",
       "capture_to_base64",
@@ -294,6 +298,7 @@
       "set_always_on_top",
       "set_app_icon_visibility",
       "set_meeting_focus_controls_geometry",
+      "set_native_stall_diagnostics",
       "set_window_height",
       "show_meeting_focus_windows",
       "stage_preparation_material_storage_delete",
@@ -391,6 +396,10 @@
     "reconciliation": {
       "allowedFrontendCommandsWithoutNativeRegistration": [],
       "allowedNativeCommandsWithoutFrontendCall": [
+        {
+          "name": "debug_block_main_thread_for_stall_test",
+          "reason": "Debug-only bounded fault fixture for native delivery diagnostics; invoked only in isolated acceptance tests."
+        },
         {
           "name": "get_audio_sample_rate",
           "reason": "Registered native diagnostic command with no current TypeScript consumer."
