@@ -2182,9 +2182,11 @@ fn emit_vad_liveness(
     );
     let diagnostics = app.state::<NativeStallDiagnostics>();
     event.diagnostic_run_id = diagnostics.begin_event(&event);
-    let delivered = app.emit("native-audio-liveness", event.clone()).is_ok();
     if event.diagnostic_run_id.is_some() {
+        let delivered = app.emit("native-audio-liveness", event.clone()).is_ok();
         diagnostics.finish_event(&event, delivered);
+    } else {
+        let _ = app.emit("native-audio-liveness", event);
     }
 }
 
