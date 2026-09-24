@@ -1,12 +1,6 @@
 import { createMeetingId } from "./meeting-id.js";
 
 import type { LogicalQuestionUnit } from "./logical-question-unit.js";
-import type {
-  InterviewerEvidenceMode,
-  InterviewerIntentAction,
-  InterviewerIntentRelation,
-  InterviewerSpeechAct,
-} from "./interviewer-intent.js";
 import { type CanonicalQuestionType } from "./task-taxonomy.js";
 
 export const TAXONOMY_ADJUDICATION_MAX_INPUT_CHARS = 1_200;
@@ -25,32 +19,6 @@ export interface TaxonomyAdjudicationProjection {
   projectedChars: number;
   projectionReason: "within-limit" | "anchor-switch-latest-constraint";
   safe: boolean;
-}
-
-export interface TaxonomyAdjudicationSourceSpan {
-  turnId: string;
-  text: string;
-}
-
-export interface LlmTaxonomyAdjudication {
-  schemaVersion: 2;
-  outputContractVersion?: 2 | 3;
-  speechAct: InterviewerSpeechAct;
-  questionType: CanonicalQuestionType;
-  relation: InterviewerIntentRelation;
-  evidenceMode: InterviewerEvidenceMode;
-  action: InterviewerIntentAction;
-  normalizedQuestion: string;
-  normalizedQuestionSource?:
-    | "model"
-    | "source-primary-ask-repair"
-    | "source-catalog";
-  normalizedQuestionRepairReason?: "action-object-not-preserved";
-  primaryAskSpans: TaxonomyAdjudicationSourceSpan[];
-  standalone: boolean;
-  evidenceSpans: string[];
-  confidence: number;
-  ambiguityReason?: string;
 }
 
 export interface TaxonomyAdjudicationLease {

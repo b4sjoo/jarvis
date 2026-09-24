@@ -15,7 +15,6 @@ import {
   QuestionHumanEvaluation,
   ScreenObservation,
   SpeechCorrection,
-  TraceHumanEvaluation,
   TranscriptTurn,
 } from "./types";
 
@@ -200,8 +199,6 @@ interface ActiveSessionRecording {
   recordedObservationIds: Set<string>;
   traceSessionIndex: Map<string, SessionTraceIndexEntry>;
   traceSummaries: Map<string, SessionCompactTraceSummary>;
-  traceHumanEvaluations: Map<string, TraceHumanEvaluation>;
-  questionHumanEvaluations: Map<string, QuestionHumanEvaluation>;
   humanGroundTruthEventsV2: Map<string, HumanGroundTruthEventV2>;
   humanEvaluationProjectionsV2: Map<string, HumanEvaluationProjectionV2>;
   humanEvaluationProjectionRevisionsV2: Map<string, string>;
@@ -1547,8 +1544,6 @@ export class SessionRecordingManager {
           recordedObservationIds: new Set(),
           traceSessionIndex: new Map(),
           traceSummaries: new Map(),
-          traceHumanEvaluations: new Map(),
-          questionHumanEvaluations: new Map(),
           humanGroundTruthEventsV2: new Map(),
           humanEvaluationProjectionsV2: new Map(),
           humanEvaluationProjectionRevisionsV2: new Map(),
@@ -1798,7 +1793,7 @@ export class SessionRecordingManager {
           failedWrites: session.failedWrites,
         };
         const evaluationIntegrity = {
-          v1EvaluationCount: session.questionHumanEvaluations.size,
+          v1EvaluationCount: 0,
           v2GroundTruthEventCount:
             session.humanGroundTruthEventsV2.size,
           v2ProjectionCount:
@@ -2522,105 +2517,6 @@ export class SessionRecordingManager {
     if (session.failedWriteCount > failuresBefore) {
       throw new Error(session.lastError || "Recording aggregate export failed.");
     }
-  }
-
-  recordHumanEvaluations(evaluations: TraceHumanEvaluation[]) {
-    const session = this.getWritableSession();
-    if (!session) return;
-    const sessionEvaluations = evaluations.filter((evaluation) =>
-      session.recordedTraceIds.has(evaluation.traceId)
-    );
-    if (!sessionEvaluations.length) return;
-    for (const evaluation of sessionEvaluations) {
-      session.traceHumanEvaluations.set(evaluation.traceId, evaluation);
-    }
-
-    const payload = JSON.stringify(
-      {
-        savedAt: Date.now(),
-        sessionId: session.sessionId,
-        evaluations: sessionEvaluations,
-      },
-      null,
-      2
-    );
-    const compactPayload = JSON.stringify({
-      savedAt: Date.now(),
-      sessionId: session.sessionId,
-      evaluations: sessionEvaluations,
-    });
-    this.enqueue(session, async () => {
-      await this.writeText(
-        session,
-        "human-evaluation/evaluations.json",
-        payload
-      );
-      await this.writeText(
-        session,
-        "human-evaluation/evaluations.jsonl",
-        `${compactPayload}\n`,
-        true
-      );
-    });
-    this.recordEvent("human-evaluation", {
-      evaluationCount: sessionEvaluations.length,
-    }, ["human-evaluation/evaluations.json"]);
-  }
-
-  recordQuestionHumanEvaluations(evaluations: QuestionHumanEvaluation[]) {
-    const session = this.getWritableSession();
-    if (!session) return;
-    const sessionEvaluations = evaluations.filter((evaluation) => {
-      if (
-        evaluation.traceIds.some((traceId) => session.recordedTraceIds.has(traceId))
-      ) {
-        return true;
-      }
-      return [
-        evaluation.taskId,
-        evaluation.parentTaskId,
-        evaluation.childTaskId,
-      ].some((taskId) => taskId && session.recordedTaskIds.has(taskId));
-    });
-    if (!sessionEvaluations.length) return;
-
-    const payload = JSON.stringify(
-      {
-        savedAt: Date.now(),
-        sessionId: session.sessionId,
-        evaluations: sessionEvaluations,
-      },
-      null,
-      2
-    );
-    const compactPayload = JSON.stringify({
-      savedAt: Date.now(),
-      sessionId: session.sessionId,
-      evaluations: sessionEvaluations,
-    });
-    for (const evaluation of sessionEvaluations) {
-      session.questionHumanEvaluations.set(evaluation.questionId, evaluation);
-    }
-    this.enqueue(session, async () => {
-      await this.writeText(
-        session,
-        "human-evaluation/question-evaluations.json",
-        payload
-      );
-      await this.writeText(
-        session,
-        "human-evaluation/question-evaluations.jsonl",
-        `${compactPayload}\n`,
-        true
-      );
-    });
-    this.recordEvent(
-      "question-human-evaluation",
-      {
-        evaluationCount: sessionEvaluations.length,
-      },
-      ["human-evaluation/question-evaluations.json"]
-    );
   }
 
   recordHumanGroundTruthEventV2(event: HumanGroundTruthEventV2) {
@@ -4045,7 +3941,7 @@ export class SessionRecordingManager {
       const version = session.enqueueVersion;
       const summaries = Array.from(session.traceSummaries.values()).sort((a, b) => a.startedAt - b.startedAt);
       const evaluationView = projectHumanEvaluationsForLegacyConsumers({
-        evaluations: Array.from(session.questionHumanEvaluations.values()),
+        evaluations: [],
         projections: Array.from(session.humanEvaluationProjectionsV2.values()),
       });
       const reviewIndex = buildSessionTaskReviewIndex(session.sessionId, summaries,
@@ -4054,7 +3950,7 @@ export class SessionRecordingManager {
       const files: Array<[string, unknown]> = [
         ["metrics/trace-session-index.latest.json", { version: SESSION_TRACE_INDEX_SCHEMA_VERSION, savedAt: Date.now(), sessionId: session.sessionId, traces: Array.from(session.traceSessionIndex.values()) }],
         ["metrics/trace-summaries.latest.json", { version: SESSION_TRACE_SUMMARY_SCHEMA_VERSION, savedAt: Date.now(), sessionId: session.sessionId, traces: summaries }],
-        ["metrics/session-summary.json", buildSessionMetricsSummary(session.sessionId, summaries, Array.from(session.traceHumanEvaluations.values()))],
+        ["metrics/session-summary.json", buildSessionMetricsSummary(session.sessionId, summaries, evaluationView.evaluations)],
         ["human-evaluation/compatibility-v2.json", evaluationView.report],
         ["human-evaluation/projections-v2.json", buildHumanEvaluationProjectionSnapshotV2(session)],
       ];
@@ -7410,7 +7306,7 @@ function buildTaxonomyAdjudicationTraceSummary(
 function buildSessionMetricsSummary(
   sessionId: string,
   summaries: SessionCompactTraceSummary[],
-  humanEvaluations: TraceHumanEvaluation[] = []
+  humanEvaluations: QuestionHumanEvaluation[] = []
 ): SessionMetricsSummary {
   const productionSummaries = summaries.filter(
     (summary) => !summary.syntheticValidation
@@ -7515,7 +7411,7 @@ function countModelGenerationDimension(values: Array<string | undefined>) {
 
 function aggregateAnswerStability(
   summaries: SessionCompactTraceSummary[],
-  humanEvaluations: TraceHumanEvaluation[]
+  humanEvaluations: QuestionHumanEvaluation[]
 ): SessionAnswerStabilityAggregate {
   const visibleRefreshWithoutPrimaryAsk = (
     summary: SessionCompactTraceSummary
@@ -7609,10 +7505,10 @@ function aggregateAnswerStability(
         summary.visibleAnswerChanged === true
     ).length,
     incorrectVisibleRefreshLabelCount: humanEvaluations.filter((evaluation) =>
-      evaluation.failureReasons.includes("incorrect-visible-refresh")
+      evaluation.answer.reasons.includes("incorrect-visible-refresh")
     ).length,
     midReadInterruptionLabelCount: humanEvaluations.filter((evaluation) =>
-      evaluation.failureReasons.includes("mid-read-interruption")
+      evaluation.answer.reasons.includes("mid-read-interruption")
     ).length,
     answerDwellMs: aggregateNumbers(
       summaries.map((summary) => summary.answerDwellMs)

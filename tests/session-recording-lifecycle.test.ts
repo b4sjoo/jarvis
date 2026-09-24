@@ -573,6 +573,18 @@ test("records append-only V2 ground truth and derived projection artifacts", asy
   assert.ok(projectionSnapshot);
   assert.ok(projectionHistory);
   assert.equal(
+    native.calls.some((call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      [
+        "human-evaluation/evaluations.json",
+        "human-evaluation/evaluations.jsonl",
+        "human-evaluation/question-evaluations.json",
+        "human-evaluation/question-evaluations.jsonl",
+      ].includes(stringArg(call, "relativePath"))
+    ),
+    false
+  );
+  assert.equal(
     (
       parsePayload(projectionSnapshot).projections as Array<{
         inputTraceHashes: string[];
@@ -587,6 +599,7 @@ test("records append-only V2 ground truth and derived projection artifacts", asy
     stoppedManifest?.evaluationIntegrity.v2SemanticInputEventCount,
     1
   );
+  assert.equal(stoppedManifest?.evaluationIntegrity.v1EvaluationCount, 0);
   assert.equal(
     stoppedManifest?.evaluationIntegrity.v2InterventionOnlyEventCount,
     0
@@ -809,7 +822,10 @@ test("drains late writes into their original folder before allowing stop-start",
 
   const stopPromise = manager.stop("rapid-toggle");
   await waitFor(() => manager.getState().lifecycle === "closing");
-  const secondStartPromise = manager.start(START_OPTIONS);
+  const secondStartPromise = manager.start({
+    ...START_OPTIONS,
+    meetingSessionId: "meeting_session_b",
+  });
   await settle();
   assert.equal(native.startCalls().length, 1);
 
@@ -891,16 +907,18 @@ test("drains late writes into their original folder before allowing stop-start",
       call.command === "write_meeting_session_recording_text" &&
       stringArg(call, "relativePath").startsWith("human-evaluation/")
   ).length;
-  manager.recordHumanEvaluations([
-    {
-      id: "evaluation_session_a",
-      traceId: "trace_session_a",
-      traceKind: "voice",
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      failureReasons: [],
+  manager.recordHumanGroundTruthEventV2(createHumanGroundTruthEventV2({
+    eventId: "evaluation_session_a",
+    sessionId: START_OPTIONS.meetingSessionId,
+    subject: {
+      questionId: "question_session_a",
+      traceIds: ["trace_session_a"],
+      sourceTurnIds: [],
     },
-  ]);
+    source: "explicit-ui",
+    sourceTraceId: "trace_session_a",
+    fact: { kind: "expected-runtime-action", expectedAction: "advise" },
+  }));
   await settle();
   assert.equal(
     native.calls.filter(
@@ -1501,19 +1519,35 @@ test("session summaries retain answer delivery and artifact stability evidence",
   assert.equal(shortIntent.intentGateDecisionAppliedCount, 1);
   assert.equal(shortIntent.intentGateDurationMs.p50, 810);
 
-  manager.recordHumanEvaluations([
-    {
-      id: "answer_stability_eval",
-      traceId: "answer_stability",
-      traceKind: "voice",
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      failureReasons: [
-        "incorrect-visible-refresh",
-        "mid-read-interruption",
-      ],
+  const stabilitySubject = {
+    questionId: "answer_stability_question",
+    traceIds: ["answer_stability"],
+    sourceTurnIds: [],
+  };
+  const stabilityEvent = createHumanGroundTruthEventV2({
+    eventId: "answer_stability_eval",
+    sessionId: START_OPTIONS.meetingSessionId,
+    subject: stabilitySubject,
+    source: "explicit-ui",
+    sourceTraceId: "answer_stability",
+    fact: {
+      kind: "answer-quality",
+      outcome: "wrong",
+      failureReasons: ["incorrect-visible-refresh", "mid-read-interruption"],
+      expectedContextTurnIds: [],
     },
-  ]);
+  });
+  manager.recordHumanGroundTruthEventV2(stabilityEvent);
+  manager.recordHumanEvaluationProjectionV2(deriveHumanEvaluationProjectionV2({
+    sessionId: START_OPTIONS.meetingSessionId,
+    subject: stabilitySubject,
+    events: [stabilityEvent],
+    observed: {
+      traceId: "answer_stability",
+      traceHash: "answer_stability_hash",
+      runtimeAction: "advise",
+    },
+  }));
   await manager.flushAggregates();
   const refreshedSummaryCalls = native.calls.filter(
     (call) =>
@@ -3705,6 +3739,7 @@ class ControlledRecordingInvoke {
           },
           evaluationIntegrity: payload.evaluationIntegrity as {
             compatibilityReportPath: string;
+            v1EvaluationCount: number;
             v2ProjectionMaterialization?: Record<string, number>;
             v2SemanticInputEventCount?: number;
             v2InterventionOnlyEventCount?: number;
