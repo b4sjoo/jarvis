@@ -104,6 +104,8 @@ export type SemanticTaxonomyEmbeddingResult =
 export interface SemanticTaxonomyRuntimeSnapshot {
   readiness: SemanticTaxonomyReadiness;
   modelVersion: string;
+  embeddingCacheEntryCount: number;
+  embeddingCacheKeyCodeUnits: number;
   sessionId?: string;
   runtimeEpoch?: number;
   pinnedReason?: string;
@@ -202,7 +204,10 @@ export class SemanticTaxonomyRuntime {
   private latestRevisionByKey = new Map<string, number>();
   private activeIdentity?: SemanticTaxonomyRuntimeIdentity;
   private hasCompletedCompute = false;
-  private snapshot: SemanticTaxonomyRuntimeSnapshot = {
+  private snapshot: Omit<
+    SemanticTaxonomyRuntimeSnapshot,
+    "embeddingCacheEntryCount" | "embeddingCacheKeyCodeUnits"
+  > = {
     readiness: typeof Worker === "undefined" ? "unavailable" : "idle",
     modelVersion: SEMANTIC_TAXONOMY_MODEL_VERSION,
     coldFallbackCount: 0,
@@ -253,7 +258,15 @@ export class SemanticTaxonomyRuntime {
   }
 
   getSnapshot(): SemanticTaxonomyRuntimeSnapshot {
-    return { ...this.snapshot };
+    let embeddingCacheKeyCodeUnits = 0;
+    for (const key of this.embeddingCache.keys()) {
+      embeddingCacheKeyCodeUnits += key.length;
+    }
+    return {
+      ...this.snapshot,
+      embeddingCacheEntryCount: this.embeddingCache.size,
+      embeddingCacheKeyCodeUnits,
+    };
   }
 
   pinSession(
@@ -1494,14 +1507,11 @@ function schedulerKey(
 }
 
 function embeddingCacheKey(input: SemanticTaxonomyEmbeddingInput) {
-  const normalized = input.texts
-    .map((text) => text.trim().replace(/\s+/g, " ").toLocaleLowerCase())
-    .join("\u001f");
-  let hash = 2166136261;
-  const value = `${SEMANTIC_TAXONOMY_MODEL_VERSION}\u001e${input.kind}\u001e${normalized}`;
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return `${input.kind}:${(hash >>> 0).toString(16)}`;
+  return JSON.stringify([
+    SEMANTIC_TAXONOMY_MODEL_VERSION,
+    input.kind,
+    input.texts.map((text) =>
+      text.trim().replace(/\s+/g, " ").toLocaleLowerCase()
+    ),
+  ]);
 }

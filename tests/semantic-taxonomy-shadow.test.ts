@@ -133,6 +133,8 @@ test("shadow metadata preserves lexical behavior and records would-rescue only",
     runtime: {
       readiness: "ready",
       modelVersion: "model-v1",
+      embeddingCacheEntryCount: 0,
+      embeddingCacheKeyCodeUnits: 0,
       coldFallbackCount: 0,
       reusedAfterAudioRecovery: false,
       queueDepth: 0,

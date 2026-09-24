@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { performance } from "node:perf_hooks";
 import test from "node:test";
 import {
   SemanticTaxonomyRuntime,
@@ -6,7 +7,9 @@ import {
   type SemanticTaxonomyEmbeddingSchedule,
   type SemanticTaxonomyWorkerLike,
 } from "../src/lib/meeting/semantic-taxonomy-runtime.js";
+import { SEMANTIC_TAXONOMY_MODEL_VERSION } from "../src/lib/meeting/semantic-taxonomy-model.js";
 import type {
+  SemanticTaxonomyEmbeddingInput,
   SemanticTaxonomyWorkerRequest,
   SemanticTaxonomyWorkerResponse,
 } from "../src/lib/meeting/semantic-taxonomy-runtime.protocol.js";
@@ -28,7 +31,9 @@ class FakeSemanticWorker implements SemanticTaxonomyWorkerLike {
 
   constructor(
     private readonly deferEmbeds = false,
-    private readonly deferInitialize = false
+    private readonly deferInitialize = false,
+    private readonly embeddingForTexts: (texts: string[]) => number[][] =
+      (texts) => texts.map(() => [1, 0, 0])
   ) {}
 
   postMessage(message: SemanticTaxonomyWorkerRequest) {
@@ -69,7 +74,7 @@ class FakeSemanticWorker implements SemanticTaxonomyWorkerLike {
         type: "embedding",
         requestId: message.requestId,
         input: message.input,
-        embeddings: message.input.texts.map(() => [1, 0, 0]),
+        embeddings: this.embeddingForTexts(message.input.texts),
         durationMs: 8,
       });
     });
@@ -105,7 +110,7 @@ class FakeSemanticWorker implements SemanticTaxonomyWorkerLike {
       type: "embedding",
       requestId,
       input: request.input,
-      embeddings: request.input.texts.map(() => [1, 0, 0]),
+      embeddings: this.embeddingForTexts(request.input.texts),
       durationMs: 8,
     });
     return true;
@@ -146,6 +151,48 @@ function embeddingSchedule(
     revision,
     ...overrides,
   };
+}
+
+function cachedKeys(runtime: SemanticTaxonomyRuntime): string[] {
+  return Array.from(
+    (runtime as unknown as { embeddingCache: Map<string, number[][]> })
+      .embeddingCache.keys()
+  );
+}
+
+function normalizeCacheText(text: string): string {
+  return text.trim().replace(/\s+/g, " ").toLocaleLowerCase();
+}
+
+function exactCacheKey(input: Pick<SemanticTaxonomyEmbeddingInput, "kind" | "texts">): string {
+  return JSON.stringify([
+    SEMANTIC_TAXONOMY_MODEL_VERSION,
+    input.kind,
+    input.texts.map(normalizeCacheText),
+  ]);
+}
+
+function legacyCacheKey(input: Pick<SemanticTaxonomyEmbeddingInput, "kind" | "texts">): string {
+  const normalized = input.texts.map(normalizeCacheText).join("\u001f");
+  const value = `${SEMANTIC_TAXONOMY_MODEL_VERSION}\u001e${input.kind}\u001e${normalized}`;
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `${input.kind}:${(hash >>> 0).toString(16)}`;
+}
+
+function assertCacheSnapshot(runtime: SemanticTaxonomyRuntime, expectedCount: number) {
+  const snapshot = runtime.getSnapshot();
+  const keys = cachedKeys(runtime);
+  assert.equal(snapshot.embeddingCacheEntryCount, expectedCount);
+  assert.equal(keys.length, expectedCount);
+  assert.equal(
+    snapshot.embeddingCacheKeyCodeUnits,
+    keys.reduce((sum, key) => sum + key.length, 0)
+  );
+  assert.ok(snapshot.embeddingCacheEntryCount <= 256);
 }
 
 test("prewarms once and returns embeddings only for the active session identity", async () => {
@@ -198,6 +245,235 @@ test("prewarms once and returns embeddings only for the active session identity"
     assert.equal(warm.telemetry.deadlineProfile, "warm");
   }
   assert.equal(worker.embedCount, 2);
+});
+
+test("separates known legacy hash collisions through the embedding consumer", async () => {
+  const firstText = "audit-1vqgez7-1y0t";
+  const secondText = "audit-1yrx0pg-3d8s";
+  const worker = new FakeSemanticWorker(false, false, (texts) =>
+    texts.map((text) => text === firstText ? [1, 0] : [0, 1])
+  );
+  const runtime = new SemanticTaxonomyRuntime({ workerFactory: () => worker });
+  runtime.pinSession({ sessionId: "meeting-1", runtimeEpoch: 1 });
+  await runtime.prewarm();
+
+  assert.equal(legacyCacheKey(embeddingInput("a", firstText)), "query:a66f498");
+  assert.equal(legacyCacheKey(embeddingInput("b", secondText)), "query:a66f498");
+
+  for (const [revision, text, vector, cacheHit] of [
+    [1, firstText, [1, 0], false],
+    [2, secondText, [0, 1], false],
+    [3, firstText, [1, 0], true],
+    [4, secondText, [0, 1], true],
+  ] as const) {
+    const result = await runtime.embed(
+      embeddingInput(`turn-${revision}`, text),
+      embeddingSchedule(revision)
+    );
+    assert.equal(result.status, "success");
+    if (result.status === "success") {
+      assert.deepEqual(result.embeddings, [vector]);
+      assert.equal(result.cacheHit, cacheHit);
+      assert.equal(result.telemetry.outcome, cacheHit ? "cache-hit" : "success");
+    }
+  }
+  assert.equal(worker.embedCount, 2);
+  assertCacheSnapshot(runtime, 2);
+});
+
+test("keeps model, kind, array boundaries, order, escapes and normalization in cache identity", async () => {
+  const seenWorkerTexts: string[][] = [];
+  const worker = new FakeSemanticWorker(false, false, (texts) => {
+    seenWorkerTexts.push(texts);
+    return texts.map(() => [1]);
+  });
+  const runtime = new SemanticTaxonomyRuntime({ workerFactory: () => worker });
+  runtime.pinSession({ sessionId: "meeting-1", runtimeEpoch: 1 });
+  await runtime.prewarm();
+
+  const distinctInputs: Array<Pick<SemanticTaxonomyEmbeddingInput, "kind" | "texts">> = [
+    { kind: "query", texts: [] },
+    { kind: "query", texts: [""] },
+    { kind: "query", texts: ["a\u001fb"] },
+    { kind: "query", texts: ["a", "b"] },
+    { kind: "query", texts: ["left", "right"] },
+    { kind: "query", texts: ["right", "left"] },
+    { kind: "query", texts: ["a\"b", "c\\d"] },
+    { kind: "query", texts: ["mixed case"] },
+    { kind: "passage", texts: ["mixed case"] },
+  ];
+  assert.equal(legacyCacheKey(distinctInputs[0]!), legacyCacheKey(distinctInputs[1]!));
+  assert.equal(legacyCacheKey(distinctInputs[2]!), legacyCacheKey(distinctInputs[3]!));
+
+  for (const [index, input] of distinctInputs.entries()) {
+    const result = await runtime.embed(
+      { ...embeddingInput(`turn-${index}`), ...input },
+      embeddingSchedule(index + 1)
+    );
+    assert.equal(result.status, "success");
+    if (result.status === "success") assert.equal(result.cacheHit, false);
+    assertCacheSnapshot(runtime, index + 1);
+  }
+  assert.equal(worker.embedCount, distinctInputs.length);
+  assert.deepEqual(seenWorkerTexts, distinctInputs.map((input) => input.texts));
+  assert.deepEqual(cachedKeys(runtime), distinctInputs.map(exactCacheKey));
+  assert.deepEqual(JSON.parse(cachedKeys(runtime)[0]!), [
+    SEMANTIC_TAXONOMY_MODEL_VERSION,
+    "query",
+    [],
+  ]);
+
+  const normalized = await runtime.embed(
+    embeddingInput("normalized", "  MIXED \t Case  "),
+    embeddingSchedule(distinctInputs.length + 1)
+  );
+  assert.equal(normalized.status, "success");
+  if (normalized.status === "success") assert.equal(normalized.cacheHit, true);
+  assert.equal(worker.embedCount, distinctInputs.length);
+  assertCacheSnapshot(runtime, distinctInputs.length);
+  assert.equal(JSON.stringify(runtime.getSnapshot()).includes("mixed case"), false);
+});
+
+test("preserves legacy cache outcomes for non-colliding consumer inputs", async () => {
+  const embeddingForTexts = (texts: string[]) =>
+    texts.map((text) => [text.length, text.charCodeAt(0) || 0]);
+  const worker = new FakeSemanticWorker(false, false, embeddingForTexts);
+  const runtime = new SemanticTaxonomyRuntime({ workerFactory: () => worker });
+  const legacyCache = new Map<string, number[][]>();
+  runtime.pinSession({ sessionId: "meeting-1", runtimeEpoch: 1 });
+  await runtime.prewarm();
+
+  const sequence: Array<Pick<SemanticTaxonomyEmbeddingInput, "kind" | "texts">> = [
+    { kind: "query", texts: ["alpha"] },
+    { kind: "query", texts: [" ALPHA "] },
+    { kind: "query", texts: ["beta"] },
+    { kind: "passage", texts: ["beta"] },
+    { kind: "query", texts: ["left", "right"] },
+    { kind: "query", texts: ["right", "left"] },
+    { kind: "query", texts: ["alpha"] },
+    { kind: "passage", texts: ["beta"] },
+  ];
+  let expectedWorkerCalls = 0;
+  for (const [index, input] of sequence.entries()) {
+    const key = legacyCacheKey(input);
+    const expectedHit = legacyCache.has(key);
+    const embeddings = legacyCache.get(key) ?? embeddingForTexts(input.texts);
+    if (!expectedHit) expectedWorkerCalls += 1;
+    legacyCache.delete(key);
+    legacyCache.set(key, embeddings);
+
+    const result = await runtime.embed(
+      { ...embeddingInput(`turn-${index}`), ...input },
+      embeddingSchedule(index + 1)
+    );
+    assert.equal(result.status, "success");
+    if (result.status === "success") {
+      assert.deepEqual(result.embeddings, embeddings);
+      assert.equal(result.cacheHit, expectedHit);
+      assert.equal(result.telemetry.outcome, expectedHit ? "cache-hit" : "success");
+    }
+    assert.equal(worker.embedCount, expectedWorkerCalls);
+  }
+  assertCacheSnapshot(runtime, legacyCache.size);
+});
+
+test("bounds LRU at 256 entries and keeps admission ahead of cache hits", async () => {
+  const workers: FakeSemanticWorker[] = [];
+  const runtime = new SemanticTaxonomyRuntime({
+    workerFactory: () => {
+      const worker = new FakeSemanticWorker();
+      workers.push(worker);
+      return worker;
+    },
+  });
+  runtime.pinSession({ sessionId: "meeting-1", runtimeEpoch: 1 });
+  await runtime.prewarm();
+  assertCacheSnapshot(runtime, 0);
+
+  let revision = 0;
+  const submit = (text: string, identity = { sessionId: "meeting-1", runtimeEpoch: 1 }) =>
+    runtime.embed(
+      { ...embeddingInput(`turn-${++revision}`, text), ...identity },
+      embeddingSchedule(revision)
+    );
+  await submit("item-0");
+  assertCacheSnapshot(runtime, 1);
+  for (let index = 1; index < 256; index += 1) {
+    await submit(`item-${index}`);
+  }
+  assertCacheSnapshot(runtime, 256);
+  assert.equal(workers[0]!.embedCount, 256);
+
+  const recentlyUsed = await submit("item-0");
+  assert.equal(recentlyUsed.status, "success");
+  if (recentlyUsed.status === "success") assert.equal(recentlyUsed.cacheHit, true);
+  await submit("item-256");
+  assertCacheSnapshot(runtime, 256);
+  assert.ok(cachedKeys(runtime).includes(exactCacheKey(embeddingInput("x", "item-0"))));
+  assert.equal(cachedKeys(runtime).includes(exactCacheKey(embeddingInput("x", "item-1"))), false);
+  assert.equal(workers[0]!.embedCount, 257);
+
+  const kept = await submit("item-0");
+  assert.equal(kept.status, "success");
+  if (kept.status === "success") assert.equal(kept.cacheHit, true);
+  const evicted = await submit("item-1");
+  assert.equal(evicted.status, "success");
+  if (evicted.status === "success") assert.equal(evicted.cacheHit, false);
+  assert.equal(workers[0]!.embedCount, 258);
+  assertCacheSnapshot(runtime, 256);
+
+  runtime.pinSession({ sessionId: "meeting-1", runtimeEpoch: 2 });
+  const staleEpoch = await submit("item-0");
+  assert.equal(staleEpoch.status, "stale");
+  assert.equal(staleEpoch.telemetry.outcome, "stale");
+  assert.equal(workers[0]!.embedCount, 258);
+  const cachedNewEpoch = await submit("item-0", { sessionId: "meeting-1", runtimeEpoch: 2 });
+  assert.equal(cachedNewEpoch.status, "success");
+  if (cachedNewEpoch.status === "success") assert.equal(cachedNewEpoch.cacheHit, true);
+  const staleSession = await submit("item-0", { sessionId: "meeting-other", runtimeEpoch: 2 });
+  assert.equal(staleSession.status, "stale");
+  assert.equal(workers[0]!.embedCount, 258);
+  const duplicateRevision = await runtime.embed(
+    { ...embeddingInput("duplicate", "item-0"), runtimeEpoch: 2 },
+    embeddingSchedule(revision - 1)
+  );
+  assert.equal(duplicateRevision.status, "stale");
+  assert.equal(workers[0]!.embedCount, 258);
+
+  await runtime.dispose("test-clear");
+  assertCacheSnapshot(runtime, 0);
+  runtime.pinSession({ sessionId: "meeting-1", runtimeEpoch: 3 });
+  const afterClear = await submit("item-0", { sessionId: "meeting-1", runtimeEpoch: 3 });
+  assert.equal(afterClear.status, "success");
+  if (afterClear.status === "success") assert.equal(afterClear.cacheHit, false);
+  assert.equal(workers.length, 2);
+  assert.equal(workers[1]!.embedCount, 1);
+  assertCacheSnapshot(runtime, 1);
+});
+
+test("does not cache an old-epoch worker response after admission changes", async () => {
+  const worker = new FakeSemanticWorker(true);
+  const runtime = new SemanticTaxonomyRuntime({ workerFactory: () => worker });
+  runtime.pinSession({ sessionId: "meeting-1", runtimeEpoch: 1 });
+  await runtime.prewarm();
+
+  const old = runtime.embed(embeddingInput("old", "shared text"), embeddingSchedule(1));
+  runtime.pinSession({ sessionId: "meeting-1", runtimeEpoch: 2 });
+  const stale = await old;
+  assert.equal(stale.status, "stale");
+  assert.equal(worker.completeNextDeferredEmbed(), true);
+  assertCacheSnapshot(runtime, 0);
+
+  const fresh = runtime.embed(
+    { ...embeddingInput("fresh", "shared text"), runtimeEpoch: 2 },
+    embeddingSchedule(2)
+  );
+  assert.equal(worker.embedCount, 2);
+  assert.equal(worker.completeNextDeferredEmbed(), true);
+  const result = await fresh;
+  assert.equal(result.status, "success");
+  if (result.status === "success") assert.equal(result.cacheHit, false);
+  assertCacheSnapshot(runtime, 1);
 });
 
 test("drops a deferred embedding when the runtime epoch changes", async () => {
@@ -661,4 +937,91 @@ test("keeps the worker warm through audio recovery and disposes after idle grace
   await new Promise((resolve) => setTimeout(resolve, 5));
   assert.equal(runtime.readiness(), "disposed");
   assert.equal(worker.terminated, true);
+});
+
+test("compares legacy and tuple cache key CPU and character payload in Node", (t) => {
+  type CacheInput = Pick<SemanticTaxonomyEmbeddingInput, "kind" | "texts">;
+  type KeyFunction = (input: CacheInput) => string;
+  const median = (samples: number[]) => {
+    const sorted = [...samples].sort((a, b) => a - b);
+    return Number(sorted[Math.floor(sorted.length / 2)]!.toFixed(4));
+  };
+  const measure = (inputs: CacheInput[], batches: number, keyOf: KeyFunction) => {
+    const construct: number[] = [];
+    const hitLru: number[] = [];
+    const insert: number[] = [];
+    const constructAndHit: number[] = [];
+    const sampleKeys = inputs.map(keyOf);
+    assert.equal(new Set(sampleKeys).size, 256);
+
+    for (let batch = 0; batch < batches; batch += 1) {
+      let started = performance.now();
+      const keys = inputs.map(keyOf);
+      construct.push(performance.now() - started);
+
+      const hitMap = new Map(keys.map((key) => [key, 1]));
+      started = performance.now();
+      for (const key of keys) {
+        const value = hitMap.get(key);
+        if (value === undefined) throw new Error("benchmark seed missing");
+        hitMap.delete(key);
+        hitMap.set(key, value);
+      }
+      hitLru.push(performance.now() - started);
+
+      const insertMap = new Map<string, number>();
+      started = performance.now();
+      for (const key of keys) insertMap.set(key, 1);
+      insert.push(performance.now() - started);
+      assert.equal(insertMap.size, 256);
+
+      started = performance.now();
+      for (const input of inputs) {
+        const key = keyOf(input);
+        const value = hitMap.get(key);
+        if (value === undefined) throw new Error("benchmark lookup missing");
+        hitMap.delete(key);
+        hitMap.set(key, value);
+      }
+      constructAndHit.push(performance.now() - started);
+    }
+
+    return {
+      medianBatchMs: {
+        construct: median(construct),
+        hitLru: median(hitLru),
+        insert: median(insert),
+        constructAndHit: median(constructAndHit),
+      },
+      keyCodeUnits: sampleKeys.reduce((sum, key) => sum + key.length, 0),
+    };
+  };
+
+  for (const [scenario, sizes, batches] of [
+    ["single-1600", [1596], 101],
+    ["pair-1200-1600", [1196, 1596], 101],
+    ["long-single-16000", [15996], 9],
+  ] as const) {
+    const inputs: CacheInput[] = Array.from({ length: 256 }, (_, index) => ({
+      kind: "query",
+      texts: sizes.map((size, position) =>
+        `${String.fromCharCode(97 + position).repeat(size)}${String(index).padStart(4, "0")}`
+      ),
+    }));
+    const legacy = measure(inputs, batches, legacyCacheKey);
+    const tuple = measure(inputs, batches, exactCacheKey);
+    assert.ok(tuple.keyCodeUnits > legacy.keyCodeUnits);
+    t.diagnostic(JSON.stringify({
+      environment: `Node ${process.version}`,
+      scenario,
+      batches,
+      batchSize: inputs.length,
+      legacy,
+      tuple,
+      estimatedUtf16PayloadBytes: {
+        legacy: legacy.keyCodeUnits * 2,
+        tuple: tuple.keyCodeUnits * 2,
+      },
+    }));
+  }
 });
