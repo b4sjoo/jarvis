@@ -331,15 +331,6 @@ impl NativeStallDiagnostics {
         if !folder.join("manifest.json").is_file() {
             return Err("Session recording is not active on disk".into());
         }
-        let mut current = self.current.lock().map_err(|_| "Diagnostics lock failed")?;
-        if let Some(existing) = current.as_ref() {
-            if existing.folder == folder.join("diagnostics/native-stall")
-                && existing.active.load(Ordering::Acquire)
-            {
-                return Ok(existing.id.clone());
-            }
-            existing.active.store(false, Ordering::Release);
-        }
         let dir = folder.join("diagnostics/native-stall");
         fs::create_dir_all(&dir)
             .map_err(|error| format!("Cannot create diagnostics directory: {error}"))?;
@@ -349,17 +340,23 @@ impl NativeStallDiagnostics {
             fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))
                 .map_err(|error| format!("Cannot restrict diagnostics directory: {error}"))?;
         }
+        let capture = self.capture.lock().map_err(|_| "Capture diagnostics lock failed")?;
+        let mut current = self.current.lock().map_err(|_| "Diagnostics lock failed")?;
+        if let Some(existing) = current.as_ref() {
+            if existing.folder == dir && existing.active.load(Ordering::Acquire) {
+                return Ok(existing.id.clone());
+            }
+            existing.active.store(false, Ordering::Release);
+        }
         let run = Arc::new(Run {
             id: Uuid::new_v4().to_string(),
             folder: dir,
             active: AtomicBool::new(true),
             state: Mutex::new(RunState::new(Instant::now())),
         });
-        if let Ok(capture) = self.capture.lock() {
-            if let Some((session_id, generation, counters)) = capture.as_ref() {
-                if let Ok(mut state) = run.state.lock() {
-                    state.set_capture(session_id, *generation, counters.clone());
-                }
+        if let Some((session_id, generation, counters)) = capture.as_ref() {
+            if let Ok(mut state) = run.state.lock() {
+                state.set_capture(session_id, *generation, counters.clone());
             }
         }
         let observer = run.clone();
