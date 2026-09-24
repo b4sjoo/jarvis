@@ -65,8 +65,9 @@ test("actual consumer keeps settled types and answer profiles despite conflictin
   }
 });
 
-test("the no-LQU trigger gate and live ancillary signal producer remain", () => {
-  assert.match(source, /!force\s*&&\s*!runtimeTypeAdjudicationOutputAuthorized\s*&&\s*!advisorJob\.logicalQuestionUnit\s*&&\s*!advisorEngineRef\.current\.shouldRequestSuggestion\(latestTurn\)/);
+test("the retired no-LQU trigger gate is absent while ancillary evidence remains", () => {
+  assert.doesNotMatch(source, /shouldRequestSuggestion/);
+  assert.match(source, /scheduleAdvisor\([\s\S]*?releasedLogicalQuestionUnit/);
   assert.match(source, /function resolveAdvisorTaskSignals\(/);
   assert.match(source, /query: buildFocusedAdvisorTaskQuery\(context, latestUsefulText\)/);
 });

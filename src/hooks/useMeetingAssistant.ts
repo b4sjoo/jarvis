@@ -12176,34 +12176,6 @@ export function useMeetingAssistant() {
       return;
     }
 
-    if (
-      !force &&
-      !runtimeTypeAdjudicationOutputAuthorized &&
-      !advisorJob.logicalQuestionUnit &&
-      !advisorEngineRef.current.shouldRequestSuggestion(latestTurn)
-    ) {
-      recordCurrentQuestionSettlement();
-      updateForceAdviseTargetForAdvisorOutcome({
-        advisorJob,
-        status: "failed",
-        outcome: "turn-did-not-require-suggestion",
-      });
-      releaseAdvisorJob(advisorJob, "suppressed", {
-        commitAuthorized: false,
-        commitAuthorizationReason: "turn-did-not-require-suggestion",
-      });
-      if (traceId) {
-        const skippedStepId = traceStoreRef.current.startStep(
-          traceId,
-          "Advisor skipped",
-          { reason: "turn did not require suggestion" }
-        );
-        traceStoreRef.current.finishStep(traceId, skippedStepId, "success");
-        traceStoreRef.current.finishTrace(traceId, "success");
-      }
-      return;
-    }
-
     const preBoundaryResponseOwnerType =
       getAdvisorActiveQuestionType(promptContext);
 

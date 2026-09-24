@@ -123,10 +123,8 @@ test("canonical response authority is not revoked by an ambient Me turn", () => 
     "  const scheduleAdvisor = useCallback("
   );
 
-  assert.match(
-    runAdvisor,
-    /!advisorJob\.logicalQuestionUnit\s*&&\s*!advisorEngineRef\.current\.shouldRequestSuggestion\(latestTurn\)/
-  );
+  assert.doesNotMatch(runAdvisor, /shouldRequestSuggestion/);
+  assert.match(runAdvisor, /if \(!executionAuthorization\.authorized\)/);
   assert.match(runAdvisor, /isAnswerDeliveryLockActive\(/);
   assert.match(runAdvisor, /compileSettledAdvisorPromptContext\(/);
 });

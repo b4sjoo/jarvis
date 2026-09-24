@@ -1,7 +1,7 @@
 import type { MeetingAdvisorRequest } from "./meeting-context-contracts.js";
 import { fetchAIResponseEvents } from "@/lib/functions";
 import type { AIResponseTerminalOutcome } from "@/lib/functions/ai-response-events";
-import { AdvisorSuggestion, ParsedMeetingAnswer, TranscriptTurn } from "./types";
+import { AdvisorSuggestion, ParsedMeetingAnswer } from "./types";
 import { buildAdvisorSystemPrompt, buildAdvisorUserMessage } from "./advisor-prompt";
 import { parseMeetingAnswer } from "./meeting-answer.js";
 import {
@@ -29,13 +29,6 @@ export type AdvisorEngineEvent =
 
 export class AdvisorEngine {
   private currentAbortController: AbortController | null = null;
-
-  shouldRequestSuggestion(turn: TranscriptTurn | undefined) {
-    if (!turn) return false;
-    if (!turn.isFinal) return false;
-    if (turn.speaker === "me") return false;
-    return turn.text.trim().length > 0;
-  }
 
   cancelCurrentRequest() {
     this.currentAbortController?.abort();
