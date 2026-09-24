@@ -14,112 +14,12 @@ use tracing::error;
 use tracing::warn;
 
 use psimple::Simple;
-use pulse::context::introspect::Introspector;
 use pulse::context::Context;
 use pulse::mainloop::standard::Mainloop;
 use pulse::sample::{Format, Spec};
 use pulse::stream::Direction;
 
 const DEFAULT_SAMPLE_RATE: u32 = 44_100;
-
-pub fn get_input_devices() -> Result<Vec<AudioDevice>> {
-    let devices = Rc::new(RefCell::new(Vec::new()));
-    let done = Rc::new(RefCell::new(false));
-
-    let mut mainloop =
-        Mainloop::new().ok_or_else(|| anyhow!("Failed to create PulseAudio mainloop"))?;
-    let mut context = Context::new(&mainloop, "jarvis-device-enum")
-        .ok_or_else(|| anyhow!("Failed to create PulseAudio context"))?;
-
-    context
-        .connect(None, pulse::context::FlagSet::NOFLAGS, None)
-        .map_err(|_| anyhow!("Failed to connect to PulseAudio"))?;
-
-    loop {
-        match mainloop.iterate(true) {
-            pulse::mainloop::standard::IterateResult::Success(_) => {}
-            _ => return Err(anyhow!("Failed to iterate mainloop")),
-        }
-
-        match context.get_state() {
-            pulse::context::State::Ready => break,
-            pulse::context::State::Failed | pulse::context::State::Terminated => {
-                return Err(anyhow!("PulseAudio context failed"));
-            }
-            _ => {}
-        }
-    }
-
-    let default_source: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
-    let default_source_clone = default_source.clone();
-    let done_clone = done.clone();
-
-    let introspector = context.introspect();
-
-    let op = introspector.get_server_info(move |info| {
-        if let Some(name) = &info.default_source_name {
-            *default_source_clone.borrow_mut() = Some(name.to_string());
-        }
-        *done_clone.borrow_mut() = true;
-    });
-
-    while !*done.borrow() {
-        match mainloop.iterate(true) {
-            pulse::mainloop::standard::IterateResult::Success(_) => {}
-            _ => break,
-        }
-    }
-    drop(op);
-
-    *done.borrow_mut() = false;
-    let devices_clone = devices.clone();
-    let done_clone = done.clone();
-    let default_source_name = default_source.borrow().clone();
-
-    let op = introspector.get_source_info_list(move |result| match result {
-        pulse::callbacks::ListResult::Item(info) => {
-            if let Some(name) = &info.name {
-                if !name.contains(".monitor") {
-                    let device_name = info
-                        .description
-                        .as_ref()
-                        .map(|d| d.to_string())
-                        .unwrap_or_else(|| name.to_string());
-                    let device_id = name.to_string();
-                    let is_default = default_source_name
-                        .as_ref()
-                        .map(|def| def == &device_id)
-                        .unwrap_or(false);
-
-                    devices_clone.borrow_mut().push(AudioDevice {
-                        id: device_id,
-                        name: device_name,
-                        is_default,
-                    });
-                }
-            }
-        }
-        pulse::callbacks::ListResult::End => {
-            *done_clone.borrow_mut() = true;
-        }
-        pulse::callbacks::ListResult::Error => {
-            *done_clone.borrow_mut() = true;
-        }
-    });
-
-    while !*done.borrow() {
-        match mainloop.iterate(true) {
-            pulse::mainloop::standard::IterateResult::Success(_) => {}
-            _ => break,
-        }
-    }
-    drop(op);
-
-    context.disconnect();
-    mainloop.quit(pulse::def::Retval(0));
-
-    Ok(Rc::try_unwrap(devices).unwrap().into_inner())
-}
 
 pub fn get_output_devices() -> Result<Vec<AudioDevice>> {
     let devices = Rc::new(RefCell::new(Vec::new()));

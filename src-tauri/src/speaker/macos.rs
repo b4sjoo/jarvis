@@ -18,47 +18,6 @@ const CAPTURE_BUFFER_SIZE: usize = 1024 * 128;
 const TERMINATION_NONE: u8 = 0;
 const TERMINATION_BUFFER_OVERFLOW: u8 = 1;
 
-pub fn get_input_devices() -> Result<Vec<AudioDevice>> {
-    let mut devices = Vec::new();
-
-    let default_input_uid = ca::System::default_input_device()
-        .ok()
-        .and_then(|d| d.uid().ok())
-        .map(|u| u.to_string());
-
-    let all_devices = ca::System::devices()?;
-
-    for device in all_devices.iter() {
-        let input_buffers = device
-            .input_stream_cfg()
-            .map(|cfg| cfg.number_buffers())
-            .unwrap_or(0);
-
-        if input_buffers > 0 {
-            let name = device
-                .name()
-                .map(|n| n.to_string())
-                .unwrap_or_else(|_| "Unknown Device".to_string());
-            let uid = device
-                .uid()
-                .map(|u| u.to_string())
-                .unwrap_or_else(|_| format!("macos_input_unknown"));
-            let is_default = default_input_uid
-                .as_ref()
-                .map(|def| def == &uid)
-                .unwrap_or(false);
-
-            devices.push(AudioDevice {
-                id: uid,
-                name,
-                is_default,
-            });
-        }
-    }
-
-    Ok(devices)
-}
-
 pub fn get_output_devices() -> Result<Vec<AudioDevice>> {
     let mut devices = Vec::new();
 

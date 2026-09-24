@@ -95,25 +95,6 @@ pub fn position_window_top_center(
     Ok(())
 }
 
-/// Future function for centering window completely (both X and Y)
-#[allow(dead_code)]
-pub fn center_window_completely(window: &WebviewWindow) -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(monitor) = window.primary_monitor()? {
-        let monitor_size = monitor.size();
-        let window_size = window.outer_size()?;
-
-        let center_x = (monitor_size.width as i32 - window_size.width as i32) / 2;
-        let center_y = (monitor_size.height as i32 - window_size.height as i32) / 2;
-
-        window.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
-            x: center_x,
-            y: center_y,
-        }))?;
-    }
-
-    Ok(())
-}
-
 #[tauri::command]
 pub fn set_window_height(
     window: tauri::WebviewWindow,

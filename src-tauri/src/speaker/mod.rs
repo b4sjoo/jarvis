@@ -57,18 +57,6 @@ pub struct AudioDevice {
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-pub(crate) fn list_input_devices() -> Result<Vec<AudioDevice>> {
-    #[cfg(target_os = "macos")]
-    return macos::get_input_devices();
-
-    #[cfg(target_os = "windows")]
-    return windows::get_input_devices();
-
-    #[cfg(target_os = "linux")]
-    return linux::get_input_devices();
-}
-
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub(crate) fn list_output_devices() -> Result<Vec<AudioDevice>> {
     #[cfg(target_os = "macos")]
     return macos::get_output_devices();
@@ -78,11 +66,6 @@ pub(crate) fn list_output_devices() -> Result<Vec<AudioDevice>> {
 
     #[cfg(target_os = "linux")]
     return linux::get_output_devices();
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-pub(crate) fn list_input_devices() -> Result<Vec<AudioDevice>> {
-    Ok(vec![])
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]

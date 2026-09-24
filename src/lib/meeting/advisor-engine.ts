@@ -1,7 +1,6 @@
 import type { MeetingAdvisorRequest } from "./meeting-context-contracts.js";
 import { fetchAIResponseEvents } from "@/lib/functions";
 import type { AIResponseTerminalOutcome } from "@/lib/functions/ai-response-events";
-import { Message } from "@/types";
 import { AdvisorSuggestion, ParsedMeetingAnswer, TranscriptTurn } from "./types";
 import { buildAdvisorSystemPrompt, buildAdvisorUserMessage } from "./advisor-prompt";
 import { parseMeetingAnswer } from "./meeting-answer.js";
@@ -194,13 +193,6 @@ function buildAdvisorExecutionIdentity(
       task?.runtimeRevision ??
       0,
   };
-}
-
-export function transcriptTurnsToMessages(turns: TranscriptTurn[]): Message[] {
-  return turns.map((turn) => ({
-    role: turn.speaker === "me" ? "user" : "assistant",
-    content: turn.text,
-  }));
 }
 
 function inferSuggestionKind(

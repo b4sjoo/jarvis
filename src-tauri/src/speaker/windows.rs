@@ -10,36 +10,6 @@ use std::time::Duration;
 use tracing::error;
 use wasapi::{get_default_device, DeviceCollection, Direction, SampleType, StreamMode, WaveFormat};
 
-pub fn get_input_devices() -> Result<Vec<AudioDevice>> {
-    let mut devices = Vec::new();
-
-    let default_device = get_default_device(&Direction::Capture).ok();
-    let default_id = default_device.as_ref().and_then(|d| d.get_id().ok());
-
-    let collection = DeviceCollection::new(&Direction::Capture)?;
-    let count = collection.get_nbr_devices()?;
-
-    for i in 0..count {
-        if let Ok(device) = collection.get_device_at_index(i) {
-            let name = device
-                .get_friendlyname()
-                .unwrap_or_else(|_| format!("Microphone {}", i));
-            let id = device
-                .get_id()
-                .unwrap_or_else(|_| format!("windows_input_{}", i));
-            let is_default = default_id.as_ref().map(|def| def == &id).unwrap_or(false);
-
-            devices.push(AudioDevice {
-                id,
-                name,
-                is_default,
-            });
-        }
-    }
-
-    Ok(devices)
-}
-
 pub fn get_output_devices() -> Result<Vec<AudioDevice>> {
     let mut devices = Vec::new();
 
