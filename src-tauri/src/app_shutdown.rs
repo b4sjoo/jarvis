@@ -6,10 +6,14 @@ use serde_json::{json, Value};
 use std::sync::Mutex;
 use std::time::Instant;
 use tauri::{AppHandle, Emitter, Manager, RunEvent, WebviewWindow};
+#[cfg(target_os = "macos")]
+use tauri::menu::{Menu, MenuEvent, MenuItem, MenuItemKind};
 
 const GENERATION: u64 = 1; // An application lifetime has one irrevocable Quit operation.
 const REQUEST_EVENT: &str = "jarvis-shutdown-requested";
 const STATUS_EVENT: &str = "jarvis-shutdown-status";
+#[cfg(target_os = "macos")]
+const QUIT_MENU_ID: &str = "jarvis-coordinated-quit";
 
 #[derive(Default)]
 pub struct AppShutdownState(Mutex<Option<ShutdownGate>>);
@@ -73,6 +77,40 @@ pub fn request(app: &AppHandle, origin: &str) -> Result<(), String> {
     }
     // Dashboard owns the visible closing UI, main owns the actual Meeting Hook.
     crate::window::show_dashboard_window(app)
+}
+
+#[cfg(target_os = "macos")]
+pub fn install_quit_menu(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    let menu = Menu::default(app.handle())?;
+    let Some(MenuItemKind::Submenu(app_menu)) = menu.items()?.into_iter().next() else {
+        return Err("Default macOS application menu is unavailable".into());
+    };
+    let Some(MenuItemKind::Predefined(default_quit)) = app_menu.items()?.into_iter().last() else {
+        return Err("Default macOS Quit item is unavailable".into());
+    };
+    if !default_quit.text()?.starts_with("Quit ") {
+        return Err("Default macOS Quit item has changed".into());
+    }
+    app_menu.remove(&default_quit)?;
+    let coordinated_quit = MenuItem::with_id(
+        app,
+        QUIT_MENU_ID,
+        default_quit.text()?,
+        true,
+        Some("CmdOrCtrl+Q"),
+    )?;
+    app_menu.append(&coordinated_quit)?;
+    app.set_menu(menu)?;
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+pub fn on_menu_event(app: &AppHandle, event: MenuEvent) {
+    if event.id().as_ref() == QUIT_MENU_ID {
+        if let Err(error) = request(app, "application-menu") {
+            eprintln!("Application menu shutdown request failed: {error}");
+        }
+    }
 }
 
 /// Register as App::run callback. Window CloseRequested hide handlers stay unchanged.

@@ -16,6 +16,8 @@ use std::io::Write;
 use std::path::{Component, Path};
 use std::sync::{Arc, Mutex};
 use std::{fs, path::PathBuf};
+#[cfg(debug_assertions)]
+use tauri::Listener;
 use tauri::{AppHandle, Manager, WebviewWindow};
 mod speaker;
 use capture::CaptureState;
@@ -425,7 +427,9 @@ pub fn run() {
         .plugin(tauri_plugin_machine_uid::init());
     #[cfg(target_os = "macos")]
     {
-        builder = builder.plugin(tauri_nspanel::init());
+        builder = builder
+            .plugin(tauri_nspanel::init())
+            .on_menu_event(app_shutdown::on_menu_event);
     }
     let mut builder = builder
         .invoke_handler(tauri::generate_handler![
@@ -504,8 +508,12 @@ pub fn run() {
             native_stall_diagnostics::acknowledge_native_stall_marker,
             #[cfg(debug_assertions)]
             native_stall_diagnostics::debug_block_main_thread_for_stall_test,
+            #[cfg(debug_assertions)]
+            native_stall_diagnostics::debug_arm_native_stall_stage,
         ])
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            app_shutdown::install_quit_menu(app)?;
             if let Err(error) =
                 stt_evaluation::cleanup_expired_stt_evaluation_captures(app.handle())
             {
@@ -523,6 +531,15 @@ pub fn run() {
 
             // Setup main window positioning
             window::setup_main_window(app).expect("Failed to setup main window");
+            #[cfg(debug_assertions)]
+            {
+                let event_app = app.handle().clone();
+                app.listen("native-audio-liveness", move |event| {
+                    event_app
+                        .state::<native_stall_diagnostics::NativeStallDiagnostics>()
+                        .hold_emit_for_debug(event.payload());
+                });
+            }
             #[cfg(target_os = "macos")]
             init(app.app_handle());
             let app_handle = app.handle();
