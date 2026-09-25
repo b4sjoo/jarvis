@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { request } from "node:http";
+import { setTimeout as wait } from "node:timers/promises";
 import { createFixedProviderServer } from "../scripts/nsd-fixed-provider-server.mjs";
 
 const first = "What does LRU stand for and how does an LRU cache work?";
@@ -45,6 +47,14 @@ test("fixed Provider serves bounded STT and current-question Advisor output with
       body: JSON.stringify({ messages: [{ role: "system", content: "other" }, { role: "user", content: first }] }),
     });
     assert.equal(unknown.status, 422);
+    const cancelled = request(`${base}/ai`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+    });
+    cancelled.on("error", () => {});
+    cancelled.write('{"messages":[');
+    await wait(30);
+    cancelled.destroy();
+    await wait(30);
     await fetch(`${base}/reset`, { method: "POST" });
     assert.equal((await (await fetch(`${base}/stt`, { method: "POST" })).json()).text, first);
   } finally {

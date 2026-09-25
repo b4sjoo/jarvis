@@ -77,7 +77,7 @@ function sendJson(response, status, value) {
 
 export function createFixedProviderServer() {
   let sttSequence = 0;
-  return createServer(async (request, response) => {
+  const handle = async (request, response) => {
     response.setHeader("Access-Control-Allow-Origin", "*");
     response.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
     response.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -145,6 +145,14 @@ export function createFixedProviderServer() {
       response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: part } }] })}\n\n`);
     }
     response.end("data: [DONE]\n\n");
+  };
+  return createServer((request, response) => {
+    void handle(request, response).catch((error) => {
+      if (request.aborted || response.destroyed || error?.code === "ECONNRESET") return;
+      process.stderr.write(`NSD fixture handler failed: ${String(error)}\n`);
+      if (!response.headersSent) sendJson(response, 500, { error: "fixture-handler-failed" });
+      else response.destroy();
+    });
   });
 }
 
