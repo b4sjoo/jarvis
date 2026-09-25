@@ -555,6 +555,7 @@ fn sample_incident(run: &Run, epoch: u64, incident: DiagnosticIncident) {
         stack_file: Option<String>,
     }
 
+    let attempt_marker = write_attempt_marker(run, &incident);
     let stack_name = format!("sample-{}.txt", incident.attempt);
     let stack_path = run.folder.join(&stack_name);
     let stderr_path = run
@@ -659,11 +660,55 @@ fn sample_incident(run: &Run, epoch: u64, incident: DiagnosticIncident) {
         exit_code,
         stack_file: stack_path.exists().then_some(stack_name),
     };
-    if let Ok(payload) = serde_json::to_vec_pretty(&report) {
-        let final_path = run.folder.join(format!("sample-{}.json", incident.attempt));
-        let partial_path = final_path.with_extension("json.partial");
-        if fs::write(&partial_path, payload).is_ok() {
-            let _ = fs::rename(partial_path, final_path);
+    match serde_json::to_vec_pretty(&report) {
+        Ok(payload) => {
+            publish_sample_report(run, incident.attempt, &payload, attempt_marker.as_deref());
+        }
+        Err(error) => {
+            eprintln!("Native stall sample report encoding failed: {error}");
+        }
+    }
+}
+
+fn write_attempt_marker(run: &Run, incident: &DiagnosticIncident) -> Option<PathBuf> {
+    use std::io::Write;
+
+    let path = run
+        .folder
+        .join(format!("attempt-{}.json.partial", incident.attempt));
+    let payload = serde_json::json!({
+        "runId": run.id,
+        "attempt": incident.attempt,
+        "marker": incident.marker,
+        "triggeredAtMs": incident.triggered_at_ms,
+        "sampleStatus": "triggered",
+    });
+    let result = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .and_then(|mut file| file.write_all(payload.to_string().as_bytes()));
+    match result {
+        Ok(()) => Some(path),
+        Err(error) => {
+            eprintln!("Native stall attempt marker unavailable: {error}");
+            None
+        }
+    }
+}
+
+fn publish_sample_report(run: &Run, attempt: u8, payload: &[u8], marker: Option<&std::path::Path>) {
+    let final_path = run.folder.join(format!("sample-{attempt}.json"));
+    let partial_path = final_path.with_extension("json.partial");
+    let result =
+        fs::write(&partial_path, payload).and_then(|_| fs::rename(&partial_path, &final_path));
+    if let Err(error) = result {
+        eprintln!("Native stall sample report unavailable: {error}");
+        return;
+    }
+    if let Some(marker) = marker {
+        if let Err(error) = fs::remove_file(marker) {
+            eprintln!("Native stall attempt marker cleanup failed: {error}");
         }
     }
 }
@@ -943,5 +988,80 @@ mod tests {
         assert!(state.tick(now + Duration::from_secs(20)).is_none());
         assert!(state.pending.is_none());
         assert_eq!(state.attempts, 0);
+    }
+
+    #[test]
+    fn attempt_marker_survives_failed_report_and_clears_after_publication() {
+        let folder = std::env::temp_dir().join(format!("jarvis-stall-report-{}", Uuid::new_v4()));
+        fs::create_dir(&folder).unwrap();
+        let run = Run {
+            id: "run-a".into(),
+            folder: folder.clone(),
+            active: AtomicBool::new(true),
+            observer_epoch: AtomicU64::new(1),
+            state: Mutex::new(RunState::new(Instant::now())),
+        };
+        let incident = DiagnosticIncident {
+            attempt: 1,
+            marker: marker(1),
+            send_started_at_ms: 1,
+            emit_finished_at_ms: None,
+            emit_succeeded: None,
+            triggered_at_ms: 2,
+            callbacks_at_trigger: None,
+            progress: Vec::new(),
+        };
+        let attempt_marker = write_attempt_marker(&run, &incident).unwrap();
+        let content = fs::read_to_string(&attempt_marker).unwrap();
+        let marker_payload: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(marker_payload["sampleStatus"], "triggered");
+        assert_eq!(marker_payload["runId"], "run-a");
+        assert_eq!(marker_payload["marker"]["captureSessionId"], "capture");
+        assert!(marker_payload.get("transcript").is_none());
+        let blocked_partial = folder.join("sample-1.json.partial");
+        fs::create_dir(&blocked_partial).unwrap();
+        publish_sample_report(
+            &run,
+            1,
+            br#"{"sampleStatus":"failed"}"#,
+            Some(&attempt_marker),
+        );
+        assert!(attempt_marker.is_file());
+        assert!(!folder.join("sample-1.json").exists());
+        fs::remove_dir(blocked_partial).unwrap();
+        publish_sample_report(
+            &run,
+            1,
+            br#"{"sampleStatus":"failed"}"#,
+            Some(&attempt_marker),
+        );
+        assert!(!attempt_marker.exists());
+        assert!(folder.join("sample-1.json").is_file());
+        fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[test]
+    fn already_unwritable_attempt_has_no_durable_marker() {
+        let file = std::env::temp_dir().join(format!("jarvis-stall-no-dir-{}", Uuid::new_v4()));
+        fs::write(&file, b"not a directory").unwrap();
+        let run = Run {
+            id: "run-a".into(),
+            folder: file.clone(),
+            active: AtomicBool::new(true),
+            observer_epoch: AtomicU64::new(1),
+            state: Mutex::new(RunState::new(Instant::now())),
+        };
+        let incident = DiagnosticIncident {
+            attempt: 1,
+            marker: marker(1),
+            send_started_at_ms: 1,
+            emit_finished_at_ms: None,
+            emit_succeeded: None,
+            triggered_at_ms: 2,
+            callbacks_at_trigger: None,
+            progress: Vec::new(),
+        };
+        assert!(write_attempt_marker(&run, &incident).is_none());
+        fs::remove_file(file).unwrap();
     }
 }
