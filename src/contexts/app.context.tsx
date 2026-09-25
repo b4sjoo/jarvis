@@ -35,6 +35,27 @@ import {
   useState,
 } from "react";
 
+const NSD_FIXED_PROVIDER_ENABLED =
+  typeof import.meta.env !== "undefined" &&
+  import.meta.env.VITE_NSD_FIXED_PROVIDER === "1";
+
+const NSD_FIXED_AI_PROVIDER: TYPE_PROVIDER = {
+  id: "nsd-fixed-ai",
+  streaming: true,
+  responseContentPath: "choices[0].message.content",
+  curl: `curl -X POST http://127.0.0.1:19921/ai \
+    -H "Content-Type: application/json" \
+    -d '{"model":"nsd-fixed","messages":[{"role":"system","content":"{{SYSTEM_PROMPT}}"},{"role":"user","content":"{{TEXT}}"}],"stream":true}'`,
+};
+
+const NSD_FIXED_STT_PROVIDER: TYPE_PROVIDER = {
+  id: "nsd-fixed-stt",
+  streaming: false,
+  responseContentPath: "text",
+  curl: `curl -X POST http://127.0.0.1:19921/stt \
+    -F "file={{AUDIO}}" -F "model=nsd-fixed"`,
+};
+
 const validateAndProcessCurlProviders = (
   providersJson: string,
   providerType: "AI" | "STT"
@@ -597,15 +618,23 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   const value: IContextType = {
     systemPrompt,
     setSystemPrompt,
-    allAiProviders,
+    allAiProviders: NSD_FIXED_PROVIDER_ENABLED
+      ? [NSD_FIXED_AI_PROVIDER]
+      : allAiProviders,
     customAiProviders,
-    selectedAIProvider,
+    selectedAIProvider: NSD_FIXED_PROVIDER_ENABLED
+      ? { provider: "nsd-fixed-ai", variables: {} }
+      : selectedAIProvider,
     onSetSelectedAIProvider,
     selectedPreparationAIProvider,
     onSetSelectedPreparationAIProvider,
-    allSttProviders,
+    allSttProviders: NSD_FIXED_PROVIDER_ENABLED
+      ? [NSD_FIXED_STT_PROVIDER]
+      : allSttProviders,
     customSttProviders,
-    selectedSttProvider,
+    selectedSttProvider: NSD_FIXED_PROVIDER_ENABLED
+      ? { provider: "nsd-fixed-stt", variables: {} }
+      : selectedSttProvider,
     onSetSelectedSttProvider,
     screenshotConfiguration,
     setScreenshotConfiguration,

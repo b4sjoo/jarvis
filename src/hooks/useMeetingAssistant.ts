@@ -24116,10 +24116,10 @@ export function useMeetingAssistant() {
 
   const startRuntimeRegressionRun = useCallback(async () => {
     if (shutdownRequestedRef.current) return false;
-    if (!import.meta.env.DEV || !debugModeRef.current) {
+    if ((!import.meta.env.DEV && import.meta.env?.VITE_NSD_FIXED_PROVIDER !== "1") || !debugModeRef.current) {
       setState((previous) => ({
         ...previous,
-        error: "Replay Lab requires a development build with Debug Mode enabled.",
+        error: "Replay Lab requires a debug or test build with Debug Mode enabled.",
       }));
       return false;
     }
