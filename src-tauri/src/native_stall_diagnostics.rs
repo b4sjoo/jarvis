@@ -2,7 +2,7 @@ use crate::speaker::NativeAudioLivenessEvent;
 use serde::Serialize;
 use std::collections::VecDeque;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -641,7 +641,7 @@ fn sample_incident(run: &Run, epoch: u64, incident: DiagnosticIncident) {
         .map(|metadata| metadata.len())
         .unwrap_or(0);
     if status == "completed" && stack_size == 0 {
-        status = "empty-stack";
+        status = empty_stack_status(&stack_path);
     }
     if stack_size > MAX_STACK_BYTES {
         if let Ok(file) = fs::OpenOptions::new().write(true).open(&stack_path) {
@@ -667,6 +667,13 @@ fn sample_incident(run: &Run, epoch: u64, incident: DiagnosticIncident) {
         Err(error) => {
             eprintln!("Native stall sample report encoding failed: {error}");
         }
+    }
+}
+
+fn empty_stack_status(path: &Path) -> &'static str {
+    match fs::OpenOptions::new().write(true).open(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => "permission-denied",
+        _ => "empty-stack",
     }
 }
 
@@ -1062,6 +1069,22 @@ mod tests {
             progress: Vec::new(),
         };
         assert!(write_attempt_marker(&run, &incident).is_none());
+        fs::remove_file(file).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn empty_stack_distinguishes_output_permission_from_other_empty_results() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let file = std::env::temp_dir().join(format!("jarvis-stall-empty-{}", Uuid::new_v4()));
+        fs::write(&file, b"").unwrap();
+        assert_eq!(empty_stack_status(&file), "empty-stack");
+
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o000)).unwrap();
+        assert_eq!(empty_stack_status(&file), "permission-denied");
+
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
         fs::remove_file(file).unwrap();
     }
 }
