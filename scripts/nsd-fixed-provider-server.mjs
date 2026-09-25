@@ -5,6 +5,39 @@ const QUESTIONS = [
   "What does LRU stand for and how does an LRU cache work?",
   "What happens when an LRU cache reaches capacity?",
 ];
+const ME_TRANSCRIPT = "I would clarify the cache capacity before I implement it.";
+
+function wavSampleRate(audio) {
+  if (audio.length < 44 || audio.toString("ascii", 0, 4) !== "RIFF"
+    || audio.toString("ascii", 8, 12) !== "WAVE"
+    || audio.readUInt32LE(4) + 8 !== audio.length) return null;
+  let offset = 12;
+  let sampleRate = null;
+  let hasData = false;
+  while (offset + 8 <= audio.length) {
+    const size = audio.readUInt32LE(offset + 4);
+    const end = offset + 8 + size;
+    if (end > audio.length) return null;
+    const name = audio.toString("ascii", offset, offset + 4);
+    if (name === "fmt ") {
+      if (sampleRate !== null || size < 16) return null;
+      const format = audio.readUInt16LE(offset + 8);
+      const channels = audio.readUInt16LE(offset + 10);
+      const rate = audio.readUInt32LE(offset + 12);
+      const byteRate = audio.readUInt32LE(offset + 16);
+      const blockAlign = audio.readUInt16LE(offset + 20);
+      const bits = audio.readUInt16LE(offset + 22);
+      if (format !== 1 || channels !== 1 || bits !== 16
+        || blockAlign !== 2 || byteRate !== rate * 2) return null;
+      sampleRate = rate;
+    } else if (name === "data") {
+      if (hasData || size === 0 || size % 2 !== 0) return null;
+      hasData = true;
+    }
+    offset = end + (size % 2);
+  }
+  return offset === audio.length && hasData ? sampleRate : null;
+}
 
 function currentQuestion(body) {
   const text = JSON.stringify(body);
@@ -97,14 +130,39 @@ export function createFixedProviderServer() {
     }
     if (request.url === "/stt") {
       let audioBytes = 0;
+      const chunks = [];
       for await (const chunk of request) {
         audioBytes += chunk.length;
         if (audioBytes > 16_000_000) {
           sendJson(response, 413, { error: "audio-too-large" });
           return;
         }
+        chunks.push(chunk);
       }
-      sendJson(response, 200, { text: QUESTIONS[sttSequence++ % QUESTIONS.length] });
+      let form;
+      try {
+        form = await new Request("http://127.0.0.1/stt", {
+          method: "POST",
+          headers: request.headers,
+          body: Buffer.concat(chunks),
+        }).formData();
+      } catch {
+        sendJson(response, 400, { error: "invalid-audio-form" });
+        return;
+      }
+      const file = form.get("file");
+      if (!(file instanceof Blob)) {
+        sendJson(response, 400, { error: "audio-file-required" });
+        return;
+      }
+      const rate = wavSampleRate(Buffer.from(await file.arrayBuffer()));
+      if (rate !== 16_000 && rate !== 48_000) {
+        sendJson(response, 422, { error: "unexpected-wav-format" });
+        return;
+      }
+      sendJson(response, 200, {
+        text: rate === 16_000 ? ME_TRANSCRIPT : QUESTIONS[sttSequence++ % QUESTIONS.length],
+      });
       return;
     }
     if (request.url !== "/ai") {

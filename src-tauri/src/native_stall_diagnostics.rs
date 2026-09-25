@@ -1108,6 +1108,58 @@ pub fn debug_block_main_thread_for_stall_test(
 mod tests {
     use super::*;
 
+    #[test]
+    #[ignore = "run in fresh processes under /usr/bin/time -l for paired memory attribution"]
+    fn memory_probe_real_owner() {
+        let mode = std::env::var("NSD_MEMORY_PROBE").expect("NSD_MEMORY_PROBE must be off or on");
+        assert!(mode == "off" || mode == "on");
+        let root = std::env::temp_dir().join(format!("jarvis-nsd-memory-{}", Uuid::new_v4()));
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("manifest.json"), "{}").unwrap();
+
+        let diagnostics = NativeStallDiagnostics::default();
+        let counters = Arc::new(CaptureCallbackCounters::new());
+        diagnostics.set_capture("capture", 1, counters.clone());
+        let run = if mode == "on" {
+            diagnostics.arm(root.clone()).unwrap();
+            Some(diagnostics.run().unwrap())
+        } else {
+            None
+        };
+        let armed_at = Instant::now();
+        for sequence in 1..=60 {
+            counters.observe_entry();
+            let selected = marker(sequence);
+            let mut entry = progress(sequence);
+            entry.at_ms = wall_ms();
+            entry.callbacks = Some(counters.snapshot());
+            if let Some(run) = &run {
+                let mut state = run.state.lock().unwrap();
+                assert!(state.select_marker(selected.clone(), entry, Instant::now()));
+                state.finish(&selected, true);
+                assert_eq!(
+                    state.acknowledge(&selected, Instant::now()),
+                    AckOutcome::Accepted
+                );
+            }
+        }
+        thread::sleep(Duration::from_millis(1_350));
+        if let Some(run) = &run {
+            let state = run.state.lock().unwrap();
+            assert_eq!(state.progress.len(), 60);
+            assert!(state.last_tick > armed_at, "real observer did not tick");
+        }
+        println!(
+            "NSD_MEMORY_PROBE mode={mode} progress={} observer_tick={}",
+            run.as_ref()
+                .map_or(0, |run| run.state.lock().unwrap().progress.len()),
+            run.as_ref()
+                .is_some_and(|run| run.state.lock().unwrap().last_tick > armed_at)
+        );
+        diagnostics.disarm();
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[cfg(debug_assertions)]
     #[test]
     fn debug_fault_is_one_run_one_capture_and_clears_on_disarm() {

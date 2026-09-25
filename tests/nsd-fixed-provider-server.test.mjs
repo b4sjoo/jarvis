@@ -6,6 +6,30 @@ import { createFixedProviderServer } from "../scripts/nsd-fixed-provider-server.
 
 const first = "What does LRU stand for and how does an LRU cache work?";
 const second = "What happens when an LRU cache reaches capacity?";
+const me = "I would clarify the cache capacity before I implement it.";
+
+function wav(rate) {
+  const audio = Buffer.alloc(46);
+  audio.write("RIFF", 0);
+  audio.writeUInt32LE(38, 4);
+  audio.write("WAVEfmt ", 8);
+  audio.writeUInt32LE(16, 16);
+  audio.writeUInt16LE(1, 20);
+  audio.writeUInt16LE(1, 22);
+  audio.writeUInt32LE(rate, 24);
+  audio.writeUInt32LE(rate * 2, 28);
+  audio.writeUInt16LE(2, 32);
+  audio.writeUInt16LE(16, 34);
+  audio.write("data", 36);
+  audio.writeUInt32LE(2, 40);
+  return audio;
+}
+
+function audioForm(audio) {
+  const form = new FormData();
+  form.append("file", new Blob([audio], { type: "audio/wav" }), "audio.wav");
+  return form;
+}
 
 test("fixed Provider serves bounded STT and current-question Advisor output without external fallback", async () => {
   const server = createFixedProviderServer();
@@ -13,10 +37,24 @@ test("fixed Provider serves bounded STT and current-question Advisor output with
   const address = server.address();
   const base = `http://127.0.0.1:${address.port}`;
   try {
-    const stt1 = await fetch(`${base}/stt`, { method: "POST" });
-    const stt2 = await fetch(`${base}/stt`, { method: "POST" });
+    const stt1 = await fetch(`${base}/stt`, { method: "POST", body: audioForm(wav(48_000)) });
+    const stt2 = await fetch(`${base}/stt`, { method: "POST", body: audioForm(wav(48_000)) });
     assert.equal((await stt1.json()).text, first);
     assert.equal((await stt2.json()).text, second);
+    const [meResult, themResult] = await Promise.all([
+      fetch(`${base}/stt`, { method: "POST", body: audioForm(wav(16_000)) }),
+      fetch(`${base}/stt`, { method: "POST", body: audioForm(wav(48_000)) }),
+    ]);
+    assert.equal((await meResult.json()).text, me);
+    assert.equal((await themResult.json()).text, first);
+    const unexpected = await fetch(`${base}/stt`, {
+      method: "POST", body: audioForm(wav(44_100)),
+    });
+    assert.equal(unexpected.status, 422);
+    const malformed = await fetch(`${base}/stt`, {
+      method: "POST", body: audioForm(Buffer.from("not a wav")),
+    });
+    assert.equal(malformed.status, 422);
 
     const response = await fetch(`${base}/ai`, {
       method: "POST",
@@ -56,7 +94,9 @@ test("fixed Provider serves bounded STT and current-question Advisor output with
     cancelled.destroy();
     await wait(30);
     await fetch(`${base}/reset`, { method: "POST" });
-    assert.equal((await (await fetch(`${base}/stt`, { method: "POST" })).json()).text, first);
+    assert.equal((await (await fetch(`${base}/stt`, {
+      method: "POST", body: audioForm(wav(48_000)),
+    })).json()).text, first);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
