@@ -733,23 +733,40 @@ pub async fn acknowledge_native_stall_marker(
 #[tauri::command]
 pub fn debug_block_main_thread_for_stall_test(
     app: AppHandle,
-    diagnostic_run_id: String,
+    diagnostic_run_id: Option<String>,
 ) -> Result<(), String> {
     let diagnostics = app.state::<NativeStallDiagnostics>();
-    let run = diagnostics
-        .run()
-        .ok_or("Native diagnostics are not armed")?;
-    if run.id != diagnostic_run_id || !run.active.load(Ordering::Acquire) {
-        return Err("Diagnostic session has changed".into());
-    }
-    if run
-        .state
-        .lock()
-        .map_err(|_| "Diagnostics lock failed")?
-        .capture
-        .is_none()
-    {
-        return Err("Meeting capture is not active".into());
+    if let Some(run_id) = diagnostic_run_id {
+        let run = diagnostics
+            .run()
+            .ok_or("Native diagnostics are not armed")?;
+        if run.id != run_id || !run.active.load(Ordering::Acquire) {
+            return Err("Diagnostic session has changed".into());
+        }
+        if run
+            .state
+            .lock()
+            .map_err(|_| "Diagnostics lock failed")?
+            .capture
+            .is_none()
+        {
+            return Err("Meeting capture is not active".into());
+        }
+    } else {
+        if diagnostics
+            .run()
+            .is_some_and(|run| run.active.load(Ordering::Acquire))
+        {
+            return Err("Unarmed comparison requires diagnostics to be disabled".into());
+        }
+        if diagnostics
+            .capture
+            .lock()
+            .map_err(|_| "Capture diagnostics lock failed")?
+            .is_none()
+        {
+            return Err("Meeting capture is not active".into());
+        }
     }
     if app.get_webview_window("main").is_none() {
         return Err("Main WebView is unavailable".into());
