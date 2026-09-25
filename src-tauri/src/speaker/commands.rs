@@ -70,6 +70,7 @@ pub struct NativeCaptureControl {
     phase: NativeCapturePhase,
     generation: u64,
     lease: Option<NativeCaptureLease>,
+    start_in_flight: Option<NativeCaptureLease>,
     metadata: Option<NativeCaptureMetadata>,
     task: Option<tokio::task::JoinHandle<()>>,
     signals: Option<NativeCaptureSignals>,
@@ -82,6 +83,79 @@ struct NativeCaptureMetadata {
     device_id: Option<String>,
     sample_rate: u32,
     started_at_ms: u64,
+}
+
+const NATIVE_START_FOREGROUND_TIMEOUT: Duration = Duration::from_secs(5);
+
+struct PreparedNativeCapture {
+    stream: SpeakerStream,
+    sample_rate: u32,
+}
+
+struct NativeStartFailure {
+    reason: &'static str,
+    message: String,
+    sample_rate: Option<u32>,
+}
+
+struct NativeStartFlightGuard {
+    app: AppHandle,
+    lease: NativeCaptureLease,
+}
+
+impl Drop for NativeStartFlightGuard {
+    fn drop(&mut self) {
+        let state = self.app.state::<crate::AudioState>();
+        if let Ok(mut control) = state.capture_control.lock() {
+            clear_start_in_flight(&mut control, &self.lease);
+        };
+    }
+}
+
+fn clear_start_in_flight(control: &mut NativeCaptureControl, lease: &NativeCaptureLease) {
+    if control.start_in_flight.as_ref() == Some(lease) {
+        control.start_in_flight = None;
+    }
+}
+
+fn discard_timed_out_start<T: Send + 'static>(receiver: &mut tokio::sync::oneshot::Receiver<T>) {
+    // Late sends fail on the worker; already queued resources leave the IPC thread for disposal.
+    receiver.close();
+    if let Ok(result) = receiver.try_recv() {
+        if let Err(error) = std::thread::Builder::new()
+            .name("native-audio-discard".into())
+            .spawn(move || drop(result))
+        {
+            warn!("Could not start background audio cleanup: {error}");
+        }
+    }
+}
+
+fn fail_capture_start(
+    app: &AppHandle,
+    lease: &NativeCaptureLease,
+    failure: NativeStartFailure,
+) -> String {
+    release_starting_capture(
+        &app.state::<crate::AudioState>(),
+        lease.owner,
+        &lease.session_id,
+        lease.generation,
+    );
+    emit_capture_lifecycle(
+        app,
+        "error",
+        lease.owner,
+        &lease.session_id,
+        lease.generation,
+        Some(failure.reason),
+        Some(&failure.message),
+        failure.sample_rate,
+        false,
+        CaptureRecoverability::Manual,
+        CaptureTerminationDiagnostics::default(),
+    );
+    failure.message
 }
 
 #[derive(Debug, Clone, Default)]
@@ -124,6 +198,11 @@ fn claim_capture_lease(
     owner: NativeCaptureOwner,
     session_id: String,
 ) -> Result<NativeCaptureLease, String> {
+    if control.start_in_flight.is_some() {
+        return Err(
+            "Previous system audio start is still finishing; retry when it completes".into(),
+        );
+    }
     if control.phase != NativeCapturePhase::Idle || control.lease.is_some() {
         let current_owner = control
             .lease
@@ -140,6 +219,7 @@ fn claim_capture_lease(
     };
     control.phase = NativeCapturePhase::Starting;
     control.lease = Some(lease.clone());
+    control.start_in_flight = Some(lease.clone());
     control.signals = Some(NativeCaptureSignals::default());
     control.capture_vad_config = Some(control.vad_config.clone());
     Ok(lease)
@@ -1008,129 +1088,77 @@ async fn start_audio_capture(
     let capture_generation = lease.generation;
 
     let requested_device_id = device_id.clone();
-    let input = match std::panic::catch_unwind(AssertUnwindSafe(|| {
-        SpeakerInput::new_with_device(device_id)
-    })) {
-        Ok(Ok(input)) => input,
-        Ok(Err(e)) => {
-            error!("Failed to create speaker input: {}", e);
-            emit_capture_lifecycle(
-                &app,
-                "error",
-                capture_owner,
-                &capture_session_id,
-                capture_generation,
-                Some("start-failed"),
-                Some(&format!("Failed to access system audio: {}", e)),
-                None,
-                false,
-                CaptureRecoverability::Manual,
-                CaptureTerminationDiagnostics::default(),
-            );
-            release_starting_capture(
-                &state,
-                capture_owner,
-                &capture_session_id,
-                capture_generation,
-            );
-            return Err(format!("Failed to access system audio: {}", e));
-        }
-        Err(_) => {
-            emit_capture_lifecycle(
-                &app,
-                "error",
-                capture_owner,
-                &capture_session_id,
-                capture_generation,
-                Some(CaptureTerminationReason::CapturePanic.as_str()),
-                Some("System audio initialization panicked."),
-                None,
-                false,
-                CaptureRecoverability::Manual,
-                CaptureTerminationDiagnostics::default(),
-            );
-            release_starting_capture(
-                &state,
-                capture_owner,
-                &capture_session_id,
-                capture_generation,
-            );
-            return Err("System audio initialization panicked".to_string());
-        }
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let worker_app = app.clone();
+    let worker_lease = lease.clone();
+    let guard = NativeStartFlightGuard {
+        app: app.clone(),
+        lease: lease.clone(),
     };
-
-    let diagnostics = serde_json::json!({
-        "stage": "capture-format",
-        "captureSessionId": capture_session_id,
-        "captureGeneration": capture_generation,
-        "owner": capture_owner.as_str(),
-        "occurredAtMs": now_ms(),
-        "requestedDeviceId": requested_device_id,
-        "actualRoute": input.capture_diagnostics(),
-    });
-    info!("[native-audio-observation] {}", diagnostics);
-    let _ = app.emit("native-audio-observation", diagnostics);
-    let stream = match std::panic::catch_unwind(AssertUnwindSafe(|| input.stream())) {
-        Ok(stream) => stream,
-        Err(_) => {
-            emit_capture_lifecycle(
-                &app,
-                "error",
-                capture_owner,
-                &capture_session_id,
-                capture_generation,
-                Some(CaptureTerminationReason::CapturePanic.as_str()),
-                Some("System audio stream creation panicked."),
-                None,
-                false,
-                CaptureRecoverability::Manual,
-                CaptureTerminationDiagnostics::default(),
-            );
-            release_starting_capture(
-                &state,
-                capture_owner,
-                &capture_session_id,
-                capture_generation,
-            );
-            return Err("System audio stream creation panicked".to_string());
-        }
-    };
-    let sr = stream.sample_rate();
-
-    // Validate sample rate
-    if !(8000..=96000).contains(&sr) {
-        error!("Invalid sample rate: {}", sr);
-        emit_capture_lifecycle(
+    if let Err(error) = std::thread::Builder::new()
+        .name("native-audio-start".into())
+        .spawn(move || {
+            let result = prepare_native_capture(&worker_app, device_id, &worker_lease);
+            let _ = sender.send((result, guard));
+        })
+    {
+        return Err(fail_capture_start(
             &app,
-            "error",
-            capture_owner,
-            &capture_session_id,
-            capture_generation,
-            Some(CaptureTerminationReason::InvalidSampleRate.as_str()),
-            Some(&format!("Invalid sample rate: {}", sr)),
-            Some(sr),
-            false,
-            CaptureRecoverability::Manual,
-            CaptureTerminationDiagnostics::default(),
-        );
-        release_starting_capture(
-            &state,
-            capture_owner,
-            &capture_session_id,
-            capture_generation,
-        );
-        return Err(format!(
-            "Invalid sample rate: {}. Expected 8000-96000 Hz",
-            sr
+            &lease,
+            NativeStartFailure {
+                reason: "start-failed",
+                message: format!("System audio startup worker unavailable: {error}"),
+                sample_rate: None,
+            },
         ));
     }
+    let mut receiver = receiver;
+    let (prepared, guard) =
+        match tokio::time::timeout(NATIVE_START_FOREGROUND_TIMEOUT, &mut receiver).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => {
+                return Err(fail_capture_start(
+                    &app,
+                    &lease,
+                    NativeStartFailure {
+                        reason: "start-failed",
+                        message: "System audio startup ended unexpectedly".into(),
+                        sample_rate: None,
+                    },
+                ));
+            }
+            Err(_) => {
+                discard_timed_out_start(&mut receiver);
+                return Err(fail_capture_start(
+                    &app,
+                    &lease,
+                    NativeStartFailure {
+                        reason: "start-failed",
+                        message: "System audio startup exceeded 5 seconds; retry after it finishes"
+                            .into(),
+                        sample_rate: None,
+                    },
+                ));
+            }
+        };
+    let PreparedNativeCapture {
+        stream,
+        sample_rate: sr,
+    } = match prepared {
+        Ok(prepared) => prepared,
+        Err(failure) => {
+            let message = fail_capture_start(&app, &lease, failure);
+            drop(guard);
+            return Err(message);
+        }
+    };
 
     let app_clone = app.clone();
     let capture_stop_requested = signals.stop_requested;
     let capture_termination_requested = signals.termination_requested;
     let capture_termination_request = signals.termination_request;
     let task_session_id = capture_session_id.clone();
-    activate_capture_if_owner(
+    let activation = activate_capture_if_owner(
         &state,
         &lease,
         NativeCaptureMetadata {
@@ -1185,7 +1213,9 @@ async fn start_audio_capture(
                 );
             })
         },
-    )?;
+    );
+    drop(guard);
+    activation?;
 
     let _ = app.emit("capture-started", sr);
     emit_capture_lifecycle(
@@ -1203,6 +1233,64 @@ async fn start_audio_capture(
     );
 
     Ok(())
+}
+
+fn prepare_native_capture(
+    app: &AppHandle,
+    device_id: Option<String>,
+    lease: &NativeCaptureLease,
+) -> Result<PreparedNativeCapture, NativeStartFailure> {
+    let input = match std::panic::catch_unwind(AssertUnwindSafe(|| {
+        SpeakerInput::new_with_device(device_id.clone())
+    })) {
+        Ok(Ok(input)) => input,
+        Ok(Err(error)) => {
+            error!("Failed to create speaker input: {}", error);
+            return Err(NativeStartFailure {
+                reason: "start-failed",
+                message: format!("Failed to access system audio: {error}"),
+                sample_rate: None,
+            });
+        }
+        Err(_) => {
+            return Err(NativeStartFailure {
+                reason: CaptureTerminationReason::CapturePanic.as_str(),
+                message: "System audio initialization panicked".into(),
+                sample_rate: None,
+            });
+        }
+    };
+    let diagnostics = serde_json::json!({
+        "stage": "capture-format",
+        "captureSessionId": lease.session_id,
+        "captureGeneration": lease.generation,
+        "owner": lease.owner.as_str(),
+        "occurredAtMs": now_ms(),
+        "requestedDeviceId": device_id,
+        "actualRoute": input.capture_diagnostics(),
+    });
+    info!("[native-audio-observation] {}", diagnostics);
+    let _ = app.emit("native-audio-observation", diagnostics);
+    let stream = std::panic::catch_unwind(AssertUnwindSafe(|| input.stream())).map_err(|_| {
+        NativeStartFailure {
+            reason: CaptureTerminationReason::CapturePanic.as_str(),
+            message: "System audio stream creation panicked".into(),
+            sample_rate: None,
+        }
+    })?;
+    let sample_rate = stream.sample_rate();
+    if !(8000..=96000).contains(&sample_rate) {
+        error!("Invalid sample rate: {}", sample_rate);
+        return Err(NativeStartFailure {
+            reason: CaptureTerminationReason::InvalidSampleRate.as_str(),
+            message: format!("Invalid sample rate: {sample_rate}. Expected 8000-96000 Hz"),
+            sample_rate: Some(sample_rate),
+        });
+    }
+    Ok(PreparedNativeCapture {
+        stream,
+        sample_rate,
+    })
 }
 
 // VAD-enabled capture - OPTIMIZED for real-time speech detection
@@ -2807,18 +2895,58 @@ mod native_capture_control_tests;
 mod tests {
     use super::{
         apply_noise_gate, begin_capture_stop, claim_capture_lease, control_owns,
-        decide_debug_audio_fault, release_active_capture_if_owner, samples_to_ms,
-        should_emit_tail_segment, take_capture_termination_request, CaptureRecoverability,
-        CaptureRunOutcome, CaptureTerminationDiagnostics, CaptureTerminationReason,
-        DebugAudioFaultDisposition, DebugAudioFaultKind, NativeAudioLifecycleEvent,
-        NativeAudioSegmentDroppedEvent, NativeCaptureControl, NativeCaptureOwner,
-        NativeCapturePhase, NativeCaptureTerminationRequest, NativeSegmentEndReason,
-        NativeSpeechDetectedEvent, NativeSpeechStartEvent, NativeStopDecision,
-        NativeTailFlushDisposition, ResolvedVadTiming, SpeakerStreamTermination,
-        SpeakerStreamTerminationReason, VadConfig, VadLivenessAccumulator,
+        decide_debug_audio_fault, discard_timed_out_start, release_active_capture_if_owner,
+        samples_to_ms, should_emit_tail_segment, take_capture_termination_request,
+        CaptureRecoverability, CaptureRunOutcome, CaptureTerminationDiagnostics,
+        CaptureTerminationReason, DebugAudioFaultDisposition, DebugAudioFaultKind,
+        NativeAudioLifecycleEvent, NativeAudioSegmentDroppedEvent, NativeCaptureControl,
+        NativeCaptureOwner, NativeCapturePhase, NativeCaptureTerminationRequest,
+        NativeSegmentEndReason, NativeSpeechDetectedEvent, NativeSpeechStartEvent,
+        NativeStopDecision, NativeTailFlushDisposition, ResolvedVadTiming,
+        SpeakerStreamTermination, SpeakerStreamTerminationReason, VadConfig,
+        VadLivenessAccumulator,
     };
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Mutex;
+
+    struct DropThreadProbe(std::sync::mpsc::Sender<std::thread::ThreadId>);
+
+    impl Drop for DropThreadProbe {
+        fn drop(&mut self) {
+            let _ = self.0.send(std::thread::current().id());
+        }
+    }
+
+    #[test]
+    fn timed_out_start_discards_queued_or_late_results_off_foreground() {
+        let foreground = std::thread::current().id();
+        let (drop_tx, drop_rx) = std::sync::mpsc::channel();
+        let (sender, mut receiver) = tokio::sync::oneshot::channel();
+        assert!(sender.send(DropThreadProbe(drop_tx)).is_ok());
+        discard_timed_out_start(&mut receiver);
+        assert_ne!(
+            drop_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap(),
+            foreground
+        );
+
+        let (drop_tx, drop_rx) = std::sync::mpsc::channel();
+        let (sender, mut receiver) = tokio::sync::oneshot::channel();
+        discard_timed_out_start(&mut receiver);
+        let worker = std::thread::spawn(move || {
+            if let Err(result) = sender.send(DropThreadProbe(drop_tx)) {
+                drop(result);
+            }
+            std::thread::current().id()
+        });
+        assert_eq!(
+            drop_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap(),
+            worker.join().unwrap()
+        );
+    }
 
     #[tokio::test]
     async fn task128_meeting_config_and_shared_stop_survive_wrapper_retirement() {
@@ -2863,6 +2991,7 @@ mod tests {
             assert_eq!(stopped, super::NativeStopDisposition::Stopped);
             assert!(signals.stop_requested.load(Ordering::Acquire));
             assert!(!super::capture_status_snapshot(&state).unwrap().active);
+            super::clear_start_in_flight(&mut state.capture_control.lock().unwrap(), &lease);
         }
     }
 
@@ -3185,6 +3314,7 @@ mod tests {
         .expect("first capture should claim the controller");
         control.phase = NativeCapturePhase::Idle;
         control.lease = None;
+        super::clear_start_in_flight(&mut control, &first);
         let second = claim_capture_lease(
             &mut control,
             NativeCaptureOwner::Meeting,
@@ -3290,6 +3420,7 @@ mod tests {
         .expect("old capture should claim the controller");
         control.phase = NativeCapturePhase::Idle;
         control.lease = None;
+        super::clear_start_in_flight(&mut control, &old);
         let current = claim_capture_lease(
             &mut control,
             NativeCaptureOwner::Meeting,

@@ -63,6 +63,36 @@ test("late start completion cannot restore capture after stop", async () => {
   assert.ok(events.some((event) => event.stage === "stale-cleanup-finished"));
 });
 
+test("bounded native start releases the queued Stop while its OS call is still pending", async () => {
+  const coordinator = new CaptureLifecycleCoordinator();
+  const nativeStart = deferred<void>();
+  const deadline = deferred<void>();
+  const actions: string[] = [];
+
+  const start = coordinator.claim("start");
+  const startRun = coordinator.run(start, async () => {
+    try {
+      await Promise.race([
+        nativeStart.promise,
+        deadline.promise.then(() => { throw new Error("startup deadline"); }),
+      ]);
+    } catch {
+      actions.push("start-deadline");
+    }
+  });
+  await allowQueuedOperationToStart();
+
+  const stop = coordinator.claim("stop");
+  const stopRun = coordinator.run(stop, async () => {
+    actions.push("stop-dequeued");
+  });
+  await allowQueuedOperationToStart();
+  assert.deepEqual(actions, []);
+  deadline.resolve();
+  await Promise.all([startRun, stopRun]);
+  assert.deepEqual(actions, ["start-deadline", "stop-dequeued"]);
+});
+
 test("newer start owns status and session after an older deferred start", async () => {
   const coordinator = new CaptureLifecycleCoordinator();
   const firstNativeStart = deferred<void>();

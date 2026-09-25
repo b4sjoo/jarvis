@@ -23,6 +23,11 @@ fn activate(state: &crate::AudioState, lease: &NativeCaptureLease) {
         tokio::spawn(std::future::pending())
     })
     .unwrap();
+    complete_start(state, lease);
+}
+
+fn complete_start(state: &crate::AudioState, lease: &NativeCaptureLease) {
+    clear_start_in_flight(&mut state.capture_control.lock().unwrap(), lease);
 }
 
 fn snapshot(state: &crate::AudioState) -> serde_json::Value {
@@ -82,6 +87,7 @@ async fn delayed_start_cannot_touch_replacement(succeeds: bool) {
         } else {
             release_starting_capture(&worker_state, a.owner, &a.session_id, a.generation);
         }
+        complete_start(&worker_state, &a);
         assert!(signals.stop_requested.load(Ordering::Acquire));
     });
     let (a, a_signals) = claimed_rx.recv_timeout(TEST_WAIT).unwrap();
@@ -92,6 +98,9 @@ async fn delayed_start_cannot_touch_replacement(succeeds: bool) {
     assert!(starting.device_id.is_none());
     assert!(starting.started_at_ms.is_none());
     assert_eq!(stop(&state, &a).await, NativeStopDisposition::Stopped);
+    assert!(reserve_capture(&state, a.owner, "B-too-early".into(), None).is_err());
+    finish_tx.send(()).unwrap();
+    worker.join().unwrap();
 
     let (b, b_signals) = reserve(&state, "B");
     activate(&state, &b);
@@ -112,8 +121,6 @@ async fn delayed_start_cannot_touch_replacement(succeeds: bool) {
         control.task.as_ref().unwrap().id()
     };
     let before = snapshot(&state);
-    finish_tx.send(()).unwrap();
-    worker.join().unwrap();
 
     // Also exercise the late terminal/debug-timeout and stale Stop paths.
     assert!(
@@ -184,6 +191,33 @@ async fn delayed_start_cannot_touch_replacement(succeeds: bool) {
 }
 
 #[tokio::test]
+async fn foreground_deadline_releases_business_lease_but_not_native_start_slot() {
+    let state = Arc::new(crate::AudioState::default());
+    let (lease, _) = reserve(&state, "slow-start");
+    let (release_tx, release_rx) = mpsc::channel();
+    let (worker_ready_tx, worker_ready_rx) = mpsc::channel();
+    let (result_tx, result_rx) = tokio::sync::oneshot::channel::<()>();
+    let worker_state = state.clone();
+    let worker_lease = lease.clone();
+    let worker = thread::spawn(move || {
+        worker_ready_tx.send(()).unwrap();
+        release_rx.recv_timeout(TEST_WAIT).unwrap();
+        let _ = result_tx.send(());
+        complete_start(&worker_state, &worker_lease);
+    });
+    worker_ready_rx.recv_timeout(TEST_WAIT).unwrap();
+    assert!(tokio::time::timeout(Duration::from_millis(25), result_rx)
+        .await
+        .is_err());
+    assert_eq!(stop(&state, &lease).await, NativeStopDisposition::Stopped);
+    assert!(reserve_capture(&state, lease.owner, "premature-retry".into(), None).is_err());
+    release_tx.send(()).unwrap();
+    worker.join().unwrap();
+    let (next, _) = reserve(&state, "manual-retry");
+    assert!(next.generation > lease.generation);
+}
+
+#[tokio::test]
 async fn late_success_preserves_new_generation_metadata_task_and_signals() {
     delayed_start_cannot_touch_replacement(true).await;
 }
@@ -204,6 +238,7 @@ async fn blocked_join_keeps_status_coherent_and_duplicate_stop_waits() {
         })
     })
     .unwrap();
+    complete_start(&state, &a);
     let before = snapshot(&state);
     let mut first = Box::pin(stop_capture_for_owner(
         &state,
@@ -387,6 +422,8 @@ fn initialization_failure_releases_only_matching_start_and_allows_retry() {
     let idle = capture_status_snapshot(&state).unwrap();
     assert!(!idle.active && !idle.system_capture_active);
     assert!(idle.capture_owner.is_none() && idle.capture_generation.is_none());
+    assert!(reserve_capture(&state, a.owner, "retry-too-early".into(), None).is_err());
+    complete_start(&state, &a);
     let (b, _) = reserve(&state, "retry");
     assert!(b.generation > a.generation);
     let before_stale_failure = snapshot(&state);
@@ -409,7 +446,7 @@ fn superseded_initialized_resource_is_dropped_outside_owner_lock() {
     let state = Arc::new(crate::AudioState::default());
     let (a, _) = reserve(&state, "resource-A");
     release_starting_capture(&state, a.owner, &a.session_id, a.generation);
-    let (_b, _) = reserve(&state, "resource-B");
+    assert!(reserve_capture(&state, a.owner, "resource-B-too-early".into(), None).is_err());
     let before = snapshot(&state);
     let dropped = Arc::new(AtomicBool::new(false));
     let resource = InitializedResource(state.clone(), dropped.clone());
@@ -422,6 +459,9 @@ fn superseded_initialized_resource_is_dropped_outside_owner_lock() {
     );
     assert!(dropped.load(Ordering::Acquire));
     assert_eq!(snapshot(&state), before);
+    complete_start(&state, &a);
+    let (b, _) = reserve(&state, "resource-B");
+    assert!(b.generation > a.generation);
 }
 
 #[tokio::test]
@@ -481,6 +521,7 @@ async fn status_never_combines_identity_and_metadata_across_transitions() {
             })
         })
         .unwrap();
+        complete_start(&state, &lease);
         phase_tx
             .send((generation, NativeCapturePhase::Active))
             .unwrap();
@@ -525,6 +566,8 @@ fn simultaneous_claims_have_one_winner_and_independent_next_tokens() {
     assert_eq!(winners.len(), 1);
     let (lease, signals, _) = &winners[0];
     release_starting_capture(&state, lease.owner, &lease.session_id, lease.generation);
+    assert!(reserve_capture(&state, lease.owner, "next-too-early".into(), None).is_err());
+    complete_start(&state, lease);
     let (next, next_signals) = reserve(&state, "next");
     assert!(next.generation > lease.generation);
     assert_tokens_distinct(signals, &next_signals);
