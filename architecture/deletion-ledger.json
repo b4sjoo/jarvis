@@ -4,6 +4,19 @@
   "updatedAt": "2026-09-26",
   "entries": [
     {
+      "id": "temporary-native-stall-acceptance-hooks",
+      "symbolOrSurface": "Fixed Provider build substitution, non-development Replay exception and native stall stage/block injectors",
+      "verdict": "delete",
+      "ownerTaskId": 145,
+      "replacement": "Normal Provider selection and development Replay admission; retained native diagnostic owner and focused tests",
+      "persistedDataImpact": "none",
+      "proofCommands": ["npm test", "npm run verify:architecture", "cargo test --lib", "cargo check --release"],
+      "deletionGate": "Temporary source, command registration, package entry and exceptions are absent; real marker, quota, error and shutdown behavior remains tested.",
+      "rollbackBoundary": "Fixture retirement is separate from real diagnostics, capture recovery and user configuration.",
+      "status": "deleted",
+      "forbiddenPatterns": ["VITE_NSD_FIXED_PROVIDER", "debug_arm_native_stall_stage", "debug_block_main_thread_for_stall_test", "struct DebugFault", "hold_emit_for_debug", "debug_sampler_denied_marker"]
+    },
+    {
       "id": "unused-native-provider-http",
       "symbolOrSurface": "URL-substring native HTTP fallback and unused HTTP plugin wiring",
       "verdict": "delete",

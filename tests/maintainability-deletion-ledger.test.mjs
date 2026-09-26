@@ -7,6 +7,7 @@ import {
 
 // Approved retired surfaces at the C196 boundary; new ledger entries are allowed.
 const requiredRetiredIds = [
+  "temporary-native-stall-acceptance-hooks",
   "unused-native-provider-http",
   "local-turn-intent-permission-layer",
   "response-consistency-shadow-operation",

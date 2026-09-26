@@ -138,8 +138,6 @@
       "commit_preparation_material_storage_delete",
       "commit_preparation_workspace_storage_delete",
       "complete_app_shutdown",
-      "debug_arm_native_stall_stage",
-      "debug_block_main_thread_for_stall_test",
       "debug_inject_native_audio_fault",
       "delete_stt_evaluation_capture",
       "discard_preparation_material_extraction_file",
@@ -308,9 +306,7 @@
       "speech-start",
       "toggle-window-visibility"
     ],
-    "nativeListenedEvents": [
-      "native-audio-liveness"
-    ],
+    "nativeListenedEvents": [],
     "staticFrontendEmittedEvents": [
       "meeting-focus-action",
       "meeting-focus-snapshot",
@@ -342,16 +338,7 @@
     "dynamicFrontendListenCallsites": [],
     "reconciliation": {
       "allowedFrontendCommandsWithoutNativeRegistration": [],
-      "allowedNativeCommandsWithoutFrontendCall": [
-        {
-          "name": "debug_arm_native_stall_stage",
-          "reason": "Debug-only one-shot native stall stage fixture; invoked only in isolated acceptance tests."
-        },
-        {
-          "name": "debug_block_main_thread_for_stall_test",
-          "reason": "Debug-only bounded fault fixture for native delivery diagnostics; invoked only in isolated acceptance tests."
-        }
-      ],
+      "allowedNativeCommandsWithoutFrontendCall": [],
       "allowedNativeEventsWithoutFrontendListener": [
         {
           "name": "capture-started",
@@ -398,12 +385,7 @@
           "reason": "Frontend-to-frontend Tauri event invalidates idle Snapshot previews across Dashboard and Main webviews."
         }
       ],
-      "allowedNativeListenersWithoutFrontendEmitter": [
-        {
-          "name": "native-audio-liveness",
-          "reason": "Debug-only listener holds an exact real native event inside Tauri emit for isolated NSD4 acceptance."
-        }
-      ]
+      "allowedNativeListenersWithoutFrontendEmitter": []
     }
   }
 }

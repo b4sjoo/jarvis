@@ -37,7 +37,6 @@
     "verify:deletion-ledger": "node scripts/verify-maintainability-ledger.mjs",
     "verify:architecture": "node scripts/verify-architecture.mjs --report",
     "verify:next-major": "node scripts/verify-next-major.mjs",
-    "test:nsd-fixed-provider": "node --test tests/nsd-fixed-provider-server.test.mjs",
     "taxonomy:evaluate": "tsc -p tsconfig.taxonomy-evaluation.json && node .tmp-taxonomy-evaluation/scripts/evaluate-taxonomy-corpus.js",
     "intent:corpus:readiness": "tsc -p tsconfig.local-intent-corpus-readiness.json && node .tmp-local-intent-corpus-readiness/scripts/build-local-intent-corpus-readiness.js",
     "intent:corpus:pilot": "tsc -p tsconfig.local-intent-corpus-readiness.json && node .tmp-local-intent-corpus-readiness/scripts/build-local-intent-annotation-pilot.js",

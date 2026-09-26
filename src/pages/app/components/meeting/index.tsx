@@ -4719,7 +4719,7 @@ const ConfigurationsPanel = ({
                 ) : null}
               </div>
             ) : null}
-            {(import.meta.env.DEV || import.meta.env?.VITE_NSD_FIXED_PROVIDER === "1") && debugMode ? (
+            {import.meta.env.DEV && debugMode ? (
               <div className="border-t border-border/60 pt-2">
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex min-w-0 items-center gap-1.5">

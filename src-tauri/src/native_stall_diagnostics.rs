@@ -319,77 +319,11 @@ struct Run {
     active: AtomicBool,
     observer_epoch: AtomicU64,
     state: Mutex<RunState>,
-    #[cfg(debug_assertions)]
-    debug_sampler_denied_marker: Mutex<Option<(Marker, Instant)>>,
-}
-
-#[cfg(debug_assertions)]
-struct DebugFault {
-    run: Arc<Run>,
-    capture: (String, u64),
-    stage: String,
-    armed_at: Instant,
-    marker: Mutex<Option<Marker>>,
-    emit_held: AtomicBool,
-    ack_held: AtomicBool,
-    cancelled: AtomicBool,
-}
-
-#[cfg(debug_assertions)]
-const DEBUG_FAULT_MAX_AGE: Duration = Duration::from_millis(11_800);
-
-#[cfg(debug_assertions)]
-impl DebugFault {
-    fn matches(&self, run_id: &str, marker: &Marker) -> bool {
-        self.armed_at.elapsed() < DEBUG_FAULT_MAX_AGE
-            && !self.cancelled.load(Ordering::Acquire)
-            && self.run.active.load(Ordering::Acquire)
-            && self.run.id == run_id
-            && self.capture.0 == marker.capture_session_id
-            && self.capture.1 == marker.capture_generation
-            && self
-                .marker
-                .lock()
-                .ok()
-                .is_some_and(|selected| selected.as_ref() == Some(marker))
-    }
-
-    fn receipt(&self, name: &str, marker: &Marker) {
-        let _ = fs::write(
-            self.run.folder.join(format!("debug-{name}.json")),
-            serde_json::json!({
-                "runId": self.run.id,
-                "stage": self.stage,
-                "captureSessionId": marker.capture_session_id,
-                "captureGeneration": marker.capture_generation,
-                "snapshotSequence": marker.snapshot_sequence,
-                "atMs": wall_ms(),
-            })
-            .to_string(),
-        );
-    }
 }
 
 impl Run {
     fn is_active(&self, epoch: u64) -> bool {
         self.active.load(Ordering::Acquire) && self.observer_epoch.load(Ordering::Acquire) == epoch
-    }
-
-    #[cfg(debug_assertions)]
-    fn take_sampler_denial(&self, marker: &Marker) -> bool {
-        self.debug_sampler_denied_marker
-            .lock()
-            .ok()
-            .is_some_and(|mut selected| {
-                if selected.as_ref().is_some_and(|(expected, armed_at)| {
-                    expected == marker && armed_at.elapsed() < DEBUG_FAULT_MAX_AGE
-                }) {
-                    selected.take();
-                    true
-                } else {
-                    false
-                }
-            })
     }
 }
 
@@ -397,8 +331,6 @@ impl Run {
 pub struct NativeStallDiagnostics {
     current: Mutex<Option<Arc<Run>>>,
     capture: Mutex<Option<(String, u64, Arc<CaptureCallbackCounters>)>>,
-    #[cfg(debug_assertions)]
-    debug_fault: Mutex<Option<Arc<DebugFault>>>,
 }
 
 impl NativeStallDiagnostics {
@@ -446,8 +378,6 @@ impl NativeStallDiagnostics {
             active: AtomicBool::new(true),
             observer_epoch: AtomicU64::new(1),
             state: Mutex::new(RunState::new(Instant::now())),
-            #[cfg(debug_assertions)]
-            debug_sampler_denied_marker: Mutex::new(None),
         });
         if let Some((session_id, generation, counters)) = capture.as_ref() {
             if let Ok(mut state) = run.state.lock() {
@@ -461,8 +391,6 @@ impl NativeStallDiagnostics {
     }
 
     pub fn disarm(&self) {
-        #[cfg(debug_assertions)]
-        self.cancel_debug_fault();
         if let Ok(current) = self.current.lock() {
             if let Some(run) = current.as_ref() {
                 run.active.store(false, Ordering::Release);
@@ -488,10 +416,6 @@ impl NativeStallDiagnostics {
             *capture = Some((session_id.to_owned(), generation, counters.clone()));
         }
         if let Some(run) = self.run() {
-            #[cfg(debug_assertions)]
-            if let Ok(mut marker) = run.debug_sampler_denied_marker.lock() {
-                *marker = None;
-            }
             if let Ok(mut state) = run.state.lock() {
                 state.set_capture(session_id, generation, counters);
             }
@@ -499,12 +423,6 @@ impl NativeStallDiagnostics {
     }
 
     pub fn clear_capture(&self, session_id: &str, generation: u64) {
-        #[cfg(debug_assertions)]
-        if let Some(fault) = self.debug_fault.lock().ok().and_then(|guard| guard.clone()) {
-            if fault.capture.0 == session_id && fault.capture.1 == generation {
-                fault.cancelled.store(true, Ordering::Release);
-            }
-        }
         if let Ok(mut capture) = self.capture.lock() {
             if capture
                 .as_ref()
@@ -514,10 +432,6 @@ impl NativeStallDiagnostics {
             }
         }
         if let Some(run) = self.run() {
-            #[cfg(debug_assertions)]
-            if let Ok(mut marker) = run.debug_sampler_denied_marker.lock() {
-                *marker = None;
-            }
             if let Ok(mut state) = run.state.lock() {
                 state.clear_capture(session_id, generation);
             }
@@ -530,10 +444,6 @@ impl NativeStallDiagnostics {
             return None;
         }
         let selected = run.state.lock().ok()?.begin(event, Instant::now());
-        #[cfg(debug_assertions)]
-        if selected {
-            self.select_debug_marker(&run, event);
-        }
         selected.then(|| run.id.clone())
     }
 
@@ -586,147 +496,6 @@ impl NativeStallDiagnostics {
             }
             _ => false,
         }
-    }
-
-    #[cfg(debug_assertions)]
-    fn cancel_debug_fault(&self) {
-        if let Ok(mut guard) = self.debug_fault.lock() {
-            if let Some(fault) = guard.take() {
-                fault.cancelled.store(true, Ordering::Release);
-                if let Ok(mut marker) = fault.run.debug_sampler_denied_marker.lock() {
-                    *marker = None;
-                }
-            }
-        }
-    }
-
-    #[cfg(debug_assertions)]
-    fn arm_debug_fault(&self, run_id: &str, stage: &str) -> Result<(), String> {
-        if stage != "emit-pending" && stage != "ack-delayed" && stage != "sampler-denied" {
-            return Err("Unsupported native stall test stage".into());
-        }
-        let run = self.run().ok_or("Native diagnostics are not armed")?;
-        if run.id != run_id || !run.active.load(Ordering::Acquire) {
-            return Err("Diagnostic session has changed".into());
-        }
-        let capture = run
-            .state
-            .lock()
-            .map_err(|_| "Diagnostics lock failed")?
-            .capture
-            .clone()
-            .ok_or("Meeting capture is not active")?;
-        let fault = Arc::new(DebugFault {
-            run,
-            capture,
-            stage: stage.to_owned(),
-            armed_at: Instant::now(),
-            marker: Mutex::new(None),
-            emit_held: AtomicBool::new(false),
-            ack_held: AtomicBool::new(false),
-            cancelled: AtomicBool::new(false),
-        });
-        let mut guard = self
-            .debug_fault
-            .lock()
-            .map_err(|_| "Test fault lock failed")?;
-        if let Ok(mut marker) = fault.run.debug_sampler_denied_marker.lock() {
-            *marker = None;
-        }
-        if let Some(old) = guard.replace(fault) {
-            old.cancelled.store(true, Ordering::Release);
-        }
-        Ok(())
-    }
-
-    #[cfg(debug_assertions)]
-    fn select_debug_marker(&self, run: &Run, event: &NativeAudioLivenessEvent) {
-        let Some(fault) = self.debug_fault.lock().ok().and_then(|guard| guard.clone()) else {
-            return;
-        };
-        if fault.run.id != run.id
-            || fault.cancelled.load(Ordering::Acquire)
-            || fault.armed_at.elapsed() >= DEBUG_FAULT_MAX_AGE
-        {
-            return;
-        }
-        if fault.capture.0 == event.capture_session_id
-            && fault.capture.1 == event.capture_generation
-        {
-            if let Ok(mut marker) = fault.marker.lock() {
-                if marker.is_some() {
-                    return;
-                }
-                let selected = Marker {
-                    capture_session_id: event.capture_session_id.clone(),
-                    capture_generation: event.capture_generation,
-                    snapshot_sequence: event.snapshot_sequence,
-                };
-                if fault.stage == "sampler-denied" {
-                    if let Ok(mut denied_marker) = run.debug_sampler_denied_marker.lock() {
-                        *denied_marker = Some((selected.clone(), fault.armed_at));
-                    }
-                }
-                *marker = Some(selected);
-            }
-        }
-    }
-
-    #[cfg(debug_assertions)]
-    pub fn hold_emit_for_debug(&self, payload: &str) {
-        let Ok(event) = serde_json::from_str::<serde_json::Value>(payload) else {
-            return;
-        };
-        let (Some(run_id), Some(capture_id), Some(generation), Some(sequence)) = (
-            event.get("diagnosticRunId").and_then(|v| v.as_str()),
-            event.get("captureSessionId").and_then(|v| v.as_str()),
-            event.get("captureGeneration").and_then(|v| v.as_u64()),
-            event.get("snapshotSequence").and_then(|v| v.as_u64()),
-        ) else {
-            return;
-        };
-        let marker = Marker {
-            capture_session_id: capture_id.to_owned(),
-            capture_generation: generation,
-            snapshot_sequence: sequence,
-        };
-        let Some(fault) = self.debug_fault.lock().ok().and_then(|guard| guard.clone()) else {
-            return;
-        };
-        if fault.stage != "emit-pending"
-            || !fault.matches(run_id, &marker)
-            || fault.emit_held.swap(true, Ordering::AcqRel)
-        {
-            return;
-        }
-        fault.receipt("emit-entered", &marker);
-        while fault.armed_at.elapsed() < DEBUG_FAULT_MAX_AGE
-            && !fault.cancelled.load(Ordering::Acquire)
-            && fault.run.active.load(Ordering::Acquire)
-        {
-            thread::sleep(Duration::from_millis(50));
-        }
-        fault.receipt("emit-released", &marker);
-    }
-
-    #[cfg(debug_assertions)]
-    async fn delay_ack_for_debug(&self, run_id: &str, marker: &Marker) {
-        let Some(fault) = self.debug_fault.lock().ok().and_then(|guard| guard.clone()) else {
-            return;
-        };
-        if !fault.matches(run_id, marker) || fault.ack_held.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        fault.receipt("ack-requested", marker);
-        let started = Instant::now();
-        while started.elapsed() < Duration::from_secs(9)
-            && fault.armed_at.elapsed() < DEBUG_FAULT_MAX_AGE
-            && !fault.cancelled.load(Ordering::Acquire)
-            && fault.run.active.load(Ordering::Acquire)
-        {
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-        fault.receipt("ack-released", marker);
     }
 }
 
@@ -800,39 +569,9 @@ fn sample_incident(run: &Run, epoch: u64, incident: DiagnosticIncident) {
     {
         #[cfg(target_os = "macos")]
         {
-            #[cfg(debug_assertions)]
-            let injected_permission_denial = run.take_sampler_denial(&incident.marker);
-            #[cfg(debug_assertions)]
-            if injected_permission_denial {
-                let _ = fs::write(
-                    run.folder
-                        .join(format!("debug-sampler-denied-{}.json", incident.attempt)),
-                    serde_json::json!({
-                        "runId": run.id,
-                        "attempt": incident.attempt,
-                        "marker": incident.marker,
-                        "atMs": wall_ms(),
-                        "injected": true,
-                    })
-                    .to_string(),
-                );
-            }
             let stderr = fs::File::create(&stderr_path);
             let child = stderr.and_then(|stderr| {
                 let mut command = Command::new("/usr/bin/sample");
-                #[cfg(debug_assertions)]
-                if injected_permission_denial {
-                    command = Command::new("/bin/sh");
-                    command.args(["-c", "printf 'Operation not permitted\\n' >&2; exit 1"]);
-                } else {
-                    command
-                        .arg(std::process::id().to_string())
-                        .arg("1")
-                        .arg("10")
-                        .arg("-file")
-                        .arg(&stack_path);
-                }
-                #[cfg(not(debug_assertions))]
                 command
                     .arg(std::process::id().to_string())
                     .arg("1")
@@ -883,12 +622,7 @@ fn sample_incident(run: &Run, epoch: u64, incident: DiagnosticIncident) {
             }
             if status == "failed" {
                 if let Ok(stderr) = fs::read(&stderr_path) {
-                    let message = String::from_utf8_lossy(&stderr[..stderr.len().min(4_096)]);
-                    if message.contains("Operation not permitted")
-                        || message.contains("Permission denied")
-                    {
-                        status = "permission-denied";
-                    }
+                    status = failed_sample_status(&stderr);
                 }
             }
             let _ = fs::remove_file(&stderr_path);
@@ -930,6 +664,15 @@ fn sample_incident(run: &Run, epoch: u64, incident: DiagnosticIncident) {
         Err(error) => {
             eprintln!("Native stall sample report encoding failed: {error}");
         }
+    }
+}
+
+fn failed_sample_status(stderr: &[u8]) -> &'static str {
+    let message = String::from_utf8_lossy(&stderr[..stderr.len().min(4_096)]);
+    if message.contains("Operation not permitted") || message.contains("Permission denied") {
+        "permission-denied"
+    } else {
+        "failed"
     }
 }
 
@@ -1040,92 +783,28 @@ pub async fn acknowledge_native_stall_marker(
         snapshot_sequence,
     };
     let diagnostics = app.state::<NativeStallDiagnostics>();
-    #[cfg(debug_assertions)]
-    diagnostics
-        .delay_ack_for_debug(&diagnostic_run_id, &marker)
-        .await;
     diagnostics.acknowledge(&diagnostic_run_id, marker)
-}
-
-#[cfg(debug_assertions)]
-#[tauri::command]
-pub fn debug_arm_native_stall_stage(
-    app: AppHandle,
-    diagnostic_run_id: String,
-    stage: String,
-) -> Result<(), String> {
-    app.state::<NativeStallDiagnostics>()
-        .arm_debug_fault(&diagnostic_run_id, &stage)
-}
-
-#[cfg(debug_assertions)]
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DebugBlockTiming {
-    block_started_at_ms: u64,
-    block_finished_at_ms: u64,
-}
-
-#[cfg(debug_assertions)]
-#[tauri::command]
-pub async fn debug_block_main_thread_for_stall_test(
-    app: AppHandle,
-    diagnostic_run_id: Option<String>,
-) -> Result<DebugBlockTiming, String> {
-    let diagnostics = app.state::<NativeStallDiagnostics>();
-    if let Some(run_id) = diagnostic_run_id {
-        let run = diagnostics
-            .run()
-            .ok_or("Native diagnostics are not armed")?;
-        if run.id != run_id || !run.active.load(Ordering::Acquire) {
-            return Err("Diagnostic session has changed".into());
-        }
-        if run
-            .state
-            .lock()
-            .map_err(|_| "Diagnostics lock failed")?
-            .capture
-            .is_none()
-        {
-            return Err("Meeting capture is not active".into());
-        }
-    } else {
-        if diagnostics
-            .run()
-            .is_some_and(|run| run.active.load(Ordering::Acquire))
-        {
-            return Err("Unarmed comparison requires diagnostics to be disabled".into());
-        }
-        if diagnostics
-            .capture
-            .lock()
-            .map_err(|_| "Capture diagnostics lock failed")?
-            .is_none()
-        {
-            return Err("Meeting capture is not active".into());
-        }
-    }
-    if app.get_webview_window("main").is_none() {
-        return Err("Main WebView is unavailable".into());
-    }
-    let (sender, receiver) = tokio::sync::oneshot::channel();
-    app.run_on_main_thread(move || {
-        let block_started_at_ms = wall_ms();
-        thread::sleep(Duration::from_secs(12));
-        let _ = sender.send(DebugBlockTiming {
-            block_started_at_ms,
-            block_finished_at_ms: wall_ms(),
-        });
-    })
-    .map_err(|error| format!("Cannot schedule bounded main-thread test: {error}"))?;
-    receiver
-        .await
-        .map_err(|_| "Main-thread test ended without a timing receipt".into())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sampler_error_classification_keeps_existing_bounded_stderr_contract() {
+        assert_eq!(
+            failed_sample_status(b"Operation not permitted"),
+            "permission-denied"
+        );
+        assert_eq!(
+            failed_sample_status(b"Permission denied"),
+            "permission-denied"
+        );
+        assert_eq!(failed_sample_status(b"unknown failure"), "failed");
+        let mut long = vec![b'x'; 4_096];
+        long.extend_from_slice(b"Permission denied");
+        assert_eq!(failed_sample_status(&long), "failed");
+    }
 
     #[test]
     #[ignore = "run in fresh processes under /usr/bin/time -l for paired memory attribution"]
@@ -1177,39 +856,6 @@ mod tests {
         );
         diagnostics.disarm();
         fs::remove_dir_all(root).unwrap();
-    }
-
-    #[cfg(debug_assertions)]
-    #[test]
-    fn debug_fault_is_one_run_one_capture_and_clears_on_disarm() {
-        let diagnostics = NativeStallDiagnostics::default();
-        let mut state = RunState::new(Instant::now());
-        state.capture = Some(("capture".into(), 1));
-        *diagnostics.current.lock().unwrap() = Some(Arc::new(Run {
-            id: "run-a".into(),
-            folder: std::env::temp_dir(),
-            active: AtomicBool::new(true),
-            observer_epoch: AtomicU64::new(1),
-            state: Mutex::new(state),
-            #[cfg(debug_assertions)]
-            debug_sampler_denied_marker: Mutex::new(None),
-        }));
-        assert!(diagnostics
-            .arm_debug_fault("run-b", "emit-pending")
-            .is_err());
-        assert!(diagnostics
-            .arm_debug_fault("run-a", "unrecognized")
-            .is_err());
-        diagnostics
-            .arm_debug_fault("run-a", "emit-pending")
-            .unwrap();
-        let fault = diagnostics.debug_fault.lock().unwrap().clone().unwrap();
-        *fault.marker.lock().unwrap() = Some(marker(1));
-        assert!(fault.matches("run-a", &marker(1)));
-        assert!(!fault.matches("run-b", &marker(1)));
-        assert!(!fault.matches("run-a", &marker(2)));
-        diagnostics.disarm();
-        assert!(!fault.matches("run-a", &marker(1)));
     }
 
     fn marker(sequence: u64) -> Marker {
@@ -1286,8 +932,6 @@ mod tests {
             active: AtomicBool::new(true),
             observer_epoch: AtomicU64::new(1),
             state: Mutex::new(state),
-            #[cfg(debug_assertions)]
-            debug_sampler_denied_marker: Mutex::new(None),
         }));
         assert!(!diagnostics.acknowledge("run-b", marker(1)));
         assert!(diagnostics.acknowledge("run-a", marker(1)));
@@ -1390,8 +1034,6 @@ mod tests {
             active: AtomicBool::new(true),
             observer_epoch: AtomicU64::new(1),
             state: Mutex::new(RunState::new(Instant::now())),
-            #[cfg(debug_assertions)]
-            debug_sampler_denied_marker: Mutex::new(None),
         };
         let incident = DiagnosticIncident {
             attempt: 1,
@@ -1442,8 +1084,6 @@ mod tests {
             active: AtomicBool::new(true),
             observer_epoch: AtomicU64::new(1),
             state: Mutex::new(RunState::new(Instant::now())),
-            #[cfg(debug_assertions)]
-            debug_sampler_denied_marker: Mutex::new(None),
         };
         let incident = DiagnosticIncident {
             attempt: 1,
@@ -1473,61 +1113,5 @@ mod tests {
 
         fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
         fs::remove_file(file).unwrap();
-    }
-
-    #[cfg(all(debug_assertions, target_os = "macos"))]
-    #[test]
-    fn injected_sampler_denial_uses_the_existing_child_outcome_parser() {
-        let folder = std::env::temp_dir().join(format!("jarvis-stall-denied-{}", Uuid::new_v4()));
-        fs::create_dir(&folder).unwrap();
-        let run = Run {
-            id: "run-denied".into(),
-            folder: folder.clone(),
-            active: AtomicBool::new(true),
-            observer_epoch: AtomicU64::new(1),
-            state: Mutex::new(RunState::new(Instant::now())),
-            debug_sampler_denied_marker: Mutex::new(Some((marker(1), Instant::now()))),
-        };
-        sample_incident(
-            &run,
-            1,
-            DiagnosticIncident {
-                attempt: 1,
-                marker: marker(1),
-                send_started_at_ms: 1,
-                emit_finished_at_ms: Some(2),
-                emit_succeeded: Some(true),
-                triggered_at_ms: 3,
-                callbacks_at_trigger: None,
-                progress: Vec::new(),
-            },
-        );
-        let report: serde_json::Value =
-            serde_json::from_slice(&fs::read(folder.join("sample-1.json")).unwrap()).unwrap();
-        assert_eq!(report["sampleStatus"], "permission-denied");
-        assert_eq!(report["exitCode"], 1);
-        assert!(report["stackFile"].is_null());
-        assert!(!folder.join("attempt-1.json.partial").exists());
-        assert!(run.debug_sampler_denied_marker.lock().unwrap().is_none());
-        fs::remove_dir_all(folder).unwrap();
-    }
-
-    #[cfg(debug_assertions)]
-    #[test]
-    fn sampler_denial_requires_exact_unexpired_marker_once() {
-        let run = Run {
-            id: "run-denied".into(),
-            folder: std::env::temp_dir(),
-            active: AtomicBool::new(true),
-            observer_epoch: AtomicU64::new(1),
-            state: Mutex::new(RunState::new(Instant::now())),
-            debug_sampler_denied_marker: Mutex::new(Some((marker(1), Instant::now()))),
-        };
-        assert!(!run.take_sampler_denial(&marker(2)));
-        assert!(run.take_sampler_denial(&marker(1)));
-        assert!(!run.take_sampler_denial(&marker(1)));
-        *run.debug_sampler_denied_marker.lock().unwrap() =
-            Some((marker(3), Instant::now() - Duration::from_secs(13)));
-        assert!(!run.take_sampler_denial(&marker(3)));
     }
 }

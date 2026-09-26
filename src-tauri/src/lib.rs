@@ -16,8 +16,6 @@ use std::io::Write;
 use std::path::{Component, Path};
 use std::sync::{Arc, Mutex};
 use std::{fs, path::PathBuf};
-#[cfg(debug_assertions)]
-use tauri::Listener;
 use tauri::{AppHandle, Manager, WebviewWindow};
 mod speaker;
 use capture::CaptureState;
@@ -505,10 +503,6 @@ pub fn run() {
             speaker::get_output_devices,
             native_stall_diagnostics::set_native_stall_diagnostics,
             native_stall_diagnostics::acknowledge_native_stall_marker,
-            #[cfg(debug_assertions)]
-            native_stall_diagnostics::debug_block_main_thread_for_stall_test,
-            #[cfg(debug_assertions)]
-            native_stall_diagnostics::debug_arm_native_stall_stage,
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]
@@ -530,15 +524,6 @@ pub fn run() {
 
             // Setup main window positioning
             window::setup_main_window(app).expect("Failed to setup main window");
-            #[cfg(debug_assertions)]
-            {
-                let event_app = app.handle().clone();
-                app.listen("native-audio-liveness", move |event| {
-                    event_app
-                        .state::<native_stall_diagnostics::NativeStallDiagnostics>()
-                        .hold_emit_for_debug(event.payload());
-                });
-            }
             #[cfg(target_os = "macos")]
             init(app.app_handle());
             let app_handle = app.handle();
