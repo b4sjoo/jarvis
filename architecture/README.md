@@ -123,7 +123,7 @@ local absolute paths, provider secrets, or session-recording payloads.
 - `architecture-contract.json` records current authority locations, known
   dependency cycles, broad-barrel consumers, Tauri IPC/events, and explained
   cross-side exceptions.
-- `orchestration-replay-baseline.json` pins the canonical digest for a real
+- `orchestration-replay-baseline.json` pins the full canonical state and ordered journal for a real
   generation-lease replay where a newer result commits before a stale result.
 - `verification-budget.json` records measured gate durations and the 20 percent
   investigation thresholds used by the full verifier.

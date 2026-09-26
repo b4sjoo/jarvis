@@ -1,7 +1,6 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "scenario": "out-of-order-answer-generation",
-  "expectedDigest": "629f2c72eb9f22c74b2da4dd1eaae438df0bd4a5014a1d5d55adf041cf10551a",
   "expectedFinalAnswer": "newer answer",
   "expectedOutcomes": {
     "generation-new": {
@@ -11,6 +10,207 @@
     "generation-old": {
       "outcome": "rejected",
       "reason": "visible-answer-revision-mismatch"
+    }
+  },
+  "expectedPayload": {
+    "journal": [
+      {
+        "event": "started",
+        "kind": "advisor",
+        "occurredAt": 0,
+        "operationId": "generation-old",
+        "order": 1,
+        "state": {
+          "activeOperationIds": {},
+          "generationOwnerId": "generation-new",
+          "generationRevision": 0,
+          "parentId": "parent-1",
+          "parentQuestionType": "general-system-design",
+          "parentRevision": 1,
+          "playbookPhase": "requirement_clarification",
+          "runtimeEpoch": 1,
+          "sessionId": "session-1"
+        }
+      },
+      {
+        "event": "started",
+        "kind": "advisor",
+        "occurredAt": 0,
+        "operationId": "generation-new",
+        "order": 2,
+        "state": {
+          "activeOperationIds": {},
+          "generationOwnerId": "generation-new",
+          "generationRevision": 0,
+          "parentId": "parent-1",
+          "parentQuestionType": "general-system-design",
+          "parentRevision": 1,
+          "playbookPhase": "requirement_clarification",
+          "runtimeEpoch": 1,
+          "sessionId": "session-1"
+        }
+      },
+      {
+        "event": "checkpoint",
+        "kind": "runtime",
+        "occurredAt": 10,
+        "operationId": "resolve-newer-generation",
+        "order": 3,
+        "reason": "before",
+        "state": {
+          "activeOperationIds": {},
+          "generationOwnerId": "generation-new",
+          "generationRevision": 0,
+          "parentId": "parent-1",
+          "parentQuestionType": "general-system-design",
+          "parentRevision": 1,
+          "playbookPhase": "requirement_clarification",
+          "runtimeEpoch": 1,
+          "sessionId": "session-1"
+        }
+      },
+      {
+        "event": "resolved",
+        "kind": "advisor",
+        "occurredAt": 10,
+        "operationId": "generation-new",
+        "order": 4,
+        "state": {
+          "activeOperationIds": {},
+          "generationOwnerId": "generation-new",
+          "generationRevision": 0,
+          "parentId": "parent-1",
+          "parentQuestionType": "general-system-design",
+          "parentRevision": 1,
+          "playbookPhase": "requirement_clarification",
+          "runtimeEpoch": 1,
+          "sessionId": "session-1"
+        }
+      },
+      {
+        "event": "committed",
+        "kind": "advisor",
+        "occurredAt": 10,
+        "operationId": "generation-new",
+        "order": 5,
+        "reason": "authorized",
+        "state": {
+          "activeOperationIds": {},
+          "generationOwnerId": "generation-new",
+          "generationRevision": 1,
+          "parentId": "parent-1",
+          "parentQuestionType": "general-system-design",
+          "parentRevision": 1,
+          "playbookPhase": "requirement_clarification",
+          "runtimeEpoch": 1,
+          "sessionId": "session-1"
+        }
+      },
+      {
+        "event": "checkpoint",
+        "kind": "runtime",
+        "occurredAt": 10,
+        "operationId": "resolve-newer-generation",
+        "order": 6,
+        "reason": "after",
+        "state": {
+          "activeOperationIds": {},
+          "generationOwnerId": "generation-new",
+          "generationRevision": 1,
+          "parentId": "parent-1",
+          "parentQuestionType": "general-system-design",
+          "parentRevision": 1,
+          "playbookPhase": "requirement_clarification",
+          "runtimeEpoch": 1,
+          "sessionId": "session-1"
+        }
+      },
+      {
+        "event": "checkpoint",
+        "kind": "runtime",
+        "occurredAt": 20,
+        "operationId": "resolve-stale-generation",
+        "order": 7,
+        "reason": "before",
+        "state": {
+          "activeOperationIds": {},
+          "generationOwnerId": "generation-new",
+          "generationRevision": 1,
+          "parentId": "parent-1",
+          "parentQuestionType": "general-system-design",
+          "parentRevision": 1,
+          "playbookPhase": "requirement_clarification",
+          "runtimeEpoch": 1,
+          "sessionId": "session-1"
+        }
+      },
+      {
+        "event": "resolved",
+        "kind": "advisor",
+        "occurredAt": 20,
+        "operationId": "generation-old",
+        "order": 8,
+        "state": {
+          "activeOperationIds": {},
+          "generationOwnerId": "generation-new",
+          "generationRevision": 1,
+          "parentId": "parent-1",
+          "parentQuestionType": "general-system-design",
+          "parentRevision": 1,
+          "playbookPhase": "requirement_clarification",
+          "runtimeEpoch": 1,
+          "sessionId": "session-1"
+        }
+      },
+      {
+        "event": "rejected",
+        "kind": "advisor",
+        "occurredAt": 20,
+        "operationId": "generation-old",
+        "order": 9,
+        "reason": "visible-answer-revision-mismatch",
+        "state": {
+          "activeOperationIds": {},
+          "generationOwnerId": "generation-new",
+          "generationRevision": 1,
+          "parentId": "parent-1",
+          "parentQuestionType": "general-system-design",
+          "parentRevision": 1,
+          "playbookPhase": "requirement_clarification",
+          "runtimeEpoch": 1,
+          "sessionId": "session-1"
+        }
+      },
+      {
+        "event": "checkpoint",
+        "kind": "runtime",
+        "occurredAt": 20,
+        "operationId": "resolve-stale-generation",
+        "order": 10,
+        "reason": "after",
+        "state": {
+          "activeOperationIds": {},
+          "generationOwnerId": "generation-new",
+          "generationRevision": 1,
+          "parentId": "parent-1",
+          "parentQuestionType": "general-system-design",
+          "parentRevision": 1,
+          "playbookPhase": "requirement_clarification",
+          "runtimeEpoch": 1,
+          "sessionId": "session-1"
+        }
+      }
+    ],
+    "state": {
+      "activeOperationIds": {},
+      "generationOwnerId": "generation-new",
+      "generationRevision": 1,
+      "parentId": "parent-1",
+      "parentQuestionType": "general-system-design",
+      "parentRevision": 1,
+      "playbookPhase": "requirement_clarification",
+      "runtimeEpoch": 1,
+      "sessionId": "session-1"
     }
   }
 }

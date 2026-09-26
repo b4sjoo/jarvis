@@ -17,23 +17,48 @@ import {
 import { setTestActiveParent } from "./helpers/meeting-task-runtime.js";
 
 interface ReplayBaseline {
-  schemaVersion: 1;
+  schemaVersion: 2;
   scenario: string;
-  expectedDigest: string;
+  expectedPayload: unknown;
   expectedFinalAnswer: string;
   expectedOutcomes: Record<string, OrchestrationCommitResult>;
 }
 
-test("replays out-of-order answer completion against the canonical digest", async () => {
+test("replays out-of-order answer completion against fixed canonical state and journal", async () => {
   const baseline = loadBaseline();
   const first = await runOutOfOrderAnswerReplay();
   const second = await runOutOfOrderAnswerReplay();
 
-  assert.equal(first.digest.hash, second.digest.hash);
-  assert.equal(first.digest.canonicalPayload, second.digest.canonicalPayload);
-  assert.equal(first.digest.hash, baseline.expectedDigest);
+  assert.equal(first.replay.canonicalPayload, second.replay.canonicalPayload);
+  assert.deepEqual(JSON.parse(first.replay.canonicalPayload), baseline.expectedPayload);
   assert.equal(first.finalAnswer, baseline.expectedFinalAnswer);
   assert.deepEqual(first.outcomes, baseline.expectedOutcomes);
+});
+
+test("D196: equal final Answers cannot hide changed intermediate state or event order", async () => {
+  const actual = await runOutOfOrderAnswerReplay();
+  const baseline = loadBaseline();
+  assert.equal(actual.finalAnswer, baseline.expectedFinalAnswer);
+  for (const change of [
+    (payload: any) => payload.journal.reverse(),
+    (payload: any) => { payload.journal[0].state.parentRevision += 1; },
+    (payload: any) => { payload.journal[0].state.generationOwnerId = "other-owner"; },
+    (payload: any) => { payload.journal[4].event = "rejected"; },
+    (payload: any) => { payload.journal[4].operationId = "other-operation"; },
+  ]) {
+    const payload = JSON.parse(actual.replay.canonicalPayload);
+    change(payload);
+    assert.throws(() => assert.deepEqual(payload, baseline.expectedPayload));
+  }
+});
+
+test("D196: canonical replay retains session alias and object-key normalization", () => {
+  const first = new MeetingOrchestrationHarness();
+  const second = new MeetingOrchestrationHarness();
+  const original = second.getStateDigest.bind(second);
+  second.getStateDigest = () => Object.fromEntries(Object.entries({ ...original(), sessionId: "another-session" }).reverse()) as unknown as ReturnType<typeof original>;
+  first.recordCheckpoint("same"); second.recordCheckpoint("same");
+  assert.equal(first.getCanonicalReplay().canonicalPayload, second.getCanonicalReplay().canonicalPayload);
 });
 
 test("rejects replay steps that move the manual clock backward", async () => {
@@ -110,7 +135,7 @@ async function runOutOfOrderAnswerReplay() {
     };
   }
 
-  const digest = await replayOrchestrationSteps(harness, [
+  const replay = await replayOrchestrationSteps(harness, [
     {
       id: "resolve-newer-generation",
       atMs: 10,
@@ -133,7 +158,7 @@ async function runOutOfOrderAnswerReplay() {
   assert.equal("latestUsefulAnswer" in manager.getTaskRuntimeState().parent!, false);
 
   return {
-    digest,
+    replay,
     outcomes,
     finalAnswer: visibleAnswer,
   };
@@ -181,7 +206,7 @@ function makeParent(): ActiveInterviewParent {
 }
 
 function loadBaseline(): ReplayBaseline {
-  return JSON.parse(
+  const baseline = JSON.parse(
     fs.readFileSync(
       path.resolve(
         process.cwd(),
@@ -191,4 +216,6 @@ function loadBaseline(): ReplayBaseline {
       "utf8"
     )
   ) as ReplayBaseline;
+  assert.equal(baseline.schemaVersion, 2);
+  return baseline;
 }

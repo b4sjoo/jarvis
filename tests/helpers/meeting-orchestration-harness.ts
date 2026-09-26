@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { MeetingContextManager } from "../../src/lib/meeting/context-manager.js";
 import {
   normalizeCanonicalQuestionType,
@@ -90,10 +89,8 @@ export interface OrchestrationReplayStep {
   run(harness: MeetingOrchestrationHarness): void | Promise<void>;
 }
 
-export interface CanonicalOrchestrationDigest {
+export interface CanonicalOrchestrationReplay {
   schemaVersion: 1;
-  algorithm: "sha256";
-  hash: string;
   canonicalPayload: string;
 }
 
@@ -270,7 +267,7 @@ export class MeetingOrchestrationHarness {
     };
   }
 
-  getCanonicalDigest(): CanonicalOrchestrationDigest {
+  getCanonicalReplay(): CanonicalOrchestrationReplay {
     const aliases = new Map<string, string>();
     const aliasSession = (sessionId: string) => {
       let alias = aliases.get(sessionId);
@@ -295,8 +292,6 @@ export class MeetingOrchestrationHarness {
     const canonicalPayload = canonicalJson(payload);
     return {
       schemaVersion: 1,
-      algorithm: "sha256",
-      hash: createHash("sha256").update(canonicalPayload).digest("hex"),
       canonicalPayload,
     };
   }
@@ -354,7 +349,7 @@ export async function replayOrchestrationSteps(
     harness.recordCheckpoint(step.id, "after");
     previousAt = step.atMs;
   }
-  return harness.getCanonicalDigest();
+  return harness.getCanonicalReplay();
 }
 
 function canonicalJson(value: unknown): string {
