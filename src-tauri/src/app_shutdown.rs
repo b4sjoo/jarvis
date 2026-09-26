@@ -5,9 +5,9 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::sync::Mutex;
 use std::time::Instant;
-use tauri::{AppHandle, Emitter, Manager, RunEvent, WebviewWindow};
 #[cfg(target_os = "macos")]
 use tauri::menu::{Menu, MenuEvent, MenuItem, MenuItemKind};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, WebviewWindow};
 
 const GENERATION: u64 = 1; // An application lifetime has one irrevocable Quit operation.
 const REQUEST_EVENT: &str = "jarvis-shutdown-requested";

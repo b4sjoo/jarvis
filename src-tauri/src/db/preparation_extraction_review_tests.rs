@@ -518,7 +518,10 @@ async fn task164_native_repository_readers_follow_failure_and_publication() {
             .args(["--test", "tests/helpers/native-repository-readers.mjs"])
             .current_dir(repo)
             .env("JARVIS_NATIVE_REPOSITORY_DB", &path)
-            .env("JARVIS_NATIVE_TEST_BINARY", std::env::current_exe().unwrap())
+            .env(
+                "JARVIS_NATIVE_TEST_BINARY",
+                std::env::current_exe().unwrap(),
+            )
             .env("JARVIS_NATIVE_REPOSITORY_EXPECTED", expected.to_string())
             .output()
             .expect("Node must be available for native-to-repository acceptance");
@@ -529,7 +532,10 @@ async fn task164_native_repository_readers_follow_failure_and_publication() {
             String::from_utf8_lossy(&result.stderr)
         );
         pool = SqlitePool::connect_with(options.clone()).await.unwrap();
-        assert_eq!(std::fs::read(&original).unwrap(), b"unchanged original fixture bytes");
+        assert_eq!(
+            std::fs::read(&original).unwrap(),
+            b"unchanged original fixture bytes"
+        );
         assert_eq!(
             sqlx::query_scalar::<_, String>(
                 "SELECT storage_relative_path FROM preparation_materials WHERE id='m'"

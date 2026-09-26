@@ -1361,9 +1361,21 @@ mod tests {
         let relative = Path::new("interview-preparation/test");
         write_extracted_text(&root, relative, "material-1", 1, "request-a", "A").unwrap();
         assert!(write_extracted_text(&root, relative, "material-1", 1, "request-a", "B").is_err());
-        assert_eq!(fs::read_to_string(root.join("materials/material-1/extraction/1/extracted-request-a.txt")).unwrap(), "A");
+        assert_eq!(
+            fs::read_to_string(
+                root.join("materials/material-1/extraction/1/extracted-request-a.txt")
+            )
+            .unwrap(),
+            "A"
+        );
         write_extracted_text(&root, relative, "material-1", 2, "request-b", "B").unwrap();
-        assert_eq!(fs::read_to_string(root.join("materials/material-1/extraction/2/extracted-request-b.txt")).unwrap(), "B");
+        assert_eq!(
+            fs::read_to_string(
+                root.join("materials/material-1/extraction/2/extracted-request-b.txt")
+            )
+            .unwrap(),
+            "B"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
