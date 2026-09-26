@@ -1059,11 +1059,19 @@ pub fn debug_arm_native_stall_stage(
 }
 
 #[cfg(debug_assertions)]
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DebugBlockTiming {
+    block_started_at_ms: u64,
+    block_finished_at_ms: u64,
+}
+
+#[cfg(debug_assertions)]
 #[tauri::command]
-pub fn debug_block_main_thread_for_stall_test(
+pub async fn debug_block_main_thread_for_stall_test(
     app: AppHandle,
     diagnostic_run_id: Option<String>,
-) -> Result<(), String> {
+) -> Result<DebugBlockTiming, String> {
     let diagnostics = app.state::<NativeStallDiagnostics>();
     if let Some(run_id) = diagnostic_run_id {
         let run = diagnostics
@@ -1100,8 +1108,19 @@ pub fn debug_block_main_thread_for_stall_test(
     if app.get_webview_window("main").is_none() {
         return Err("Main WebView is unavailable".into());
     }
-    app.run_on_main_thread(|| thread::sleep(Duration::from_secs(12)))
-        .map_err(|error| format!("Cannot schedule bounded main-thread test: {error}"))
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    app.run_on_main_thread(move || {
+        let block_started_at_ms = wall_ms();
+        thread::sleep(Duration::from_secs(12));
+        let _ = sender.send(DebugBlockTiming {
+            block_started_at_ms,
+            block_finished_at_ms: wall_ms(),
+        });
+    })
+    .map_err(|error| format!("Cannot schedule bounded main-thread test: {error}"))?;
+    receiver
+        .await
+        .map_err(|_| "Main-thread test ended without a timing receipt".into())
 }
 
 #[cfg(test)]
