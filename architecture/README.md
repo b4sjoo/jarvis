@@ -158,6 +158,16 @@ have explicit allowed data/foundation dependencies; the ID leaf has none. These
 guards prevent moving a dependency behind a barrel or type query to hide it.
 The existing task-writer and unrelated IPC/barrel boundaries are unchanged.
 
+At the `c85732c` checkpoint, the analyzer reported 5 components with 39 internal
+edges, 6 broad-barrel consumers and 27 deleted ledger entries. The September 24
+cleanup reduced this to 1 component with 17 edges and 31 deleted ledger entries;
+the 6 broad-barrel consumers remain. The scanner now includes prepared transition
+and deadline installation/rollback APIs, recognizing 11 task-writer callsites in
+2 modules. That count increase reflects broader discovery of existing callers,
+not new runtime writers. The older counts are checkpoints under their stated
+analyzer and commit. The named-API scanner does not prove discovery of arbitrary
+aliases, reflection or future mutation methods.
+
 ## Verification
 
 ```bash
@@ -167,9 +177,17 @@ npm run verify:next-major
 ```
 
 `verify:architecture` is the fast local gate. `verify:next-major` runs every
-gate in order and writes `.tmp-architecture/next-major-verification-report.json`.
+configured gate in order: architecture (including deletion-ledger validation),
+JS/TS tests, frontend build and `cargo check`. It writes
+`.tmp-architecture/next-major-verification-report.json`.
 The report records the current commit, dirty-file count, command, duration, gate
 status, and budget comparison without recording file contents.
+
+`cargo test`, native/UI smoke and recorded product validation are separate evidence.
+The standalone ledger command is a focused convenience, not an additional required
+step before architecture. Duration-budget overruns warn; malformed present budget
+configuration fails. These are locally invoked gates; this repository does not
+currently contain a CI workflow that proves remote push enforcement.
 
 Private working documents under `docs/` are not part of the clean-checkout
 contract. They remain gitignored by design.
@@ -181,8 +199,12 @@ Do not regenerate a contract merely to make a failure disappear.
 1. Confirm the code change is intentional and covered by its task brief.
 2. Prefer reducing writers, cycles, barrel consumers, and IPC exceptions.
 3. Run the focused tests that prove the replacement boundary.
-4. For an intentional architecture-contract change, run
-   `node scripts/verify-architecture.mjs --write-baseline --force-baseline`.
+4. Review the observed inventory against the existing policy. The
+   `--write-baseline --force-baseline` path preserves that policy, including
+   `imports.acyclicModules`, `imports.contractDependencies` and exception reasons;
+   missing or malformed policy fails explicitly. It does not automatically grant
+   permission to observed callers or edges. Intentional permission changes require
+   an explicitly reviewed contract diff; inspect the complete generated diff.
 5. Review every generated IPC exception reason; replace generic text with a
    concrete owner and rationale before commit.
 6. Run `npm run verify:next-major` and inspect the generated report.
