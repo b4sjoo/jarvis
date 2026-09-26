@@ -632,6 +632,17 @@ function validateContract(contract, errors) {
     }
   }
   if (!contract.imports || typeof contract.imports !== "object" || Array.isArray(contract.imports)) return;
+  for (const key of ["allowedCycleEdges", "broadMeetingBarrelAllowedConsumers"]) {
+    const values = contract.imports[key];
+    if (!Array.isArray(values) || values.some((value) => typeof value !== "string" || !value.trim())) {
+      errors.push(`architecture contract imports.${key} must be a string array`);
+    }
+  }
+  if (!Array.isArray(contract.imports.allowedCycles) || contract.imports.allowedCycles.some(
+    (group) => !Array.isArray(group) || group.length === 0 || group.some((file) => typeof file !== "string" || !file.trim())
+  )) {
+    errors.push("architecture contract imports.allowedCycles must contain nonempty module arrays");
+  }
   if (
     !Array.isArray(contract.imports.acyclicModules) ||
     contract.imports.acyclicModules.some((module) => typeof module !== "string" || !module.trim())
@@ -690,11 +701,9 @@ function validateLegacyReaderImports(analysis, contract, errors) {
 }
 
 function validateCycles(analysis, contract, errors) {
-  const allowed = new Set(
-    (contract.imports.allowedCycles ?? []).map(canonicalComponent)
-  );
+  const allowed = contract.imports.allowedCycles.map((group) => new Set(group));
   for (const cycle of analysis.importCycles) {
-    if (!allowed.has(canonicalComponent(cycle))) {
+    if (!allowed.some((group) => cycle.every((file) => group.has(file)))) {
       errors.push(`import-cycle: ${cycle.join(" -> ")}`);
     }
   }
@@ -734,13 +743,6 @@ function validateBroadBarrel(analysis, contract, errors) {
     if (!allowed.has(consumer)) {
       errors.push(`meeting-barrel: new consumer ${consumer}`);
     }
-  }
-  const maximum = contract.imports.broadMeetingBarrelMaxConsumers;
-  if (analysis.broadMeetingBarrelConsumers.length > maximum) {
-    errors.push(
-      `meeting-barrel: ${analysis.broadMeetingBarrelConsumers.length} consumers; ` +
-        `baseline allows ${maximum}`
-    );
   }
 }
 

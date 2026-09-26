@@ -58,17 +58,75 @@ function expectFailure(result, fragment) {
 test("accepts the tracked architecture baseline", () => {
   const result = evaluate({ analysis: baselineAnalysis, contract: baselineContract });
   assert.equal(result.ok, true, result.errors.join("\n"));
-  assert.equal(result.metrics.taskWriterCallsites, 11);
-  assert.equal(result.metrics.taskWriterModules, 2);
   assert.equal(result.metrics.liveLegacyImports, 0);
-  assert.equal(result.metrics.importCycles, 1);
-  assert.equal(result.metrics.importCycleEdges, 17);
   assert.equal(result.metrics.frontendCommandsWithoutNativeRegistration, 0);
 });
 
 test("small validator fixture passes before targeted negatives", () => {
   const result = evaluate();
   assert.equal(result.ok, true, result.errors.join("\n"));
+});
+
+test("C196: actual source graphs may shrink, split or remove an allowed cycle", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "jarvis-cycle-contraction-"));
+  try {
+    fs.mkdirSync(path.join(root, "src/lib/meeting"), { recursive: true });
+    fs.mkdirSync(path.join(root, "src-tauri/src"), { recursive: true });
+    fs.writeFileSync(path.join(root, "src-tauri/src/lib.rs"), "");
+    fs.writeFileSync(path.join(root, "src/lib/meeting/index.ts"), "export {};\n");
+    const file = (name) => `src/${name}.ts`;
+    const full = { a: ["b"], b: ["a", "c"], c: ["d"], d: ["c", "a"] };
+    const contract = structuredClone(baselineContract);
+    contract.repositoryRoot = root;
+    contract.imports.allowedCycles = [["a", "b", "c", "d"].map(file)];
+    contract.imports.allowedCycleEdges = Object.entries(full).flatMap(([from, targets]) => targets.map(to => `${file(from)} -> ${file(to)}`));
+    contract.imports.acyclicModules = [];
+    contract.imports.contractDependencies = {};
+    contract.imports.broadMeetingBarrelAllowedConsumers = [file("a"), file("b")];
+    const run = (graph, policy = contract, barrel = []) => {
+      for (const name of ["a", "b", "c", "d", "e"]) {
+        fs.writeFileSync(path.join(root, file(name)), [
+          ...(graph[name] ?? []).map(target => `import "./${target}";`),
+          ...(barrel.includes(name) ? ['import "./lib/meeting/index";'] : []),
+        ].join("\n"));
+      }
+      const found = discoverArchitecture(root);
+      const analysis = structuredClone(controlledAnalysis);
+      for (const key of ["importCycles", "importCycleEdges", "importDependencies", "broadMeetingBarrelConsumers"]) analysis[key] = found[key];
+      return evaluate({ analysis, contract: policy });
+    };
+    for (const graph of [full, { a: ["b"], b: ["a"] }, { a: ["b"], b: ["a"], c: ["d"], d: ["c"] }, { a: ["b"], b: ["c"] }, {}]) {
+      const result = run(graph);
+      assert.equal(result.ok, true, result.errors.join("\n"));
+    }
+    expectFailure(run({ ...full, a: ["b", "c"] }), "import-cycle-edge:");
+    expectFailure(run({ ...full, a: ["b", "e"], e: ["a"] }), "import-cycle:");
+    const separated = structuredClone(contract);
+    separated.imports.allowedCycles = [[file("a"), file("b")], [file("c"), file("d")]];
+    assert.equal(run({ a: ["b"], b: ["a"], c: ["d"], d: ["c"] }, separated).ok, true);
+    expectFailure(run(full, separated), "import-cycle:");
+    const protectedPolicy = structuredClone(contract);
+    protectedPolicy.imports.acyclicModules = [file("a")];
+    expectFailure(run(full, protectedPolicy), "protected-module-cycle:");
+    const restricted = structuredClone(contract);
+    restricted.imports.contractDependencies[file("a")] = [];
+    expectFailure(run(full, restricted), "contract-dependency:");
+    for (const subset of [[], ["a"], ["b"], ["a", "b"]]) assert.equal(run({}, contract, subset).ok, true);
+    expectFailure(run({}, contract, ["a", "b", "e"]), "meeting-barrel: new consumer");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("C196: changed policy fields fail closed when missing or malformed", () => {
+  assert.equal("broadMeetingBarrelMaxConsumers" in baselineContract.imports, false);
+  for (const key of ["allowedCycles", "allowedCycleEdges", "broadMeetingBarrelAllowedConsumers"]) {
+    for (const value of [undefined, null, {}, [null]]) {
+      const contract = structuredClone(fixtureContract);
+      if (value === undefined) delete contract.imports[key]; else contract.imports[key] = value;
+      expectFailure(evaluate({ contract }), `architecture contract imports.${key}`);
+    }
+  }
 });
 
 test("all retired Meeting cycles and moved contracts remain acyclic", () => {

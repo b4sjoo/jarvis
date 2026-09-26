@@ -65,7 +65,6 @@
       "src/pages/app/components/meeting/whiteboard-mermaid-error.tsx",
       "src/pages/app/components/meeting/whiteboard-viewer.tsx"
     ],
-    "broadMeetingBarrelMaxConsumers": 6,
     "acyclicModules": [
       "src/lib/meeting/active-meeting-task.ts",
       "src/lib/meeting/adjacent-question-constraint.ts",
