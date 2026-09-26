@@ -51,7 +51,6 @@ function transportHarness(raw: string, mode: "sse" | "wait" | "http-error" = "ss
   const timers: { callback: () => void; ms: number; cleared: boolean }[] = [];
   const transport = loadModule("src/lib/functions/ai-response.function.ts", {
     "./common.function": common,
-    "@tauri-apps/plugin-http": { fetch: () => assert.fail("native network forbidden") },
     "@bany/curl-to-json": { default: curl2Json },
     "../response-settings.constants": { RESPONSE_LENGTHS: [], LANGUAGES: [] },
     "../storage/response-settings.storage": { getResponseSettings: () => assert.fail("response settings must stay disabled") },

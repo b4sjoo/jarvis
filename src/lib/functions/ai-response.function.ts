@@ -7,7 +7,6 @@ import {
   ImageInput,
 } from "./common.function";
 import { Message, TYPE_PROVIDER } from "@/types";
-import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import curl2Json from "@bany/curl-to-json";
 import { RESPONSE_LENGTHS, LANGUAGES } from "../response-settings.constants";
 import { getResponseSettings } from "../storage/response-settings.storage";
@@ -261,11 +260,9 @@ async function* fetchAIResponseAttemptEvents(
       }
     }
 
-    const fetchFunction = url?.includes("http") ? fetch : tauriFetch;
-
     let response;
     try {
-      response = await fetchFunction(url, {
+      response = await fetch(url, {
         method: curlJson.method || "POST",
         headers,
         body: curlJson.method === "GET" ? undefined : JSON.stringify(bodyObj),

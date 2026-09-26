@@ -39,7 +39,6 @@ export function createSttFixture() {
   const stt = load("src/lib/functions/stt.function.ts", {
     "./common.function": common,
     "@bany/curl-to-json": require("@bany/curl-to-json"),
-    "@tauri-apps/plugin-http": { fetch: () => { throw new Error("Unexpected native HTTP"); } },
   }, { fetch: async (url: string, request: any) => {
     assert.equal(url, "https://stt.invalid/transcribe");
     requests.push({ url, ...request });

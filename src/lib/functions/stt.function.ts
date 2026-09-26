@@ -3,7 +3,6 @@ import {
   getByPath,
   blobToBase64,
 } from "./common.function";
-import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 
 import { TYPE_PROVIDER } from "@/types";
 import curl2Json from "@bany/curl-to-json";
@@ -167,12 +166,10 @@ export async function fetchSTT(params: STTParams): Promise<string> {
       body = JSON.stringify(deepVariableReplacer(dataObj, allVariables));
     }
 
-    const fetchFunction = url?.includes("http") ? fetch : tauriFetch;
-
     // Send request
     let response: Response;
     try {
-      response = await fetchFunction(url, {
+      response = await fetch(url, {
         method: curlJson.method || "POST",
         headers: finalHeaders,
         body: curlJson.method === "GET" ? undefined : body,

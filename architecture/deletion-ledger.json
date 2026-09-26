@@ -1,8 +1,21 @@
 {
   "$schema": "./deletion-ledger.schema.json",
   "version": 1,
-  "updatedAt": "2026-09-10",
+  "updatedAt": "2026-09-26",
   "entries": [
+    {
+      "id": "unused-native-provider-http",
+      "symbolOrSurface": "URL-substring native HTTP fallback and unused HTTP plugin wiring",
+      "verdict": "delete",
+      "ownerTaskId": 199,
+      "replacement": "Existing WebView fetch in the shared AI and STT request builders",
+      "persistedDataImpact": "none",
+      "proofCommands": ["npm test", "npm run build", "cargo check --tests"],
+      "deletionGate": "Actual AI and STT request consumers preserve requests and cancellation; plugin dependencies, registration and permissions are absent.",
+      "rollbackBoundary": "Transport cleanup does not change provider settings, parsing, budgets, retries or browser redirects.",
+      "status": "deleted",
+      "forbiddenPatterns": ["import { fetch as tauriFetch }", "tauri_plugin_http::init()", "const fetchFunction = url?.includes(\"http\")"]
+    },
     {
       "id": "local-turn-intent-permission-layer",
       "symbolOrSurface": "Local Turn Intent authorization factories, permission fields and suppression writer",

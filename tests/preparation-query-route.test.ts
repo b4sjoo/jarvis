@@ -96,15 +96,11 @@ async function fixture(options: {
   };
 }
 
-// Bundle the existing transport unchanged; only native HTTP is forbidden. Tests intercept browser fetch.
+// Tests intercept the same browser fetch used by the production transport.
 async function transport() {
   const result = await build({
     entryPoints: ["src/lib/functions/ai-response.function.ts"], bundle: true, write: false,
     platform: "node", format: "cjs",
-    plugins: [{ name: "no-native-provider", setup(b) {
-      b.onResolve({ filter: /^@tauri-apps\/plugin-http$/ }, () => ({ path: "native-http", namespace: "fixture" }));
-      b.onLoad({ filter: /.*/, namespace: "fixture" }, () => ({ contents: "export const fetch = () => { throw Error('Native provider calls forbidden'); };" }));
-    } }],
   });
   const module = { exports: {} as { fetchAIResponse: PreparationFetchResponse; fetchAIResponseEvents: PreparationFetchResponseEvents } };
   new Function("require", "module", "exports", result.outputFiles[0].text)(createRequire(import.meta.url), module, module.exports);

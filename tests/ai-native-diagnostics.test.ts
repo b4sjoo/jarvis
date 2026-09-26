@@ -50,7 +50,6 @@ function harness(responses: (() => Response)[], streaming = true, responseConten
   const calls: any[] = [];
   const transport = loadModule("src/lib/functions/ai-response.function.ts", {
     "./common.function": common,
-    "@tauri-apps/plugin-http": { fetch: () => assert.fail("unexpected native fetch") },
     "@bany/curl-to-json": { default: curl2Json },
     "../response-settings.constants": { RESPONSE_LENGTHS: [], LANGUAGES: [] },
     "../storage/response-settings.storage": { getResponseSettings: () => assert.fail("response settings disabled") },

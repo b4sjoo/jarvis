@@ -27,10 +27,6 @@
     "sql:allow-execute",
     "autostart:allow-enable",
     "autostart:allow-disable",
-    "autostart:allow-is-enabled",
-    {
-      "identifier": "http:default",
-      "allow": [{ "url": "http://**" }, { "url": "https://**" }]
-    }
+    "autostart:allow-is-enabled"
   ]
 }

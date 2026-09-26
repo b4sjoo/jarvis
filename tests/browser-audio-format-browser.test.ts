@@ -23,7 +23,6 @@ test("BM-F1: native browser MediaRecorder bytes flow through Chat into the actua
         curl: "curl -X POST 'https://stt.invalid/transcribe' -F 'file=@audio' -F 'model=fixture'" }],
     });`,
     "@/components": `export const Button = ({size, variant, children, ...props}) => <button {...props}>{children}</button>;`,
-    "@tauri-apps/plugin-http": `export const fetch = () => { throw new Error('Unexpected native request'); };`,
   };
   const bundle = await build({
     entryPoints: [path.join(root, "tests/fixtures/task-128-audio-format.tsx")],
