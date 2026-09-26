@@ -46,7 +46,7 @@ const corpora = [
 ] as const;
 
 for (const fixture of corpora) {
-  const file = path.resolve("docs", fixture.directory, "corpus.json");
+  const file = path.resolve("evidence", fixture.directory, "corpus.json");
   test(`RC1 ${fixture.count} ${fixture.kind} inputs exactly match approved ${fixture.arm}`, {
     skip: !existsSync(file) && process.env.JARVIS_REQUIRE_3B_CORPORA !== "1"
       ? "Private evaluation corpus unavailable; RC1 acceptance requires JARVIS_REQUIRE_3B_CORPORA=1"
@@ -57,7 +57,7 @@ for (const fixture of corpora) {
     const corpus = JSON.parse(bytes.toString());
     const samples = corpus.samples.filter((s: { kind: string }) => s.kind === fixture.kind);
     assert.equal(samples.length, fixture.count);
-    const experiment = await import(pathToFileURL(path.resolve("docs", fixture.directory, "prompts.mjs")).href);
+    const experiment = await import(pathToFileURL(path.resolve("evidence", fixture.directory, "prompts.mjs")).href);
     for (const sample of samples) {
       const request: AnswerRecoveryAdjudicationRequest = { ...sample.request, promptVersion: fixture.version };
       assert.notEqual(request.promptVersion, sample.request.promptVersion);
