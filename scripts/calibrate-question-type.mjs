@@ -27,9 +27,10 @@ const limits = [
 
 // This loader follows the source-execution tests, but retains complete modules and their dependencies.
 // It is a tool-local composition adapter, never a replacement request/retry implementation.
-export function createProductionRuntime({ cap, operationKind = "question-type-adjudication", fetchImpl = () => { throw new Error("network disabled"); }, now = Date.now, onTerminal = () => {} } = {}) {
+export function createProductionRuntime({ cap, operationKind = "question-type-adjudication", operationTimeoutMs, fetchImpl = () => { throw new Error("network disabled"); }, now = Date.now, onTerminal = () => {} } = {}) {
   if (![512, 1024].includes(cap)) throw new Error("Only approved caps 512 and 1024 are allowed");
   if (!["question-type-adjudication", "task-relation-parent-affinity", "task-relation-child-affinity", "task-relation-canonical-shadow"].includes(operationKind)) throw new Error("Unsupported bounded calibration operation");
+  if (operationTimeoutMs !== undefined && (!Number.isFinite(operationTimeoutMs) || operationTimeoutMs <= 0)) throw new Error("Expected positive calibration operation timeout");
   const typeOperation = operationKind === "question-type-adjudication";
   const requestFile = typeOperation ? "question-type-adjudication-request.ts" : "task-relation-split-shadow-request.ts";
   const cache = new Map();
@@ -60,7 +61,8 @@ export function createProductionRuntime({ cap, operationKind = "question-type-ad
       if (filename.endsWith(requestFile) && target.endsWith("runtime-inference.ts")) {
         return { ...exports, getRuntimeInferenceOperationDefinition: kind => {
           if (kind !== operationKind) throw new Error("Operation differs from frozen calibration route");
-          return { ...exports.getRuntimeInferenceOperationDefinition(kind), maxOutputTokens: cap };
+          return { ...exports.getRuntimeInferenceOperationDefinition(kind), maxOutputTokens: cap,
+            ...(operationTimeoutMs === undefined ? {} : { timeoutMs: operationTimeoutMs }) };
         } };
       }
       if (filename.endsWith("runtime-inference-request.ts") && target.endsWith("ai-response.function.ts")) {
@@ -110,17 +112,18 @@ export function createProductionRuntime({ cap, operationKind = "question-type-ad
     builtinProvider: id => load(join(root, "src/config/ai-providers.constants.ts")).AI_PROVIDERS.find(p => p.id === id),
     parse: typeOperation ? type.parseQuestionTypeAdjudicationOutput
       : operationKind === "task-relation-canonical-shadow" ? split.parseTaskRelationCanonicalShadowOutput : split.parseTaskRelationAffinityOutput,
-    async run({ config, request, operationId, singleAttempt = false }) {
+    async run({ config, request, operationId, singleAttempt = false, timeoutMs = 4000 }) {
+      if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error("Expected positive calibration timeout");
       const startedAt = now();
       const execution = { ...config, request, signal: new AbortController().signal,
         executionIdentity: { requestId: operationId, executionPlanId: operationId,
           sessionId: "bounded-calibration", runtimeEpoch: 1 } };
       const result = typeOperation
-        ? await requestModule.requestQuestionTypeAdjudication({ ...execution, timeoutMs: 4000,
-            ...(singleAttempt ? {} : { readRetryDeadlineAt: () => startedAt + 4000 }), isExecutionCurrent: () => true })
+        ? await requestModule.requestQuestionTypeAdjudication({ ...execution, timeoutMs,
+            ...(singleAttempt ? {} : { readRetryDeadlineAt: () => startedAt + timeoutMs }), isExecutionCurrent: () => true })
         : await requestModule.requestTaskRelationSplitShadow(execution);
       return { ...result, startedAt, durationMs: now() - startedAt,
-        onTimeStrictValid: typeOperation ? Boolean(result.parsed.ok && result.completedAt <= startedAt + 4000) : undefined };
+        onTimeStrictValid: typeOperation ? Boolean(result.parsed.ok && result.completedAt <= startedAt + timeoutMs) : undefined };
     } };
 }
 

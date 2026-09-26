@@ -16,6 +16,36 @@ const config = {
 const valid = JSON.stringify({ v: 1, t: "field-knowledge", c: 0.95, e: "HNSW" });
 const response = (content = valid) => new Response(JSON.stringify({ choices: [{ message: { content }, finish_reason: "stop" }], usage: { prompt_tokens: 10, completion_tokens: 12, total_tokens: 22 } }), { headers: { "content-type": "application/json" } });
 
+test("explicit calibration timeout controls request and timely eligibility without changing the default", async () => {
+  let now = 1000;
+  const runtime = tool.createProductionRuntime({ cap: 1024, now: () => now, fetchImpl: async () => {
+    now += 1600;
+    return response();
+  } });
+  const request = runtime.makeRequest(tool.frozenInputs[2]);
+  for (const timeoutMs of [1000, 1500, 2000, 2500, 3000, undefined]) {
+    const result = await runtime.run({ config, request, operationId: `deadline-${timeoutMs}`, singleAttempt: true, timeoutMs });
+    assert.equal(runtime.requests.at(-1).timeoutMs, timeoutMs ?? 4000);
+    assert.equal(result.parsed.ok, true);
+    assert.equal(result.onTimeStrictValid, (timeoutMs ?? 4000) >= 1600);
+  }
+});
+
+test("explicit calibration deadline really aborts transport and performs no retry", async () => {
+  let aborted = false;
+  const runtime = tool.createProductionRuntime({ cap: 1024, fetchImpl: (_url: string, init: any) => new Promise((_resolve, reject) => {
+    init.signal.addEventListener("abort", () => {
+      aborted = true;
+      reject(new DOMException("Aborted", "AbortError"));
+    }, { once: true });
+  }) });
+  const result = await runtime.run({ config, request: runtime.makeRequest(tool.frozenInputs[2]), operationId: "abort-short", singleAttempt: true, timeoutMs: 50 });
+  assert.equal(aborted, true);
+  assert.equal(result.providerOutcome.status, "timed-out");
+  assert.equal(result.parsed.ok, false);
+  assert.equal(runtime.requests.length, 1);
+});
+
 test("bounded onsite Type pilot disables retries explicitly without changing production defaults", async () => {
   let calls = 0;
   const runtime = tool.createProductionRuntime({ cap: 1024, fetchImpl: async () => {
@@ -57,6 +87,37 @@ test("bounded onsite relation adapter reuses actual prompts/request/parser at bo
       assert.equal(result.onTimeStrictValid, undefined, "standalone relation duration must not impersonate original foreground usefulness");
     }
   }
+});
+
+test("bounded Canonical calibration can inject a shorter provider timeout without changing production defaults", async () => {
+  const pilot = await import(pathToFileURL(resolve("scripts/prepare-onsite-runtime-pilot.mjs")).href);
+  const calls: any[] = [];
+  const runtime = tool.createProductionRuntime({ cap: 1024, operationKind: "task-relation-canonical-shadow", operationTimeoutMs: 3000,
+    fetchImpl: async (_url: string, init: any) => {
+      calls.push(JSON.parse(init.body));
+      return response(JSON.stringify({ schemaVersion: 3, relation: "new-parent", confidence: 0.9,
+        currentQuestionEvidenceSpans: ["Explain HNSW."], parentEvidenceSpans: [] }));
+    } });
+  const prompts = runtime.prompts({ operationKind: "task-relation-canonical-shadow", schemaVersion: 3, promptVersion: "fixture",
+    identity: { logicalQuestionUnitId: "q", logicalQuestionRevision: 1 }, semanticPayload: {
+      currentQuestion: { sourceTexts: ["Explain HNSW."] }, activeParent: { topic: "RAG", objective: "RAG", acceptedConstraints: [] },
+      recentEvidence: [], affinity: { parent: { status: "unknown" } },
+    }, semanticPayloadDigest: "fixture" });
+  const request = pilot.requestFromSavedPrompt({ runtime, operationKind: "task-relation-canonical-shadow", traceId: "canonical-timeout", promptText: `${prompts.systemPrompt}\n\n${prompts.userMessage}` });
+  const result = await runtime.run({ config, request, operationId: "canonical-timeout", singleAttempt: true });
+  assert.equal(calls.length, 1);
+  assert.equal(runtime.requests[0].timeoutMs, 3000);
+  assert.equal(runtime.requests[0].maxOutputTokens, 1024);
+  assert.equal(result.parsed.ok, true);
+  const defaultRuntime = tool.createProductionRuntime({ cap: 1024, operationKind: "task-relation-canonical-shadow", fetchImpl: async () => response(JSON.stringify({
+    schemaVersion: 3, relation: "new-parent", confidence: 0.9,
+    currentQuestionEvidenceSpans: ["Explain HNSW."], parentEvidenceSpans: [],
+  })) });
+  const defaultPrompts = defaultRuntime.prompts({ ...request, promptVersion: "fixture" });
+  const defaultRequest = pilot.requestFromSavedPrompt({ runtime: defaultRuntime, operationKind: "task-relation-canonical-shadow", traceId: "canonical-default", promptText: `${defaultPrompts.systemPrompt}\n\n${defaultPrompts.userMessage}` });
+  const defaultResult = await defaultRuntime.run({ config, request: defaultRequest, operationId: "canonical-default", singleAttempt: true });
+  assert.equal(defaultRuntime.requests[0].timeoutMs, 6000);
+  assert.equal(defaultResult.parsed.ok, true);
 });
 
 test("frozen plan has eight inputs, 24 alternating pairs, 48 operations and no expected payload", () => {
