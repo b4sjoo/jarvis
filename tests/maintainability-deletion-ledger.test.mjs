@@ -62,9 +62,9 @@ test("C196: ledger may grow without losing or downgrading retired protection", (
   assertRetiredEntriesPreserved(extended);
   for (const change of [
     ledger => { ledger.entries = []; },
-    ledger => { ledger.entries.shift(); },
-    ledger => { ledger.entries[0].status = "candidate"; },
-    ledger => { delete ledger.entries[0].forbiddenPatterns; },
+    ledger => { ledger.entries = ledger.entries.filter(entry => entry.id !== requiredRetiredIds[0]); },
+    ledger => { ledger.entries.find(entry => entry.id === requiredRetiredIds[0]).status = "candidate"; },
+    ledger => { delete ledger.entries.find(entry => entry.id === requiredRetiredIds[0]).forbiddenPatterns; },
   ]) {
     const changed = structuredClone(original); change(changed);
     assert.throws(() => assertRetiredEntriesPreserved(changed));
