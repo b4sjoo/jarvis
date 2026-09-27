@@ -15,7 +15,8 @@ node tests/native-smoke/launch.mjs evidence/native-app-smoke/<build-id>/build.js
 The build uses a separate frontend/Cargo output, a stable test bundle ID and the
 fixed `src-tauri/target/debug/bundle/macos/Jarvis Native Diagnostics Test.app`.
 Never launch an old app by name. The launcher requires the latest successful
-build manifest and checks its executable hash before starting an owned process.
+build manifest and checks its executable and host keyboard-helper hashes before
+starting an owned process. The helper is compiled once with the smoke build.
 It waits for UI-driven normal Quit and records process exit and the existing
 shutdown receipt. It does not kill ordinary Jarvis or reset application data.
 Exit other Jarvis instances first: the real global shortcuts remain unchanged,
@@ -72,12 +73,62 @@ Do not interpret `pressKey` returning as proof of delivery, or assume changing
 modifier spelling fixes it. Observe the outcome/available native receipt.
 
 Focus panels expose accessibility text, but their menus can time out even with an
-unlocked desktop. A user-selected regular Dashboard permits opening the observer.
-Record that assistance explicitly; this is not proven unattended automation.
+unlocked desktop. The bounded HID helper below can open the regular Dashboard for
+the observer. Initial acceptance used physical-key assistance; preserve that fact.
 Protected screenshots may be blank, and the first transition frame may report
 zero size before a subsequent state read becomes ready. Do not repeat the business
-action to get another screenshot. None of these observations authorizes a second
-input transport, new product button or business-control hook.
+action to get another screenshot. Do not add a product button or business-control
+hook to compensate for a tool limitation.
+
+### Bounded Global Shortcuts
+
+`keyboard.mjs` uses a host-side Swift sender for exactly two default bindings:
+`meeting_focus_mode = cmd+shift+j` and `toggle_dashboard = cmd+shift+d`. It sends
+real paired HID key events; Jarvis still uses its normal global-shortcut handler.
+No arbitrary keys, new app IPC, event listener or persistent input service.
+
+Keep Meeting stopped, the Mac unlocked, other Jarvis instances closed and user
+input idle. Run the sender in the approved host execution environment: a sandbox
+can report missing event-post permission even when the host has it. The helper
+checks existing permission only; it never requests a new grant. It verifies the
+owned PID/bundle, absence of competing Jarvis apps and foreground activation.
+It refuses held modifiers and restores the pre-chord modifier state on key-up.
+
+Open **Read Smoke Status** after frontend shortcut registration. Check build/PID
+and the actual `shortcutBindings`; null or non-default values are not replaced
+with assumed defaults. Then use the run directory printed by the launcher:
+
+```sh
+node tests/native-smoke/keyboard.mjs prepare /absolute/path/to/run-directory
+node tests/native-smoke/keyboard.mjs send /absolute/path/to/run-directory meeting_focus_mode
+# Assert Focus UI through the existing UI tool before sending another action.
+node tests/native-smoke/keyboard.mjs send /absolute/path/to/run-directory toggle_dashboard
+# Assert the Dashboard, then complete only this test's required actions.
+node tests/native-smoke/keyboard.mjs finish /absolute/path/to/run-directory
+```
+
+Preparation freezes the run's observed bindings once. Re-registration, identity
+change, missing/duplicate/unrequested callback or sender failure stops the run.
+`keyboard.json` stores every attempted send, byte offsets and its new native
+receipt. **`native-received` is not a UI pass.** The caller separately asserts the
+visible consequence. `finish` rejects late callbacks; normal app Quit remains the
+existing UI/lifecycle path. Never reset a failed run or automatically resend a
+toggle. Investigate the cause before an explicitly started replacement run.
+
+The accepted automatic case entered Focus, opened Dashboard while retaining both
+Focus windows, returned to Normal and quit normally without human keys. This is
+not a promise of arbitrary or unattended interaction on every Mac. Foreground
+changes between admission and posting remain possible; keep the desktop controlled.
+
+Pure Node tests need no UI permission. The additional no-post Swift policy check
+constructs events, so run it on the host rather than in an OS-restricted sandbox:
+
+```sh
+xcrun swiftc -D NATIVE_SMOKE_POLICY_TESTS \
+  -module-cache-path src-tauri/target/native-smoke/swift-cache \
+  tests/native-smoke/keyboard.swift -o src-tauri/target/native-smoke/keyboard-policy-test
+src-tauri/target/native-smoke/keyboard-policy-test
+```
 
 30s connect/ready and 10s individual UI-operation budgets are test stop limits,
 not product SLAs. The UI API may not be cancellable: helpers report elapsed

@@ -35,6 +35,7 @@ pub(super) fn on_menu_event(app: &AppHandle, event: &MenuEvent) -> bool {
 }
 
 fn show_status(app: &AppHandle) -> tauri::Result<()> {
+    let registered = crate::shortcuts::get_registered_shortcuts(app.clone()).ok();
     let mut windows: Vec<_> = app
         .webview_windows()
         .into_iter()
@@ -53,6 +54,10 @@ fn show_status(app: &AppHandle) -> tauri::Result<()> {
         "pid": std::process::id(),
         "sampledAtMs": SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis(),
         "windows": windows,
+        "shortcutBindings": {
+            "meeting_focus_mode": registered.as_ref().and_then(|keys| keys.get("meeting_focus_mode")),
+            "toggle_dashboard": registered.as_ref().and_then(|keys| keys.get("toggle_dashboard")),
+        },
         "businessState": "not sampled; inspect the actual UI",
         "actionReceipts": "not sampled; use existing native logs",
     });

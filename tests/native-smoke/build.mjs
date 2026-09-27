@@ -101,6 +101,11 @@ export async function buildSmoke() {
     JARVIS_NATIVE_SMOKE_BUILD_ID:id,JARVIS_NATIVE_SMOKE_FRONTEND:frontend};
   console.log(JSON.stringify({id,evidence,status:"building"}));
   try {
+    const keyboardHelper = path.join(workspace, "keyboard-helper");
+    await command("xcrun", ["swiftc", "-module-cache-path", path.join(workspace, "swift-cache"),
+      "tests/native-smoke/keyboard.swift", "-o", keyboardHelper], env, path.join(evidence, "keyboard-build.log"));
+    manifest.keyboardHelper = keyboardHelper;
+    manifest.keyboardHelperSha256 = hash(fs.readFileSync(keyboardHelper));
     await command(process.execPath,["node_modules/typescript/bin/tsc"],env,path.join(evidence,"typescript.log"));
     await command(process.execPath,["node_modules/vite/bin/vite.js","build","--config","tests/native-smoke/vite.config.ts","--outDir",frontend,"--emptyOutDir"],env,path.join(evidence,"frontend.log"));
     await command(process.execPath,["node_modules/@tauri-apps/cli/tauri.js","build","--debug","--features","native-app-smoke","--bundles","app","--config",configPath,"--ci"],env,path.join(evidence,"native.log"));

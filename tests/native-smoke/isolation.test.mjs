@@ -23,6 +23,8 @@ test("native observer is opt-in and release cannot include it", () => {
   const observer = read("src-tauri/src/native_app_smoke.rs");
   assert.doesNotMatch(observer, /#\[tauri::command\]|invoke_handler|spawn|sleep|TaskRuntime|useMeeting/);
   assert.match(read("src-tauri/build.rs"), /Native and frontend smoke build identities differ/);
+  assert.match(observer, /crate::shortcuts::get_registered_shortcuts\(app.clone\(\)\)/);
+  assert.doesNotMatch(observer, /update_shortcuts|CGEvent/);
 });
 
 test("observer adds no IPC capability and never modifies production capability files", () => {

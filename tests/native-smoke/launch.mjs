@@ -13,6 +13,11 @@ export function verifiedManifest(manifestPath) {
   const plist = JSON.parse(execFileSync("plutil", ["-convert", "json", "-o", "-", path.join(publishedApp, "Contents/Info.plist")], { encoding: "utf8" }));
   const hash = crypto.createHash("sha256").update(fs.readFileSync(path.join(publishedApp,"Contents/MacOS/jarvis"))).digest("hex");
   assertBuildIdentity(manifest, plist.CFBundleIdentifier, hash);
+  const helper = path.join(workspace, "keyboard-helper");
+  if (manifest.keyboardHelper !== helper || crypto.createHash("sha256")
+    .update(fs.readFileSync(helper)).digest("hex") !== manifest.keyboardHelperSha256) {
+    throw new Error("Keyboard helper does not match the completed smoke build");
+  }
   // Real app global shortcuts are unchanged, so concurrent instances are not isolated.
   if (jarvisProcesses().length) throw new Error("Exit other Jarvis instances before native smoke; no processes were changed");
   return manifest;

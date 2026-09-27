@@ -19,7 +19,8 @@ function statusView(native) {
 }
 
 test("status rendering is read-only, bounded per AX node and has no provider or timer dependency", () => {
-  const native = { buildId: "current", windows: [{label:"main",visible:true}], pid:123 };
+  const native = { buildId: "current", windows: [{label:"main",visible:true}], pid:123,
+    shortcutBindings: {meeting_focus_mode:"cmd+shift+j",toggle_dashboard:null} };
   const original = structuredClone(native);
   const { elements, listeners } = statusView(native);
   assert.deepEqual(native, original);
@@ -27,6 +28,7 @@ test("status rendering is read-only, bounded per AX node and has no provider or 
   const lines = elements.status.children.map(node => node.textContent);
   assert.ok(lines.every(line => line.length < 512));
   assert.equal(JSON.parse(lines.join("\n")).native.pid,123);
+  assert.deepEqual(JSON.parse(lines.join("\n")).native.shortcutBindings,native.shortcutBindings);
   assert.deepEqual([...listeners.keys()],["native-smoke-snapshot"]);
 });
 
