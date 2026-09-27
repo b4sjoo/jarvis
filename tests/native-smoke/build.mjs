@@ -15,9 +15,11 @@ export function createBuildConfig(base, frontend, buildId) {
     productName: APP_NAME,
     identifier: APP_ID,
     build: { beforeBuildCommand: "", frontendDist: frontend },
-    app: { windows: base.app.windows.map(window => ({
-      ...window, title: `${APP_NAME} [${buildId}]`,
-    })) },
+    app: {
+      windows: base.app.windows.map(window => ({
+        ...window, title: `${APP_NAME} [${buildId}]`,
+      })),
+    },
   };
 }
 
@@ -40,13 +42,21 @@ function treeFiles(directory) {
     });
 }
 
-export function bundleProcessIds(appPath = publishedApp) {
-  const executable = path.join(appPath, "Contents/MacOS/jarvis");
-  return execFileSync("ps", ["-axo", "pid=,comm="], { encoding: "utf8" }).split("\n")
+export function parseJarvisProcesses(output) {
+  return output.split("\n")
     .flatMap(line => {
       const match = line.trim().match(/^(\d+)\s+(.+)$/);
-      return match?.[2] === executable ? [Number(match[1])] : [];
+      return match && /(?:^|\/)jarvis$/.test(match[2]) ? [{pid:Number(match[1]), executable:match[2]}] : [];
     });
+}
+
+export function jarvisProcesses() {
+  return parseJarvisProcesses(execFileSync("ps", ["-axo", "pid=,comm="], { encoding: "utf8" }));
+}
+
+export function bundleProcessIds(appPath = publishedApp) {
+  const executable = path.join(appPath, "Contents/MacOS/jarvis");
+  return jarvisProcesses().filter(process => process.executable === executable).map(process => process.pid);
 }
 
 async function command(executable, args, env, output) {
@@ -87,12 +97,13 @@ export async function buildSmoke() {
   // Point at this attempt before building so a failed attempt cannot reuse an old success.
   fs.writeFileSync(path.join(workspace,"current.json"),JSON.stringify({manifestPath},null,2));
   fs.writeFileSync(path.join(evidence,"working-tree.patch"),execFileSync("git",["diff","--binary","HEAD"],{cwd:root}));
-  const env={...process.env,CARGO_TARGET_DIR:cargo,CARGO_NET_OFFLINE:"true"};
+  const env={...process.env,CARGO_TARGET_DIR:cargo,CARGO_NET_OFFLINE:"true",
+    JARVIS_NATIVE_SMOKE_BUILD_ID:id,JARVIS_NATIVE_SMOKE_FRONTEND:frontend};
   console.log(JSON.stringify({id,evidence,status:"building"}));
   try {
     await command(process.execPath,["node_modules/typescript/bin/tsc"],env,path.join(evidence,"typescript.log"));
-    await command(process.execPath,["node_modules/vite/bin/vite.js","build","--outDir",frontend,"--emptyOutDir"],env,path.join(evidence,"frontend.log"));
-    await command(process.execPath,["node_modules/@tauri-apps/cli/tauri.js","build","--debug","--bundles","app","--config",configPath,"--ci"],env,path.join(evidence,"native.log"));
+    await command(process.execPath,["node_modules/vite/bin/vite.js","build","--config","tests/native-smoke/vite.config.ts","--outDir",frontend,"--emptyOutDir"],env,path.join(evidence,"frontend.log"));
+    await command(process.execPath,["node_modules/@tauri-apps/cli/tauri.js","build","--debug","--features","native-app-smoke","--bundles","app","--config",configPath,"--ci"],env,path.join(evidence,"native.log"));
     const built=path.join(cargo,`debug/bundle/macos/${APP_NAME}.app`);
     const plist=JSON.parse(execFileSync("plutil",["-convert","json","-o","-",path.join(built,"Contents/Info.plist")],{encoding:"utf8"}));
     if(plist.CFBundleIdentifier!==APP_ID) throw new Error("Refuse to publish a non-smoke bundle");
@@ -106,7 +117,7 @@ export async function buildSmoke() {
     const staged = `${publishedApp}.next`;
     const previous = `${publishedApp}.previous`;
     fs.rmSync(staged,{recursive:true,force:true});
-    fs.cpSync(built,staged,{recursive:true});
+    fs.renameSync(built,staged);
     // One replaceable test bundle, not an accumulating archive of runnable apps.
     fs.rmSync(previous,{recursive:true,force:true});
     if(fs.existsSync(publishedApp)) fs.renameSync(publishedApp,previous);

@@ -12,6 +12,9 @@ keywords = ["ai-assistant", "tauri", "desktop-app", "privacy-first", "meeting-as
 categories = ["gui", "multimedia", "accessibility", "science", "development-tools"]
 edition = "2021"
 
+[features]
+native-app-smoke = []
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]

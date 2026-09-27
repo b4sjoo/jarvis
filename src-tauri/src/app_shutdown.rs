@@ -9,6 +9,12 @@ use std::time::Instant;
 use tauri::menu::{Menu, MenuEvent, MenuItem, MenuItemKind};
 use tauri::{AppHandle, Emitter, Manager, RunEvent, WebviewWindow};
 
+#[cfg(all(feature = "native-app-smoke", not(debug_assertions)))]
+compile_error!("native-app-smoke is only supported in an isolated Debug build");
+#[cfg(all(feature = "native-app-smoke", debug_assertions, target_os = "macos"))]
+#[path = "native_app_smoke.rs"]
+mod native_app_smoke;
+
 const GENERATION: u64 = 1; // An application lifetime has one irrevocable Quit operation.
 const REQUEST_EVENT: &str = "jarvis-shutdown-requested";
 const STATUS_EVENT: &str = "jarvis-shutdown-status";
@@ -99,6 +105,8 @@ pub fn install_quit_menu(app: &mut tauri::App) -> Result<(), Box<dyn std::error:
         true,
         Some("CmdOrCtrl+Q"),
     )?;
+    #[cfg(all(feature = "native-app-smoke", debug_assertions))]
+    native_app_smoke::install(app, &app_menu)?;
     app_menu.append(&coordinated_quit)?;
     app.set_menu(menu)?;
     Ok(())
@@ -106,6 +114,10 @@ pub fn install_quit_menu(app: &mut tauri::App) -> Result<(), Box<dyn std::error:
 
 #[cfg(target_os = "macos")]
 pub fn on_menu_event(app: &AppHandle, event: MenuEvent) {
+    #[cfg(all(feature = "native-app-smoke", debug_assertions))]
+    if native_app_smoke::on_menu_event(app, &event) {
+        return;
+    }
     if event.id().as_ref() == QUIT_MENU_ID {
         if let Err(error) = request(app, "application-menu") {
             eprintln!("Application menu shutdown request failed: {error}");
