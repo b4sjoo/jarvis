@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { loadConfigFromFile } from "vite";
 
 import {
   DEFAULT_JARVIS_DEV_PORT,
@@ -50,4 +51,20 @@ test("inserts the Tauri config before runner and application arguments", () => {
     "--",
     "--release",
   ]);
+});
+
+test("the production Vite configuration consumes the narrow port override", async () => {
+  const previous = process.env.JARVIS_DEV_PORT;
+  process.env.JARVIS_DEV_PORT = "1438";
+  try {
+    const loaded = await loadConfigFromFile(
+      { command: "serve", mode: "development" },
+      new URL("../vite.config.ts", import.meta.url).pathname
+    );
+    assert.equal(loaded?.config.server?.port, 1438);
+    assert.equal(loaded?.config.server?.strictPort, true);
+  } finally {
+    if (previous === undefined) delete process.env.JARVIS_DEV_PORT;
+    else process.env.JARVIS_DEV_PORT = previous;
+  }
 });

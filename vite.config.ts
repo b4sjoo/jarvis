@@ -35,7 +35,7 @@ const buildTimestamp = new Date().toISOString();
 export default defineConfig(async ({ command }) => {
   const devPort =
     command === "serve"
-      ? resolveJarvisDevPort(process.env)
+      ? resolveJarvisDevPort({ JARVIS_DEV_PORT: process.env.JARVIS_DEV_PORT })
       : DEFAULT_JARVIS_DEV_PORT;
 
   return {
