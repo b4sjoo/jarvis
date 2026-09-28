@@ -233,6 +233,25 @@ test("response actions authorize the LQU frozen by the explicit action", () => {
       logicalQuestionUnit: responseActionQuestion,
     }
   );
+  assert.deepEqual(
+    resolveAdvisorLogicalQuestionAuthorizationTarget({
+      jobSource: "clarifying-answer",
+      runtimeCurrent: undefined,
+      responseActionTarget: responseActionQuestion,
+    }),
+    { source: "response-action-target", logicalQuestionUnit: responseActionQuestion },
+    "an explicitly source-bound project choice reuses the manual response target"
+  );
+  assert.deepEqual(
+    resolveAdvisorLogicalQuestionAuthorizationTarget({ jobSource: "clarifying-answer", runtimeCurrent: responseActionQuestion }),
+    { source: "runtime-current", logicalQuestionUnit: responseActionQuestion },
+    "ordinary clarification without an explicit target retains its existing source"
+  );
+  assert.deepEqual(
+    resolveAdvisorLogicalQuestionAuthorizationTarget({ jobSource: "live-turn", responseActionTarget: responseActionQuestion }),
+    { source: "runtime-current", logicalQuestionUnit: undefined },
+    "the supplied manual target cannot grant authority to live input"
+  );
 });
 
 test("Regenerate authorizes the visible LQU rather than ambient runtime current", () => {

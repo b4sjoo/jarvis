@@ -148,7 +148,8 @@ export function resolveAdvisorLogicalQuestionAuthorizationTarget(input: {
     };
   }
 
-  if (input.jobSource === "response-action") {
+  if (input.jobSource === "response-action" ||
+      (input.jobSource === "clarifying-answer" && input.responseActionTarget)) {
     return {
       source: "response-action-target",
       logicalQuestionUnit: input.responseActionTarget,

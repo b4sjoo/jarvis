@@ -124,8 +124,10 @@ test("first-time phase navigation shares one trace with its manual action", () =
   );
   const ast = ts.createSourceFile("hook.ts", source, ts.ScriptTarget.Latest, true);
   let visibleTarget: ts.Expression | undefined;
+  let actionTarget: ts.Expression | undefined;
   const visit = (node: ts.Node) => {
     if (ts.isVariableDeclaration(node) && node.name.getText(ast) === "genericVisibleTarget") visibleTarget = node.initializer;
+    if (ts.isPropertyAssignment(node) && node.name.getText(ast) === "responseActionTarget") actionTarget = node.initializer;
     ts.forEachChild(node, visit);
   };
   visit(ast);
@@ -136,8 +138,18 @@ test("first-time phase navigation shares one trace with its manual action", () =
     }).outputText, { responseAction, resolveVisibleAnswerResponseActionTarget: () => assert.fail("phase navigation must not read the pinned answer") });
     assert.equal(selected, undefined);
   }
-  assert.match(
-    source,
-    /responseActionTarget:\s*advisorJob\.source === "response-action"\s*\? advisorJob\.logicalQuestionUnit/
-  );
+  assert.ok(actionTarget);
+  const target = { id: "the-explicit-source" };
+  for (const [jobSource, selectedProject, expected] of [
+    ["response-action", false, target],
+    ["clarifying-answer", true, target],
+    ["clarifying-answer", false, undefined],
+    ["live-turn", true, undefined],
+  ] as const) {
+    const actual = vm.runInNewContext(ts.transpileModule(`(${actionTarget.getText(ast)})`, {
+      compilerOptions: { target: ts.ScriptTarget.ES2020 },
+    }).outputText, { advisorJob: { source: jobSource, logicalQuestionUnit: target },
+      options: { explicitProjectSelection: selectedProject ? { projectId: "project" } : undefined } });
+    assert.equal(actual, expected);
+  }
 });

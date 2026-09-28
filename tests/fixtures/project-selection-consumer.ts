@@ -89,7 +89,7 @@ export const S63_EXECUTION_CONSTRAINTS = {
   preBindingPause: "Hold the actual external snapshot read. A warm cache must be invalidated through an existing production data operation; pausing a synthetic binding callback is not evidence.",
   postBindingPause: "Hold the external Provider stream after checking the actual bound-project Prompt; introduce the next source through its real ingress, then release the old response.",
   screenFixture: "Supply a synthetic question screenshot through the existing capture transport and preserve its observation/image identity. A blank image plus an invented task is not a source fixture.",
-  completion: "Ten executions remain pending until one harness crosses the whole chain; isolated UI, domain and publication results cannot be added together as a pass.",
+  completion: "Run all ten executions through the real Hook browser test; isolated UI, domain and publication results cannot be added together as a pass.",
 } as const;
 
 function projectFact(projectId: string, projectName: string, content: string): MemoryEntry {

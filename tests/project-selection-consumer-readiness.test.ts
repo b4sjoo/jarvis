@@ -88,8 +88,5 @@ test("S63 production callback inventory reports the unexecuted boundaries, not a
   t.diagnostic(`existing publication test prepares candidates outside runAdvisor: ${existingPublicationTest.includes("function prepareOutputCandidate")}`);
 });
 
-// N1 now has a real browser/Hook test in project-selection-hook-browser.test.mjs.
-// Keep the remaining nine executions pending, independently of readiness checks.
-for (const execution of S63_CONSUMER_EXECUTIONS.filter(item => item.executionId !== "S63-N1")) {
-  test.todo(`${execution.executionId}: ${execution.surface}/${execution.source} ${execution.behavior}${execution.pauseAt ? ` at ${execution.pauseAt}` : ""}; not yet accepted by the complete production consumer matrix`);
-}
+// All ten executions live in project-selection-hook-browser.test.mjs.
+// The four readiness checks above remain preparation evidence, not S63 passes.

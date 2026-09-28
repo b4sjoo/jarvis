@@ -10489,7 +10489,8 @@ export function useMeetingAssistant() {
     }
     const settlementOverride = options.currentQuestionSettlementOverride;
     const responseActionSourceRecord =
-      advisorJob.source === "response-action" &&
+      (advisorJob.source === "response-action" ||
+        (advisorJob.source === "clarifying-answer" && options.explicitProjectSelection)) &&
       advisorJob.logicalQuestionUnit
       ? effectiveQuestionSourceLedgerRef.current.findLogicalQuestion({
           sessionId: advisorJob.logicalQuestionUnit.sessionId,
@@ -10615,7 +10616,8 @@ export function useMeetingAssistant() {
             ? advisorJob.logicalQuestionUnit
             : undefined,
         responseActionTarget:
-          advisorJob.source === "response-action"
+          advisorJob.source === "response-action" ||
+          (advisorJob.source === "clarifying-answer" && options.explicitProjectSelection)
             ? advisorJob.logicalQuestionUnit
             : undefined,
         artifactRegenerationTarget:
@@ -34577,16 +34579,14 @@ export function useMeetingAssistant() {
         );
       const recordedState = trace?.metadata?.clarifyingSelectionState;
       const state =
-        recordedState === "succeeded" ||
+        trace?.status === "error" ? "failed"
+          : trace?.status === "cancelled" ? "stale"
+          : recordedState === "succeeded" ||
         recordedState === "pending" ||
         recordedState === "failed" ||
         recordedState === "stale"
           ? recordedState
-          : trace?.status === "error"
-            ? "failed"
-            : trace?.status === "cancelled"
-              ? "stale"
-              : "failed";
+          : "failed";
       const reason =
         typeof trace?.metadata?.clarifyingSelectionTerminalReason === "string"
           ? trace.metadata.clarifyingSelectionTerminalReason
