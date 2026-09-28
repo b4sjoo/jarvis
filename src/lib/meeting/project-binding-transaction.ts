@@ -113,7 +113,7 @@ export function commitProjectBindingSettlement({
       ? []
       : [...currentTask.supportedFactAnchors],
     playbookPhase: invalidateProjectState
-      ? "project_narrative"
+      ? "project_summary"
       : currentTask.playbookPhase,
     phaseProgress: invalidateProjectState
       ? {}

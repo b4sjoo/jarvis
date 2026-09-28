@@ -153,6 +153,10 @@ export class RuntimeInferenceOperationRuntime<
     return this.currentOperationId;
   }
 
+  hasStartedBudgetSlot(budgetKey: string, slot: string) {
+    return (this.startsByBudgetKey.get(budgetKey)?.[slot] ?? 0) > 0;
+  }
+
   cancelAll(reason: "disposed" | "superseded" = "disposed") {
     this.disposed = reason === "disposed";
     this.currentOperationId = undefined;

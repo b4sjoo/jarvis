@@ -63,7 +63,7 @@ function task(): ActiveMeetingTask {
       id: "parent-rag",
       questionType: "ai-ml-system-design",
       topic: "Design a production RAG system",
-      playbookPhase: "architecture_decision",
+      playbookPhase: "project_QA",
       phaseProgress: {},
       supportedFactAnchors: [],
       canonicalQuestionSourceTurnIds: ["turn-parent"],

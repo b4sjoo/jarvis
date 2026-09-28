@@ -46,6 +46,7 @@ import type {
   DisplayTranscriptHistoryEntry,
   FactAnchorState,
   InterviewPlaybookPhase,
+  RecordedInterviewPlaybookPhase,
   MeetingResponseActionMode,
   MeetingResponseConfig,
   MeetingResponseLanguage,
@@ -101,7 +102,6 @@ import {
   resolveNativeAudioPrimaryControlAction,
   resolveCodingArtifactDisplay,
   resolveWhiteboardArtifactDisplay,
-  readProjectBindingClarifyingCandidates,
   resolveSettledAttemptEvaluationTarget,
   resolveTraceMemoryEvaluationSnapshot,
   selectPreparationArtifactUseReceiptsForEvaluation,
@@ -155,6 +155,10 @@ import { createMeetingFocusPublisher } from "@/lib/meeting/focus-window-protocol
 import { FactGuardrailNotice } from "./fact-guardrail-notice";
 import { PhaseOutputNotice } from "./phase-output-notice";
 import { AdvisePinButton } from "./advise-pin-button";
+import { TypeCorrectionMenuButton, type TypeCorrectionMenuActions } from "./type-correction-menu";
+import type { ManualCorrectionMenuSelection, ProjectChoicePresentation, ProjectChoiceSelection } from "@/lib/meeting/focus-window";
+import type { AdviseDisplayTarget } from "@/lib/meeting/manual-advise-display";
+import { ProjectChoiceControl } from "./project-choice-control";
 import { createMeetingFocusDisplayModel, projectSelectedFocusTask } from "@/lib/meeting/focus-display";
 import { formatChineseThinkingText } from "@/lib/meeting/meeting-display-text";
 import { MeetingMarkdownText } from "./meeting-markdown-text";
@@ -398,6 +402,7 @@ type ClarifyingSelectionState = {
   requestId?: string;
   traceId?: string;
   reason?: string;
+  projectTarget?: AdviseDisplayTarget;
 };
 
 type NativeAudioFaultFeedback = {
@@ -825,18 +830,7 @@ export const MeetingAssistant = ({
   const clarifyingQuestion = displaySuggestionSections.clarifyingQuestion.trim();
   const rawClarifyingOptions = displaySuggestionSections.clarifyingOptions ?? [];
   const displayedSuggestion = adviseDisplay.stable?.suggestion;
-  const clarifyingSourceTrace = displayedSuggestion?.sourceTraceId
-    ? meeting.traces.find(
-        (trace) => trace.id === displayedSuggestion?.sourceTraceId
-      )
-    : undefined;
-  const projectBindingClarifyingCandidates = useMemo(
-    () =>
-      readProjectBindingClarifyingCandidates(
-        clarifyingSourceTrace?.metadata
-      ),
-    [clarifyingSourceTrace?.metadata]
-  );
+  const projectChoice = meeting.readProjectChoicePresentation(adviseDisplay.target);
   const clarifyingQuestionOwner =
     displayedSuggestion?.questionLineage?.questionInstanceId ??
     displayedSuggestion?.parentTaskId ??
@@ -850,20 +844,19 @@ export const MeetingAssistant = ({
       buildClarifyingOptionDisplayModel({
         question: clarifyingQuestion,
         options: rawClarifyingOptions,
-        projectBindingNeedsSelection:
-          projectBindingClarifyingCandidates.needsSelection,
-        projectBindingCandidates:
-          projectBindingClarifyingCandidates.candidates,
       }),
     [
       clarifyingQuestion,
-      projectBindingClarifyingCandidates,
       rawClarifyingOptions,
     ]
   );
   const clarifyingOptions = clarifyingOptionDisplay.options;
   const activeClarifyingSelection =
-    clarifyingSelection?.questionKey === clarifyingQuestionKey
+    (clarifyingSelection?.projectTarget
+      ? clarifyingSelection.projectTarget.sessionId === adviseDisplay.target.sessionId &&
+        clarifyingSelection.projectTarget.logicalQuestionUnitId === adviseDisplay.target.logicalQuestionUnitId &&
+        clarifyingSelection.projectTarget.logicalQuestionRevision === adviseDisplay.target.logicalQuestionRevision
+      : clarifyingSelection?.questionKey === clarifyingQuestionKey)
       ? clarifyingSelection
       : null;
   const showClarifyingQuestion = Boolean(
@@ -873,9 +866,9 @@ export const MeetingAssistant = ({
     isTaskSwitchQuestion(clarifyingQuestion);
   useEffect(() => {
     if (!clarifyingSelection) return;
-    if (clarifyingSelection.questionKey === clarifyingQuestionKey) return;
+    if (activeClarifyingSelection) return;
     setClarifyingSelection(null);
-  }, [clarifyingQuestionKey, clarifyingSelection]);
+  }, [clarifyingQuestionKey, clarifyingSelection, activeClarifyingSelection]);
   useEffect(() => {
     if (!activeClarifyingSelection?.traceId) return;
     const trace = meeting.traces.find(
@@ -901,7 +894,7 @@ export const MeetingAssistant = ({
       return;
     }
     setClarifyingSelection((current) =>
-      current?.questionKey === clarifyingQuestionKey
+      current?.questionKey === activeClarifyingSelection.questionKey
         ? { ...current, status: recordedState, reason }
         : current
     );
@@ -1041,6 +1034,7 @@ export const MeetingAssistant = ({
         ? { label: audioWarningLabel, detail: audioWarningDetail }
         : undefined,
       showClarifyingQuestion,
+      projectChoice,
       clarifyingQuestion,
       showClarifyingBooleanFallback:
         clarifyingOptionDisplay.showBooleanFallback,
@@ -1134,6 +1128,7 @@ export const MeetingAssistant = ({
       meetingStatusLabel,
       audioPauseResumeControl,
       showClarifyingQuestion,
+      projectChoice,
       displaySuggestionSections.primaryAnswer,
       displaySuggestionSections.chineseThinking,
       clarifyingOptions,
@@ -1548,9 +1543,11 @@ export const MeetingAssistant = ({
     (
       answer: ClarifyingQuestionAnswer,
       option?: { label?: string; value?: string },
-      displayTarget = adviseDisplay.target
+      displayTarget = adviseDisplay.target,
+      projectSelection?: Pick<ProjectChoiceSelection, "key" | "reselect">
     ) => {
-      if (!clarifyingQuestion) return;
+      if (!clarifyingQuestion && !projectSelection) return;
+      const questionKey = projectSelection?.key ?? clarifyingQuestionKey;
 
       const label =
         option?.label ||
@@ -1563,7 +1560,8 @@ export const MeetingAssistant = ({
               : "Selected option");
       const submittedAt = Date.now();
       setClarifyingSelection({
-        questionKey: clarifyingQuestionKey,
+        questionKey,
+        ...(projectSelection ? { projectTarget: { ...displayTarget } } : {}),
         label,
         value: option?.value,
         submittedAt,
@@ -1571,18 +1569,19 @@ export const MeetingAssistant = ({
       });
       setDismissedQuestionKey(null);
       void meeting
-        .answerClarifyingQuestion(clarifyingQuestion, answer, option, {
+        .answerClarifyingQuestion(projectSelection ? "" : clarifyingQuestion, answer, option, {
           displayTarget,
-          questionKey: clarifyingQuestionKey,
-          optionSource: clarifyingOptionDisplay.source,
-          optionCount: clarifyingOptions.length,
+          questionKey,
+          ...(projectSelection ? { projectChoice: projectSelection } : {}),
+          optionSource: projectSelection ? "project-binding" : clarifyingOptionDisplay.source,
+          optionCount: projectSelection ? projectChoice?.options.length ?? 0 : clarifyingOptions.length,
           booleanFallbackUsed:
-            clarifyingOptionDisplay.showBooleanFallback &&
+            !projectSelection && clarifyingOptionDisplay.showBooleanFallback &&
             (answer === "yes" || answer === "no"),
         })
         .then((outcome) => {
           setClarifyingSelection((current) =>
-            current?.questionKey === clarifyingQuestionKey &&
+            current?.questionKey === questionKey &&
             current.submittedAt === submittedAt
               ? {
                   ...current,
@@ -1596,7 +1595,7 @@ export const MeetingAssistant = ({
         })
         .catch((error) => {
           setClarifyingSelection((current) =>
-            current?.questionKey === clarifyingQuestionKey &&
+            current?.questionKey === questionKey &&
             current.submittedAt === submittedAt
               ? {
                   ...current,
@@ -1618,8 +1617,14 @@ export const MeetingAssistant = ({
       clarifyingQuestionKey,
       displayTargetKey,
       meeting.answerClarifyingQuestion,
+      projectChoice,
     ]
   );
+
+  const handleProjectChoice = (selection: ProjectChoiceSelection) =>
+    handleClarifyingAnswer("option", selection.option, selection.displayTarget, {
+      key: selection.key, reselect: selection.reselect,
+    });
 
   const handleSpeechCorrectionSubmit = useCallback(() => {
     const correction = speechCorrectionInput.trim();
@@ -1628,6 +1633,12 @@ export const MeetingAssistant = ({
     setSpeechCorrectionInput("");
     void meeting.submitSpeechCorrection(correction);
   }, [meeting.submitSpeechCorrection, speechCorrectionInput]);
+  const submitTypeCorrection = (selection: ManualCorrectionMenuSelection, source: "normal-mode" | "focus-mode") =>
+    meeting.correctActiveQuestionType(selection.correctedType, source, {
+      displayTarget: selection.displayTarget,
+      correctionTarget: selection.target,
+      correctionIntent: selection.option.intent,
+    });
   const handleSpeechCorrectionDeactivate = useCallback(
     (correctionId: string) => {
       void meeting.deactivateSpeechCorrection(correctionId);
@@ -1710,19 +1721,28 @@ export const MeetingAssistant = ({
       case "deactivate-correction":
         void meeting.deactivateSpeechCorrection(action.correctionId);
         break;
+      case "request-correction-menu":
+        void Promise.resolve().then(() => meeting.readManualCorrectionMenu(action.correctedType, action.displayTarget))
+          .then(menu => focusPublisherRef.current?.respondCorrectionMenu(action, menu))
+          .catch(error => focusPublisherRef.current?.respondCorrectionMenu(action, {
+            correctedType: action.correctedType, options: [],
+            rejectionReason: error instanceof Error ? error.message : "Unable to load correction options.",
+          }));
+        break;
       case "correct-question-type":
         void meeting.correctActiveQuestionType(
           action.correctedType,
           action.source,
           { actionId: action.actionId, ingressReceivedAt: action.requestedAt, ingressSource: "ui",
-            ...(action.displayTarget ? { displayTarget: action.displayTarget } : {}) }
+            displayTarget: action.displayTarget ?? { sessionId: "" },
+            correctionTarget: action.correctionTarget, correctionIntent: action.correctionIntent }
         );
         break;
       case "update-interview-types":
         updateFocusInterviewTypes(action.interviewTypes);
         break;
       case "clarifying-answer":
-        handleClarifyingAnswer(action.answer, action.option, action.displayTarget ?? { sessionId: "" });
+        handleClarifyingAnswer(action.answer, action.option, action.displayTarget ?? { sessionId: "" }, action.projectChoice);
         break;
       case "new-task":
         handleNewTaskConfirmation();
@@ -1890,13 +1910,11 @@ export const MeetingAssistant = ({
               manualQuestionTypeCorrection={
                 focusSnapshot.manualQuestionTypeCorrection
               }
-              onCorrectQuestionType={(correctedType) => {
-                void meeting.correctActiveQuestionType(
-                  correctedType,
-                  "focus-mode",
-                  adviseDisplay.locked ? { displayTarget: adviseDisplay.target } : {}
-                );
-              }}
+              typeCorrectionMenu={{ displayTarget: adviseDisplay.target,
+                requestMenu: meeting.readManualCorrectionMenu,
+                onSelect: selection => submitTypeCorrection(selection, "focus-mode") }}
+              projectChoice={focusSnapshot.projectChoice}
+              onProjectChoice={handleProjectChoice}
                 latestTurnText={focusSnapshot.latestTurnText}
               forceAdviseAvailable={focusSnapshot.forceAdviseAvailable}
               forceAdvisePending={focusSnapshot.forceAdvisePending}
@@ -2094,6 +2112,12 @@ export const MeetingAssistant = ({
                 </section>
               ) : null}
 
+              {projectChoice ? <section className="min-w-0 border-t border-border/70 py-3">
+                <ProjectChoiceControl presentation={projectChoice} onSelect={handleProjectChoice}
+                  selectedLabel={activeClarifyingSelection?.label}
+                  selectionState={activeClarifyingSelection?.status}
+                  selectionMessage={formatClarifyingSelectionMessage(activeClarifyingSelection)} />
+              </section> : null}
               <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3">
                 <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
                   <MessageSquareTextIcon className="h-3.5 w-3.5" />
@@ -2418,13 +2442,9 @@ export const MeetingAssistant = ({
                       compact
                       effectiveType={effectiveQuestionType}
                       correction={activeManualQuestionTypeCorrection}
-                      onCorrect={(correctedType) => {
-                        void meeting.correctActiveQuestionType(
-                          correctedType,
-                          "normal-mode",
-                          adviseDisplay.locked ? { displayTarget: adviseDisplay.target } : {}
-                        );
-                      }}
+                      menu={{ displayTarget: adviseDisplay.target,
+                        requestMenu: meeting.readManualCorrectionMenu,
+                        onSelect: selection => submitTypeCorrection(selection, "normal-mode") }}
                     />
                   </div>
                 ) : null}
@@ -2519,7 +2539,7 @@ export const MeetingAssistant = ({
                         : "Not needed yet."
                   }
                 />
-                {showClarifyingQuestion ? (
+                {showClarifyingQuestion && !projectChoice?.canSelect ? (
                   <ClarifyingActionButtons
                     isBusy={focusSnapshot.isBusy}
                     selectedAnswerLabel={activeClarifyingSelection?.label}
@@ -2974,6 +2994,11 @@ export const MeetingAssistant = ({
                     candidate={latestCriticalMomentCandidate}
                     evaluation={latestCriticalMomentEvaluation}
                     groundTruth={latestCriticalMomentGroundTruth}
+                    observed={latestCriticalMomentGroundTruth?.projectionId
+                      ? meeting.humanEvaluationProjectionsV2.find(projection =>
+                          projection.sessionId === latestCriticalMomentCandidate.sessionId &&
+                          projection.projectionId === latestCriticalMomentGroundTruth.projectionId)?.observed
+                      : undefined}
                     traces={latestCriticalMomentTraces}
                     onUpdate={(patch) =>
                       meeting.updateCriticalMomentEvaluation(
@@ -3171,7 +3196,9 @@ const FocusModePanel = ({
   transientPersonalStatusLabel,
   answerDeliveryState,
   manualQuestionTypeCorrection,
-  onCorrectQuestionType,
+  typeCorrectionMenu,
+  projectChoice,
+  onProjectChoice,
   latestTurnText,
   forceAdviseAvailable,
   forceAdvisePending,
@@ -3217,7 +3244,9 @@ const FocusModePanel = ({
   transientPersonalStatusLabel?: string;
   answerDeliveryState: AnswerDeliveryPresentation["state"];
   manualQuestionTypeCorrection?: MeetingFocusSnapshot["manualQuestionTypeCorrection"];
-  onCorrectQuestionType: (type: CanonicalQuestionType) => void;
+  typeCorrectionMenu: TypeCorrectionMenuActions;
+  projectChoice?: ProjectChoicePresentation;
+  onProjectChoice: (selection: ProjectChoiceSelection) => void;
   latestTurnText: string;
   forceAdviseAvailable: boolean;
   forceAdvisePending: boolean;
@@ -3378,6 +3407,11 @@ const FocusModePanel = ({
               </section>
             ) : null}
 
+            {projectChoice ? <section className="min-w-0 border-t border-border/70 py-3">
+              <ProjectChoiceControl presentation={projectChoice} onSelect={onProjectChoice}
+                selectedLabel={selectedClarifyingAnswerLabel} selectionState={clarifyingSelectionState}
+                selectionMessage={clarifyingSelectionMessage} />
+            </section> : null}
             {showClarifyingQuestion ? (
               <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3">
                 <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
@@ -3388,7 +3422,7 @@ const FocusModePanel = ({
                   className={cn(WRAP_TEXT_CLASS, "text-xs leading-5")}
                   value={clarifyingQuestion}
                 />
-                <ClarifyingActionButtons
+                {!projectChoice?.canSelect ? <ClarifyingActionButtons
                   isBusy={isBusy}
                   isTaskSwitchClarifyingQuestion={
                     isTaskSwitchClarifyingQuestion
@@ -3402,7 +3436,7 @@ const FocusModePanel = ({
                   onNewTaskConfirmation={onNewTaskConfirmation}
                   onSameTaskConfirmation={onSameTaskConfirmation}
                   onDismiss={onDismissClarifyingQuestion}
-                />
+                /> : null}
               </section>
             ) : null}
           </div>
@@ -3420,7 +3454,7 @@ const FocusModePanel = ({
                 compact
                 effectiveType={effectiveQuestionType}
                 correction={manualQuestionTypeCorrection}
-                onCorrect={onCorrectQuestionType}
+                menu={typeCorrectionMenu}
               />
             ) : (
               <InterviewTypeButtonGrid
@@ -3621,12 +3655,12 @@ const InterviewTypeButtonGrid = ({
 const CurrentQuestionTypeControl = ({
   effectiveType,
   correction,
-  onCorrect,
+  menu,
   compact = false,
 }: {
   effectiveType?: CanonicalQuestionType;
   correction?: MeetingFocusSnapshot["manualQuestionTypeCorrection"];
-  onCorrect: (type: CanonicalQuestionType) => void;
+  menu: TypeCorrectionMenuActions;
   compact?: boolean;
 }) => {
   const isPending =
@@ -3648,19 +3682,18 @@ const CurrentQuestionTypeControl = ({
         const selected = option.id === effectiveType;
 
         return (
-          <Button
+          <TypeCorrectionMenuButton
             key={option.id}
-            size="sm"
-            variant={selected ? "default" : "outline"}
+            {...menu}
+            correctedType={option.id}
+            selected={selected}
+            label={option.shortLabel}
             className={cn(
               "h-7 min-w-[72px] px-2 text-[10px]",
               compact && "h-6 min-w-[64px] shrink-0 px-1.5"
             )}
             title={`Correct the current question to ${option.label}`}
-            onClick={() => onCorrect(option.id)}
-          >
-            {option.shortLabel}
-          </Button>
+          />
         );
       })}
       {statusLabel ? (
@@ -5396,6 +5429,7 @@ const CriticalMomentEvaluationPanel = ({
   candidate,
   evaluation,
   groundTruth,
+  observed,
   traces,
   onUpdate,
   onRecordGroundTruth,
@@ -5403,6 +5437,7 @@ const CriticalMomentEvaluationPanel = ({
   candidate: CriticalMomentCandidate;
   evaluation: CriticalMomentEvaluation | undefined;
   groundTruth: CriticalMomentExpectedFacts | undefined;
+  observed?: HumanEvaluationProjectionV2["observed"];
   traces: MeetingTrace[];
   onUpdate: (patch: CriticalMomentOutcomeEvaluationPatch) => void;
   onRecordGroundTruth: (
@@ -5429,6 +5464,7 @@ const CriticalMomentEvaluationPanel = ({
       ? evaluateTaskSettlementTupleCompatibilityV2({
           relation: expectedRelation,
           parentAction: expectedParentAction,
+          manualCorrectionEvidence: observed?.manualCorrectionEvidence,
         })
       : undefined;
 
@@ -5444,6 +5480,7 @@ const CriticalMomentEvaluationPanel = ({
         evaluateTaskSettlementTupleCompatibilityV2({
           relation: groundTruth?.expectedRelation ?? "none",
           parentAction: "none",
+          manualCorrectionEvidence: observed?.manualCorrectionEvidence,
         }).recommendedParentAction
     );
     evaluationOpenedAtRef.current = undefined;
@@ -5629,11 +5666,13 @@ const CriticalMomentEvaluationPanel = ({
                     evaluateTaskSettlementTupleCompatibilityV2({
                       relation,
                       parentAction: current,
+                      manualCorrectionEvidence: observed?.manualCorrectionEvidence,
                     }).compatible
                       ? current
                       : evaluateTaskSettlementTupleCompatibilityV2({
                           relation,
                           parentAction: "none",
+                          manualCorrectionEvidence: observed?.manualCorrectionEvidence,
                         }).recommendedParentAction
                   );
                 }
@@ -5881,10 +5920,8 @@ const evaluationParentActions: HumanExpectedParentAction[] = [
 ];
 
 const projectTrajectoryPhases: InterviewPlaybookPhase[] = [
-  "project_narrative",
-  "architecture_decision",
-  "validation_reliability",
-  "impact_lessons",
+  "project_summary",
+  "project_QA",
 ];
 
 const projectTrajectoryFactAnchorStates: FactAnchorState[] = [
@@ -5972,7 +6009,7 @@ const TraceHumanEvaluationPanel = ({
     useState<MeetingMetadataEvaluationErrorKind>();
   const [expectedProjectName, setExpectedProjectName] = useState("");
   const [expectedProjectPhase, setExpectedProjectPhase] =
-    useState<InterviewPlaybookPhase>();
+    useState<RecordedInterviewPlaybookPhase>();
   const [expectedProjectFactAnchorState, setExpectedProjectFactAnchorState] =
     useState<FactAnchorState>();
   const [expectedProjectChildContinuity, setExpectedProjectChildContinuity] =
@@ -6014,6 +6051,7 @@ const TraceHumanEvaluationPanel = ({
       ? evaluateTaskSettlementTupleCompatibilityV2({
           relation: expectedRelation,
           parentAction: expectedParentAction,
+          manualCorrectionEvidence: observedSnapshotV2.manualCorrectionEvidence,
         })
       : undefined;
   const observedSettlementCompatibility =
@@ -6021,6 +6059,7 @@ const TraceHumanEvaluationPanel = ({
       ? evaluateTaskSettlementTupleCompatibilityV2({
           relation: observedRelation,
           parentAction: observedParentAction,
+          manualCorrectionEvidence: observedSnapshotV2.manualCorrectionEvidence,
         })
       : undefined;
   const activeRuntimeFact =
@@ -7043,7 +7082,7 @@ const TraceHumanEvaluationPanel = ({
                   label="Expected phase"
                   options={projectTrajectoryPhases.map((phase) => [
                     phase,
-                    phase,
+                    phase === "project_summary" ? "Summary" : "QA",
                   ])}
                   value={expectedProjectPhase}
                   onSelect={(value) =>

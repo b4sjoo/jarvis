@@ -22,9 +22,6 @@ export type PlaybookPhaseFlag =
   | "evaluation_metrics"
   | "latency_cost_safety"
   | "project_context"
-  | "hard_problem"
-  | "tradeoff_decision"
-  | "validation_debugging"
   | "impact_lesson"
   | "whiteboard"
   | "tradeoffs_wrapup"
@@ -131,6 +128,24 @@ export interface PlaybookPhaseDecision {
   phaseStateCompatible?: boolean;
 }
 
+/** Source-admission facts, never inferred from question text or parent origin.
+ * The caller owns operation consumption and must revalidate authorization at
+ * commit against LQU/session/source, final owner, task/phase and manual-action
+ * bases. Replays, stale results and already consumed operations are unauthorized.
+ */
+export interface ProjectMainlinePhaseAdmission {
+  logicalQuestionUnitId: string;
+  previousLogicalQuestionUnitId?: string;
+  newQuestionAdmitted: boolean;
+  parentId: string;
+  responseOwner: {
+    kind: "parent" | "child" | "current-only";
+    parentId?: string;
+  };
+  authorized: boolean;
+  initializesSummary: boolean;
+}
+
 export interface PlaybookPhaseDecisionInput {
   questionType?: CanonicalQuestionType | ScreenQuestionType;
   playbookId?: InterviewPlaybookId;
@@ -145,6 +160,7 @@ export interface PlaybookPhaseDecisionInput {
   phaseControl?: PlaybookPhaseControlEvidence;
   phaseControlSettled?: boolean;
   freshParentCreated?: boolean;
+  projectMainlineAdmission?: ProjectMainlinePhaseAdmission;
 }
 
 export interface ResolvedPlaybookState {

@@ -14,6 +14,9 @@ for (const name of [
   "logical-question-ownership", "logical-question-unit", "current-question-settlement",
   "context-manager", "active-meeting-task", "active-branch-phase", "coding-child-phase",
   "interview-playbook", "playbook-phase", "playbook-phase-history", "human-evaluation", "force-advise",
+  "effective-question-source-ledger", "manual-correction-intent", "manual-correction-transition",
+  "settled-advisor-execution-plan", "effective-task-source-view", "runtime-commit-authorization",
+  "bounded-recent-history",
 ]) {
   Object.assign(production, await import(pathToFileURL(path.join(output, `src/lib/meeting/${name}.js`))));
 }
@@ -79,6 +82,8 @@ function harness({ activeChild = false, selectedChild = false, phase = "design_f
   const f = sourceFixture();
   const manager = new production.MeetingContextManager();
   manager.reset({ sessionId: f.unit.sessionId });
+  const ledger = new production.EffectiveQuestionSourceLedger();
+  manager.setEffectiveQuestionSourceLedger(ledger);
   const playbook = production.selectInterviewPlaybook({ questionType: "general-system-design" });
   const parent = {
     ...f.context.activeMeetingTask.parent, stableKind: "general-system-design", source: "voice",
@@ -188,8 +193,13 @@ function harness({ activeChild = false, selectedChild = false, phase = "design_f
     latestManualCorrectionTargetRef: { current: backgroundTarget },
     manualCorrectionTargetHistoryRef: { current: [selectedTarget, backgroundTarget] },
     logicalQuestionUnitRef: { current: backgroundUnit }, runtimeEpochRef: { current: 3 },
-    latestForceAdviseTargetRef: { current: { presentation: forcePresentation } },
-    effectiveQuestionSourceLedgerRef: { current: { list: () => f.records } },
+    latestForceAdviseTargetRef: { current: { presentation: forcePresentation, logicalQuestionUnit: backgroundUnit,
+      logicalQuestionLease: production.createLogicalQuestionUnitLease(backgroundUnit) } },
+    effectiveQuestionSourceLedgerRef: { current: ledger },
+    manualCorrectionRevisionRef: { current: 0 },
+    currentQuestionSettlementRef: { current: structuredClone(background.settlementSnapshot) },
+    settledAdvisorExecutionPlanRef: { current: undefined },
+    recentAdvisorContinuityRef: { current: { recentCapsules: [] } },
     contextManagerRef: { current: manager }, playbookPhaseHistoryRef: { current: production.createPlaybookPhaseHistoryState() },
     sessionRecordingManagerRef: { current: { recordCaptureLifecycle: event => recordingEvents.push(event) } },
     state, currentSuggestionText: background.suggestion.content,
@@ -209,6 +219,11 @@ function harness({ activeChild = false, selectedChild = false, phase = "design_f
     finalizeCorrection: input => finalizations.push(input), correctionTrace: { id: "correction-trace" }, mutationStepId: "correction-step",
   };
   f.records = [f.record, backgroundRecord];
+  for (const record of f.records) ledger.upsert(record);
+  for (const unit of [f.unit, backgroundUnit]) manager.recordTaskQuestionAdmission({
+    sessionId: f.unit.sessionId, parentId: parent.id, childId: selectedChild ? "child-code" : undefined,
+    logicalQuestionUnitId: unit.id,
+  });
   const context = vm.createContext(environment);
   environment.isManualRuntimeActionBusy = evaluate(`(${declaration("isManualRuntimeActionBusy").getText(hook)})`, context);
   environment.shortcutRejectionMessage = evaluate(`(${declaration("shortcutRejectionMessage").getText(hook)})`, context);
@@ -216,7 +231,12 @@ function harness({ activeChild = false, selectedChild = false, phase = "design_f
   environment.transitionForceAdviseTarget = callback("transitionForceAdviseTarget", context);
   environment.invalidateBackgroundAfterSelectedTaskMutation = callback("invalidateBackgroundAfterSelectedTaskMutation", context);
   environment.recordCommittedPlaybookPhaseTransition = callback("recordCommittedPlaybookPhaseTransition", context);
-  return { f, manager, selected, background, snapshot, selectedTarget, backgroundTarget, environment, context,
+  for (const name of ["readManualCorrectionContext", "readManualCorrectionMenu", "readEffectiveSemanticTask", "isSelectedHistoricalQuestion"]) {
+    environment[name] = callback(name, context);
+  }
+  const correctionContext = environment.readManualCorrectionContext(snapshot.target);
+  const correctionInvocation = { correctionIntent: { kind: "independent" }, correctionTarget: correctionContext?.target };
+  return { f, manager, ledger, selected, background, snapshot, selectedTarget, backgroundTarget, environment, context, correctionInvocation,
     display, calls, events, writes, traces, finalizations, recordingEvents, get state() { return state; } };
 }
 
@@ -233,11 +253,11 @@ function correctionIngress(h, invocation = {}) {
     ${body}
     return { correctionLogicalQuestionUnit, correctionLogicalQuestionLease, correctionLineage,
       targetResolution, canonicalCorrectionTarget, displayScopedCorrection };
-  })`, h.context)("coding", "normal-mode", invocation);
+  })`, h.context)("coding", "normal-mode", { ...h.correctionInvocation, ...invocation });
 }
 
 function correctionLeaseRecheck(h, captured) {
-  Object.assign(h.environment, captured);
+  Object.assign(h.environment, captured, { invocation: { ...h.correctionInvocation, displayTarget: h.snapshot.target } });
   const node = callbackNode("correctActiveQuestionType");
   const guard = find(node, n => ts.isIfStatement(n) && n.expression.getText(hook) === "correctionLogicalQuestionLease", "correction lease recheck");
   return evaluate(`(() => { ${guard.getText(hook)}; return "authorized"; })()`, h.context);
@@ -266,19 +286,37 @@ test("B controls: production Correction ingress selects pinned A and preserves l
   assert.equal(h.environment.stableAnswerRevisionRef.current, h.background);
   assert.equal(correctionLeaseRecheck(h, captured), "authorized");
   h.environment.manualCorrectionTargetHistoryRef.current = [h.backgroundTarget];
+  assert.equal(correctionLeaseRecheck(h, captured), "authorized", "retained ledger recovers A after history eviction");
+  h.ledger.clear();
+  h.ledger.upsert(h.f.records[1]);
   assert.equal(correctionLeaseRecheck(h, captured), undefined);
   assert.equal(h.finalizations.length, 1);
   assert.equal(h.writes.length, 0);
   assert.equal(h.calls.length, 0);
 });
 
-for (const invalid of ["stale-focus", "missing-history", "source-hash", "exited-parent", "clear"]) {
+test("B controls: an evicted correction history entry is recovered from the real ledger", async () => {
+  const h = harness();
+  h.environment.manualCorrectionTargetHistoryRef.current = [h.backgroundTarget];
+  const captured = await correctionIngress(h, { displayTarget: h.snapshot.target });
+  assert.equal(captured.correctionLogicalQuestionUnit.id, h.f.unit.id);
+  assert.equal(captured.correctionLogicalQuestionUnit.normalizedText, h.f.unit.normalizedText);
+  assert.equal(correctionLeaseRecheck(h, captured), "authorized");
+  assert.equal(h.environment.latestManualCorrectionTargetRef.current, h.backgroundTarget);
+  assert.equal(h.writes.length, 0);
+  assert.equal(h.calls.length, 0);
+});
+
+for (const invalid of ["stale-focus", "missing-source", "source-hash", "exited-parent", "clear"]) {
   test(`B controls: Correction rejects ${invalid} without selecting B`, async () => {
     const h = harness();
     const invocation = { displayTarget: h.snapshot.target };
     if (invalid === "stale-focus") invocation.displayTarget = { ...h.snapshot.target, suggestionId: "old-A" };
-    if (invalid === "missing-history") h.environment.manualCorrectionTargetHistoryRef.current = [h.backgroundTarget];
-    if (invalid === "source-hash") h.f.records[0].sourceHash = "changed";
+    if (invalid === "missing-source") {
+      h.environment.manualCorrectionTargetHistoryRef.current = [h.backgroundTarget];
+      h.ledger.clear(); h.ledger.upsert(h.f.records[1]);
+    }
+    if (invalid === "source-hash") h.ledger.upsert({ ...h.f.records[0], sourceHash: "changed" });
     if (invalid === "clear") h.manager.reset({ sessionId: "cleared-session" });
     if (invalid === "exited-parent") {
       h.manager.commitTaskRuntimeTransition({ id: "replace-owner", transition: "replace-parent", reason: "fixture-owner-exit",
@@ -312,6 +350,19 @@ test("B controls: Correction can still capture the selected active child without
   assert.equal(correctionLeaseRecheck(h, captured), "authorized");
   assert.equal(h.environment.latestManualCorrectionTargetRef.current, h.backgroundTarget);
   assert.equal(h.writes.length, 0);
+});
+
+test("B controls: replacing the selected child rejects its old click even under the same parent and Type", async () => {
+  const h = harness({ selectedChild: true });
+  const before = h.manager.getTaskRuntimeState().parent;
+  assert.equal(h.manager.commitTaskRuntimeTransition({ id: "replace-child", transition: "attach-child", reason: "fixture",
+    parent: { ...before, child: { ...before.child, id: "replacement-child" }, revisions: before.revisions + 1 } }).authorized, true);
+  h.writes.length = 0;
+  assert.equal(await correctionIngress(h, { displayTarget: h.snapshot.target }), undefined);
+  assert.deepEqual(h.events.map(event => event.stage), ["requested", "terminal"]);
+  assert.equal(h.events.at(-1).terminalDisposition, "stale");
+  assert.equal(h.writes.length, 0);
+  assert.equal(h.calls.length, 0);
 });
 
 for (const action of ["previous-phase", "next-phase"]) {
@@ -367,7 +418,7 @@ for (const action of ["previous-phase", "next-phase"]) {
       const h = harness();
       const invocation = { displayTarget: h.snapshot.target };
       if (invalid === "stale-focus") invocation.displayTarget = { ...h.snapshot.target, suggestionId: "old-A" };
-      if (invalid === "source-hash") h.f.records[0].sourceHash = "changed";
+      if (invalid === "source-hash") h.ledger.upsert({ ...h.f.records[0], sourceHash: "changed" });
       if (invalid === "exited-parent" || invalid === "phase-changed") {
         const before = h.manager.getState().taskRuntime.parent;
         const after = invalid === "exited-parent" ? { ...before, id: "new-parent" } : {
@@ -564,16 +615,125 @@ test("B controls: phase history same-phase and duplicate rejection preserve back
 
 // This is the actual Correction post-writer gate through invalidation, driven by
 // the real manager's result. It does not replace the earlier Correction admission proof.
-function correctionPostWriter(h, lifecycleCommit, before, after) {
-  Object.assign(h.environment, { lifecycleCommit, parentBefore: before, parentAfter: after, parentLifecycleMutationApplied: false });
+function correctionPostWriter(h, lifecycleCommit, before, after, preparedSource) {
+  Object.assign(h.environment, { lifecycleCommit, parentBefore: before, parentAfter: after, parentLifecycleMutationApplied: false,
+    contextState: h.manager.getState(), decision: preparedSource?.transition.decision ?? { target: after.child ? "child" : "parent" },
+    sourceOwnerCorrection: preparedSource?.ownerCorrection, effectiveSourceAfterCorrection: preparedSource?.record ?? h.f.record,
+    correctionLogicalQuestionUnit: h.f.unit, correctionCurrentQuestionSettlement: preparedSource?.transition.settlement ?? h.selected.settlementSnapshot,
+    correctionExecutionPlan: undefined });
   const guard = find(callbackNode("correctActiveQuestionType"),
     n => ts.isIfStatement(n) && n.expression.getText(hook) === "!lifecycleCommit.authorized", "Correction post-writer guard");
   const statements = guard.parent.statements;
   const index = statements.indexOf(guard);
-  assert.match(statements[index + 2].getText(hook), /^invalidateBackgroundAfterSelectedTaskMutation\(/);
-  return evaluate(`(() => { ${statements.slice(index, index + 3).map(n => n.getText(hook)).join("\n")}
+  const end = statements.findIndex((statement, i) => i > index && ts.isVariableStatement(statement) &&
+    statement.declarationList.declarations.some(item => item.name.getText(hook) === "correctedContextState"));
+  assert.ok(end > index, "keep contiguous production source/admission/invalidation/settlement writes");
+  return evaluate(`(() => { ${statements.slice(index, end).map(n => n.getText(hook)).join("\n")}
     return parentLifecycleMutationApplied;
   })()`, h.context);
+}
+
+function retypeSelectedOwner(h, selectedChild) {
+  const before = h.manager.getTaskRuntimeState().parent;
+  const correctedType = selectedChild ? "field-knowledge" : "ai-ml-system-design";
+  const ctx = h.environment.readManualCorrectionContext(h.snapshot.target);
+  assert.ok(ctx);
+  const kind = selectedChild ? "continue-child" : "retype-parent";
+  const capability = production.getManualCorrectionCapabilities(ctx, correctedType).options.find(option => option.id === kind);
+  assert.ok(capability);
+  const prepared = production.prepareManualCorrectionIntentTransition({
+    operationId: "SB-correction", context: ctx, correctedType, intent: capability.intent,
+    correctedPlaybook: production.selectInterviewPlaybook({ questionType: correctedType }), newParentId: "unused", now: 100,
+  });
+  assert.equal(prepared.authorized, true, prepared.reason);
+  const nextSource = production.createEffectiveQuestionSourceRecord({ logicalQuestionUnit: h.f.unit,
+    settlement: production.buildEffectiveAdvisorSettlementView({ settlement: prepared.settlement,
+      activeMeetingTask: prepared.activeMeetingTask, taskRuntimeRevision: ctx.runtime.revision + 1,
+      fallback: { questionType: correctedType, relation: prepared.capability.relation } }).effectiveSettlement,
+    activeMeetingTask: prepared.activeMeetingTask });
+  assert.ok(nextSource);
+  const ownerCorrection = h.ledger.prepareOwnerCorrection({ operationId: "SB-writer", sessionId: ctx.currentSessionId,
+    runtimeEpoch: ctx.currentRuntimeEpoch, logicalQuestionUnitId: h.f.unit.id, logicalQuestionRevision: h.f.unit.revision,
+    sourceHash: ctx.source.sourceHash, expectedOwner: ctx.source.owner, nextOwner: nextSource.owner,
+    relation: prepared.capability.relation, availableObservationIds: [] });
+  assert.ok(ownerCorrection);
+  const result = h.manager.commitTaskRuntimeTransition({ id: "SB-writer", transition: prepared.transition,
+    parent: prepared.parent, sourceOwnerCorrection: ownerCorrection, expectedRevision: ctx.runtime.revision, reason: "SB-real-writer" });
+  assert.equal(result.authorized, true, result.reason);
+  assert.equal(correctionPostWriter(h, result, before, prepared.parent, { transition: prepared, ownerCorrection, record: nextSource }), true);
+  return { correctedType, kind, before, after: h.manager.getTaskRuntimeState().parent };
+}
+
+for (const selectedChild of [false, true]) {
+  test(`SB current ${selectedChild ? "child" : "parent"} A retype refreshes B effective settlement without rewriting historical output`, async () => {
+    const h = harness({ selectedChild });
+    const before = h.manager.getTaskRuntimeState().parent;
+    const oldType = selectedChild ? before.child.questionType : before.stableKind;
+    const rawB = JSON.stringify(h.background);
+    const rawPlan = production.buildSettledAdvisorExecutionPlan({
+      settlement: h.background.settlementSnapshot, activeMeetingTask: h.manager.getState().activeMeetingTask,
+      providerSnapshot: { providers: [], selectedProvider: { provider: "fixture", variables: {} }, codingProvider: { provider: "fixture", variables: {} } },
+      memoryUseCase: selectedChild ? "coding_interview" : "system_design_interview",
+      askFrame: "hypothetical-design", topicDomain: "backend", sourceQuestion: h.backgroundTarget.logicalQuestionUnit.normalizedText,
+    });
+    h.environment.settledAdvisorExecutionPlanRef.current = rawPlan;
+    const planBefore = JSON.stringify(rawPlan);
+    const historical = { rawSettlement: structuredClone(h.background.settlementSnapshot), humanExpectedType: oldType };
+    h.traces.push({ id: "trace-B", status: "success", metadata: historical });
+    const { correctedType, kind } = retypeSelectedOwner(h, selectedChild);
+    assert.equal(h.environment.stableAnswerRevisionRef.current, null);
+    assert.equal(h.state.latestSuggestion, null);
+    assert.equal(h.writes.filter(write => write.result.mutationApplied).length, 1);
+    assert.equal(JSON.stringify(h.background), rawB, "historical attempt must keep its original Type");
+    assert.equal(h.background.settlementSnapshot.questionType, oldType);
+    assert.equal(historical.rawSettlement.questionType, oldType);
+    assert.equal(historical.humanExpectedType, oldType);
+    assert.equal(JSON.stringify(rawPlan), planBefore, "old execution plan must stay immutable");
+    const effective = h.environment.currentQuestionSettlementRef.current;
+    const view = production.buildEffectiveAdvisorSettlementView({ settlement: effective,
+      activeMeetingTask: h.manager.getState().activeMeetingTask, taskRuntimeRevision: h.manager.getTaskRuntimeState().revision,
+      fallback: { questionType: correctedType, relation: selectedChild ? "child-probe" : "followup-parent" } });
+    console.log(`SB ${kind}: owner=${selectedChild ? h.manager.getState().activeMeetingTask.child.questionType : h.manager.getState().activeMeetingTask.parent.questionType}, currentB=${effective.questionType}, targetB=${h.environment.latestManualCorrectionTargetRef.current.settlement.questionType}, consumer=${view.questionType}/${view.contextReadScope}`);
+    assert.equal(effective.questionType, correctedType, "current B settlement must follow its retyped active owner");
+    assert.equal(effective.logicalQuestionUnitId, "background-B");
+    assert.equal(h.environment.latestManualCorrectionTargetRef.current.settlement.questionType, correctedType);
+    assert.equal(view.questionType, correctedType);
+    assert.equal(view.contextReadScope, selectedChild ? "active-child-read" : "active-parent-read");
+  });
+
+  test(`SB ${selectedChild ? "child" : "parent"} retype rejects old B commit and unlock cannot regenerate its invalidated answer`, async () => {
+    const h = harness({ selectedChild });
+    const oldToken = production.createRuntimeCommitToken({ operationId: "B-in-flight", pipeline: "advisor",
+      snapshot: production.buildRuntimeCommitSnapshot({ runtimeEpoch: 3, contextState: h.manager.getState() }) });
+    assert.equal(production.authorizeRuntimeCommit({ token: oldToken, currentOperationId: "B-in-flight",
+      current: production.buildRuntimeCommitSnapshot({ runtimeEpoch: 3, contextState: h.manager.getState() }) }).authorized, true);
+    const rawB = JSON.stringify(h.background);
+    const { before, after, correctedType } = retypeSelectedOwner(h, selectedChild);
+    assert.equal(after.id, before.id);
+    assert.equal(after.sourceQuestionUnitId, before.sourceQuestionUnitId);
+    assert.equal(after.topic, before.topic);
+    if (selectedChild) {
+      assert.equal(after.child.id, before.child.id);
+      assert.equal(after.stableKind, before.stableKind);
+      assert.equal(after.child.questionType, correctedType);
+    } else assert.equal(after.stableKind, correctedType);
+    const authorization = production.authorizeRuntimeCommit({ token: oldToken, currentOperationId: "B-in-flight",
+      current: production.buildRuntimeCommitSnapshot({ runtimeEpoch: 3, contextState: h.manager.getState() }) });
+    assert.equal(authorization.authorized, false, "late B cannot authorize publication after the real writer changed its owner");
+    assert.equal(h.display.current.target.logicalQuestionUnitId, h.f.unit.id);
+    assert.equal(h.display.toggle(h.snapshot.target).accepted, true);
+    assert.equal(h.display.locked, false);
+    assert.equal(h.display.current, null, "unlock cannot restore invalidated B");
+    h.environment.currentSuggestionText = "";
+    await callback("forceAdviseLatestTurn", h.context)();
+    assert.equal(h.events.at(-1).reason, "stale-recovery-target");
+    await callback("regenerateSuggestion", h.context)();
+    assert.equal(h.events.at(-1).terminalDisposition, "stale");
+    assert.equal(h.events.at(-1).reason, "visible-answer-missing");
+    assert.equal(h.calls.length, 0, "neither automatic nor manual invocation may reuse old B");
+    assert.equal(h.writes.length, 1);
+    assert.equal(JSON.stringify(h.background), rawB);
+  });
 }
 
 for (const authorized of [true, false]) {

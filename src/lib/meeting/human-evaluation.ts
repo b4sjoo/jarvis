@@ -1230,6 +1230,8 @@ function normalizeProjectTrajectoryPhase(
     value === "solution_planning" ||
     value === "requirement_clarification" ||
     value === "design_framing" ||
+    value === "project_summary" ||
+    value === "project_QA" ||
     value === "project_narrative" ||
     value === "architecture_decision" ||
     value === "validation_reliability" ||

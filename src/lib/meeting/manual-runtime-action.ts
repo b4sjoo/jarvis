@@ -34,6 +34,8 @@ export type ManualRuntimeActionIngressRejectionReason =
 
 export interface ManualRuntimeActionInvocation {
   displayTarget?: import("./manual-advise-display.js").AdviseDisplayTarget;
+  correctionIntent?: import("./manual-correction-intent.js").ManualCorrectionIntent;
+  correctionTarget?: import("./manual-correction-intent.js").ManualCorrectionTargetSnapshot;
   uiSurface?: "meeting-response-actions" | "normal-mode" | "focus-mode";
   actionId?: string;
   ingressSource?: "ui" | "shortcut";
@@ -72,6 +74,7 @@ export interface ManualRuntimeActionEventV1 {
   observedVisibleAnswerRevision?: number;
   specializedEventId?: string;
   correctedType?: string;
+  correctionIntent?: import("./manual-correction-intent.js").ManualCorrectionIntent;
   terminalDisposition?: ManualRuntimeActionTerminalDisposition;
   reason?: string;
 }

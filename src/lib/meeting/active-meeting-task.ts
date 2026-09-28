@@ -138,7 +138,7 @@ function isProjectBindingContextReset(before: ActiveInterviewParent, after: Acti
   // Existing project rebind/invalidate semantics clear the old project's state.
   // A binding change does not authorize arbitrary phase or child replacement.
   return !sameRuntimeValue(before.projectBinding, after.projectBinding) &&
-    after.playbookPhase === "project_narrative" &&
+    after.playbookPhase === "project_summary" &&
     Object.keys(after.phaseProgress).length === 0 &&
     after.supportedFactAnchors.length === 0 && !after.child &&
     !after.whiteboardArtifact;

@@ -6,6 +6,8 @@ import {
   MEETING_FOCUS_SNAPSHOT_EVENT as snapshotEvent,
   type MeetingFocusSnapshotEnvelope,
   type MeetingFocusWindowKind,
+  type ManualCorrectionMenu,
+  type MeetingFocusCorrectionMenuRequest,
 } from "../src/lib/meeting/focus-window.js";
 import { createMeetingFocusConsumer, createMeetingFocusPublisher, type MeetingFocusTransport } from "../src/lib/meeting/focus-window-protocol.js";
 import { createMeetingFocusDisplayModel } from "../src/lib/meeting/focus-display.js";
@@ -39,6 +41,80 @@ class Bus {
   }
 }
 const fail = (error: Error) => { throw error; };
+
+test("on-demand correction menu preserves request target without changing the applied display", async () => {
+  const bus = new Bus(), p = publisher(bus), c = consumer(bus, "controls");
+  await p.start(); await c.start(); await p.publish(empty); bus.drain();
+  const original = { sessionId: "session", logicalQuestionUnitId: "selected-A", logicalQuestionRevision: 1 };
+  const before = c.received.length;
+  const result = c.requestCorrectionMenu("coding", original);
+  bus.drain();
+  const request = p.actions.at(-1) as MeetingFocusCorrectionMenuRequest;
+  assert.equal(request.type, "request-correction-menu");
+  assert.deepEqual(request.displayTarget, original);
+  const menu: ManualCorrectionMenu = { correctedType: "coding", target: {
+    sessionId: "session", runtimeEpoch: 1, logicalQuestionUnitId: "selected-A", logicalQuestionRevision: 1,
+    sourceHash: "hash-A", manualCorrectionRevision: 0, taskRuntimeRevision: 1,
+  }, options: [{ id: "independent", label: "Create an independent question", family: "independent",
+    intent: { kind: "independent" }, relation: "new-parent", action: "create", scope: "independent-new-parent", targetOwner: { kind: "new-parent" } }] };
+  await p.respondCorrectionMenu({ ...request, requestId: "old-request" }, menu); bus.drain();
+  assert.ok(c.rejected.includes("menu-request-correlation"));
+  await p.respondCorrectionMenu(request, menu); bus.drain();
+  assert.deepEqual(await result, menu);
+  assert.equal(c.received.length, before, "menu response is not a new display or ACK");
+  assert.equal(p.actions.length, 1, "opening type menu never submits a correction");
+  p.dispose(); c.dispose();
+});
+
+test("project choice whitelist retains exact owner, candidates and reselect intent without model text", async () => {
+  const bus = new Bus(), p = publisher(bus), c = consumer(bus, "answer");
+  await p.start(); await c.start();
+  const target = { sessionId: "session", logicalQuestionUnitId: "selected-A", logicalQuestionRevision: 1 };
+  const source = { ...empty, projectChoice: {
+    key: "parent-A:binding-1", displayTarget: { ...target, hiddenSourceText: "private" },
+    currentProject: { id: "project-a", name: "Project A", evidence: "private" },
+    options: [{ id: "project-b", label: "Project B", value: "project-b", evidence: "private" }],
+    canSelect: false, canReselect: true, hiddenRuntime: { secret: true },
+  } };
+  await p.publish(source); bus.drain();
+  const snapshot = c.received.at(-1)!.payload;
+  assert.equal(snapshot.clarifyingQuestion, "");
+  assert.equal(snapshot.showClarifyingQuestion, false);
+  assert.deepEqual(snapshot.projectChoice, { key: "parent-A:binding-1", displayTarget: target,
+    currentProject: { id: "project-a", name: "Project A" },
+    options: [{ id: "project-b", label: "Project B", value: "project-b" }], canSelect: false, canReselect: true });
+  assert.ok(Object.isFrozen(snapshot.projectChoice));
+  assert.ok(Object.isFrozen(snapshot.projectChoice!.options[0]));
+  source.projectChoice.options[0].label = "Changed after publication";
+  assert.equal(snapshot.projectChoice!.options[0].label, "Project B");
+  await c.dispatch({ type: "clarifying-answer", answer: "option", displayTarget: target,
+    option: { label: "Project B", value: "project-b" }, projectChoice: { key: "parent-A:binding-1", reselect: true } });
+  bus.drain();
+  assert.deepEqual(p.actions, [{ type: "clarifying-answer", answer: "option", displayTarget: target,
+    option: { label: "Project B", value: "project-b" }, projectChoice: { key: "parent-A:binding-1", reselect: true } }]);
+  await p.publish(empty); bus.drain();
+  assert.equal(c.received.at(-1)!.payload.projectChoice, undefined);
+  c.dispose(); p.dispose();
+});
+
+test("closing/replacing Focus menu discards late responses and publisher restart invalidates a pending edit", async () => {
+  const bus = new Bus(), p = publisher(bus), c = consumer(bus, "controls");
+  await p.start(); await c.start(); await p.publish(empty); bus.drain();
+  const abort = new AbortController();
+  const first = c.requestCorrectionMenu("coding", { sessionId: "session" }, abort.signal);
+  const cancelled = assert.rejects(first, /closed/);
+  bus.drain();
+  const request = p.actions.at(-1) as MeetingFocusCorrectionMenuRequest;
+  abort.abort(); await cancelled;
+  await p.respondCorrectionMenu(request, { correctedType: "coding", options: [] }); bus.drain();
+  assert.ok(c.rejected.includes("menu-request-correlation"));
+  const second = c.requestCorrectionMenu("coding", { sessionId: "session" });
+  const restarted = assert.rejects(second, /main window changed/);
+  bus.drain(); p.dispose();
+  const replacement = publisher(bus, "new-publisher");
+  await replacement.start(); await replacement.publish(empty); bus.drain(); await restarted;
+  replacement.dispose(); c.dispose();
+});
 
 test("Focus carries the original Type Correction request identity to the main window", async () => {
   const bus = new Bus(), p = publisher(bus), c = consumer(bus, "controls");

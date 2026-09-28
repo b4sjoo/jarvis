@@ -513,7 +513,7 @@ function makeParent(
       stableKind === "coding"
         ? "implementation_validation"
         : stableKind === "project-deep-dive"
-          ? "project_narrative"
+          ? "project_summary"
           : "story_selection",
     phaseProgress: {},
     supportedFactAnchors: [],

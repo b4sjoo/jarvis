@@ -82,7 +82,7 @@ test("keeps envelope fields out of every runtime LLM prompt", () => {
         logicalQuestionUnitId: "question-prior",
         logicalQuestionUnitRevision: 1,
         parentId: "parent-a",
-        playbookPhase: "project_narrative",
+        playbookPhase: "project_summary",
         createdAt: 100,
         unresolved: true,
       },

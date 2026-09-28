@@ -23,10 +23,8 @@ export type InterviewPlaybookCatalogPhase =
   | "solution_planning"
   | "requirement_clarification"
   | "design_framing"
-  | "project_narrative"
-  | "architecture_decision"
-  | "validation_reliability"
-  | "impact_lessons"
+  | "project_summary"
+  | "project_QA"
   | "concept_explanation"
   | "follow_up";
 
@@ -254,7 +252,7 @@ export function createInterviewPlaybookFromCatalog(input: {
     return createPlaybook({
       id: "project_deep_dive",
       label: "Project Deep Dive",
-      phase: "project_narrative",
+      phase: "project_summary",
       questionType,
       confidence,
       reason,
@@ -264,11 +262,11 @@ export function createInterviewPlaybookFromCatalog(input: {
         "system-design",
       ],
       firstMove:
-        "When the request needs personal implementation facts, anchor on one real project and give a 30-45 second introduction covering supported problem, role, contribution, and outcome. Otherwise answer the requested product or technical judgment directly with bounded analysis or an explicit hypothetical example.",
+        "Follow the committed project_summary or project_QA contract. In Summary, give a source-grounded 3-5 minute project introduction inside Answer. An explicit current technical question, including the first question, takes priority over a default introduction. Manual Next/Back phase-continuation intent takes priority over the reused old question. Use one bound project for personal facts; otherwise give bounded analysis or an explicitly hypothetical example.",
       clarifyingStrategy:
         "Ask whether to discuss the existing implementation or a future design only when that distinction materially changes the answer. Missing project facts alone do not require clarification when bounded analysis remains useful.",
       outputContract:
-        "Use fact-bound first-person claims only when supported. For unsupported product judgment, tradeoff, or future improvement, Answer may be a direct bounded analysis or explicitly hypothetical example; do not present it as completed personal work.",
+        "Summary uses four parts within the existing Answer: background and supported scale; my concrete responsibilities and team boundaries; architecture and tradeoffs; retrospective and proposed redesign. Its 3-5 minute target replaces generic short-answer limits only for Summary, follows the meeting language, and never justifies invented facts or padding. QA directly answers the current ask, including an explicitly requested overview. Use fact-bound first-person claims only when supported; distinguish future proposals and hypothetical analysis from completed work.",
       followUpPolicy:
         "Follow-ups should drill into architecture, tradeoff, debugging, metrics, failure, rollout, or future work for the same project.",
       maxEntries: 7,

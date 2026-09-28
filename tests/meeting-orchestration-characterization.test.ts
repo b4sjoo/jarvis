@@ -755,7 +755,7 @@ test("an exact correction token follows its one owned phase-progress mutation", 
   assert.ok(corrected);
   setTestActiveParent(manager, {
     ...corrected,
-    phaseProgress: { ...corrected.phaseProgress, project_narrative: true },
+    phaseProgress: { ...corrected.phaseProgress, project_summary: true },
     revisions: corrected.revisions + 1,
   });
   const completionToken = rebaseRuntimeCommitTokenAfterOwnedParentMutation({

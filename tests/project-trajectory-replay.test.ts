@@ -8,6 +8,7 @@ import {
 } from "../src/lib/meeting/human-ground-truth-v2.js";
 import { buildCompactTraceSummary } from "../src/lib/meeting/session-recording.js";
 import { buildSessionLongitudinalEvaluationReport } from "../src/lib/meeting/session-longitudinal-evaluation.js";
+import { upsertQuestionHumanEvaluation } from "../src/lib/meeting/human-evaluation.js";
 import type { MeetingTrace } from "../src/lib/meeting/types.js";
 import { PROJECT_TRAJECTORY_EXPERTISE_REPLAY } from "./fixtures/project-trajectory-expertise-session.js";
 
@@ -145,6 +146,65 @@ test("replays a sanitized project trajectory with joined evaluation evidence", (
   assert.equal(scorecard.projectTrajectoryFunnel.phaseRestartCount, 0);
   assert.equal(scorecard.projectTrajectoryFunnel.childResumeObserved, 1);
   assert.equal(scorecard.projectTrajectoryFunnel.childResumeSuccessRate.rate, 1);
+});
+
+test("phase readers round-trip both PDD generations without rewriting raw labels or Expected", () => {
+  const phases = ["project_summary", "project_QA", "project_narrative", "architecture_decision", "validation_reliability", "impact_lessons"] as const;
+  for (const [index, phase] of phases.entries()) {
+    const trace = makeTrace(`reader-${phase}`, {
+      activeMeetingParentId: "parent-project",
+      activeMeetingParentRevision: 1,
+      activeMeetingParentQuestionType: "project-deep-dive",
+      activeMeetingParentPhase: phase,
+      activeMeetingProjectBindingId: "project",
+      activeMeetingProjectBindingRevision: 1,
+    }, index);
+    const original = JSON.stringify(trace);
+    const summary = buildCompactTraceSummary({
+      sessionId: "phase-readers", trace, trigger: "manual",
+      traceExportPath: `traces/${trace.id}/trace.json`, summaryPath: `traces/${trace.id}/summary.json`,
+    });
+    assert.equal(summary.projectTrajectory?.phase, phase);
+    const observed = buildHumanEvaluationObservedSnapshotV2(trace);
+    assert.equal(observed.playbookPhase, phase);
+    const legacyEvaluation = upsertQuestionHumanEvaluation([], {
+      sessionId: "phase-readers", traceId: trace.id, traceKind: "voice",
+      taskId: "parent-project", questionType: "project-deep-dive",
+      projectTrajectory: { detectedPhase: phase },
+    }, { projectTrajectory: { expectedPhase: phase } });
+    assert.equal(legacyEvaluation[0]?.projectTrajectory?.detectedPhase, phase);
+    assert.equal(legacyEvaluation[0]?.projectTrajectory?.expectedPhase, phase);
+    const event = createHumanGroundTruthEventV2({
+      sessionId: "phase-readers",
+      subject: { questionId: `Q-${phase}`, taskId: "parent-project", traceIds: [trace.id], sourceTurnIds: [] },
+      fact: { kind: "expected-project-trajectory", expectedPhase: phase },
+      source: "explicit-ui", now: 10,
+    });
+    const projection = deriveHumanEvaluationProjectionV2({
+      sessionId: "phase-readers", subject: event.subject, events: [event], observed, now: 20,
+    });
+    assert.equal(projection.verdicts.playbookPhaseCorrect, true);
+    assert.equal(JSON.stringify(trace), original);
+    assert.equal(event.fact.kind === "expected-project-trajectory" && event.fact.expectedPhase, phase);
+  }
+});
+
+test("cross-version phase labels are not silently remapped into a new accuracy claim", () => {
+  const observed = buildHumanEvaluationObservedSnapshotV2(makeTrace("new-summary", {
+    activeMeetingParentPhase: "project_summary",
+  }, 0));
+  const event = createHumanGroundTruthEventV2({
+    sessionId: "phase-readers",
+    subject: { questionId: "Q", traceIds: ["trace:new-summary"], sourceTurnIds: [] },
+    fact: { kind: "expected-project-trajectory", expectedPhase: "project_narrative" },
+    source: "explicit-ui", now: 10,
+  });
+  const projection = deriveHumanEvaluationProjectionV2({
+    sessionId: "phase-readers", subject: event.subject, events: [event], observed, now: 20,
+  });
+  assert.equal(observed.playbookPhase, "project_summary");
+  assert.equal(event.fact.kind === "expected-project-trajectory" && event.fact.expectedPhase, "project_narrative");
+  assert.notEqual(projection.verdicts.playbookPhaseCorrect, true);
 });
 
 function makeTrace(

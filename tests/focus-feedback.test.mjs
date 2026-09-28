@@ -11,7 +11,7 @@ const output = process.env.JARVIS_TEST_OUTPUT_DIR ?? ".tmp-tests";
 const production = file => import(pathToFileURL(path.resolve(output, `src/lib/meeting/${file}.js`)));
 const { ManualAdviseDisplay: CurrentSelector } = await production("manual-advise-display");
 const { buildMeetingAnswerDisplayModel, overlayMeetingAnswerArtifacts } = await production("meeting-answer-display");
-const { buildClarifyingOptionDisplayModel, readProjectBindingClarifyingCandidates } = await production("clarifying-options");
+const { buildClarifyingOptionDisplayModel } = await production("clarifying-options");
 const { createMeetingFocusDisplayModel } = await production("focus-display");
 const { createMeetingFocusPublisher, createMeetingFocusConsumer } = await production("focus-window-protocol");
 const { EMPTY_MEETING_FOCUS_SNAPSHOT: empty } = await production("focus-window");
@@ -83,7 +83,8 @@ async function harness(t, replacement = false) {
   let pendingRender = false, renders = 0, memoIndex = 0;
   const memos = [];
   const env = {
-    state: { partialSuggestion: replacement ? "" : "Answer: A first chunk", latestSuggestion: null },
+    state: { partialSuggestion: replacement ? "" : "Answer: A first chunk", latestSuggestion: null,
+      settings: { useMemory: false } },
     contextManagerRef: { current: { getState: () => ({ sessionId: "session" }) } },
     stableAnswerRevisionRef: { current: replacement ? stable("A") : null },
     displayedStreamRef: { current: { leaseId: "lease-A", generationId: "A", traceId: "trace-A",
@@ -91,7 +92,7 @@ async function harness(t, replacement = false) {
     generationResultLedgerRef: { current: { getEntry: () => ({ commitDisposition: "started" }) } },
     manualAdviseDisplayRef: { current: display },
     buildMeetingAnswerDisplayModel, overlayMeetingAnswerArtifacts,
-    buildClarifyingOptionDisplayModel, readProjectBindingClarifyingCandidates, createMeetingFocusDisplayModel,
+    buildClarifyingOptionDisplayModel, createMeetingFocusDisplayModel,
     // The native filesystem is the only recorder substitute; event/state transitions are production code.
     setState(update) { const previous = env.state; env.state = update(previous); stateChanges.push(env.state); pendingRender = true; },
     traceStoreRef: { current: { getTraces: () => [] } }, refreshRecordedCompletedTrace() {},
@@ -117,6 +118,8 @@ async function harness(t, replacement = false) {
     formatClarifyingSelectionMessage: () => undefined, getActiveMeetingTaskFocusSummary: () => undefined,
   };
   const select = hookCallback("selectAdviseDisplay", env);
+  env.readProjectChoiceContext = hookCallback("readProjectChoiceContext", env);
+  env.meeting.readProjectChoicePresentation = hookCallback("readProjectChoicePresentation", env);
   env.meeting.recordAdviseDisplayApplied = hookCallback("recordAdviseDisplayApplied", env);
   const recorder = new SessionRecordingManager(evaluate(`(${recorderCreation.arguments[0].getText(hook)})`, env), async (command, args) => {
     writes.push({ command, args });
@@ -166,8 +169,7 @@ async function harness(t, replacement = false) {
     env.adviseDisplay = read();
     env.displaySuggestionSections = env.adviseDisplay.sections;
     env.displayTargetKey = JSON.stringify(env.adviseDisplay.target);
-    env.clarifyingSourceTrace = undefined;
-    for (const name of ["clarifyingQuestion", "rawClarifyingOptions", "projectBindingClarifyingCandidates", "clarifyingOptionDisplay", "clarifyingOptions"]) {
+    for (const name of ["clarifyingQuestion", "rawClarifyingOptions", "projectChoice", "clarifyingOptionDisplay", "clarifyingOptions"]) {
       env[name] = evaluate(`(${variable(main, name).initializer.getText(main)})`, env);
     }
     env.showClarifyingQuestion = Boolean(env.clarifyingQuestion);
@@ -211,6 +213,7 @@ for (const replacement of [false, true]) {
     assert.equal(h.env.focusSnapshot, first);
     assert.equal(h.published().length, 1);
     assert.equal(h.actions.length, 0, "ACK never becomes a product/model action");
+    assert.equal(h.env.focusSnapshot.projectChoice, undefined, "the real project reader has no active project capability");
     await h.recorder.stop();
     const recorded = h.writes.filter(write => write.args.relativePath === "timeline.jsonl")
       .map(write => JSON.parse(write.args.payload)).filter(event => event.metadata?.stage === "advise-display-applied");

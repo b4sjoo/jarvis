@@ -97,7 +97,7 @@ test("personalized guidance selects only matching family, project, and playbook 
     questionType: "project-deep-dive",
     taskRelation: "followup-parent",
     playbookId: "project_deep_dive",
-    playbookPhase: "architecture_decision",
+    playbookPhase: "project_QA",
     openingRoute: {
       kind: "project-intro",
       source: "test",

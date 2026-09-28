@@ -15,7 +15,7 @@ function parent(): ActiveInterviewParent {
 }
 
 for (const [field, value] of [
-  ["stableKind", "coding"], ["playbookPhase", "architecture_decision"],
+  ["stableKind", "coding"], ["playbookPhase", "project_QA"],
   ["topic", "A different question"], ["source", "screen"],
   ["createdAt", 99], ["originQuestionId", "other-question"],
   ["child", { id: "injected-child", questionType: "coding" }],
@@ -44,7 +44,7 @@ test("J2: real phase writer rejects a phase transition with a hidden Type change
   const result = manager.commitTaskRuntimeTransition({
     id: "phase-update", transition: "set-phase", reason: "test-phase-write",
     expectedRevision: snapshot.revision,
-    parent: { ...before, revisions: 2, playbookPhase: "architecture_decision", stableKind: "coding" },
+    parent: { ...before, revisions: 2, playbookPhase: "project_QA", stableKind: "coding" },
   });
   assert.equal(result.authorized, false);
   assert.deepEqual(manager.getTaskRuntimeState(), snapshot);
@@ -262,7 +262,7 @@ for (const action of ["bind", "rebind", "invalidate"] as const) {
     assert.deepEqual(result.state.parent, JSON.parse(JSON.stringify(producer.task)));
     if (action !== "bind") {
       assert.equal(result.state.parent?.child, undefined);
-      assert.equal(result.state.parent?.playbookPhase, "project_narrative");
+      assert.equal(result.state.parent?.playbookPhase, "project_summary");
     }
     assert.equal("latestUsefulAnswer" in result.state.parent!, false);
     assert.equal("previousUsefulAnswer" in result.state.parent!, false);

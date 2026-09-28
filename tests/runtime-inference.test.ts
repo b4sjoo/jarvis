@@ -53,6 +53,9 @@ test("registers each atomic runtime operation with an isolated policy", () => {
   const metadata = getRuntimeInferenceOperationDefinition(
     "meeting-metadata-inference"
   );
+  const projectSelection = getRuntimeInferenceOperationDefinition(
+    "project-selection-inference"
+  );
   const whiteboard = getRuntimeInferenceOperationDefinition(
     "whiteboard-syntax-repair"
   );
@@ -96,6 +99,16 @@ test("registers each atomic runtime operation with an isolated policy", () => {
   assert.equal(responseOpportunity.quiescenceMs, 0);
   assert.equal(metadata.lane, "background");
   assert.equal(metadata.timeoutMs, 5_000);
+  assert.deepEqual(projectSelection, {
+    workloadClass: "runtime",
+    operationKind: "project-selection-inference",
+    providerTier: "fast",
+    lane: "critical",
+    timeoutMs: 3_000,
+    maxOutputTokens: 512,
+    quiescenceMs: 0,
+    maxStartsPerBudgetSlot: 1,
+  });
   assert.equal(whiteboard.timeoutMs, 3_000);
   assert.equal(whiteboard.maxOutputTokens, 768);
   assert.equal(relation.lane, "critical");
@@ -367,6 +380,34 @@ test("rejects an operation submitted to the wrong runtime", () => {
   assert.equal(disposition, "operation-mismatch");
 });
 
+test("project selection uses the existing runtime budget once per final Me slot, including failure", async () => {
+  const runtime = new RuntimeInferenceOperationRuntime<RuntimeInferenceRuntimeJob, string>(
+    "project-selection-inference"
+  );
+  let calls = 0;
+  const schedule = (turn: string, fail = false) => new Promise<string>((resolve) => {
+    runtime.schedule({
+      job: {
+        ...runtimeJob("project-selection-inference", `selection-${calls}-${turn}`),
+        budgetKey: "pending-parent:binding-0",
+        budgetSlot: `final-me:${turn}`,
+      },
+      execute: async () => {
+        calls++;
+        if (fail) throw new Error("fixture provider failure");
+        return "proposal";
+      },
+      onSettled: (settlement) => resolve(settlement.disposition),
+    });
+  });
+  assert.equal(await schedule("turn-1", true), "error");
+  assert.equal(await schedule("turn-1"), "budget-exhausted");
+  assert.equal(await schedule("turn-2"), "completed");
+  assert.equal(await schedule("turn-2"), "budget-exhausted");
+  assert.equal(calls, 2);
+  runtime.cancelAll();
+});
+
 test("isolates provider circuits by operation and session", () => {
   const circuit = new RuntimeInferenceSessionCircuitBreaker();
   const opened = circuit.open({
@@ -426,10 +467,17 @@ test("routes Fast Runtime work through the override and Intelligent work through
     snapshot,
     operationKind: "question-type-adjudication",
   });
+  const projectSelectionRoute = resolveRuntimeInferenceModelRouteFromSnapshot({
+    snapshot,
+    operationKind: "project-selection-inference",
+  });
 
   assert.equal(fastRoute.route, "runtime-inference-override");
   assert.equal(fastRoute.providerTier, "fast");
   assert.equal(fastRoute.selectedProvider.variables.MODEL, "runtime");
+  assert.equal(projectSelectionRoute.route, fastRoute.route);
+  assert.equal(projectSelectionRoute.providerTier, "fast");
+  assert.deepEqual(projectSelectionRoute.selectedProvider, fastRoute.selectedProvider);
   assert.equal(intelligentRoute.route, "main");
   assert.equal(intelligentRoute.providerTier, "intelligent");
   assert.equal(intelligentRoute.provider?.id, "shared");

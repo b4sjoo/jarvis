@@ -76,7 +76,9 @@ test("B UI: native producer and main consumer retain the clicked locked target a
   assert.ok(assignment);
   for (const action of [{ type: "response-action", action: "next-phase" },
     { type: "response-action", action: "previous-phase" },
-    { type: "correct-question-type", correctedType: "field-knowledge", source: "focus-mode" }]) {
+    { type: "correct-question-type", correctedType: "field-knowledge", source: "focus-mode", displayTarget: targetA,
+      correctionTarget: { logicalQuestionUnitId: "lqu-A", logicalQuestionRevision: 3 },
+      correctionIntent: { kind: "new-child", parentId: "parent-A" } }]) {
     for (const locked of [false, true]) {
       const queue = [];
       const send = evaluate(`(${variable(focus, "sendFocusAction").initializer.getText(focus)})`, {
@@ -86,23 +88,28 @@ test("B UI: native producer and main consumer retain the clicked locked target a
       });
       send(action);
       const pending = queue[0];
-      assert.equal(Object.hasOwn(pending, "displayTarget"), locked);
+      const scoped = locked || action.type === "correct-question-type";
+      assert.equal(Object.hasOwn(pending, "displayTarget"), scoped);
       const env = environment(false);
       env.adviseDisplay.target = targetB;
       const receive = evaluate(`(${assignment.right.getText(main)})`, env);
       receive(pending);
       const invocation = env.calls[0].args.at(-1);
-      assert.equal(Object.hasOwn(invocation, "displayTarget"), locked);
-      if (locked) assert.deepEqual(invocation.displayTarget, targetA);
-      if (action.type === "correct-question-type") assert.equal(invocation.actionId, "action-A");
+      assert.equal(Object.hasOwn(invocation, "displayTarget"), scoped);
+      if (scoped) assert.deepEqual(invocation.displayTarget, targetA);
+      if (action.type === "correct-question-type") {
+        assert.equal(invocation.actionId, "action-A");
+        assert.deepEqual(JSON.parse(JSON.stringify(invocation.correctionTarget)), action.correctionTarget);
+        assert.deepEqual(JSON.parse(JSON.stringify(invocation.correctionIntent)), action.correctionIntent);
+      }
     }
   }
 });
 
-test("B UI: normal and embedded type controls and normal phase buttons scope only locked clicks", () => {
+test("MC7 UI: both type menus submit the original selection; phase buttons retain locked-only scope", () => {
   const corrections = nodes(main, node => ts.isJsxAttribute(node) &&
-    ["onCorrect", "onCorrectQuestionType"].includes(node.name.getText(main)) &&
-    node.initializer?.expression?.getText(main).includes("meeting.correctActiveQuestionType("));
+    ["menu", "typeCorrectionMenu"].includes(node.name.getText(main)) &&
+    node.initializer?.expression?.getText(main).includes("submitTypeCorrection("));
   assert.equal(corrections.length, 2);
   const response = nodes(main, node => ts.isJsxAttribute(node) && node.name.getText(main) === "onClick" &&
     node.initializer?.expression?.getText(main).includes("meeting.applyResponseAction(action.id"));
@@ -110,9 +117,16 @@ test("B UI: normal and embedded type controls and normal phase buttons scope onl
   for (const locked of [false, true]) {
     for (const control of corrections) {
       const env = environment(locked);
-      evaluate(`(${control.initializer.expression.getText(main)})`, env)("coding");
-      assert.equal(Object.hasOwn(env.calls[0].args[2], "displayTarget"), locked);
-      if (locked) assert.deepEqual(env.calls[0].args[2].displayTarget, targetA);
+      env.submitTypeCorrection = evaluate(`(${variable(main, "submitTypeCorrection").initializer.getText(main)})`, env);
+      const menu = evaluate(`(${control.initializer.expression.getText(main)})`, env);
+      assert.deepEqual(menu.displayTarget, targetA);
+      env.adviseDisplay.target = targetB;
+      const selection = { correctedType: "coding", displayTarget: targetA, target: { logicalQuestionUnitId: "lqu-A" },
+        option: { intent: { kind: "retype-parent", parentId: "parent-A" } } };
+      menu.onSelect(selection);
+      assert.deepEqual(env.calls[0].args[2].displayTarget, targetA);
+      assert.equal(env.calls[0].args[2].correctionTarget, selection.target);
+      assert.equal(env.calls[0].args[2].correctionIntent, selection.option.intent);
     }
     for (const id of ["previous-phase", "next-phase", "enhance-context", "narrow-context"]) {
       const env = { ...environment(locked), action: { id } };
@@ -121,6 +135,44 @@ test("B UI: normal and embedded type controls and normal phase buttons scope onl
       assert.equal(Object.hasOwn(env.calls[0].args[1], "displayTarget"), scoped);
       if (scoped) assert.deepEqual(env.calls[0].args[1].displayTarget, targetA);
     }
+  }
+});
+
+test("PDD UI phase choices are Summary/QA while historical Observed and Expected values round-trip unchanged", () => {
+  const phases = evaluate(`(${variable(main, "projectTrajectoryPhases").initializer.getText(main)})`, {});
+  assert.deepEqual(Array.from(phases), ["project_summary", "project_QA"]);
+  const group = nodes(main, node => ts.isJsxSelfClosingElement(node) &&
+    node.tagName.getText(main) === "CriticalMomentButtonGroup" &&
+    node.attributes.properties.some(prop => prop.name?.getText(main) === "label" && prop.initializer?.text === "Expected phase"))[0];
+  assert.ok(group);
+  const optionExpression = group.attributes.properties.find(prop => prop.name?.getText(main) === "options").initializer.expression;
+  const options = evaluate(`(${optionExpression.getText(main)})`, { projectTrajectoryPhases: phases });
+  assert.deepEqual(JSON.parse(JSON.stringify(options)), [["project_summary", "Summary"], ["project_QA", "QA"]]);
+  const draftDeclaration = nodes(main, node => ts.isVariableDeclaration(node) && ts.isArrayBindingPattern(node.name) &&
+    node.name.elements[0]?.name?.getText(main) === "expectedProjectPhase")[0];
+  assert.equal(draftDeclaration.initializer.typeArguments[0].getText(main), "RecordedInterviewPlaybookPhase");
+  const fix = nodes(main, node => ts.isJsxAttribute(node) && node.name.getText(main) === "onClick" &&
+    node.initializer?.expression?.getText(main).includes("setExpectedProjectPhase("))[0];
+  assert.ok(fix);
+  for (const phase of ["project_narrative", "architecture_decision", "validation_reliability", "impact_lessons", ...phases]) {
+    const facts = [];
+    const env = { activeProjectTrajectoryFact: undefined, observedProjectId: "project-a", observedProjectName: "Project A",
+      observedProjectPhase: phase, observedProjectFactAnchorState: undefined, observedProjectChildContinuity: undefined,
+      expectedProjectName: "Project A", expectedProjectPhase: undefined, expectedProjectFactAnchorState: undefined,
+      expectedProjectChildContinuity: undefined, expectedUnsupportedFirstPersonClaim: undefined,
+      setExpectedProjectName() {}, setExpectedProjectPhase: value => { env.expectedProjectPhase = value; },
+      setExpectedProjectFactAnchorState() {}, setExpectedProjectChildContinuity() {}, setExpectedUnsupportedFirstPersonClaim() {},
+      setProjectTrajectoryFixOpen() {}, recordExpectedProjectTrajectory: fact => facts.push(fact),
+    };
+    evaluate(`(${fix.initializer.expression.getText(main)})`, env)();
+    assert.equal(env.expectedProjectPhase, phase);
+    evaluate(`(${variable(main, "saveCorrectedProjectTrajectory").initializer.getText(main)})`, env)();
+    evaluate(`(${variable(main, "recordObservedProjectTrajectory").initializer.getText(main)})`, env)();
+    assert.deepEqual(facts.map(fact => fact.expectedPhase), [phase, phase]);
+    const observed = evaluate(`(${variable(main, "observedProjectPhase").initializer.getText(main)})`, {
+      observedSnapshotV2: { playbookPhase: phase },
+    });
+    assert.equal(observed, phase);
   }
 });
 

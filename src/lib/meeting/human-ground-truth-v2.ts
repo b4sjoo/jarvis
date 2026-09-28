@@ -10,7 +10,7 @@ import type {
   HumanExpectedParentAction,
   HumanEvaluationTaskRelation,
   FactAnchorState,
-  InterviewPlaybookPhase,
+  RecordedInterviewPlaybookPhase,
   MeetingTrace,
   MeetingTraceStatus,
   ProjectTrajectoryChildContinuity,
@@ -18,10 +18,14 @@ import type {
   HumanEvaluationCollectionProvenance,
 } from "./types.js";
 import type { AdvisorContextReadScope } from "./advisor-context-read-scope.js";
+import type { ManualCorrectionCapability, ManualCorrectionIntent } from "./manual-correction-intent.js";
 import type { SettledAdvisorArtifactIntent } from "./settled-advisor-execution-plan.js";
 import {
   projectObservedParentAction,
   resolveCommittedSourceTransitionLifecycleEvidence,
+  resolveCommittedManualCorrectionEvidence,
+  readManualCorrectionIntent,
+  type CommittedManualCorrectionEvidence,
 } from "./task-settlement-tuple.js";
 import {
   projectQuestionTypeObservation,
@@ -48,7 +52,7 @@ export type ObservedQuestionSourceKind = "voice" | "screen" | "mixed";
 
 export const HUMAN_GROUND_TRUTH_SCHEMA_VERSION = 2 as const;
 export const HUMAN_EVALUATION_DERIVATION_VERSION =
-  "human-evaluation-v2.12";
+  "human-evaluation-v2.13";
 
 export type HumanGroundTruthConfirmation = "confirmed" | "suggested";
 
@@ -97,6 +101,30 @@ export interface ExpectedTaskSettlementFactV2 {
   expectedParentId?: string;
   expectedBranchId?: string;
   expectedContextOwnerId?: string;
+  correctionIntent?: ManualCorrectionIntent;
+}
+
+// The frozen menu option expresses the human request even when execution later
+// fails. Only existing owners named in that request become identity expectations.
+export function buildManualCorrectionExpectedTaskSettlementFactV2(input: {
+  correctedType: CanonicalQuestionType;
+  option: ManualCorrectionCapability;
+}): ExpectedTaskSettlementFactV2 | undefined {
+  const intent = readManualCorrectionIntent(input.option.intent);
+  if (input.correctedType === "unknown" || !intent || input.option.id !== intent.kind) return undefined;
+  return {
+    kind: "expected-task-settlement",
+    expectedQuestionType: input.correctedType,
+    expectedRelation: input.option.relation,
+    expectedParentAction: input.option.action,
+    correctionIntent: intent,
+    ...(intent.kind === "independent" ? {} : {
+      expectedParentId: intent.parentId,
+      ...(intent.kind === "new-child" ? {} : {
+        expectedBranchId: intent.kind === "continue-child" ? intent.childId : intent.parentId,
+      }),
+    }),
+  };
 }
 
 export interface ExpectedQuestionTypeFactV2 {
@@ -148,7 +176,7 @@ export interface ExpectedProjectTrajectoryFactV2 {
   kind: "expected-project-trajectory";
   expectedProjectId?: string;
   expectedProjectName?: string;
-  expectedPhase?: InterviewPlaybookPhase;
+  expectedPhase?: RecordedInterviewPlaybookPhase;
   expectedFactAnchorState?: FactAnchorState;
   expectedChildContinuity?: ProjectTrajectoryChildContinuity;
   unsupportedFirstPersonClaim?: boolean;
@@ -204,6 +232,7 @@ export interface HumanEvaluationObservedSnapshotV2 {
   questionType?: CanonicalQuestionType;
   relation?: HumanEvaluationTaskRelation;
   parentAction?: HumanExpectedParentAction;
+  manualCorrectionEvidence?: CommittedManualCorrectionEvidence;
   adviseOnly?: boolean;
   adviseOnlyReason?: string;
   questionSourceKind?: ObservedQuestionSourceKind;
@@ -235,7 +264,7 @@ export interface HumanEvaluationObservedSnapshotV2 {
   projectId?: string;
   projectName?: string;
   projectBindingRevision?: number;
-  playbookPhase?: InterviewPlaybookPhase;
+  playbookPhase?: RecordedInterviewPlaybookPhase;
   factAnchorState?: FactAnchorState;
   childContinuity?: ProjectTrajectoryChildContinuity;
   observedCurrentQuestionType?: CanonicalQuestionType;
@@ -669,9 +698,11 @@ export function projectHumanEvaluationObservedFieldsV2(
   trace: MeetingTrace
 ): Omit<HumanEvaluationObservedSnapshotV2, "traceHash"> {
   const metadata = trace.metadata ?? {};
+  const manualCorrectionEvidence = resolveCommittedManualCorrectionEvidence(metadata);
+  const uncommittedManualReceipt = metadata.manualCorrectionIntentReceipt !== undefined && !manualCorrectionEvidence;
   const questionTypeObservation = projectQuestionTypeObservation({ metadata });
   const questionType =
-    questionTypeObservation.observedCurrentQuestionType;
+    uncommittedManualReceipt ? undefined : questionTypeObservation.observedCurrentQuestionType;
   const questionSourceKind = resolveObservedQuestionSourceKind(
     trace.kind,
     metadata
@@ -692,7 +723,7 @@ export function projectHumanEvaluationObservedFieldsV2(
   const planUsable = metadata.settledExecutionPlanAuthorized === true ||
     (!planId && metadata.settledExecutionPlanAuthorized === undefined &&
       trace.status === "success");
-  const relation = normalizeRelation(
+  const relation = manualCorrectionEvidence?.relation ?? (uncommittedManualReceipt ? undefined : normalizeRelation(
     (planUsable
       ? metadata.settledExecutionPlanRelation ?? metadata.settledExecutionPlanTaskRelation
       : undefined) ??
@@ -700,9 +731,10 @@ export function projectHumanEvaluationObservedFieldsV2(
     metadata.currentQuestionSettlementRelation ??
     metadata.taskRelation ??
     metadata.relationToActiveTask
-  );
-  const parentAction = projectObservedParentAction({
+  ));
+  const parentAction = uncommittedManualReceipt ? undefined : projectObservedParentAction({
     relation,
+    manualCorrectionEvidence,
     mutationAuthorized: readBoolean(
       metadata.effectiveCurrentQuestionSettlementParentMutationAuthorized ??
         metadata.currentQuestionSettlementParentMutationAuthorized
@@ -803,7 +835,9 @@ export function projectHumanEvaluationObservedFieldsV2(
     metadata,
     answerCommitted
   );
-  const settledParentId = currentOnly && relation === "none"
+  const settledParentId = manualCorrectionEvidence ? manualCorrectionEvidence.parentAfterId
+    : uncommittedManualReceipt ? readString(metadata.taskLifecycleParentBeforeId)
+    : currentOnly && relation === "none"
     ? undefined
     : readString(
         metadata.effectiveCurrentQuestionSettlementParentId ??
@@ -811,7 +845,9 @@ export function projectHumanEvaluationObservedFieldsV2(
           metadata.activeMeetingParentId ??
           metadata.currentQuestionSettlementParentAfterId
       );
-  const settledChildId = currentOnly && relation === "none"
+  const settledChildId = manualCorrectionEvidence ? manualCorrectionEvidence.childAfterId
+    : uncommittedManualReceipt ? readString(metadata.taskLifecycleChildBeforeId)
+    : currentOnly && relation === "none"
     ? undefined
     : readString(
         metadata.effectiveCurrentQuestionSettlementChildId ??
@@ -852,7 +888,10 @@ export function projectHumanEvaluationObservedFieldsV2(
   const factAnchorState = normalizeFactAnchorState(
     metadata.factAnchorState
   );
-  const childContinuity = resolveObservedChildContinuity(metadata);
+  const childContinuity: ProjectTrajectoryChildContinuity | undefined = manualCorrectionEvidence
+    ? manualCorrectionEvidence.childAfterId ? "child-attached"
+      : manualCorrectionEvidence.command === "resume-parent" ? "parent-resumed" : "none"
+    : uncommittedManualReceipt ? undefined : resolveObservedChildContinuity(metadata);
   const meetingMetadata = projectMeetingMetadataEvaluationObservation(
     metadata
   );
@@ -864,6 +903,7 @@ export function projectHumanEvaluationObservedFieldsV2(
     questionType,
     relation,
     parentAction,
+    ...(manualCorrectionEvidence ? { manualCorrectionEvidence } : {}),
     ...(adviseOnly ? { adviseOnly: true, adviseOnlyReason } : {}),
     questionSourceKind,
     settledParentId,
@@ -889,6 +929,16 @@ export function projectHumanEvaluationObservedFieldsV2(
       ? meetingMetadata
       : undefined,
     ...questionTypeObservation,
+    ...(manualCorrectionEvidence ? {
+      observedParentId: manualCorrectionEvidence.parentAfterId,
+      observedParentType: manualCorrectionEvidence.parentAfterType,
+    } : {}),
+    ...(uncommittedManualReceipt ? {
+      observedCurrentQuestionType: undefined,
+      observedParentId: readString(metadata.taskLifecycleParentBeforeId),
+      observedParentType: normalizeCanonicalQuestionType(metadata.taskLifecycleParentBeforeType),
+      typeAppliedToResponse: false, typeAppliedToSettlement: false, typeAppliedToParent: false,
+    } : {}),
   };
   return traceEvidence;
 }
@@ -1233,6 +1283,7 @@ function normalizeFact(fact: HumanGroundTruthFactV2): HumanGroundTruthFactV2 {
       expectedParentId: cleanOptional(fact.expectedParentId),
       expectedBranchId: cleanOptional(fact.expectedBranchId),
       expectedContextOwnerId: cleanOptional(fact.expectedContextOwnerId),
+      ...(fact.correctionIntent !== undefined ? { correctionIntent: readManualCorrectionIntent(fact.correctionIntent) } : {}),
     };
   }
   if (fact.kind === "expected-artifact-intent") {
@@ -1549,7 +1600,7 @@ function normalizeFactAnchorState(
 
 function normalizePlaybookPhase(
   value: unknown
-): InterviewPlaybookPhase | undefined {
+): RecordedInterviewPlaybookPhase | undefined {
   return value === "story_selection" ||
     value === "baseline_reasoning" ||
     value === "optimized_pseudocode" ||
@@ -1557,6 +1608,8 @@ function normalizePlaybookPhase(
     value === "solution_planning" ||
     value === "requirement_clarification" ||
     value === "design_framing" ||
+    value === "project_summary" ||
+    value === "project_QA" ||
     value === "project_narrative" ||
     value === "architecture_decision" ||
     value === "validation_reliability" ||

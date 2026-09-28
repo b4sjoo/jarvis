@@ -90,6 +90,55 @@ export function resolveFocusControlsGeometry(input: {
 }
 
 
+export interface ProjectChoicePresentation {
+  key: string;
+  displayTarget: AdviseDisplayTarget;
+  currentProject?: { id: string; name: string };
+  options: readonly ClarifyingQuestionOption[];
+  canSelect: boolean;
+  canReselect: boolean;
+}
+
+export interface ProjectChoiceSelection {
+  key: string;
+  displayTarget: AdviseDisplayTarget;
+  option: ClarifyingQuestionOption;
+  reselect: boolean;
+}
+
+export type ManualCorrectionMenu = Readonly<{
+  correctedType: CanonicalQuestionType;
+  target?: import("./manual-correction-intent.js").ManualCorrectionTargetSnapshot;
+  options: readonly import("./manual-correction-intent.js").ManualCorrectionCapability[];
+  rejectionReason?: string;
+}>;
+
+export type ManualCorrectionMenuSelection = Readonly<{
+  correctedType: CanonicalQuestionType;
+  displayTarget: AdviseDisplayTarget;
+  target: import("./manual-correction-intent.js").ManualCorrectionTargetSnapshot;
+  option: import("./manual-correction-intent.js").ManualCorrectionCapability;
+}>;
+
+export type MeetingFocusCorrectionMenuRequest = Readonly<{
+  type: "request-correction-menu";
+  schemaVersion: typeof MEETING_FOCUS_SCHEMA_VERSION;
+  publisherInstanceId: string;
+  windowKind: MeetingFocusWindowKind;
+  requestId: string;
+  correctedType: CanonicalQuestionType;
+  displayTarget: AdviseDisplayTarget;
+}>;
+
+export type MeetingFocusCorrectionMenuResponse = Readonly<{
+  type: "correction-menu";
+  schemaVersion: typeof MEETING_FOCUS_SCHEMA_VERSION;
+  publisherInstanceId: string;
+  windowKind: MeetingFocusWindowKind;
+  requestId: string;
+  menu: ManualCorrectionMenu;
+}>;
+
 export type MeetingFocusWindowKind = "answer" | "controls";
 export const MEETING_FOCUS_SCHEMA_VERSION = 1;
 export type MeetingFocusSnapshotEnvelope = Readonly<{
@@ -176,6 +225,7 @@ export type MeetingFocusSnapshot = FocusReadonly<{
   audioControl: NativeAudioPauseResumeControlPresentation;
   audioInputWarning?: { label: string; detail: string };
   showClarifyingQuestion: boolean;
+  projectChoice?: ProjectChoicePresentation;
   clarifyingQuestion: string;
   showClarifyingBooleanFallback: boolean;
   selectedClarifyingAnswerLabel?: string;
@@ -206,6 +256,7 @@ export type MeetingFocusSnapshot = FocusReadonly<{
 
 export type MeetingFocusAction =
   | MeetingFocusProtocolAction
+  | MeetingFocusCorrectionMenuRequest
   | { type: "toggle-listening" }
   | { type: "regenerate"; displayTarget?: AdviseDisplayTarget }
   | { type: "toggle-advise-pin"; displayTarget?: AdviseDisplayTarget }
@@ -221,6 +272,8 @@ export type MeetingFocusAction =
       requestedAt?: number;
       correctedType: CanonicalQuestionType;
       source: ManualQuestionTypeCorrectionSource;
+      correctionTarget?: import("./manual-correction-intent.js").ManualCorrectionTargetSnapshot;
+      correctionIntent?: import("./manual-correction-intent.js").ManualCorrectionIntent;
     }
   | { type: "update-interview-types"; interviewTypes: InterviewBriefType[] }
   | {
@@ -228,6 +281,7 @@ export type MeetingFocusAction =
       displayTarget?: AdviseDisplayTarget;
       answer: ClarifyingQuestionAnswer;
       option?: { label?: string; value?: string };
+      projectChoice?: Pick<ProjectChoiceSelection, "key" | "reselect">;
     }
   | { type: "new-task" }
   | { type: "same-task" }

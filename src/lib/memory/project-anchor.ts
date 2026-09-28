@@ -1,4 +1,5 @@
 import type { MemoryEntry } from "./types.js";
+import { classifyRuntimeMemoryRole } from "./runtime-role.js";
 
 export function isMemoryProjectAnchorCompatible(
   entry: MemoryEntry,
@@ -49,6 +50,8 @@ function isProjectSpecificEntry(entry: MemoryEntry) {
 function isGlobalProjectAnchorExemptEntry(entry: MemoryEntry) {
   return (
     entry.scope === "global" &&
+    (!classifyRuntimeMemoryRole(entry).anchorEligible ||
+      (!entry.projectId?.trim() && !entry.projectName?.trim())) &&
     (entry.type === "profile" ||
       entry.type === "preference" ||
       entry.type === "resume_fact" ||

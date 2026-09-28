@@ -1,6 +1,9 @@
 import { MEETING_FOCUS_SCHEMA_VERSION } from "./focus-window.js";
 import type { MeetingFocusAction, MeetingFocusSnapshot, MeetingFocusWindowKind, MeetingFocusProtocolAction, MeetingFocusSnapshotEnvelope, MeetingFocusUserAction } from "./focus-window.js";
 import { createMeetingFocusDisplayModel, readMeetingFocusDisplay } from "./focus-display.js";
+import type { ManualCorrectionMenu, MeetingFocusCorrectionMenuRequest, MeetingFocusCorrectionMenuResponse } from "./focus-window.js";
+import type { AdviseDisplayTarget } from "./manual-advise-display.js";
+import type { CanonicalQuestionType } from "./task-taxonomy.js";
 
 export interface MeetingFocusTransport {
   subscribe(receive: (payload: unknown) => void): Promise<() => void>;
@@ -43,7 +46,7 @@ export function createMeetingFocusPublisher(options: Options & {
   const requests = new Map<MeetingFocusWindowKind, string>();
   const waiting = new Set<MeetingFocusWindowKind>();
   const applied = new Map<MeetingFocusWindowKind, Applied>();
-  const send = async (envelope: MeetingFocusSnapshotEnvelope) => {
+  const send = async (envelope: MeetingFocusSnapshotEnvelope | MeetingFocusCorrectionMenuResponse) => {
     if (disposed) return;
     try { await options.transport.send(envelope); }
     catch (error) { if (!disposed) options.onError(asError(error)); }
@@ -80,6 +83,13 @@ export function createMeetingFocusPublisher(options: Options & {
     }
     // Product intents retain their existing payload and runtime authority checks.
     switch (message.type) {
+      case "request-correction-menu":
+        if (message.schemaVersion === MEETING_FOCUS_SCHEMA_VERSION &&
+            message.publisherInstanceId === publisherInstanceId && role(message.windowKind) &&
+            id(message.requestId) && record(message.displayTarget) && id(message.correctedType)) {
+          options.onAction(message as MeetingFocusCorrectionMenuRequest);
+        }
+        return;
       case "toggle-advise-pin": case "response-action":
       case "toggle-listening": case "regenerate": case "force-advise": case "capture-screen":
       case "submit-correction": case "deactivate-correction": case "correct-question-type":
@@ -115,6 +125,11 @@ export function createMeetingFocusPublisher(options: Options & {
       }
     },
     getLatestApplied(windowKind: MeetingFocusWindowKind) { return applied.get(windowKind); },
+    respondCorrectionMenu(request: MeetingFocusCorrectionMenuRequest, menu: ManualCorrectionMenu) {
+      if (request.publisherInstanceId !== publisherInstanceId) return Promise.resolve();
+      return send({ type: "correction-menu", schemaVersion: MEETING_FOCUS_SCHEMA_VERSION,
+        publisherInstanceId, windowKind: request.windowKind, requestId: request.requestId, menu });
+    },
     dispose() { disposed = true; unlisten?.(); unlisten = undefined; requests.clear(); waiting.clear(); applied.clear(); },
   };
 }
@@ -135,6 +150,8 @@ export function createMeetingFocusConsumer(options: Options & {
   let currentRequestId: string | undefined;
   let lastApplied = 0;
   const retired = new Set<string>();
+  let menuRequest: { requestId: string; publisherInstanceId: string;
+    finish(menu?: ManualCorrectionMenu, error?: Error): void } | undefined;
   const send = async (action: MeetingFocusAction) => {
     if (disposed) return;
     try { await options.transport.send(action); }
@@ -154,6 +171,20 @@ export function createMeetingFocusConsumer(options: Options & {
     if (disposed || !ready || !record(message)) return;
     if (message.schemaVersion !== MEETING_FOCUS_SCHEMA_VERSION) {
       reject("schema-version"); options.onError(versionError()); return;
+    }
+    if (message.type === "correction-menu") {
+      if (message.windowKind !== options.windowKind) return;
+      if (!menuRequest || message.requestId !== menuRequest.requestId ||
+          message.publisherInstanceId !== menuRequest.publisherInstanceId ||
+          message.publisherInstanceId !== current?.publisherInstanceId) {
+        reject("menu-request-correlation"); return;
+      }
+      if (!record(message.menu) || !Array.isArray(message.menu.options) ||
+          message.menu.options.length > 7) {
+        menuRequest.finish(undefined, new Error("Invalid correction menu. Reopen the type menu.")); return;
+      }
+      menuRequest.finish(structuredClone(message.menu) as ManualCorrectionMenu);
+      return;
     }
     if (!id(message.publisherInstanceId) || !sequence(message.sequence)) { reject("invalid-envelope"); return; }
     const publisherInstanceId = message.publisherInstanceId;
@@ -187,6 +218,7 @@ export function createMeetingFocusConsumer(options: Options & {
     try { payload = readMeetingFocusDisplay(newerCandidate?.payload ?? message.payload); }
     catch (error) { reject("invalid-payload"); options.onError(asError(error)); return; }
     if (publisherInstanceId !== current?.publisherInstanceId) {
+      menuRequest?.finish(undefined, new Error("The main window changed. Reopen the type menu."));
       if (current) retired.add(current.publisherInstanceId);
       lastApplied = 0;
     }
@@ -220,6 +252,29 @@ export function createMeetingFocusConsumer(options: Options & {
         windowKind: options.windowKind, requestId: currentRequestId });
     },
     dispatch(action: MeetingFocusUserAction) { return send(action); },
-    dispose() { disposed = true; unlisten?.(); unlisten = undefined; },
+    requestCorrectionMenu(correctedType: CanonicalQuestionType, displayTarget: AdviseDisplayTarget, signal?: AbortSignal): Promise<ManualCorrectionMenu> {
+      menuRequest?.finish(undefined, new Error("Correction menu request replaced."));
+      if (disposed || !current || signal?.aborted) return Promise.reject(new Error("Focus is not ready. Reopen the type menu."));
+      const publisherInstanceId = current.publisherInstanceId;
+      const requestId = (options.createRequestId ?? (() => crypto.randomUUID()))();
+      return new Promise((resolve, rejectRequest) => {
+        const cancel = () => finish(undefined, new Error("Correction menu closed."));
+        const timeout = setTimeout(() => finish(undefined, new Error("The main window did not respond. Reopen the type menu.")), 10_000);
+        const finish = (menu?: ManualCorrectionMenu, error?: Error) => {
+          if (menuRequest?.requestId !== requestId) return;
+          menuRequest = undefined;
+          clearTimeout(timeout);
+          signal?.removeEventListener("abort", cancel);
+          if (menu) resolve(menu); else rejectRequest(error);
+        };
+        menuRequest = { requestId, publisherInstanceId, finish };
+        signal?.addEventListener("abort", cancel, { once: true });
+        void options.transport.send({ type: "request-correction-menu", schemaVersion: MEETING_FOCUS_SCHEMA_VERSION,
+          publisherInstanceId, windowKind: options.windowKind, requestId, correctedType,
+          displayTarget: { ...displayTarget } } satisfies MeetingFocusCorrectionMenuRequest)
+          .catch(error => finish(undefined, asError(error)));
+      });
+    },
+    dispose() { disposed = true; menuRequest?.finish(undefined, new Error("Focus window closed.")); unlisten?.(); unlisten = undefined; },
   };
 }

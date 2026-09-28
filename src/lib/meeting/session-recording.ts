@@ -70,10 +70,11 @@ import type {
   RuntimeRegressionStepEventV1,
 } from "./runtime-regression.js";
 import type { ManualRuntimeActionEventV1 } from "./manual-runtime-action.js";
+import { readManualCorrectionIntent, resolveCommittedManualCorrectionEvidence, type CommittedManualCorrectionEvidence } from "./task-settlement-tuple.js";
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
 const SESSION_RECORDING_INTEGRITY_SCHEMA_VERSION = 1;
-const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 43;
+const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 44;
 const SESSION_TRACE_INDEX_SCHEMA_VERSION = 1;
 const MAX_RECORDED_WRITE_FAILURES = 20;
 
@@ -330,6 +331,8 @@ export interface SessionEffectiveCurrentQuestionSettlementSummary
 
 export interface SessionCompactTraceSummary {
   version: number;
+  manualCorrectionEvidence?: CommittedManualCorrectionEvidence;
+  correctionAtomicCommitAuthorized?: boolean;
   sessionId: string;
   traceId: string;
   traceKind: MeetingTrace["kind"];
@@ -1746,6 +1749,10 @@ export class SessionRecordingManager {
         traceId: event.traceId,
         terminalDisposition: event.terminalDisposition,
         reason: event.reason,
+        ...(event.action === "type-correction" ? {
+          correctedType: event.correctedType,
+          correctionIntent: readManualCorrectionIntent(event.correctionIntent),
+        } : {}),
       },
       undefined,
       event.traceId,
@@ -4557,6 +4564,8 @@ export function buildCompactTraceSummary({
     sessionId,
     traceId: trace.id,
     traceKind: trace.kind,
+    manualCorrectionEvidence: resolveCommittedManualCorrectionEvidence(trace.metadata ?? {}),
+    correctionAtomicCommitAuthorized: readBoolean(trace.metadata?.correctionAtomicCommitAuthorized),
     status: trace.status,
     trigger,
     startedAt: trace.startedAt,

@@ -4,6 +4,8 @@ import type {
 } from "./human-ground-truth-v2.js";
 import type { ManualRuntimeActionEventV1 } from "./manual-runtime-action.js";
 import type { RuntimeRegressionStepEventV1 } from "./runtime-regression.js";
+import type { ManualCorrectionIntent } from "./manual-correction-intent.js";
+import { readManualCorrectionIntent, readCommittedManualCorrectionEvidence, type CommittedManualCorrectionEvidence } from "./task-settlement-tuple.js";
 
 export const SESSION_PROCEDURE_SCHEMA_VERSION = 1 as const;
 
@@ -93,6 +95,7 @@ export interface SessionProcedureStepV1 {
     artifactRefs?: string[];
     screen?: SessionProcedureScreenInput;
     correctedType?: string;
+    correctionIntent?: ManualCorrectionIntent;
     correctionText?: string;
     sourceTerm?: string;
     replacementTerm?: string;
@@ -111,6 +114,10 @@ export interface SessionProcedureStepV1 {
     responseOpportunityDisposition?: string;
     questionType?: string;
     relation?: string;
+    parentAction?: string;
+    settledParentId?: string;
+    settledChildId?: string;
+    manualCorrectionEvidence?: CommittedManualCorrectionEvidence;
     contextReadScope?: string;
     settlementDisposition?: string;
     taskMutationCommand?: string;
@@ -284,7 +291,7 @@ export function buildSessionProcedureV1(input: {
     if (!requested) continue;
     steps.push(
       attachExpectedContract(
-        buildManualActionStep(
+        attachRuntimeTraceSummary(buildManualActionStep(
           {
             id: `unindexed-action:${actionId}`,
             kind: "manual-runtime-action",
@@ -292,7 +299,7 @@ export function buildSessionProcedureV1(input: {
             metadata: { actionId },
           },
           events
-        ),
+        ), traceSummariesById, { enabled: traceSummaryProjectionEnabled }),
         input.humanEvaluationProjections
       )
     );
@@ -512,12 +519,14 @@ function buildTypeCorrectionStep(
   event: SessionProcedureTimelineEvent
 ): SessionProcedureStepV1 {
   const metadata = event.metadata ?? {};
+  const correctionIntent = readManualCorrectionIntent(metadata.manualCorrectionIntent ?? metadata.correctionIntent);
   return baseStep({
     event,
     kind: "type-correction",
     replaySupport: "capture-only",
     input: {
       correctedType: readString(metadata.correctedQuestionType),
+      ...(correctionIntent ? { correctionIntent } : {}),
     },
     actionId: readString(metadata.manualQuestionTypeCorrectionId),
     traceIds: readStringArray([
@@ -603,11 +612,15 @@ function buildManualActionStep(
   const traceIds = uniqueStrings(
     events.map((candidate) => candidate.traceId).filter(isString)
   );
+  const correctionIntent = readManualCorrectionIntent(requested?.correctionIntent ?? source.correctionIntent);
   return baseStep({
     event,
     kind: source.action,
     replaySupport: "capture-only",
-    input: source.action === "type-correction" ? { correctedType: requested?.correctedType ?? source.correctedType } : {},
+    input: source.action === "type-correction" ? {
+      correctedType: requested?.correctedType ?? source.correctedType,
+      ...(correctionIntent ? { correctionIntent } : {}),
+    } : {},
     actionId: source.actionId,
     specializedEventId: events
       .map((candidate) => candidate.specializedEventId)
@@ -682,6 +695,9 @@ function attachRuntimeTraceSummary(
   summariesById: Map<string, SessionProcedureTraceSummary>,
   options: { enabled: boolean }
 ): SessionProcedureStepV1 {
+  if (options.enabled && step.kind === "type-correction" && step.input.correctionIntent) {
+    return attachManualCorrectionTraceSummary(step, summariesById);
+  }
   if (
     !options.enabled ||
     (step.kind !== "them-text" && step.kind !== "screen-input") ||
@@ -784,6 +800,37 @@ function attachRuntimeTraceSummary(
       ingressReceivedAt: step.observed?.ingressReceivedAt,
     }),
   };
+}
+
+function attachManualCorrectionTraceSummary(
+  step: SessionProcedureStepV1,
+  summariesById: Map<string, SessionProcedureTraceSummary>
+): SessionProcedureStepV1 {
+  const candidates = step.provenance.traceIds.flatMap(traceId => {
+    const summary = summariesById.get(traceId);
+    const evidence = readCommittedManualCorrectionEvidence(summary?.manualCorrectionEvidence);
+    return evidence && summary ? [{ summary, evidence }] : [];
+  });
+  const first = candidates[0];
+  const conflicting = candidates.some(candidate => JSON.stringify(candidate.evidence) !== JSON.stringify(first?.evidence));
+  const sourceMismatch = first && step.observed?.logicalQuestionUnitId &&
+    first.evidence.sourceLogicalQuestionUnitId !== step.observed.logicalQuestionUnitId;
+  if (!first || conflicting || sourceMismatch) {
+    const missingSuccessfulCommit = !first && step.observed?.terminalDisposition === "completed";
+    const gap = conflicting || sourceMismatch ? "ambiguous-manual-correction-commit-evidence"
+      : missingSuccessfulCommit ? "manual-correction-commit-evidence-missing" : undefined;
+    return gap ? { ...step, evidenceGaps: uniqueStrings([...step.evidenceGaps, gap]), reviewStatus: "needs-review" } : step;
+  }
+  const evidence = first.evidence;
+  return { ...step, observed: {
+    ...step.observed,
+    traceIds: uniqueStrings([...(step.observed?.traceIds ?? []), ...candidates.map(candidate => candidate.summary.traceId)]),
+    logicalQuestionUnitId: evidence.sourceLogicalQuestionUnitId,
+    relation: evidence.relation, parentAction: evidence.action,
+    settledParentId: evidence.parentAfterId, settledChildId: evidence.childAfterId,
+    taskId: evidence.parentAfterId, taskMutationCommand: evidence.command,
+    taskMutationDisposition: "commit-before-advisor", manualCorrectionEvidence: evidence,
+  } };
 }
 
 function attachExpectedContract(

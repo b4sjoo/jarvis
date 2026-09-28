@@ -11,6 +11,7 @@ import {
   decideInterviewerAssumptionAuthorization,
   decidePlaybookPhaseProgression,
 } from "../src/lib/meeting/playbook-phase.js";
+import { buildProjectMainlinePhaseAdmission } from "../src/lib/meeting/project-mainline-phase-admission.js";
 import type {
   ActiveInterviewParent,
   InterviewPlaybookId,
@@ -483,12 +484,12 @@ test("resumes a child from its bounded parent capsule", () => {
     playbook: makePlaybook(
       "project_deep_dive",
       "project-deep-dive",
-      "architecture_decision"
+      "project_QA"
     ),
-    playbookPhase: "architecture_decision",
+    playbookPhase: "project_QA",
     phaseProgress: {
-      project_narrative: true,
-      architecture_decision: true,
+      project_summary: true,
+      project_QA: true,
     },
     projectBinding: {
       projectId: "agentic-memory",
@@ -564,13 +565,179 @@ test("resumes a child from its bounded parent capsule", () => {
 
   assert.equal(resumed.mutationApplied, true);
   assert.equal(resumed.task?.child, undefined);
-  assert.equal(resumed.task?.playbookPhase, "architecture_decision");
+  assert.equal(resumed.task?.playbookPhase, "project_QA");
   assert.deepEqual(resumed.task?.supportedFactAnchors, [
     "mem-agentic",
     "mem-agentic-parser",
   ]);
   assert.equal(resumed.task?.projectBinding?.projectId, "agentic-memory");
 });
+
+test("PDD admitted new mainline resume atomically restores the parent and advances Summary to QA", () => {
+  for (const source of ["voice", "screen"] as const) {
+    const parent = makeProjectParentWithChild();
+    const before = structuredClone(parent);
+    const candidate = makeProjectResumeCandidate(parent, { source });
+    const resumed = prepareSourceOwnedTransition({
+      candidate, currentTask: parent, currentSessionId: "session-a", currentRuntimeEpoch: 3, now: 130,
+    });
+    assert.equal(candidate.kind, "resume-parent");
+    assert.equal(resumed.mutationApplied, true);
+    assert.equal(resumed.phaseBefore, "project_summary");
+    assert.equal(resumed.phaseAfter, "project_QA");
+    assert.equal(resumed.task?.playbookPhase, "project_QA");
+    assert.equal(resumed.task?.playbook?.phase, "project_QA");
+    assert.deepEqual(resumed.task?.phaseProgress, { project_summary: true, project_QA: true });
+    assert.equal(resumed.task?.child, undefined);
+    assert.equal(resumed.task?.revisions, parent.revisions + 1);
+    assert.deepEqual(resumed.task?.projectBinding, parent.projectBinding);
+    assert.deepEqual(resumed.task?.supportedFactAnchors, parent.supportedFactAnchors);
+    assert.deepEqual(resumed.task?.whiteboardArtifact, parent.whiteboardArtifact);
+    assert.equal(sourceOwnedTransitionSurvivesModelOutcome(resumed, "error"), true);
+    assert.deepEqual(parent, before);
+    const duplicate = prepareSourceOwnedTransition({
+      candidate, currentTask: resumed.task, currentSessionId: "session-a", currentRuntimeEpoch: 3, now: 140,
+    });
+    assert.equal(duplicate.mutationApplied, false);
+    assert.equal(duplicate.reason, "parent-revision-mismatch");
+    assert.equal(duplicate.task?.playbookPhase, "project_QA");
+  }
+});
+
+test("PDD resume preserves capsule phase unless the candidate contains the admitted automatic advance", () => {
+  for (const change of [
+    { phaseDecision: undefined },
+    { logicalQuestionUnitId: undefined },
+    { questionType: "field-knowledge" as const },
+    { phaseDecisionPatch: { action: "stay" as const } },
+    { phaseDecisionPatch: { action: "resume-parent" as const } },
+    { phaseDecisionPatch: { source: "manual-next" as const } },
+    { phaseDecisionPatch: { source: undefined } },
+    { phaseDecisionPatch: { phaseFrom: "project_QA" as const } },
+    { phaseDecisionPatch: { phase: "design_framing" as const } },
+  ]) {
+    const parent = makeProjectParentWithChild();
+    const base = makeProjectResumeCandidate(parent);
+    const { phaseDecisionPatch, ...candidatePatch } = change;
+    const candidate: SourceOwnedTransitionCandidate = {
+      ...base,
+      ...candidatePatch,
+      ...(phaseDecisionPatch ? { phaseDecision: { ...base.phaseDecision!, ...phaseDecisionPatch } } : {}),
+    };
+    const resumed = prepareSourceOwnedTransition({
+      candidate, currentTask: parent, currentSessionId: "session-a", currentRuntimeEpoch: 3, now: 130,
+    });
+    assert.equal(resumed.task?.child, undefined);
+    assert.equal(resumed.task?.playbookPhase, "project_summary");
+    assert.deepEqual(resumed.task?.phaseProgress, parent.phaseProgress);
+  }
+  const parent = makeProjectParentWithChild();
+  for (const admissionOverrides of [{ replay: true }, { authorized: false }, { projectSelection: true }]) {
+    const candidate = makeProjectResumeCandidate(parent, admissionOverrides);
+    const resumed = prepareSourceOwnedTransition({
+      candidate, currentTask: parent, currentSessionId: "session-a", currentRuntimeEpoch: 3,
+    });
+    assert.equal(resumed.task?.playbookPhase, "project_summary");
+  }
+});
+
+test("PDD resume preserves an already-QA capsule and does not reset progress", () => {
+  const parent = makeProjectParentWithChild("project_QA");
+  const resumed = prepareSourceOwnedTransition({
+    candidate: makeProjectResumeCandidate(parent), currentTask: parent,
+    currentSessionId: "session-a", currentRuntimeEpoch: 3,
+  });
+  assert.equal(resumed.task?.playbookPhase, "project_QA");
+  assert.deepEqual(resumed.task?.phaseProgress, parent.phaseProgress);
+  assert.equal(resumed.task?.child, undefined);
+});
+
+test("PDD resume never bypasses source candidate authorization or a newer manual phase revision", () => {
+  const parent = makeProjectParentWithChild();
+  const candidate = makeProjectResumeCandidate(parent);
+  for (const override of [
+    { currentSessionId: "other-session" },
+    { currentRuntimeEpoch: 4 },
+    { currentTask: { ...parent, revisions: parent.revisions + 1 } },
+    { currentTask: { ...parent, id: "other-parent" } },
+    { candidate: { ...candidate, state: "rejected" as const, rejectionReason: "mutation-unauthorized" } },
+  ]) {
+    const resumed = prepareSourceOwnedTransition({
+      candidate, currentTask: parent, currentSessionId: "session-a", currentRuntimeEpoch: 3,
+      ...override,
+    });
+    assert.equal(resumed.mutationApplied, false);
+    assert.equal(resumed.task?.playbookPhase, "project_summary");
+    assert.equal(resumed.task?.child?.id, parent.child?.id);
+  }
+});
+
+test("PDD resume without an active child only changes phase for a newly admitted mainline question", () => {
+  const parent = { ...makeProjectParentWithChild(), child: undefined };
+  const restored = prepareSourceOwnedTransition({
+    candidate: makeProjectResumeCandidate(parent, { replay: true }), currentTask: parent,
+    currentSessionId: "session-a", currentRuntimeEpoch: 3,
+  });
+  assert.equal(restored.mutationApplied, false);
+  const resumed = prepareSourceOwnedTransition({
+    candidate: makeProjectResumeCandidate(parent), currentTask: parent,
+    currentSessionId: "session-a", currentRuntimeEpoch: 3,
+  });
+  assert.equal(resumed.task?.playbookPhase, "project_QA");
+  assert.equal(resumed.mutationApplied, true);
+});
+
+function makeProjectParentWithChild(phase: "project_summary" | "project_QA" = "project_summary") {
+  const parent = makeParent({
+    stableKind: "project-deep-dive", topic: "Project parser",
+    playbook: makePlaybook("project_deep_dive", "project-deep-dive", phase),
+    playbookPhase: phase, phaseProgress: { [phase]: true },
+    supportedFactAnchors: ["project-parser"],
+  });
+  const candidate = createSourceOwnedTransitionCandidate({
+    sessionId: "session-a", runtimeEpoch: 3, source: "voice", sourceTurnIds: ["child-turn"],
+    existingTask: parent, relation: "child-probe", authoritySource: "accepted-transcript",
+    mutationAuthorized: true, questionType: "field-knowledge", question: "What is NDJSON?",
+    subtaskIntent: "concept-probe", now: 100,
+  });
+  assert.ok(candidate);
+  const result = prepareSourceOwnedTransition({
+    candidate, currentTask: parent, currentSessionId: "session-a", currentRuntimeEpoch: 3, now: 110,
+  });
+  assert.ok(result.task?.child?.returnCapsule);
+  return result.task;
+}
+
+function makeProjectResumeCandidate(parent: ActiveInterviewParent, input: {
+  source?: "voice" | "screen";
+  replay?: boolean;
+  authorized?: boolean;
+  projectSelection?: boolean;
+} = {}) {
+  const event = buildProjectMainlinePhaseAdmission({
+    logicalQuestionUnit: { id: "Q-resume", sessionId: "session-a" },
+    effectiveRecords: [{ sessionId: "session-a", logicalQuestionUnitId: "Q-intro",
+      owner: { kind: "parent-mainline", parentId: parent.id } }],
+    parentId: parent.id, responseOwner: { kind: "parent", parentId: parent.id },
+    source: input.source === "screen" ? "manual-screen" : "live-turn",
+    authorized: input.authorized ?? true, replay: input.replay, projectSelection: input.projectSelection,
+  });
+  const phaseDecision = decidePlaybookPhaseProgression({
+    questionType: "project-deep-dive", currentPhase: parent.playbookPhase,
+    relation: "resume-parent", projectMainlineAdmission: event,
+  });
+  const candidate = createSourceOwnedTransitionCandidate({
+    sessionId: "session-a", runtimeEpoch: 3, source: input.source ?? "voice",
+    sourceTurnIds: input.source === "screen" ? [] : ["resume-turn"],
+    sourceObservationIds: input.source === "screen" ? ["resume-screen"] : [],
+    logicalQuestionUnitId: "Q-resume", logicalQuestionRevision: 1,
+    existingTask: parent, relation: "resume-parent", authoritySource: "accepted-source",
+    mutationAuthorized: true, questionType: "project-deep-dive", question: "Why did the parser use NDJSON?",
+    playbook: parent.playbook, phaseDecision, now: 120,
+  });
+  assert.ok(candidate);
+  return candidate;
+}
 
 test("rejects parent resume after the project binding changes", () => {
   const parent = makeParent({
@@ -879,7 +1046,7 @@ test("reseeds a provisional parent and invalidates stale project state atomicall
     playbook: makePlaybook(
       "project_deep_dive",
       "project-deep-dive",
-      "project_narrative"
+      "project_summary"
     ),
     now: 100,
   });
@@ -900,7 +1067,7 @@ test("reseeds a provisional parent and invalidates stale project state atomicall
   assert.deepEqual(result.task?.supportedFactAnchors, []);
   assert.equal(result.task?.whiteboardArtifact, undefined);
   assert.equal(result.task?.child, undefined);
-  assert.equal(result.task?.playbookPhase, "project_narrative");
+  assert.equal(result.task?.playbookPhase, "project_summary");
   assert.equal(result.task?.admission?.action, "reseed-parent");
   assert.equal(result.task?.revisions, parent.revisions + 1);
 });

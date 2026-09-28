@@ -3,7 +3,7 @@ import { ManualAdviseDisplay, type AdviseDisplaySnapshot, type AdviseDisplayTarg
 import { UnpublishedArtifactSlot, type UnpublishedArtifactOffer, type UnpublishedArtifactCandidate } from "../lib/meeting/unpublished-artifact.js";
 import { buildMeetingAnswerDisplayModel, overlayMeetingAnswerArtifacts, type MeetingAnswerDisplayModel } from "../lib/meeting/meeting-answer-display.js";
 import { humanEvaluationStore } from "../lib/meeting/human-evaluation-store.js";
-import type { HumanGroundTruthEventV2, HumanEvaluationProjectionV2 } from "../lib/meeting/human-ground-truth-v2.js";
+import { buildManualCorrectionExpectedTaskSettlementFactV2, type HumanGroundTruthEventV2, type HumanEvaluationProjectionV2 } from "../lib/meeting/human-ground-truth-v2.js";
 import type { CurrentQuestionEvaluationIdentity, HumanEvaluationSelectionSnapshot } from "../lib/meeting/human-evaluation.js";
 import {
   useCallback,
@@ -126,9 +126,23 @@ import {
 } from "@/lib/meeting/runtime-inference-response";
 import { buildManualScreenLogicalQuestionUnit } from "@/lib/meeting/manual-screen-question-source";
 import {
-  authorizeManualCorrectionLifecycle,
-  settleManualQuestionTypeCorrection,
-} from "@/lib/meeting/manual-correction-settlement";
+  getManualCorrectionCapabilities,
+  type ManualCorrectionCapabilityContext,
+  type ManualCorrectionTargetSnapshot,
+} from "@/lib/meeting/manual-correction-intent";
+import { prepareManualCorrectionIntentTransition } from "@/lib/meeting/manual-correction-transition";
+import { buildProjectMainlinePhaseAdmission } from "@/lib/meeting/project-mainline-phase-admission";
+import { getProjectSelectionCapability } from "@/lib/meeting/project-binding";
+import { formatMemoryProjectDirectoryForTrace } from "@/lib/memory/retrieval";
+import type { ProjectChoicePresentation, ProjectChoiceSelection } from "@/lib/meeting/focus-window";
+import type { ExplicitProjectSelection } from "@/lib/meeting/types";
+import {
+  buildProjectSelectionInferenceRequest,
+  buildProjectSelectionInferencePrompts,
+  requestProjectSelectionInference,
+  type ProjectSelectionInferenceRequestResult,
+} from "@/lib/meeting/project-selection-inference";
+import type { RuntimeInferenceRuntimeJob } from "@/lib/meeting/runtime-inference-runtime";
 import {
   extractCodingSolutionManifest,
   formatCodingSolutionManifestForPrompt,
@@ -750,7 +764,6 @@ import {
   questionTypeDecisionAuthorityConfidence,
   isExactLowValueAcknowledgement,
   isParentCanonicalQuestionType,
-  canParentQuestionTypeOwnChild,
   normalizeCanonicalQuestionType,
   mergeSentenceFragments,
   normalizeInterviewBriefTypes as normalizeTaxonomyInterviewBriefTypes,
@@ -809,7 +822,6 @@ import {
   decideManualCorrectionTerminalState,
   buildManualCorrectionParentTransition,
   classifyManualCorrectionTarget,
-  decideProvisionalQuestionTypeCorrection,
   markManualCorrectionTargetResolved,
   resolveManualCorrectionTarget,
   selectManualCorrectionTargetFromHistory,
@@ -1083,6 +1095,8 @@ function submitTaskRuntimeTransition(
     parent?: ActiveInterviewParent | null;
     screenAttachment?: ActiveScreenTask | null;
     expectedRevision?: number;
+    recentParentToRestore?: string;
+    sourceOwnerCorrection?: ReturnType<EffectiveQuestionSourceLedger["prepareOwnerCorrection"]>;
   }
 ) {
   const { operationId, ...transition } = input;
@@ -1157,7 +1171,10 @@ function commitCorrectionLifecycleWithManager(input: {
   currentContext: MeetingContextState;
   currentLogicalQuestionUnit: LogicalQuestionUnit;
   manualCorrectionRevision: number;
-  parentBefore: ActiveInterviewParent;
+  currentRuntimeEpoch?: number;
+  recentParentToRestore?: string;
+  sourceOwnerCorrection?: ReturnType<EffectiveQuestionSourceLedger["prepareOwnerCorrection"]>;
+  parentBefore?: ActiveInterviewParent;
   screenBefore?: ActiveScreenTask;
   parentAfter: ActiveInterviewParent;
   screenAfter?: ActiveScreenTask | null;
@@ -1167,7 +1184,7 @@ function commitCorrectionLifecycleWithManager(input: {
     plan: input.plan,
     currentSettlement: input.settlement,
     currentSessionId: input.currentContext.sessionId,
-    currentRuntimeEpoch: input.currentLogicalQuestionUnit.runtimeEpoch,
+    currentRuntimeEpoch: input.currentRuntimeEpoch ?? input.currentLogicalQuestionUnit.runtimeEpoch,
     currentLogicalQuestionUnitId: input.currentLogicalQuestionUnit.id,
     currentLogicalQuestionRevision: input.currentLogicalQuestionUnit.revision,
     currentSourceHash: input.settlement.sourceHash,
@@ -1183,7 +1200,7 @@ function commitCorrectionLifecycleWithManager(input: {
   const reduction = reduceTaskLifecycleTransaction({
     transaction,
     currentSessionId: input.currentContext.sessionId,
-    currentRuntimeEpoch: input.currentLogicalQuestionUnit.runtimeEpoch,
+    currentRuntimeEpoch: input.currentRuntimeEpoch ?? input.currentLogicalQuestionUnit.runtimeEpoch,
     currentLogicalQuestionUnitId: input.currentLogicalQuestionUnit.id,
     currentLogicalQuestionRevision: input.currentLogicalQuestionUnit.revision,
     currentManualCorrectionRevision: input.manualCorrectionRevision,
@@ -1196,7 +1213,7 @@ function commitCorrectionLifecycleWithManager(input: {
         plan: input.plan,
         currentSettlement: input.settlement,
         currentSessionId: input.currentContext.sessionId,
-        currentRuntimeEpoch: input.currentLogicalQuestionUnit.runtimeEpoch,
+        currentRuntimeEpoch: input.currentRuntimeEpoch ?? input.currentLogicalQuestionUnit.runtimeEpoch,
         currentLogicalQuestionUnitId: input.currentLogicalQuestionUnit.id,
         currentLogicalQuestionRevision:
           input.currentLogicalQuestionUnit.revision,
@@ -1235,6 +1252,8 @@ function commitCorrectionLifecycleWithManager(input: {
         authorizedArtifacts: input.plan.artifactPolicy.allowWhiteboard ? ["whiteboard"] : [],
         deadlineDelta: input.deadlineDelta,
         expectedRevision: input.currentContext.taskRuntime.revision,
+        recentParentToRestore: input.recentParentToRestore,
+        sourceOwnerCorrection: input.sourceOwnerCorrection,
         screenAttachment: reduction.screenAttachment ?? null,
         parent: reduction.parent ?? null,
       })
@@ -2343,6 +2362,7 @@ interface RunAdvisorOptions {
   responseAction?: MeetingResponseActionMode;
   currentSuggestion?: string;
   clarifyingFeedback?: ClarifyingQuestionFeedback;
+  explicitProjectSelection?: ExplicitProjectSelection;
   traceId?: string;
   manualQuestionTypeCorrection?: ManualQuestionTypeCorrection;
   turnIntentDecision?: AdvisorTurnIntentDecision;
@@ -3457,6 +3477,15 @@ export function useMeetingAssistant() {
   const sourceLinkageAdjudicationCircuitRef = useRef(
     new RuntimeInferenceSessionCircuitBreaker()
   );
+  const projectSelectionInferenceRuntimeRef = useRef<RuntimeInferenceOperationRuntime<
+    RuntimeInferenceRuntimeJob, ProjectSelectionInferenceRequestResult
+  > | null>(null);
+  if (projectSelectionInferenceRuntimeRef.current === null) {
+    projectSelectionInferenceRuntimeRef.current = new RuntimeInferenceOperationRuntime(
+      "project-selection-inference", runtimeInferenceProviderAdmissionRef.current
+    );
+  }
+  const projectSelectionIngressRef = useRef<((turn: TranscriptTurn, traceId: string) => void) | undefined>(undefined);
   const whiteboardSyntaxRepairRuntimeRef = useRef<
     RuntimeInferenceOperationRuntime<
       WhiteboardSyntaxRepairJob,
@@ -3578,6 +3607,13 @@ export function useMeetingAssistant() {
   const effectiveQuestionSourceLedgerRef = useRef(
     new EffectiveQuestionSourceLedger()
   );
+  const projectBindingObservationRef = useRef<{
+    sessionId: string;
+    parentId: string;
+    bindingRevision: number;
+    decision: ReturnType<typeof resolveProjectBinding>;
+  } | undefined>(undefined);
+  contextManagerRef.current.setEffectiveQuestionSourceLedger(effectiveQuestionSourceLedgerRef.current);
   const readEffectiveSemanticTask = useCallback(
     (task: ActiveMeetingTask | undefined, logicalQuestionUnit?: LogicalQuestionUnit) =>
       projectEffectiveTaskSourceView({
@@ -5713,6 +5749,7 @@ export function useMeetingAssistant() {
     answerResolutionRuntimeRef.current?.cancelAll("superseded");
     evidenceRequirementRuntimeRef.current?.cancelAll("superseded");
     sourceLinkageAdjudicationRuntimeRef.current?.cancelAll("superseded");
+    projectSelectionInferenceRuntimeRef.current?.cancelAll("superseded");
     whiteboardSyntaxRepairRuntimeRef.current?.cancelAll("superseded");
     whiteboardSyntaxRepairAttemptKeysRef.current.clear();
     taskBoundaryCandidateRef.current = undefined;
@@ -9340,6 +9377,7 @@ export function useMeetingAssistant() {
       askFrame,
       topicDomain,
       projectAnchor,
+      projectId,
       memoryPolicy,
       forceStrictProjectAnchor,
       personalEvidenceDecision,
@@ -9362,6 +9400,7 @@ export function useMeetingAssistant() {
       askFrame?: MemoryAskFrame;
       topicDomain?: MemoryTopicDomain;
       projectAnchor?: string;
+      projectId?: string;
       memoryPolicy?: MemoryRetrievalPolicy;
       forceStrictProjectAnchor?: boolean;
       personalEvidenceDecision?: PersonalEvidenceDecision;
@@ -9475,6 +9514,7 @@ export function useMeetingAssistant() {
         const retrievedMemoryContext = await retrieveMemoryContext(
           {
             sessionId: memoryRuntimeSessionId,
+            memoryStage,
             query,
             currentQuestionQuery: currentQuestionEvidenceText,
             behavioralStoryQuery,
@@ -9486,6 +9526,7 @@ export function useMeetingAssistant() {
             askFrame,
             topicDomain,
             projectAnchor,
+            projectId,
             interviewTypes,
             memoryPolicy: effectiveMemoryPolicy,
           },
@@ -9621,6 +9662,7 @@ export function useMeetingAssistant() {
             formatMemorySelectionForTrace(memoryContext),
             {
               memoryStage,
+              ...formatMemoryProjectDirectoryForTrace(memoryContext.projectDirectory),
               ...buildMemoryEvaluationTraceMetadata(memoryContext),
               ...memoryPerformanceTraceMetadata,
               selectedEntries: memoryContext.entries.length,
@@ -9761,6 +9803,73 @@ export function useMeetingAssistant() {
     },
     [readRuntimeCommitSnapshot, state.settings.useMemory]
   );
+
+  const readProjectChoiceContext = useCallback((displayTarget?: AdviseDisplayTarget) => {
+    const context = contextManagerRef.current.getState();
+    const parent = context.activeMeetingTask?.parent;
+    const directory = state.lastMemoryContext?.projectDirectory;
+    if (!state.settings.useMemory || !parent || context.activeMeetingTask?.child ||
+        normalizeCanonicalQuestionType(parent.questionType) !== "project-deep-dive" ||
+        directory?.status !== "ready" || directory.snapshotSessionId !== context.sessionId) return undefined;
+    const displayed = manualAdviseDisplayRef.current.capture(displayTarget);
+    const displaySource = displayed?.stable ? resolveVisibleAnswerResponseActionTarget({
+      stableAnswer: displayed.stable,
+      currentLogicalQuestionUnit: logicalQuestionUnitRef.current,
+      effectiveQuestionSources: effectiveQuestionSourceLedgerRef.current.list(),
+      meetingContext: context, runtimeEpoch: runtimeEpochRef.current,
+    }) : undefined;
+    if (manualAdviseDisplayRef.current.locked && !displaySource?.authorized) return undefined;
+    const logicalQuestionUnit = displaySource?.authorized ? displaySource.logicalQuestionUnit
+      : resolveResponseActionLogicalQuestionUnit({
+          currentLogicalQuestionUnit: logicalQuestionUnitRef.current,
+          effectiveQuestionSources: effectiveQuestionSourceLedgerRef.current.list(),
+          meetingContext: context, runtimeEpoch: runtimeEpochRef.current,
+          preferScreen: Boolean(context.activeMeetingTask?.screen),
+          phaseOwner: { kind: "parent", id: parent.id },
+        });
+    if (!logicalQuestionUnit) return undefined;
+    const record = effectiveQuestionSourceLedgerRef.current.findLogicalQuestion({
+      sessionId: context.sessionId, runtimeEpoch: runtimeEpochRef.current,
+      logicalQuestionUnitId: logicalQuestionUnit.id, logicalQuestionRevision: logicalQuestionUnit.revision,
+    });
+    if (!record || record.owner.kind !== "parent-mainline" || record.owner.parentId !== parent.id) return undefined;
+    const observed = projectBindingObservationRef.current;
+    if (observed?.sessionId !== context.sessionId || observed.parentId !== parent.id ||
+        observed.bindingRevision !== (parent.projectBinding?.revision ?? 0)) return undefined;
+    const decision = observed.decision;
+    const capability = getProjectSelectionCapability({
+      decision, directory, memoryEnabled: true, questionType: "project-deep-dive", isActiveParent: true,
+    });
+    const canReselect = Boolean(parent.projectBinding &&
+      parent.projectBinding.authority !== "interviewer-explicit" &&
+      decision.sourceAuthority !== "interviewer-explicit" && directory.candidates.length);
+    const key = JSON.stringify([context.sessionId, runtimeEpochRef.current, parent.id,
+      parent.projectBinding?.revision ?? 0, directory.snapshotVersion, directory.snapshotGeneration,
+      directory.authorityRevision]);
+    const target: AdviseDisplayTarget = displaySource?.authorized && displayed
+      ? displayed.target
+      : { sessionId: context.sessionId, logicalQuestionUnitId: logicalQuestionUnit.id,
+          logicalQuestionRevision: logicalQuestionUnit.revision };
+    const presentation: ProjectChoicePresentation = {
+      key, displayTarget: target,
+      currentProject: parent.projectBinding ? {
+        id: parent.projectBinding.projectId ?? parent.projectBinding.projectName,
+        name: parent.projectBinding.projectName,
+      } : undefined,
+      options: directory.candidates.map((candidate, index) => ({
+        id: `project-${index}`, label: candidate.projectName,
+        value: candidate.projectId ?? candidate.projectName,
+      })),
+      canSelect: capability.available, canReselect,
+    };
+    return { context, parent, record, logicalQuestionUnit, directory, decision, capability, presentation };
+  }, [state.settings.useMemory, state.lastMemoryContext]);
+
+  const readProjectChoicePresentation = useCallback((displayTarget?: AdviseDisplayTarget) => {
+    const choice = readProjectChoiceContext(displayTarget);
+    return choice && (choice.presentation.canSelect || choice.presentation.currentProject)
+      ? choice.presentation : undefined;
+  }, [readProjectChoiceContext]);
 
   const clearActiveTask = useCallback(() => {
     const actionId = createMeetingId("manual_action");
@@ -12300,6 +12409,23 @@ export function useMeetingAssistant() {
           promptContext.activeMeetingTask?.parent
       ),
       freshParentCreated: startsNewParentForPhase,
+      projectMainlineAdmission: buildProjectMainlinePhaseAdmission({
+        logicalQuestionUnit: advisorJob.logicalQuestionUnit,
+        effectiveRecords: effectiveQuestionSourceLedgerRef.current.list(),
+        parentId: effectiveAdvisorSettlementView.parentId,
+        responseOwner: {
+          kind: effectiveAdvisorSettlementView.currentOnly ? "current-only"
+            : effectiveAdvisorSettlementView.relation === "child-probe" ? "child" : "parent",
+          parentId: effectiveAdvisorSettlementView.parentId,
+        },
+        source: advisorJob.source,
+        authorized: taskMutationAuthorization.authorized &&
+          currentQuestionSettlement?.responseAuthorized === true &&
+          advisorJob.manualCorrectionRevision === manualCorrectionRevisionRef.current &&
+          advisorJob.responseActionRevision === responseActionRevisionRef.current,
+        freshParentCreated: startsNewParentForPhase,
+        projectSelection: Boolean(options.clarifyingFeedback),
+      }),
     });
     const defaultManualPhaseDecision = advisorPhaseView
       ? decideManualNextPhaseTransitionForBranch({
@@ -12939,6 +13065,13 @@ export function useMeetingAssistant() {
       effectiveQuestionSourceLedgerRef.current.upsert(
         effectiveQuestionSourceRecord
       );
+      contextManagerRef.current.recordTaskQuestionAdmission({
+        sessionId: effectiveQuestionSourceRecord.sessionId,
+        parentId: effectiveQuestionSourceRecord.owner.parentId,
+        childId: effectiveQuestionSourceRecord.owner.kind === "active-child"
+          ? effectiveQuestionSourceRecord.owner.childId : undefined,
+        logicalQuestionUnitId: effectiveQuestionSourceRecord.logicalQuestionUnitId,
+      });
     }
     const effectiveQuestionSourceRecords =
       effectiveQuestionSourceLedgerRef.current.list();
@@ -13851,7 +13984,7 @@ export function useMeetingAssistant() {
         generationLeaseId: answerGenerationLease.id,
       });
     }
-    const candidateMemoryContext = await loadMemoryForPrompt({
+    const advisorMemoryRequest = {
       traceId,
       taskId: activeMeetingTaskId,
       source: "advisor",
@@ -13905,7 +14038,8 @@ export function useMeetingAssistant() {
       memoryStage: advisorRequiresProjectBinding
         ? "candidate-discovery"
         : "prompt-injection",
-    });
+    } satisfies Parameters<typeof loadMemoryForPrompt>[0];
+    const candidateMemoryContext = await loadMemoryForPrompt(advisorMemoryRequest);
     if (rejectStaleCommit("post-memory")) return;
     const projectBindingDecision = resolveProjectBinding({
       existingBinding:
@@ -13922,10 +14056,10 @@ export function useMeetingAssistant() {
         settledExecutionPlan?.memoryPolicy.projectAnchor ??
         advisorProjectAnchor,
       explicitProjectSelection:
-        options.clarifyingFeedback?.answer === "option"
+        options.explicitProjectSelection ?? (options.clarifyingFeedback?.answer === "option"
           ? options.clarifyingFeedback.answerValue ??
             options.clarifyingFeedback.answerLabel
-          : undefined,
+          : undefined),
       explicitSelectionSource: "user-selection",
       currentSourceText: advisorCurrentQuestionEvidenceText,
       sourceTurnIds:
@@ -14077,9 +14211,29 @@ export function useMeetingAssistant() {
         );
       }
     }
+    const currentProjectParent = contextManagerRef.current.getState().activeMeetingTask?.parent;
+    if (advisorRequiresProjectBinding && currentProjectParent && !effectiveAdvisorSettlementView.currentOnly) {
+      projectBindingObservationRef.current = {
+        sessionId: contextManagerRef.current.getState().sessionId,
+        parentId: currentProjectParent.id,
+        bindingRevision: currentProjectParent.projectBinding?.revision ?? 0,
+        decision: projectBindingDecision,
+      };
+    }
+    const boundProjectMemoryContext = advisorRequiresProjectBinding
+      ? await loadMemoryForPrompt({
+          ...advisorMemoryRequest,
+          memoryStage: "prompt-injection",
+          projectId: projectBindingDecision.binding?.projectId,
+          projectAnchor: projectBindingDecision.binding?.projectName,
+          forceStrictProjectAnchor: Boolean(projectBindingDecision.binding),
+          runtimeToken: effectiveRuntimeCommitToken,
+        })
+      : candidateMemoryContext;
+    if (rejectStaleCommit("post-project-memory")) return;
     const projectMemorySettlement =
       settleMemoryContextForProjectBinding({
-        candidateContext: candidateMemoryContext,
+        candidateContext: boundProjectMemoryContext,
         bindingDecision: projectBindingDecision,
       });
     const memoryContext = projectMemorySettlement.memoryContext;
@@ -23002,6 +23156,7 @@ export function useMeetingAssistant() {
         }
 
         appendTranscriptTurnForTrace(turn, traceId, segment);
+        projectSelectionIngressRef.current?.(turn, traceId);
         const stableAnswer = stableAnswerRevisionRef.current;
         if (stableAnswer) {
           const deliveryProgress = updateAnswerDeliveryProgress({
@@ -28115,6 +28270,21 @@ export function useMeetingAssistant() {
             askFrame: screenPreflight?.askFrame ?? screenMemoryAskFrame,
             freshParentCreated:
               screenTransitionSeedPhaseInput.freshParentCreated,
+            projectMainlineAdmission: buildProjectMainlinePhaseAdmission({
+              logicalQuestionUnit: screenRelationLogicalQuestionUnit,
+              effectiveRecords: effectiveQuestionSourceLedgerRef.current.list(),
+              parentId: preflightContextState.activeMeetingTask?.parent.id,
+              responseOwner: {
+                kind: screenCurrentOnly ? "current-only"
+                  : provisionalScreenTaskRelation === "child-probe" ? "child" : "parent",
+                parentId: preflightContextState.activeMeetingTask?.parent.id,
+              },
+              source: "manual-screen",
+              authorized: readScreenAuthorization().authorized && screenTransitionMutationAuthorized,
+              freshParentCreated: screenFreshParentMutationRequested,
+              replay: Boolean(latePreflightRepair),
+              boundVoicePrimaryAsk: screenQuestionOwnedByVoice,
+            }),
           });
         const screenTransitionSeedPlaybook =
           provisionalScreenTaskRelation === "child-probe"
@@ -28338,6 +28508,13 @@ export function useMeetingAssistant() {
           effectiveQuestionSourceLedgerRef.current.upsert(
             screenEffectiveQuestionSourceRecord
           );
+          contextManagerRef.current.recordTaskQuestionAdmission({
+            sessionId: screenEffectiveQuestionSourceRecord.sessionId,
+            parentId: screenEffectiveQuestionSourceRecord.owner.parentId,
+            childId: screenEffectiveQuestionSourceRecord.owner.kind === "active-child"
+              ? screenEffectiveQuestionSourceRecord.owner.childId : undefined,
+            logicalQuestionUnitId: screenEffectiveQuestionSourceRecord.logicalQuestionUnitId,
+          });
         }
         traceStoreRef.current.updateMetadata(trace.id, {
           screenEffectiveQuestionSourceRecordId:
@@ -28622,7 +28799,7 @@ export function useMeetingAssistant() {
           questionId: `screen:${observation.id}`,
           answerRevision: visibleAnswerRevisionRef.current + 1,
         });
-        const candidateMemoryContext = await loadMemoryForPrompt({
+        const screenMemoryRequest = {
           traceId: trace.id,
           source: "screen",
           query: screenMemoryQuery,
@@ -28659,7 +28836,8 @@ export function useMeetingAssistant() {
           memoryStage: screenRequiresProjectBinding
             ? "candidate-discovery"
             : "prompt-injection",
-        });
+        } satisfies Parameters<typeof loadMemoryForPrompt>[0];
+        const candidateMemoryContext = await loadMemoryForPrompt(screenMemoryRequest);
         if (rejectStaleScreenOperation("post-memory")) return;
         const screenProjectBindingDecision = resolveProjectBinding({
           existingBinding:
@@ -28714,9 +28892,29 @@ export function useMeetingAssistant() {
             );
           }
         }
+        const currentScreenProjectParent = contextManagerRef.current.getState().activeMeetingTask?.parent;
+        if (screenRequiresProjectBinding && currentScreenProjectParent && !screenCurrentOnly) {
+          projectBindingObservationRef.current = {
+            sessionId: contextManagerRef.current.getState().sessionId,
+            parentId: currentScreenProjectParent.id,
+            bindingRevision: currentScreenProjectParent.projectBinding?.revision ?? 0,
+            decision: screenProjectBindingDecision,
+          };
+        }
+        const boundScreenMemoryContext = screenRequiresProjectBinding
+          ? await loadMemoryForPrompt({
+              ...screenMemoryRequest,
+              memoryStage: "prompt-injection",
+              projectId: screenProjectBindingDecision.binding?.projectId,
+              projectAnchor: screenProjectBindingDecision.binding?.projectName,
+              forceStrictProjectAnchor: Boolean(screenProjectBindingDecision.binding),
+              runtimeToken: screenRuntimeToken,
+            })
+          : candidateMemoryContext;
+        if (rejectStaleScreenOperation("post-project-memory")) return;
         const screenProjectMemorySettlement =
           settleMemoryContextForProjectBinding({
-            candidateContext: candidateMemoryContext,
+            candidateContext: boundScreenMemoryContext,
             bindingDecision: screenProjectBindingDecision,
           });
         const memoryContext =
@@ -30932,6 +31130,67 @@ export function useMeetingAssistant() {
   const currentSuggestionText =
     state.partialSuggestion || state.latestSuggestion?.content || "";
 
+  const readManualCorrectionContext = useCallback((displayTarget?: AdviseDisplayTarget) => {
+    const context = contextManagerRef.current.getState();
+    const displayScoped = Boolean(displayTarget || manualAdviseDisplayRef.current.locked);
+    const displayed = displayScoped ? manualAdviseDisplayRef.current.capture(displayTarget) : undefined;
+    const displaySource = displayed?.stable ? resolveVisibleAnswerResponseActionTarget({
+      stableAnswer: displayed.stable,
+      currentLogicalQuestionUnit: logicalQuestionUnitRef.current,
+      effectiveQuestionSources: effectiveQuestionSourceLedgerRef.current.list(),
+      meetingContext: context,
+      runtimeEpoch: runtimeEpochRef.current,
+    }) : undefined;
+    if (displayScoped && !displaySource?.authorized) return undefined;
+    const logicalQuestionUnit = displayScoped
+      ? displaySource?.logicalQuestionUnit
+      : latestManualCorrectionTargetRef.current?.logicalQuestionUnit ?? logicalQuestionUnitRef.current;
+    if (!logicalQuestionUnit || logicalQuestionUnit.sessionId !== context.sessionId) return undefined;
+    const source = effectiveQuestionSourceLedgerRef.current.findLogicalQuestion({
+      sessionId: context.sessionId,
+      runtimeEpoch: runtimeEpochRef.current,
+      logicalQuestionUnitId: logicalQuestionUnit.id,
+      logicalQuestionRevision: logicalQuestionUnit.revision,
+    });
+    const currentQuestion = createProvisionalCurrentQuestion({
+      logicalQuestionUnit,
+      sourceKind: displaySource?.sourceKind ?? source?.sourceKind ?? latestManualCorrectionTargetRef.current?.sourceKind ?? "voice",
+      sourceObservationIds: displaySource?.sourceObservationIds ?? source?.sourceObservationIds ??
+        latestManualCorrectionTargetRef.current?.sourceObservationIds,
+    });
+    const recentParent = contextManagerRef.current.getRecentManualCorrectionParent();
+    const target: ManualCorrectionTargetSnapshot = {
+      sessionId: context.sessionId,
+      runtimeEpoch: runtimeEpochRef.current,
+      logicalQuestionUnitId: logicalQuestionUnit.id,
+      logicalQuestionRevision: logicalQuestionUnit.revision,
+      sourceHash: currentQuestion.sourceHash,
+      manualCorrectionRevision: manualCorrectionRevisionRef.current,
+      taskRuntimeRevision: context.taskRuntime.revision,
+      owner: source?.owner,
+    };
+    return {
+      logicalQuestionUnit,
+      target,
+      currentQuestion,
+      currentSessionId: context.sessionId,
+      currentRuntimeEpoch: runtimeEpochRef.current,
+      manualCorrectionRevision: manualCorrectionRevisionRef.current,
+      runtime: context.taskRuntime,
+      source,
+      admission: contextManagerRef.current.getManualCorrectionAdmission(),
+      recentParent,
+      recentParentSources: contextManagerRef.current.getRecentManualCorrectionSources(runtimeEpochRef.current),
+    } satisfies ManualCorrectionCapabilityContext & { logicalQuestionUnit: LogicalQuestionUnit };
+  }, []);
+
+  const readManualCorrectionMenu = useCallback((correctedType: CanonicalQuestionType, displayTarget?: AdviseDisplayTarget) => {
+    const context = readManualCorrectionContext(displayTarget);
+    return context
+      ? { correctedType, target: context.target, ...getManualCorrectionCapabilities(context, correctedType) }
+      : { correctedType, options: [], rejectionReason: "displayed-question-source-unavailable" };
+  }, [readManualCorrectionContext]);
+
   const correctActiveQuestionType = useCallback(
     async (
       correctedType: CanonicalQuestionType,
@@ -30942,13 +31201,17 @@ export function useMeetingAssistant() {
       const displayScopedCorrection = Boolean(manualAdviseDisplayRef.current.locked || invocation.displayTarget);
       const correctionDisplay = displayScopedCorrection
         ? manualAdviseDisplayRef.current.capture(invocation.displayTarget) : undefined;
+      const displayedCorrectionSource = displayScopedCorrection
+        ? readManualCorrectionContext(invocation.displayTarget) : undefined;
       const requestedTarget = displayScopedCorrection
         ? manualCorrectionTargetHistoryRef.current.find(target =>
             target.logicalQuestionUnit.id === correctionDisplay?.target.logicalQuestionUnitId &&
-            target.logicalQuestionUnit.revision === correctionDisplay?.target.logicalQuestionRevision)?.logicalQuestionUnit
+            target.logicalQuestionUnit.revision === correctionDisplay?.target.logicalQuestionRevision)?.logicalQuestionUnit ??
+          displayedCorrectionSource?.logicalQuestionUnit
         : latestManualCorrectionTargetRef.current?.logicalQuestionUnit;
       const actionEvidence = {
         actionId, action: "type-correction" as const, correctedType, uiSurface: source,
+        correctionIntent: invocation.correctionIntent,
         ingressSource: invocation.ingressSource ?? "ui" as const,
         ingressReceivedAt: invocation.ingressReceivedAt ?? Date.now(),
         observedLogicalQuestionUnitId: requestedTarget?.id,
@@ -30959,6 +31222,11 @@ export function useMeetingAssistant() {
       const rejectCorrectionRequest = (reason: string, terminalDisposition: ManualRuntimeActionTerminalDisposition = "rejected") => {
         recordManualRuntimeAction({ ...actionEvidence, stage: "terminal", terminalDisposition, reason });
       };
+      if (!invocation.correctionIntent || !invocation.correctionTarget) {
+        rejectCorrectionRequest("explicit-correction-intent-required");
+        setState(previous => ({ ...previous, error: "Choose how the corrected question belongs to the current task before applying it." }));
+        return;
+      }
       if (displayScopedCorrection && (!correctionDisplay || !requestedTarget)) {
         rejectCorrectionRequest("displayed-question-source-unavailable", "stale");
         setState(previous => ({...previous, error:"The displayed question source changed. Unlock or wait for its current result before correcting it."}));
@@ -30984,11 +31252,23 @@ export function useMeetingAssistant() {
       }
       const clickedCorrectionTarget =
         displayScopedCorrection
-          ? manualCorrectionTargetHistoryRef.current.find(target => target.logicalQuestionUnit === requestedTarget)
+          ? manualCorrectionTargetHistoryRef.current.find(target => target.logicalQuestionUnit === requestedTarget) ??
+            (displayedCorrectionSource && correctionDisplay?.stable?.suggestion.questionLineage ? {
+              sourceKind: displayedCorrectionSource.currentQuestion.sourceKind,
+              originTraceId: correctionDisplay.stable.suggestion.sourceTraceId ?? correctionDisplay.target.traceId ?? actionId,
+              sourceObservationIds: displayedCorrectionSource.currentQuestion.sourceObservationIds,
+              updatedAt: displayedCorrectionSource.logicalQuestionUnit.updatedAt,
+              logicalQuestionUnit: displayedCorrectionSource.logicalQuestionUnit,
+              logicalQuestionLease: createLogicalQuestionUnitLease(displayedCorrectionSource.logicalQuestionUnit),
+              questionLineage: correctionDisplay.stable.suggestion.questionLineage,
+              targetKind: "substantive" as const,
+            } satisfies ManualCorrectionRuntimeTarget : undefined)
           : latestManualCorrectionTargetRef.current;
       const correctionTargetSelection =
         selectManualCorrectionTargetFromHistory({
-          history: manualCorrectionTargetHistoryRef.current,
+          history: clickedCorrectionTarget
+            ? upsertManualCorrectionTargetHistory(manualCorrectionTargetHistoryRef.current, clickedCorrectionTarget)
+            : manualCorrectionTargetHistoryRef.current,
           latestCanonical: latestManualCorrectionTargetRef.current,
           preferredLogicalQuestionUnitId:
             clickedCorrectionTarget?.logicalQuestionUnit.id,
@@ -31114,57 +31394,48 @@ export function useMeetingAssistant() {
       }
       const correctionLogicalQuestionLease =
         createLogicalQuestionUnitLease(correctionLogicalQuestionUnit);
-      const initialDecision = activeTask
-        ? decideManualQuestionTypeCorrection(activeTask, correctedType)
-        : decideProvisionalQuestionTypeCorrection(correctedType);
-      const boundaryReassertionCandidate = Boolean(
-        activeTask &&
-          correctionLineage &&
-          initialDecision.noOp &&
-          initialDecision.reason === "already-effective-question-type"
-      );
-      const decision = boundaryReassertionCandidate
-        ? {
-            ...initialDecision,
-            noOp: false,
-            target: "parent" as const,
-            reason: "manual-correction-reasserts-current-question-boundary",
-          }
-        : initialDecision;
-      if (decision.noOp || !decision.target) {
-        rejectCorrectionRequest(decision.reason);
+      const capabilityContext = readManualCorrectionContext(invocation.displayTarget);
+      if (!capabilityContext) {
+        rejectCorrectionRequest("correction-target-unavailable", "stale");
         return;
       }
-
       const correctionOriginTurn = correctionLineage?.triggerTurnId
         ? contextState.transcriptTurns.find(
             (turn) => turn.id === correctionLineage.triggerTurnId
           )
         : undefined;
-      const effectiveCorrectionTask = readEffectiveSemanticTask(activeTask, correctionLogicalQuestionUnit);
       const correctionQuestionText =
         getLogicalQuestionSemanticEvidenceText(correctionLogicalQuestionUnit);
-      let correctionScopeDecision = decideManualCorrectionScope({
-        task: activeTask,
-        decision,
-        lineage: correctionLineage,
-        latestQuestionText: correctionQuestionText,
-        parentQuestionText:
-          effectiveCorrectionTask?.parent.topic,
-        classifierConfidence: activeTask?.screen?.classifierConfidence,
-        currentQuestionMatchesParentOrigin: Boolean(
-          correctionLineage?.sourceSuggestionId &&
-            correctionLineage.sourceSuggestionId === state.latestSuggestion?.id &&
-            activeTask?.parent.startObservationId &&
-            state.latestSuggestion?.basedOnObservationIds.includes(
-              activeTask.parent.startObservationId
-            )
-        ),
-        currentQuestionRelation:
-          canonicalCorrectionTarget?.settlement?.relation,
-        currentQuestionSource:
-          canonicalCorrectionTarget?.sourceKind,
+      const selectedCorrectionPlaybook = selectInterviewPlaybook({
+        query: correctionQuestionText,
+        questionType: correctedType,
+        askFrame: getManualOverrideAskFrame(correctedType),
+        topicDomain: getManualOverrideTopicDomain(correctedType, undefined),
+        classifierConfidence: 1,
+        interviewSessionBrief: contextState.interviewSessionBrief,
+        interviewSessionContext: contextState.interviewSessionContext,
       });
+      const correctionNewParentId = createMeetingId("interview_parent");
+      const correctionIntentPreparation = prepareManualCorrectionIntentTransition({
+        operationId: actionId,
+        context: { ...capabilityContext, target: invocation.correctionTarget },
+        correctedType,
+        intent: invocation.correctionIntent,
+        correctedPlaybook: selectedCorrectionPlaybook,
+        newParentId: correctionNewParentId,
+      });
+      if (!correctionIntentPreparation.authorized) {
+        rejectCorrectionRequest(correctionIntentPreparation.reason, "stale");
+        setState(previous => ({ ...previous, error: `The correction target or available action changed: ${correctionIntentPreparation.reason}. Reopen the type menu.` }));
+        return;
+      }
+      const decision = correctionIntentPreparation.decision;
+      if (!decision.target) {
+        rejectCorrectionRequest("correction-target-unavailable");
+        return;
+      }
+      const boundaryReassertionCandidate = decision.detectedType === correctedType;
+      let correctionScopeDecision = correctionIntentPreparation.scopeDecision;
       const existingParent =
         contextState.taskRuntime.parent ??
         (contextState.taskRuntime.screenAttachment
@@ -31183,11 +31454,7 @@ export function useMeetingAssistant() {
               questionText: correctionQuestionText,
               logicalQuestionUnit: correctionLogicalQuestionUnit,
             }));
-      const nonDurableCurrentOnlyCorrection = Boolean(
-        correctionScopeDecision.scope === "current-only" &&
-          decision.target === "current-question"
-      );
-      if (!existingParent && !nonDurableCurrentOnlyCorrection) {
+      if (!existingParent) {
         setState((previous) => ({
           ...previous,
           error: "The active question has no repairable parent task.",
@@ -31224,6 +31491,7 @@ export function useMeetingAssistant() {
         correctionLogicalQuestionUnit.id,
         correctionLogicalQuestionUnit.revision,
         correctedType,
+        JSON.stringify(invocation.correctionIntent),
       ].join(":");
       const operationClaim =
         manualCorrectionOperationCoordinatorRef.current.claim(
@@ -31239,6 +31507,7 @@ export function useMeetingAssistant() {
         observedLogicalQuestionUnitId: correctionLogicalQuestionUnit.id,
         observedLogicalQuestionUnitRevision: correctionLogicalQuestionUnit.revision });
       manualCorrectionRevisionRef.current += 1;
+      const correctionManualRevision = manualCorrectionRevisionRef.current;
       unpublishedArtifactSlotRef.current.clear();
       settleAwaitingVisualEvidenceRecovery(
         "cancelled",
@@ -31419,15 +31688,8 @@ export function useMeetingAssistant() {
       }) => {
         const sourceTraceId =
           correctionQuestion.sourceTraceId ?? correctionTrace.id;
-        recordHumanGroundTruthV2(
-          sourceTraceId,
-          {
-            kind: "expected-question-type",
-            expectedQuestionType: decision.correctedType,
-            correctionScope: correctionScopeDecision.scope,
-          },
-          {
-            source: "manual-type-correction",
+        const provenance = {
+            source: "manual-type-correction" as const,
             collection: correctionEvaluationCollection,
             actionId: eventId,
             repairTraceId: input.repairTraceId,
@@ -31448,8 +31710,17 @@ export function useMeetingAssistant() {
               repairTraceId: input.repairTraceId,
               frozenAt: requestedAt,
             },
-          }
-        );
+          };
+        recordHumanGroundTruthV2(sourceTraceId, {
+          kind: "expected-question-type",
+          expectedQuestionType: decision.correctedType,
+          correctionScope: correctionScopeDecision.scope,
+        }, provenance);
+        const expected = buildManualCorrectionExpectedTaskSettlementFactV2({
+          correctedType: decision.correctedType,
+          option: correctionIntentPreparation.capability,
+        });
+        if (expected) recordHumanGroundTruthV2(sourceTraceId, expected, provenance);
       };
       let correction: ManualQuestionTypeCorrection = {
         eventId,
@@ -31634,7 +31905,8 @@ export function useMeetingAssistant() {
               displayScopedCorrection
                 ? manualCorrectionTargetHistoryRef.current.find(target =>
                     target.logicalQuestionUnit.id === correctionLogicalQuestionUnit.id &&
-                    target.logicalQuestionUnit.revision === correctionLogicalQuestionUnit.revision)?.logicalQuestionUnit
+                    target.logicalQuestionUnit.revision === correctionLogicalQuestionUnit.revision)?.logicalQuestionUnit ??
+                  readManualCorrectionContext(invocation.displayTarget)?.logicalQuestionUnit
                 : latestManualCorrectionTargetRef.current?.logicalQuestionUnit
             );
           traceStoreRef.current.updateMetadata(
@@ -31675,226 +31947,36 @@ export function useMeetingAssistant() {
             return;
           }
         }
-        const correctionCurrentQuestion =
-          createProvisionalCurrentQuestion({
-            logicalQuestionUnit: correctionLogicalQuestionUnit,
-            sourceKind: correctionCurrentQuestionSourceKind,
-            sourceObservationIds:
-              correctionSourceObservationIds,
-          });
-        const correctionTargetOwnsActiveParent = Boolean(
-          activeTask &&
-            (correctionScopeDecision.currentQuestionIsParentOrigin ||
-              (activeTask.parent.sourceQuestionUnitId ===
-                correctionLogicalQuestionUnit.id &&
-                activeTask.parent.sourceQuestionRevision ===
-                  correctionLogicalQuestionUnit.revision))
-        );
-        const correctionTargetOwnsActiveChild = Boolean(
-          activeTask?.child &&
-            (correctionScopeDecision.currentQuestionIsChild ||
-              activeTask.child.basedOnTurnIds.some((turnId) =>
-                correctionLogicalQuestionUnit.sourceTurnIds.includes(
-                  turnId
-                )
-              ))
-        );
-        const revisionStableTopologyBinding =
-          resolveRevisionStableTopologyBinding({
-            records:
-              effectiveQuestionSourceLedgerRef.current.listHistory(),
-            logicalQuestionUnit: correctionLogicalQuestionUnit,
-            activeMeetingTask: activeTask,
-          });
-        const correctionRevisionStableRelation = !activeTask &&
-          isParentCanonicalQuestionType(correctedType)
-          ? "new-parent"
-          : revisionStableTopologyBinding?.relation;
-        let orderedCorrectionRelation:
-          | OrderedTaskRelationResolutionDecision
-          | undefined;
-        let orderedCorrectionRelationCandidate:
-          | ReturnType<typeof projectOrderedTaskRelationAdjudication>
-          | undefined;
-        let relationAdjudicationWaitDisposition = activeTask
-          ? "not-requested"
-          : "active-parent-missing";
-        let relationAdjudicationWaitMs = 0;
-        const relationAdjudicationHandle = activeTask
-          ? scheduleTaskRelationAdjudication({
-              turn: {
-                speaker: "them",
-                text: correctionQuestionText,
-              },
-              traceId: correctionTrace.id,
-              turnGateAction: "answer-refresh",
-              logicalQuestionUnit: correctionLogicalQuestionUnit,
-              lexical: {
-                ...inferQuestionTypeDecisionFromText(
-                  correctionQuestionText,
-                  {
-                    interviewSessionBrief:
-                      contextState.interviewSessionBrief,
-                  }
-                ),
-                type: correctedType,
-                legacyType: correctedType,
-                certainty: "exact-high",
-                authorityReason:
-                  "explicit-manual-question-type-correction",
-                confidence: 1,
-              },
-              sourceKind: correctionCurrentQuestionSourceKind,
-              currentQuestion: correctionCurrentQuestion,
-              manualCorrectionOwned: true,
-              authorizeSourceOperation: () =>
-                toTaskRelationOperationAuthorization(
-                  readCorrectionAuthorization(correctionRuntimeToken),
-                  "correctionOperation"
-                ),
-            })
-          : undefined;
-        if (relationAdjudicationHandle?.releaseWindowRequested) {
-          const waitStartedAt = Date.now();
-          try {
-            const resolution =
-              await resolveOrderedTaskRelationWithinWindow({
-                handle: relationAdjudicationHandle,
-                traceId: correctionTrace.id,
-                currentQuestionType: correctedType,
-                allowParentRetype: decision.target === "parent" && isParentCanonicalQuestionType(correctedType) &&
-                  !canParentQuestionTypeOwnChild(normalizeCanonicalQuestionType(activeTask?.parent.questionType) ?? "unknown", correctedType),
-                sourceKind: correctionCurrentQuestionSourceKind,
-                activeMeetingTask: activeTask,
-                screenBoundaryPrior:
-                  correctionCurrentQuestionSourceKind === "screen",
-                screenTypeEvidenceAuthorized: true,
-                waitBudgetMs:
-                  correctionCurrentQuestionSourceKind === "screen"
-                    ? SCREEN_ORDERED_RELATION_FOREGROUND_BUDGET_MS
-                    : VOICE_ORDERED_RELATION_FOREGROUND_BUDGET_MS,
-              });
-            if (resolution.terminalDisposition !== "resolved") {
-              relationAdjudicationWaitDisposition =
-                resolution.terminalDisposition;
-              traceStoreRef.current.updateMetadata(correctionTrace.id, {
-                manualCorrectionRelationOperationAuthorized: false,
-                manualCorrectionRelationOperationReason:
-                  resolution.operationAuthorization.reason,
-                manualCorrectionRelationTerminalDisposition:
-                  resolution.terminalDisposition,
-              });
-              finalizeCorrection({
-                authorizationFailureReason:
-                  resolution.terminalDisposition === "client-error"
-                    ? "task-relation-client-error"
-                    : resolution.operationAuthorization.reason,
-                failureMessage:
-                  resolution.terminalDisposition === "client-error"
-                    ? "Runtime relation model configuration failed. The task type was not changed."
-                    : "The active question changed before the correction could be applied.",
-              });
-              return;
-            }
-            orderedCorrectionRelation = resolution.decision;
-            orderedCorrectionRelationCandidate =
-              projectOrderedTaskRelationAdjudication(
-                resolution.decision
-              );
-            relationAdjudicationWaitDisposition =
-              resolution.decision.relation
-                ? "settled-before-deadline"
-                : "settled-current-only";
-          } catch (error) {
-            relationAdjudicationWaitDisposition =
-              "ordered-chain-error";
-            traceStoreRef.current.updateMetadata(
-              correctionTrace.id,
-              {
-                manualCorrectionRelationWaitError:
-                  error instanceof Error ? error.message : String(error),
-              }
-            );
-            throw error;
-          } finally {
-            relationAdjudicationWaitMs = Math.max(
-              0,
-              Date.now() - waitStartedAt
-            );
-          }
+        const currentIntentContext = readManualCorrectionContext(invocation.displayTarget);
+        if (!currentIntentContext) {
+          finalizeCorrection({ authorizationFailureReason: "correction-target-unavailable" });
+          return;
         }
-        const correctionCoordinatorDecision = coordinateOrderedSettlement({
-          sourceKind: correctionCurrentQuestionSourceKind,
-          currentQuestionType: correctedType,
-          allowParentRetype: decision.target === "parent" && isParentCanonicalQuestionType(correctedType) &&
-            !canParentQuestionTypeOwnChild(normalizeCanonicalQuestionType(activeTask?.parent.questionType) ?? "unknown", correctedType),
+        const correctionIntentTransition = prepareManualCorrectionIntentTransition({
+          operationId: eventId,
+          context: {
+            ...currentIntentContext,
+            target: { ...invocation.correctionTarget, manualCorrectionRevision: correctionManualRevision },
+          },
+          correctedType,
+          intent: invocation.correctionIntent,
+          correctedPlaybook: selectedCorrectionPlaybook,
+          newParentId: correctionNewParentId,
+        });
+        if (!correctionIntentTransition.authorized) {
+          finalizeCorrection({ authorizationFailureReason: correctionIntentTransition.reason });
+          return;
+        }
+        const correctionTargetOwnsActiveParent = activeTask?.parent.sourceQuestionUnitId === correctionLogicalQuestionUnit.id;
+        const correctionTargetOwnsActiveChild = currentIntentContext.source?.owner.kind === "active-child";
+        const revisionStableTopologyBinding = resolveRevisionStableTopologyBinding({
+          records: effectiveQuestionSourceLedgerRef.current.listHistory(),
+          logicalQuestionUnit: correctionLogicalQuestionUnit,
           activeMeetingTask: activeTask,
-          orderedRelation: orderedCorrectionRelation,
-          screenBoundaryPrior:
-            correctionCurrentQuestionSourceKind === "screen",
-          screenTypeEvidenceAuthorized: true,
         });
-        orderedCorrectionRelation = correctionCoordinatorDecision.relation;
-        orderedCorrectionRelationCandidate =
-          projectOrderedTaskRelationAdjudication(
-            correctionCoordinatorDecision.relation
-          );
-        const correctionSettlementResult =
-          settleManualQuestionTypeCorrection({
-            operationId: eventId,
-            currentQuestion: correctionCurrentQuestion,
-            correctedType,
-            activeParentId: activeTask?.parent.id,
-            activeParentRevision: activeTask?.parent.revisions,
-            manualCorrectionRevision:
-              manualCorrectionRevisionRef.current,
-            relationCandidate: orderedCorrectionRelationCandidate,
-            orderedRelationProposal: orderedCorrectionRelation.status === "resolved" ? {
-              source: orderedCorrectionRelationCandidate ? "runtime-adjudication" : "deterministic-fast-path",
-              sessionId: correctionCurrentQuestion.sessionId,
-              runtimeEpoch: correctionCurrentQuestion.runtimeEpoch,
-              logicalQuestionUnitId: correctionCurrentQuestion.logicalQuestionUnitId,
-              revision: correctionCurrentQuestion.revision,
-              sourceHash: correctionCurrentQuestion.sourceHash,
-              relation: orderedCorrectionRelation.relation ?? "none",
-              preserveActiveChild: orderedCorrectionRelation.preserveActiveChild,
-              confidence: orderedCorrectionRelation.confidence,
-              typeEvidenceAuthorized: false, relationEvidenceAuthorized: true,
-              expectedParentId: activeTask?.parent.id, expectedParentRevision: activeTask?.parent.revisions,
-              reasons: [`ordered-relation:${orderedCorrectionRelation.reason}`],
-            } : undefined,
-            relationOperationLeaseAuthorized:
-              orderedCorrectionRelation.status === "resolved",
-            revisionStableRelation: correctionRevisionStableRelation,
-            revisionStableRelationReason:
-              revisionStableTopologyBinding?.source ??
-              (!activeTask ? "first-parent-source-identity" : undefined),
-          });
-        correctionCurrentQuestionSettlement =
-          correctionSettlementResult.settlement;
-        correctionScopeDecision = decideManualCorrectionScope({
-          task: activeTask,
-          decision,
-          lineage: correctionLineage,
-          latestQuestionText: correctionQuestionText,
-          parentQuestionText:
-            effectiveCorrectionTask?.parent.topic,
-          classifierConfidence:
-            activeTask?.screen?.classifierConfidence,
-          currentQuestionMatchesParentOrigin:
-            correctionTargetOwnsActiveParent,
-          currentQuestionRelation:
-            correctionCurrentQuestionSettlement.relation,
-          currentQuestionSource:
-            correctionCurrentQuestionSourceKind,
-        });
-        correctionCurrentQuestionSettlement =
-          authorizeManualCorrectionLifecycle({
-            settlement: correctionCurrentQuestionSettlement,
-            scope: correctionScopeDecision.scope,
-            activeParentId: activeTask?.parent.id,
-            activeParentType: activeTask?.parent.questionType,
-          });
+        const correctionRevisionStableRelation = revisionStableTopologyBinding?.relation;
+        correctionCurrentQuestionSettlement = correctionIntentTransition.settlement;
+        correctionScopeDecision = correctionIntentTransition.scopeDecision;
         correction = {
           ...correction,
           scope: correctionScopeDecision.scope,
@@ -31918,25 +32000,11 @@ export function useMeetingAssistant() {
           manualCorrectionScope: correctionScopeDecision.scope,
           correctionScopeReason: correctionScopeDecision.reason,
           boundaryDecisionReason: correctionScopeDecision.reason,
-          manualCorrectionRelationOperationId:
-            relationAdjudicationHandle?.operationId,
-          manualCorrectionRelationCandidate:
-            orderedCorrectionRelation?.relation,
-          manualCorrectionRelationCandidateConfidence:
-            orderedCorrectionRelation?.confidence,
-          manualCorrectionRelationLeaseAuthorized:
-            Boolean(orderedCorrectionRelationCandidate),
-          manualCorrectionRelationReleaseAuthorized:
-            correctionSettlementResult.relationRelease?.authorized ?? false,
-          manualCorrectionRelationReleaseReason:
-            correctionSettlementResult.relationRelease?.reason,
-          manualCorrectionRelationWaitMs:
-            relationAdjudicationWaitMs,
-          manualCorrectionRelationWaitDisposition:
-            relationAdjudicationWaitDisposition,
-          ...formatOrderedSettlementCoordinatorForTrace(
-            correctionCoordinatorDecision
-          ),
+          manualCorrectionIntent: invocation.correctionIntent,
+          manualCorrectionRelationWaitMs: 0,
+          manualCorrectionRelationWaitDisposition: "explicit-human-intent",
+          manualCorrectionRelationReleaseAuthorized: true,
+          manualCorrectionRelationReleaseReason: "explicit-human-intent",
           manualCorrectionSourceIdentityReseed:
             !activeTask || correctionTargetOwnsActiveParent,
           manualCorrectionSourceIdentityPreservedChild:
@@ -31949,8 +32017,6 @@ export function useMeetingAssistant() {
             revisionStableTopologyBinding?.owner.kind,
         });
         const activeScreenTask = contextState.taskRuntime.screenAttachment;
-        const currentOnlyCorrection =
-          correctionScopeDecision.scope === "current-only";
         const correctionSettledRuntimeRelation = isRuntimeTaskRelation(
           correctionCurrentQuestionSettlement.relation
         )
@@ -31966,51 +32032,10 @@ export function useMeetingAssistant() {
             ? undefined
             : activeScreenTask?.classifier?.topicDomain
         );
-        const correctionRecentSourceContext = resolveAuthorizedEffectiveSourceContext({
-          selectedSourceTurnIds: contextState.transcriptTurns.slice(-4).map((turn) => turn.id),
-          transcriptTurns: contextState.transcriptTurns,
-          effectiveRecords: effectiveQuestionSourceLedgerRef.current.list(),
-          activeMeetingTask: activeTask,
-          logicalQuestionUnit: correctionLogicalQuestionUnit,
-          sessionId: contextState.sessionId,
-          runtimeEpoch: runtimeEpochRef.current,
-        });
-        const correctionQuery =
-          startsNewParentBoundary || currentOnlyCorrection
-          ? correctionQuestionText
-          : [
-              effectiveCorrectionTask?.child?.question,
-              effectiveCorrectionTask?.screen?.question,
-              effectiveCorrectionTask?.parent.topic,
-              correctionQuestionText,
-              questionOnlyLineage
-                ? undefined
-                : correctionRecentSourceContext.transcriptProjection.transcript,
-            ]
-              .filter(Boolean)
-              .join("\n");
-        const selectedPlaybook =
-          decision.target === "resume-parent"
-            ? existingParent?.playbook
-            : selectInterviewPlaybook({
-                query: correctionQuery,
-                questionType: correctedType,
-                askFrame,
-                topicDomain,
-                projectAnchor: startsNewParentBoundary
-                  ? undefined
-                  : activeTask?.screen?.projectAnchor,
-                classifierConfidence: 1,
-                interviewSessionBrief: contextState.interviewSessionBrief,
-                interviewSessionContext: contextState.interviewSessionContext,
-              });
-        const correctedPlaybook = selectedPlaybook
-          ? {
-              ...selectedPlaybook,
-              confidence: 1,
-              reason: `${selectedPlaybook.reason}; authoritative manual runtime correction`,
-            }
-          : undefined;
+        const correctedBranch = resolveEffectiveBranchPhase(correctionIntentTransition.parent);
+        const correctedPlaybook = correctedBranch.status === "resolved"
+          ? { ...correctedBranch.view.playbook, phase: correctedBranch.view.phase }
+          : selectedCorrectionPlaybook;
         const correctionSourceAdmission =
           authorizeSettlementOwnedQuestionContext({
             sourceKind: correctionCurrentQuestionSettlement.sourceKind,
@@ -32074,194 +32099,176 @@ export function useMeetingAssistant() {
           });
           return;
         }
-        if (
-          correctionScopeDecision.scope === "same-question-retype" &&
-          activeTask &&
-          correctionCurrentQuestionSettlement
-        ) {
-          const parentBefore =
-            contextState.taskRuntime.parent ??
-            buildCorrectionParentFromActiveMeetingTask(
-              activeTask,
-              normalizeCanonicalQuestionType(
-                activeTask.parent.questionType
-              ) ?? correctedType
-            );
-          if (!parentBefore) {
-            traceStoreRef.current.finishTrace(
-              correctionTrace.id,
-              "cancelled",
-              "correction-parent-projection-missing"
-            );
-            finalizeCorrection({
-              authorizationFailureReason:
-                "correction-parent-projection-missing",
-            });
-            return;
-          }
-          const correctedParentDeadline = getActiveScreenTaskExpiresAt(state.settings);
-          const parentTransition = buildManualCorrectionParentTransition({
-            parent: parentBefore,
-            decision,
-            scopeDecision: correctionScopeDecision,
-            correctedPlaybook,
-            latestQuestionText: correctionQuestionText,
-            lineage: correctionLineage,
-            transcriptTurns: contextState.transcriptTurns,
-            newParentId: createMeetingId("interview_parent"),
-            source: activeTask.screen ? "screen" : "voice",
-            now: Date.now(),
-          });
-          const preserveExistingParentOrigin =
-            !correctionTargetOwnsActiveParent;
-          const parentAfter = {
-            ...parentTransition.parent,
-            canonicalQuestionSourceTurnIds: preserveExistingParentOrigin
-              ? parentTransition.parent.canonicalQuestionSourceTurnIds
-              : [...correctionLogicalQuestionUnit.sourceTurnIds],
-            sourceQuestionUnitId: preserveExistingParentOrigin
-              ? parentTransition.parent.sourceQuestionUnitId
-              : correctionLogicalQuestionUnit.id,
-            sourceQuestionRevision: preserveExistingParentOrigin
-              ? parentTransition.parent.sourceQuestionRevision
-              : correctionLogicalQuestionUnit.revision,
-            settlementId: correctionCurrentQuestionSettlement.settlementId,
-          };
-          const correctedScreenDeadline = contextState.taskRuntime.screenAttachment
-            ? getActiveScreenTaskExpiresAt(state.settings) : undefined;
-          const screenAfter = contextState.taskRuntime.screenAttachment
-            ? applyManualQuestionTypeCorrectionToScreenTask({
-                task: contextState.taskRuntime.screenAttachment,
-                correctedType,
-                correctedPlaybook,
-                askFrame,
-                topicDomain,
-                now: Date.now(),
-              })
-            : undefined;
-          const projectedTask = buildActiveMeetingTask({
-            screenAttachment: screenAfter,
-            parent: parentAfter,
-            runtimeRevision: contextState.taskRuntime.revision + 1,
-          });
-          if (!projectedTask) {
-            traceStoreRef.current.finishTrace(
-              correctionTrace.id,
-              "cancelled",
-              "correction-task-projection-missing"
-            );
-            finalizeCorrection({
-              authorizationFailureReason:
-                "correction-task-projection-missing",
-            });
-            return;
-          }
-          correctionExecutionPlan = buildSettledAdvisorExecutionPlan({
-            executionRuntimeEpoch: runtimeEpochRef.current,
+        const parentBefore = contextState.taskRuntime.parent;
+        const parentAfter = correctionIntentTransition.parent;
+        const restoresPreviousParent = invocation.correctionIntent.kind === "merge-recent-parent";
+        const screenAfter = restoresPreviousParent
+          ? undefined
+          : invocation.correctionIntent.kind === "independent"
+            ? correctionCurrentQuestionSourceKind === "voice" ? undefined : contextState.taskRuntime.screenAttachment
+            : contextState.taskRuntime.screenAttachment && invocation.correctionIntent.kind === "retype-parent"
+              ? applyManualQuestionTypeCorrectionToScreenTask({
+                  task: contextState.taskRuntime.screenAttachment, correctedType, correctedPlaybook,
+                  askFrame, topicDomain, now: Date.now(),
+                })
+              : contextState.taskRuntime.screenAttachment;
+        const projectedTask = buildActiveMeetingTask({
+          parent: parentAfter, screenAttachment: screenAfter,
+          runtimeRevision: contextState.taskRuntime.revision + 1,
+        });
+        if (!projectedTask) {
+          finalizeCorrection({ authorizationFailureReason: "correction-task-projection-missing" });
+          return;
+        }
+        correctionExecutionPlan = buildSettledAdvisorExecutionPlan({
+          executionRuntimeEpoch: runtimeEpochRef.current,
+          settlement: correctionCurrentQuestionSettlement,
+          activeMeetingTask: projectedTask,
+          expectedActiveMeetingTask: activeTask,
+          preBoundaryQuestionType: activeTask?.parent.questionType,
+          taskBoundaryCommitted: correctionIntentTransition.command.kind === "create-parent" ||
+            correctionIntentTransition.command.kind === "replace-parent",
+          childOwnsResponse: decision.target === "child",
+          subtaskIntent: decision.target === "child" ? parentAfter.child?.intent : undefined,
+          providerSnapshot: meetingModelProviderSnapshotRef.current,
+          questionTypePrior: resolvePreparationRuntimeReinforcement(
+            preparationRuntimeContextRef.current, contextState.interviewSessionBrief
+          ).questionTypePriorObservation,
+          playbook: decision.target === "child" ? correctedPlaybook : parentAfter.playbook ?? correctedPlaybook,
+          memoryUseCase: toMemoryUseCaseForQuestionType(inferMemoryUseCaseFromQuery(correctionQuestionText), correctedType),
+          askFrame, topicDomain: topicDomain ?? "unknown",
+          projectAnchor: parentAfter.projectBinding?.projectName,
+          sourceQuestion: correctionQuestionText,
+          parentSourceQuestion: readEffectiveSemanticTask(projectedTask, correctionLogicalQuestionUnit)?.parent.topic,
+          promptCurrentQuestionSourceHash: correctionCurrentQuestionSettlement.sourceHash,
+          contextReadScopeOverride: invocation.correctionIntent.kind === "independent"
+            ? "current-only" : decision.target === "child" ? "active-child-read" : "active-parent-read",
+          explicitTaskMutationCommand: correctionIntentTransition.command,
+          taskMutationCommittedBeforeAdvisor: true,
+          artifactRequest: { manualCorrection: true },
+        });
+        const effectiveSourceAfterCorrection = createEffectiveQuestionSourceRecord({
+          logicalQuestionUnit: correctionLogicalQuestionUnit,
+          settlement: buildEffectiveAdvisorSettlementView({
             settlement: correctionCurrentQuestionSettlement,
             activeMeetingTask: projectedTask,
-            expectedActiveMeetingTask: activeTask,
-            preBoundaryQuestionType: activeTask.parent.questionType,
-            taskBoundaryCommitted: true,
-            childOwnsResponse: false,
-            providerSnapshot: meetingModelProviderSnapshotRef.current,
-            questionTypePrior: resolvePreparationRuntimeReinforcement(
-              preparationRuntimeContextRef.current,
-              contextState.interviewSessionBrief
-            ).questionTypePriorObservation,
-            playbook: correctedPlaybook,
-            memoryUseCase: toMemoryUseCaseForQuestionType(
-              inferMemoryUseCaseFromQuery(correctionQuestionText),
-              correctedType
-            ),
-            askFrame,
-            topicDomain: topicDomain ?? "unknown",
-            projectAnchor: screenAfter?.classifier?.projectAnchor,
-            sourceQuestion: correctionQuestionText,
-            parentSourceQuestion: effectiveCorrectionTask?.parent.topic,
-            promptCurrentQuestionSourceHash:
-              correctionCurrentQuestionSettlement.sourceHash,
-            contextReadScopeOverride: "active-parent-read",
-            explicitTaskMutationCommand: {
-              kind: "replace-parent",
-              type: parentAfter.stableKind,
-              topic: parentAfter.topic,
-            },
-            taskMutationCommittedBeforeAdvisor: true,
-            artifactRequest: {
-              manualCorrection: true,
-            },
-          });
-          const lifecycleCommit = commitCorrectionLifecycleWithManager({
-            manager: contextManagerRef.current,
-            deadlineDelta: {
-              parent: { ownerId: parentAfter.id, deadline: correctedParentDeadline },
-              screen: screenAfter ? { ownerId: screenAfter.id, deadline: correctedScreenDeadline } : undefined,
-            },
-            plan: correctionExecutionPlan,
-            settlement: correctionCurrentQuestionSettlement,
-            currentContext: contextState,
-            currentLogicalQuestionUnit: correctionLogicalQuestionUnit,
-            manualCorrectionRevision:
-              manualCorrectionRevisionRef.current,
-            parentBefore,
-            screenBefore: contextState.taskRuntime.screenAttachment,
-            parentAfter,
-            screenAfter: screenAfter ?? null,
-            operationId: correctionTrace.id,
-          });
-          const lifecycleMetadata = {
-            ...formatTaskLifecycleReductionForTrace(
-              lifecycleCommit.reduction
-            ),
-            ...formatSettledAdvisorExecutionPlanForTrace(
-              correctionExecutionPlan,
-              lifecycleCommit.postMutationAuthorization ??
-                lifecycleCommit.preMutationAuthorization
-            ),
-            correctionAtomicCommitAuthorized:
-              lifecycleCommit.authorized,
-            correctionAtomicCommitReason: lifecycleCommit.reason,
-            correctionOwnedParentBeforeId: parentBefore.id,
-            correctionOwnedParentAfterId: parentAfter.id,
-            correctionOwnedParentBeforeType:
-              normalizeCanonicalQuestionType(parentBefore.stableKind) ??
-              "unknown",
-            correctionOwnedParentAfterType: correctedType,
-            correctionPreservedExistingParentOrigin:
-              preserveExistingParentOrigin,
-          };
-          traceStoreRef.current.updateMetadata(
-            correctionTrace.id,
-            lifecycleMetadata
-          );
-          sessionRecordingManagerRef.current?.recordCaptureLifecycle({
-            stage: lifecycleCommit.authorized
-              ? "task-lifecycle-command-committed"
-              : "task-lifecycle-command-rejected",
-            traceId: correctionTrace.id,
-            taskId: activeTask.id,
-            ...lifecycleMetadata,
-          });
-          if (!lifecycleCommit.authorized) {
-            traceStoreRef.current.finishTrace(
-              correctionTrace.id,
-              "cancelled",
-              lifecycleCommit.reason
-            );
-            finalizeCorrection({
-              authorizationFailureReason: lifecycleCommit.reason,
+            taskRuntimeRevision: contextState.taskRuntime.revision + 1,
+            fallback: { questionType: correctedType, relation: correctionSettledRuntimeRelation },
+          }).effectiveSettlement!,
+          activeMeetingTask: projectedTask,
+        });
+        if (!effectiveSourceAfterCorrection) {
+          finalizeCorrection({ authorizationFailureReason: "correction-source-owner-projection-missing" });
+          return;
+        }
+        const sourceOwnerCorrection = currentIntentContext.source
+          ? effectiveQuestionSourceLedgerRef.current.prepareOwnerCorrection({
+              operationId: correctionTrace.id,
+              sessionId: contextState.sessionId,
+              runtimeEpoch: runtimeEpochRef.current,
+              logicalQuestionUnitId: correctionLogicalQuestionUnit.id,
+              logicalQuestionRevision: correctionLogicalQuestionUnit.revision,
+              sourceHash: correctionCurrentQuestionSettlement.sourceHash,
+              expectedOwner: currentIntentContext.source.owner,
+              nextOwner: effectiveSourceAfterCorrection.owner,
+              relation: correctionIntentTransition.capability.relation,
+              restoredParentId: restoresPreviousParent ? parentAfter.id : undefined,
+              availableObservationIds: contextState.screenObservations.filter(item => Boolean(item.imageBase64)).map(item => item.id),
+            })
+          : undefined;
+        if (currentIntentContext.source && !sourceOwnerCorrection) {
+          finalizeCorrection({ authorizationFailureReason: "correction-source-owner-changed" });
+          return;
+        }
+        const lifecycleCommit = commitCorrectionLifecycleWithManager({
+          manager: contextManagerRef.current,
+          currentRuntimeEpoch: runtimeEpochRef.current,
+          recentParentToRestore: restoresPreviousParent ? parentAfter.id : undefined,
+          sourceOwnerCorrection,
+          deadlineDelta: {
+            parent: { ownerId: parentAfter.id, deadline: getActiveScreenTaskExpiresAt(state.settings) },
+            screen: screenAfter ? { ownerId: screenAfter.id, deadline: getActiveScreenTaskExpiresAt(state.settings) } : undefined,
+          },
+          plan: correctionExecutionPlan, settlement: correctionCurrentQuestionSettlement,
+          currentContext: contextState, currentLogicalQuestionUnit: correctionLogicalQuestionUnit,
+          manualCorrectionRevision: correctionManualRevision,
+          parentBefore, screenBefore: contextState.taskRuntime.screenAttachment,
+          parentAfter, screenAfter: screenAfter ?? null, operationId: correctionTrace.id,
+        });
+        const lifecycleMetadata = {
+          ...formatTaskLifecycleReductionForTrace(lifecycleCommit.reduction),
+          ...formatSettledAdvisorExecutionPlanForTrace(correctionExecutionPlan,
+            lifecycleCommit.postMutationAuthorization ?? lifecycleCommit.preMutationAuthorization),
+          manualCorrectionIntent: correctionIntentTransition.receipt.intent,
+          manualCorrectionIntentReceipt: correctionIntentTransition.receipt,
+          manualCorrectionCommittedPlanId: correctionExecutionPlan.id,
+          manualCorrectionCommittedCommand: correctionIntentTransition.command.kind,
+          correctionAtomicCommitAuthorized: lifecycleCommit.authorized,
+          correctionAtomicCommitReason: lifecycleCommit.reason,
+          correctionOwnedParentBeforeId: parentBefore?.id,
+          correctionOwnedParentAfterId: parentAfter.id,
+          correctionOwnedParentBeforeType: normalizeCanonicalQuestionType(parentBefore?.stableKind) ?? "unknown",
+          correctionOwnedParentAfterType: normalizeCanonicalQuestionType(parentAfter.stableKind),
+          correctionPreservedExistingParentOrigin: parentBefore?.id === parentAfter.id,
+        };
+        traceStoreRef.current.updateMetadata(correctionTrace.id, lifecycleMetadata);
+        sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+          stage: lifecycleCommit.authorized ? "task-lifecycle-command-committed" : "task-lifecycle-command-rejected",
+          traceId: correctionTrace.id, taskId: parentAfter.id, ...lifecycleMetadata,
+        });
+        if (!lifecycleCommit.authorized) {
+          finalizeCorrection({ authorizationFailureReason: lifecycleCommit.reason });
+          return;
+        }
+        // Source and task projections are prepared before this synchronous commit.
+        if (!sourceOwnerCorrection) effectiveQuestionSourceLedgerRef.current.upsert(effectiveSourceAfterCorrection);
+        contextManagerRef.current.recordTaskQuestionAdmission({
+          sessionId: contextState.sessionId, parentId: parentAfter.id,
+          childId: decision.target === "child" ? parentAfter.child?.id : undefined,
+          logicalQuestionUnitId: correctionLogicalQuestionUnit.id,
+        });
+        parentLifecycleMutationApplied = true;
+        if (parentBefore) invalidateBackgroundAfterSelectedTaskMutation({
+          before: parentBefore, after: parentAfter, traceId: correctionTrace.id,
+        });
+        if (parentBefore?.id !== parentAfter.id || parentBefore.stableKind !== parentAfter.stableKind) {
+          recentAdvisorContinuityRef.current = clearBoundedGeneratedSummaries(recentAdvisorContinuityRef.current);
+        }
+        if (!isSelectedHistoricalQuestion(correctionLogicalQuestionUnit.id)) {
+          currentQuestionSettlementRef.current = correctionCurrentQuestionSettlement;
+          settledAdvisorExecutionPlanRef.current = correctionExecutionPlan;
+        } else if (parentBefore?.id === parentAfter.id) {
+          const current = currentQuestionSettlementRef.current;
+          const source = current && effectiveQuestionSourceLedgerRef.current.list().find(record =>
+            record.sessionId === current.sessionId && record.logicalQuestionUnitId === current.logicalQuestionUnitId &&
+            record.logicalQuestionRevision === current.revision && record.sourceHash === current.sourceHash &&
+            record.owner.parentId === parentAfter.id);
+          const childId = source?.owner.kind === "active-child" ? source.owner.childId : undefined;
+          const beforeType = childId
+            ? parentBefore.child?.id === childId ? parentBefore.child.questionType : undefined
+            : parentBefore.stableKind;
+          const afterType = childId
+            ? parentAfter.child?.id === childId ? parentAfter.child.questionType : undefined
+            : parentAfter.stableKind;
+          if (current && source && beforeType && afterType && beforeType !== afterType) {
+            // The shared owner changed; refresh the live projection, not B's historical result.
+            const projected = Object.freeze({
+              ...current,
+              questionType: afterType,
+              typeAuthoritySource: "manual-correction" as const,
+              activeParentRevision: parentAfter.revisions,
+              manualCorrectionRevision: correctionCurrentQuestionSettlement.manualCorrectionRevision,
+              typeMutationAuthorized: false,
+              relationMutationAuthorized: false,
+              parentMutationAuthorized: false,
+              reasons: [...current.reasons, "current-question-inherits-manually-retyped-owner"],
             });
-            return;
-          }
-          parentLifecycleMutationApplied = true;
-          invalidateBackgroundAfterSelectedTaskMutation({before:parentBefore,after:parentAfter,traceId:correctionTrace.id});
-          if (parentTransition.clearedContextFields.includes("generated-answers")) {
-            recentAdvisorContinuityRef.current = clearBoundedGeneratedSummaries(recentAdvisorContinuityRef.current);
-          }
-          if (!isSelectedHistoricalQuestion(correctionLogicalQuestionUnit.id)) {
-            currentQuestionSettlementRef.current = correctionCurrentQuestionSettlement;
-            settledAdvisorExecutionPlanRef.current = correctionExecutionPlan;
+            currentQuestionSettlementRef.current = projected;
+            const target = latestManualCorrectionTargetRef.current;
+            if (target?.logicalQuestionUnit.id === current.logicalQuestionUnitId &&
+                target.logicalQuestionUnit.revision === current.revision) {
+              latestManualCorrectionTargetRef.current = { ...target, settlement: projected, updatedAt: Date.now() };
+            }
           }
         }
         const correctedContextState = contextManagerRef.current.getState();
@@ -32322,8 +32329,7 @@ export function useMeetingAssistant() {
             parentLifecycleMutationApplied,
           correctionParentMutationDelegatedToAdvisor:
             !parentLifecycleMutationApplied,
-          correctionCurrentOnlyViaEffectiveSettlement:
-            currentOnlyCorrection,
+          correctionCurrentOnlyViaEffectiveSettlement: false,
           correctionVisibleAnswerCleared: true,
           correctionReliableAnswerCleared: false,
           correctionPreviousReliableAnswerPreserved: true,
@@ -32361,6 +32367,9 @@ export function useMeetingAssistant() {
             : "voice",
           {
             source: "manual-question-type-correction-regeneration",
+            ...lifecycleMetadata,
+            manualCorrectionIntent: correctionIntentTransition.receipt.intent,
+            manualCorrectionIntentReceipt: correctionIntentTransition.receipt,
             questionInstanceId: questionId,
             questionOriginTraceId: correctionQuestion.sourceTraceId,
             parentCorrectionTraceId: correctionTrace.id,
@@ -32499,9 +32508,7 @@ export function useMeetingAssistant() {
           traceId: regenerationTrace.id,
           manualQuestionTypeCorrection: correction,
           advisorJobSource: "manual-correction",
-          taskMutationAuthority: currentOnlyCorrection
-            ? "preserve-parent"
-            : "manual-correction",
+          taskMutationAuthority: "manual-correction",
           questionLineage: promoteQuestionLineage(
             correctionLineage ?? state.currentQuestionLineage
           ),
@@ -34474,16 +34481,20 @@ export function useMeetingAssistant() {
       question: string,
       answer: ClarifyingQuestionAnswer,
       option?: { label?: string; value?: string },
-      interaction?: ClarifyingQuestionInteractionContext & { displayTarget?: AdviseDisplayTarget }
+      interaction?: ClarifyingQuestionInteractionContext & {
+        displayTarget?: AdviseDisplayTarget;
+        projectChoice?: Pick<ProjectChoiceSelection, "key" | "reselect">;
+        projectSelectionTurnId?: string;
+      }
     ): Promise<ClarifyingQuestionInteractionOutcome> => {
       const requestId = createMeetingId("clarifying_request");
       const displayed = manualAdviseDisplayRef.current.capture(interaction?.displayTarget);
-      if ((interaction?.displayTarget || manualAdviseDisplayRef.current.locked) &&
+      if (!interaction?.projectChoice && (interaction?.displayTarget || manualAdviseDisplayRef.current.locked) &&
           (!displayed?.stable || displayed.stable.suggestion.id !== stableAnswerRevisionRef.current?.suggestion.id)) {
         return { requestId, state: "stale", reason: "display-target-changed" };
       }
       const trimmedQuestion = question.trim();
-      if (!trimmedQuestion) {
+      if (!trimmedQuestion && !interaction?.projectChoice) {
         return {
           requestId,
           state: "failed",
@@ -34494,8 +34505,43 @@ export function useMeetingAssistant() {
       flushPendingSentenceCompletion("clarifying-answer");
 
       contextManagerRef.current.clearExpiredActiveMeetingTask();
+      const projectChoice = interaction?.projectChoice
+        ? readProjectChoiceContext(interaction.displayTarget) : undefined;
+      let explicitProjectSelection: ExplicitProjectSelection | undefined;
+      if (interaction?.projectChoice) {
+        const optionId = option?.value;
+        const currentProjectId = projectChoice?.parent.projectBinding?.projectId ?? projectChoice?.parent.projectBinding?.projectName;
+        const authorizedChoice = Boolean(projectChoice &&
+          projectChoice.presentation.key === interaction.projectChoice.key &&
+          (interaction.projectChoice.reselect ? projectChoice.presentation.canReselect
+            : projectChoice.presentation.canSelect || currentProjectId === optionId));
+        const candidate = authorizedChoice
+          ? projectChoice?.directory.candidates.find(item => (item.projectId ?? item.projectName) === optionId)
+          : undefined;
+        if (!projectChoice || !candidate) {
+          return { requestId, state: "stale", reason: "project-choice-owner-or-capability-changed" };
+        }
+        if (!interaction.projectSelectionTurnId) projectSelectionInferenceRuntimeRef.current?.cancelAll("superseded");
+        explicitProjectSelection = {
+          sessionId: projectChoice.context.sessionId,
+          runtimeEpoch: runtimeEpochRef.current,
+          sourceTurnId: interaction.projectSelectionTurnId ?? requestId,
+          projectId: candidate.projectId, projectName: candidate.projectName,
+          authority: "user-explicit", actionRevision: responseActionRevisionRef.current,
+          createdAt: Date.now(),
+        };
+        sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+          stage: "project-selection-requested", requestId,
+          projectSelectionSource: interaction.projectSelectionTurnId ? "me" : "button",
+          parentId: projectChoice.parent.id, projectId: candidate.projectId,
+          logicalQuestionUnitId: projectChoice.logicalQuestionUnit.id,
+          bindingRevision: projectChoice.parent.projectBinding?.revision ?? 0,
+          reselect: interaction.projectChoice.reselect,
+        });
+      }
       const hasActiveScreenTask = Boolean(
-        contextManagerRef.current.getState().activeMeetingTask?.screen
+        projectChoice ? projectChoice.record.sourceObservationIds?.length
+          : contextManagerRef.current.getState().activeMeetingTask?.screen
       );
 
       await runAdvisor({
@@ -34504,9 +34550,14 @@ export function useMeetingAssistant() {
         currentSuggestion: currentSuggestionText,
         advisorJobSource: "clarifying-answer",
         taskMutationAuthority: "preserve-parent",
-        questionLineage: resolveCurrentSuggestionQuestionLineage(),
+        logicalQuestionUnit: projectChoice?.logicalQuestionUnit,
+        explicitProjectSelection,
+        questionLineage: projectChoice
+          ? createCanonicalLogicalQuestionLineage({ unit: projectChoice.logicalQuestionUnit,
+              traceId: displayed?.stable?.suggestion.questionLineage?.questionOriginTraceId ?? requestId })
+          : resolveCurrentSuggestionQuestionLineage(),
         clarifyingFeedback: {
-          question: trimmedQuestion,
+          question: trimmedQuestion || "Project selection",
           answer,
           answerLabel: option?.label,
           answerValue: option?.value,
@@ -34566,10 +34617,120 @@ export function useMeetingAssistant() {
       currentSuggestionText,
       flushPendingSentenceCompletion,
       refreshRecordedCompletedTrace,
+      readProjectChoiceContext,
       resolveCurrentSuggestionQuestionLineage,
       runAdvisor,
     ]
   );
+
+  projectSelectionIngressRef.current = (turn, traceId) => {
+    if (turn.speaker !== "me" || !turn.isFinal || !runtimeActiveRef.current || shutdownRequestedRef.current) return;
+    const choice = readProjectChoiceContext();
+    if (!choice?.capability.available) return;
+    const runtime = projectSelectionInferenceRuntimeRef.current!;
+    const operationId = `project-selection:${choice.context.sessionId}:${turn.id}`;
+    if (runtime.getCurrentOperationId() === operationId || runtime.hasStartedBudgetSlot(choice.context.sessionId, turn.id)) return;
+    const latestMe = [...choice.context.transcriptTurns].reverse().find(item => item.speaker === "me");
+    if (latestMe?.id !== turn.id) return;
+    const request = buildProjectSelectionInferenceRequest({
+      currentQuestion: getLogicalQuestionSemanticEvidenceText(choice.logicalQuestionUnit),
+      selectionContext: "The current interviewer project question is awaiting an explicit project choice. Candidate order matches the project menu.",
+      candidates: choice.directory.candidates.map(candidate => ({
+        projectId: candidate.projectId ?? candidate.projectName, name: candidate.projectName,
+        // Existing retrieval aliases are hints, not reviewed project identities.
+        aliases: [],
+      })),
+      meText: turn.text,
+    });
+    if (!request) {
+      traceStoreRef.current.updateMetadata(traceId, { projectSelectionDisposition: "input-unavailable-or-unbounded" });
+      return;
+    }
+    const route = resolveRuntimeInferenceModelRouteFromSnapshot({
+      snapshot: meetingModelProviderSnapshotRef.current,
+      operationKind: "project-selection-inference", reason: "pending-project-choice",
+    });
+    if (!route.provider) {
+      traceStoreRef.current.updateMetadata(traceId, { projectSelectionDisposition: "provider-configuration-error" });
+      setState(previous => ({ ...previous, error: "Project selection inference needs a configured Fast provider. You can still select the project in its menu." }));
+      return;
+    }
+    const epoch = runtimeEpochRef.current;
+    const manualRevision = manualCorrectionRevisionRef.current;
+    const actionRevision = responseActionRevisionRef.current;
+    const authorized = () => {
+      const current = readProjectChoiceContext();
+      return Boolean(runtimeActiveRef.current && !shutdownRequestedRef.current &&
+        runtimeEpochRef.current === epoch && manualCorrectionRevisionRef.current === manualRevision &&
+        responseActionRevisionRef.current === actionRevision && current?.capability.available &&
+        current.presentation.key === choice.presentation.key &&
+        current.context.transcriptTurns.some(source => source.id === turn.id && source.speaker === "me" && source.text === request.meText));
+    };
+    const prompts = buildProjectSelectionInferencePrompts(request);
+    const stepId = traceStoreRef.current.startStep(traceId, "Project selection inference", {
+      operationId, projectSelectionSourceTurnId: turn.id, parentId: choice.parent.id,
+      candidateCount: request.candidates.length,
+      ...formatRuntimeInferenceModelRouteForTrace(route),
+    });
+    const job: RuntimeInferenceRuntimeJob = {
+      operationId, operationKind: "project-selection-inference",
+      sessionId: choice.context.sessionId, budgetKey: choice.context.sessionId,
+      budgetSlot: turn.id, budgetReason: "once-per-final-me-turn", providerTier: "fast",
+    };
+    runtime.schedule({
+      job,
+      execute: async (_job, signal) => {
+        if (!authorized()) throw new Error("project-selection-source-stale");
+        traceStoreRef.current.recordInput(traceId, "project selection model input", formatTraceModelInput(prompts.systemPrompt, prompts.userMessage), {
+          operationId, projectSelectionSourceTurnId: turn.id,
+          ...formatRuntimeInferenceModelRouteForTrace(route),
+        });
+        return requestProjectSelectionInference({ request, provider: route.provider,
+          selectedProvider: route.selectedProvider, signal,
+          executionIdentity: {
+            requestId: operationId, executionPlanId: operationId,
+            modelId: readSelectedProviderModelId(route.selectedProvider),
+            sessionId: choice.context.sessionId, runtimeEpoch: epoch,
+            logicalQuestionUnitId: choice.logicalQuestionUnit.id,
+            logicalQuestionRevision: choice.logicalQuestionUnit.revision,
+          },
+        });
+      },
+      onSettled: settlement => {
+        const parsed = settlement.result?.parsed;
+        const current = authorized() && runtime.getCurrentOperationId() === operationId;
+        const selectedId = current && settlement.disposition === "completed" && parsed?.ok
+          ? parsed.value.projectId : null;
+        const reason = !current ? "stale" : selectedId ? "choice-proposed"
+          : parsed?.ok ? "choice-unresolved" : settlement.result?.parseDisposition ?? settlement.disposition;
+        const metadata = { operationId, projectSelectionDisposition: reason,
+          projectSelectionProposedId: selectedId, projectSelectionDurationMs: settlement.durationMs,
+          projectSelectionQueueWaitMs: settlement.queueWaitMs, projectSelectionSourceTurnId: turn.id,
+          projectSelectionParentId: choice.parent.id, projectSelectionBudget: settlement.budget };
+        traceStoreRef.current.updateMetadata(traceId, metadata);
+        traceStoreRef.current.finishStep(traceId, stepId, current ? "success" : "cancelled", metadata);
+        if (settlement.result) traceStoreRef.current.recordOutput(traceId, "project selection raw output", settlement.result.rawOutput, metadata);
+        sessionRecordingManagerRef.current?.recordCaptureLifecycle({ stage: "project-selection-inference-settled", traceId, ...metadata });
+        refreshRecordedCompletedTrace(traceId);
+        if (!selectedId) return;
+        const option = choice.presentation.options.find(item => item.value === selectedId);
+        if (!option) return;
+        void answerClarifyingQuestion("", "option", option, {
+          questionKey: choice.presentation.key,
+          displayTarget: choice.presentation.displayTarget,
+          projectChoice: { key: choice.presentation.key, reselect: false },
+          projectSelectionTurnId: turn.id, optionSource: "project-binding",
+          optionCount: choice.presentation.options.length, booleanFallbackUsed: false,
+        }).then(outcome => {
+          traceStoreRef.current.updateMetadata(traceId, { projectSelectionBindingTerminal: outcome.state, projectSelectionBindingReason: outcome.reason });
+          refreshRecordedCompletedTrace(traceId);
+        }).catch(error => {
+          traceStoreRef.current.updateMetadata(traceId, { projectSelectionBindingTerminal: "failed", projectSelectionBindingReason: error instanceof Error ? error.message : String(error) });
+          refreshRecordedCompletedTrace(traceId);
+        });
+      },
+    });
+  };
 
   const submitSpeechCorrection = useCallback(
     async (input: string) => {
@@ -37088,6 +37249,7 @@ export function useMeetingAssistant() {
       answerResolutionRuntimeRef.current?.cancelAll("disposed");
       evidenceRequirementRuntimeRef.current?.cancelAll("disposed");
       sourceLinkageAdjudicationRuntimeRef.current?.cancelAll("disposed");
+      projectSelectionInferenceRuntimeRef.current?.cancelAll("disposed");
       whiteboardSyntaxRepairRuntimeRef.current?.cancelAll("disposed");
       const regression = runtimeRegressionRunRef.current;
       if (regression) {
@@ -37156,6 +37318,7 @@ export function useMeetingAssistant() {
       answerResolutionRuntimeRef.current?.cancelAll("disposed");
       evidenceRequirementRuntimeRef.current?.cancelAll("disposed");
       sourceLinkageAdjudicationRuntimeRef.current?.cancelAll("disposed");
+      projectSelectionInferenceRuntimeRef.current?.cancelAll("disposed");
       whiteboardSyntaxRepairRuntimeRef.current?.cancelAll("disposed");
       void semanticTaxonomyRuntimeRef.current?.dispose("meeting-hook-unmounted");
     };
@@ -37340,10 +37503,12 @@ export function useMeetingAssistant() {
     recordCriticalMomentGroundTruthV2,
     updateCriticalMomentEvaluation,
     correctActiveQuestionType,
+    readManualCorrectionMenu,
     regenerateSuggestion,
     forceAdviseLatestTurn,
     applyResponseAction,
     answerClarifyingQuestion,
+    readProjectChoicePresentation,
     submitSpeechCorrection,
     deactivateSpeechCorrection,
     aiProviders: allAiProviders,

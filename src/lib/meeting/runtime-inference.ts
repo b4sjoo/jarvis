@@ -8,6 +8,7 @@ export type RuntimeInferenceOperationKind =
   | "taxonomy-adjudication"
   | "question-type-adjudication"
   | "response-opportunity-inference"
+  | "project-selection-inference"
   | "meeting-metadata-inference"
   | "whiteboard-syntax-repair"
   | "task-relation-adjudication"
@@ -127,6 +128,16 @@ const DEFINITIONS: Record<
     lane: "background",
     timeoutMs: 5_000,
     maxOutputTokens: 256,
+    quiescenceMs: 0,
+    maxStartsPerBudgetSlot: 1,
+  },
+  "project-selection-inference": {
+    workloadClass: "runtime",
+    operationKind: "project-selection-inference",
+    providerTier: "fast",
+    lane: "critical",
+    timeoutMs: 3_000,
+    maxOutputTokens: 512,
     quiescenceMs: 0,
     maxStartsPerBudgetSlot: 1,
   },

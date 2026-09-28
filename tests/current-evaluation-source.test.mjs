@@ -9,7 +9,7 @@ import ts from "typescript";
 // Bundle current sources in memory so this standalone test cannot use stale .tmp-tests output.
 const bundle = await build({
   stdin: {
-    contents: ["human-evaluation", "current-question-settlement", "source-owned-transition-runtime", "playbook-phase-history"]
+    contents: ["human-evaluation", "current-question-settlement", "source-owned-transition-runtime", "playbook-phase-history", "runtime-inference-runtime"]
       .map(name => `export * from "./src/lib/meeting/${name}.ts";`).join("\n"),
     resolveDir: process.cwd(), loader: "ts",
   },
@@ -202,7 +202,9 @@ test("B2 current source: real Voice publication advances to B while historical s
   commit();
   evaluate(assignmentGuard("effectiveAdvisorSettlementView.effectiveSettlement").getText(hook), h.context);
   Object.assign(h.env, { correctionLogicalQuestionUnit: unit(h.a), correctionCurrentQuestionSettlement: h.a,
-    correctionExecutionPlan: { id: "historical-correction-plan-A" } });
+    correctionExecutionPlan: { id: "historical-correction-plan-A" },
+    parentBefore: { id: "parent-B", stableKind: "ai-ml-system-design" },
+    parentAfter: { id: "parent-A", stableKind: "ai-ml-system-design" } });
   evaluate(assignmentGuard("correctionCurrentQuestionSettlement").getText(hook), h.context);
   h.traces.unshift(trace(h.a, "success", "newer-historical-A"));
   assert.equal(h.env.currentQuestionSettlementRef.current, h.b);
@@ -223,6 +225,9 @@ function bindRuntimeReset(h) {
     "questionTypeAdjudicationRuntimeRef", "taskRelationChildAffinityRuntimeRef", "taskRelationParentAffinityRuntimeRef",
     "taskRelationCanonicalShadowRuntimeRef", "answerResolutionRuntimeRef", "evidenceRequirementRuntimeRef",
     "sourceLinkageAdjudicationRuntimeRef", "whiteboardSyntaxRepairRuntimeRef"]) h.env[name] = { current: { cancelAll: noop } };
+  h.env.projectSelectionInferenceRuntimeRef = {
+    current: new production.RuntimeInferenceOperationRuntime("project-selection-inference"),
+  };
   for (const name of ["screenOperationCoordinatorRef", "manualCorrectionOperationCoordinatorRef"]) h.env[name] = { current: { reset: noop } };
   for (const name of ["taskBoundaryCandidateRef", "manualCorrectionRevisionRef", "adjacentQuestionScopeRef",
     "manualCorrectionTargetHistoryRef", "playbookPhaseHistoryRef", "pendingInterviewSectionHintRef",
@@ -232,9 +237,18 @@ function bindRuntimeReset(h) {
   h.env.advanceRuntimeEpoch = callback("advanceRuntimeEpoch", h.context);
 }
 
-test("B2 current source: real Clear epoch boundary cannot resurrect retained same-session traces", () => {
+test("B2 current source: real Clear epoch boundary cannot resurrect retained same-session traces", t => {
   const h = harness();
   bindRuntimeReset(h);
+  const projectRuntime = h.env.projectSelectionInferenceRuntimeRef.current;
+  const projectSettlements = [];
+  t.after(() => projectRuntime.cancelAll("disposed"));
+  projectRuntime.schedule({ job: { operationId: "project-selection-before-clear", operationKind: "project-selection-inference",
+    sessionId: h.runtime.sessionId, budgetKey: h.runtime.sessionId, budgetSlot: "me-turn", budgetReason: "test-clear-boundary" },
+    execute: async () => assert.fail("Clear must cancel the queued project inference before provider execution"),
+    onSettled: result => projectSettlements.push(result),
+  }, 60_000);
+  assert.equal(projectRuntime.getCurrentOperationId(), "project-selection-before-clear");
   const clear = declaration("clearActiveTask").initializer.arguments[0];
   const resetCall = find(clear, node => ts.isCallExpression(node) &&
     node.expression.getText(hook) === "advanceRuntimeEpoch", "Clear epoch boundary");
@@ -242,6 +256,8 @@ test("B2 current source: real Clear epoch boundary cannot resurrect retained sam
   const clearState = evaluate(`(${declaration("clearActiveTaskState").getText(hook)})`, h.context);
   h.env.state = clearState(h.env.state, h.runtime);
   assert.equal(h.env.runtimeEpochRef.current, 4);
+  assert.equal(projectRuntime.getCurrentOperationId(), undefined);
+  assert.deepEqual(projectSettlements.map(result => result.disposition), ["superseded"]);
   assert.equal(h.env.currentQuestionSettlementRef.current, undefined);
   assert.equal(h.env.logicalQuestionUnitRef.current, undefined);
   assert.equal(h.env.latestManualCorrectionTargetRef.current, undefined);

@@ -1,9 +1,8 @@
 import type {
   MemoryQuestionType,
+  MemoryProjectDirectory,
   MemoryRetrievalResult,
-  RetrievedMemoryEntry,
 } from "@/lib/memory";
-import { resolveRetrievedMemoryRole } from "../memory/runtime-role.js";
 import type {
   EffectiveInterviewTaskRelation,
   InterviewTaskRelation,
@@ -50,9 +49,14 @@ export function resolveProjectBinding({
   memoryContext,
   now = Date.now(),
 }: ResolveProjectBindingInput): ProjectBindingDecision {
-  const candidates = collectProjectBindingCandidates(
-    memoryContext?.entries ?? []
-  );
+  const directory = memoryContext?.projectDirectory;
+  const candidates = directory?.status === "ready"
+    ? directory.candidates.map((candidate) => ({
+        ...candidate,
+        evidenceEntryIds: [...candidate.evidenceEntryIds],
+        identityAliases: [...candidate.identityAliases],
+      }))
+    : [];
   const startsNewParent = relation === "new-parent";
   const continuingBinding = startsNewParent ? undefined : existingBinding;
   const topicEvidence =
@@ -90,13 +94,14 @@ export function resolveProjectBinding({
     ? [authoritativeSelection.sourceObservationId]
     : [...sourceObservationIds];
 
-  const selectedCandidate = authoritativeSelection
-    ? findMatchingCandidate(
+  const selectedCandidate = authoritativeSelection?.projectId
+    ? candidates.find((candidate) => candidate.projectId === authoritativeSelection.projectId)
+    : authoritativeSelection
+      ? findMatchingCandidate(
         candidates,
-        authoritativeSelection.projectId ||
-          authoritativeSelection.projectName
+        authoritativeSelection.projectName
       )
-    : undefined;
+      : undefined;
   if (selectedCandidate) {
     const sameProject = continuingBinding
       ? projectBindingMatchesCandidate(continuingBinding, selectedCandidate)
@@ -142,11 +147,12 @@ export function resolveProjectBinding({
   if (authoritativeSelection) {
     if (
       continuingBinding &&
-      projectBindingMatchesProjectHint(
-        continuingBinding,
-        authoritativeSelection.projectId ||
-          authoritativeSelection.projectName
-      )
+      (authoritativeSelection.projectId
+        ? continuingBinding.projectId === authoritativeSelection.projectId
+        : [continuingBinding.projectId, continuingBinding.projectName].some(
+            (identity) => identity && normalizeProjectAlias(identity) ===
+              normalizeProjectAlias(authoritativeSelection.projectName)
+          ))
     ) {
       return createProjectBindingDecision({
         action: "preserve",
@@ -241,7 +247,7 @@ export function resolveProjectBinding({
 
   const anchorMatches = projectAnchor
     ? candidates.filter((candidate) =>
-        projectIdentityMatches(projectAnchor, candidate)
+        Boolean(findExplicitCanonicalProjectIdentity(projectAnchor, candidate))
       )
     : [];
   if (anchorMatches.length === 1) {
@@ -284,25 +290,15 @@ export function resolveProjectBinding({
 
   if (candidates.length === 1) {
     return createProjectBindingDecision({
-      action: "bind",
-      binding: createProjectBinding({
-        candidate: candidates[0],
-        source: "memory",
-        authority: "memory-candidate",
-        confidence: 0.9,
-        reason: "one-eligible-evidence-project",
-        sourceTurnIds,
-        sourceObservationIds,
-        now,
-      }),
+      action: "needs-selection",
       candidates,
-      changed: true,
+      changed: false,
       sourceAuthority: "memory-candidate",
       sourceTurnIds,
       sourceObservationIds,
       topicCompatible: true,
       topicEvidence,
-      reason: "one-eligible-evidence-project",
+      reason: "one-eligible-evidence-project-requires-confirmation",
     });
   }
 
@@ -329,8 +325,54 @@ export function resolveProjectBinding({
     sourceObservationIds,
     topicCompatible: true,
     topicEvidence,
-    reason: "no-eligible-evidence-project",
+    reason: !directory
+      ? "project-directory-not-loaded"
+      : directory.status === "unavailable"
+        ? "project-directory-unavailable"
+        : "no-eligible-evidence-project",
   });
+}
+
+export interface ProjectSelectionCapability {
+  available: boolean;
+  reason: string;
+  candidates: ProjectBindingCandidate[];
+}
+
+export function getProjectSelectionCapability({
+  decision,
+  directory,
+  memoryEnabled,
+  questionType,
+  isActiveParent,
+}: {
+  decision?: ProjectBindingDecision;
+  directory?: MemoryProjectDirectory;
+  memoryEnabled: boolean;
+  questionType?: MemoryQuestionType;
+  /** Caller validates the current session/parent and binding revision. */
+  isActiveParent: boolean;
+}): ProjectSelectionCapability {
+  const unavailable = (reason: string) => ({ available: false, reason, candidates: [] });
+  if (!memoryEnabled) return unavailable("memory-disabled");
+  if (!isActiveParent || questionType !== "project-deep-dive") return unavailable("not-active-project-parent");
+  if (decision?.binding) return unavailable("project-already-bound");
+  if (!directory) return unavailable("project-directory-not-loaded");
+  if (directory.status !== "ready") return unavailable("project-directory-unavailable");
+  if (!directory.candidates.length) return unavailable("no-eligible-evidence-project");
+  if (!decision || decision.action !== "needs-selection") return unavailable(decision?.reason ?? "binding-not-resolved");
+  if (
+    (decision.sourceAuthority !== "memory-candidate" && decision.sourceAuthority !== "compatible-existing") ||
+    (!decision.topicCompatible && !decision.topicEvidence?.deicticReference) ||
+    (decision.topicEvidence?.explicitProjectNames.length ?? 0) > 1
+  ) return unavailable(decision.reason);
+  // A changed directory must be resolved again before exposing its choices.
+  const ids = new Set(directory.candidates.map((candidate) => candidate.projectId || candidate.projectName));
+  if (!decision.candidates.length || decision.candidates.length !== ids.size ||
+    decision.candidates.some((candidate) => !ids.has(candidate.projectId || candidate.projectName))) {
+    return unavailable("project-directory-changed");
+  }
+  return { available: true, reason: decision.reason, candidates: decision.candidates };
 }
 
 export function formatProjectBindingDecisionForPrompt(
@@ -350,7 +392,7 @@ export function formatProjectBindingDecisionForPrompt(
       ? `Project id: ${decision.binding.projectId}`
       : undefined,
     decision.binding
-      ? `Evidence entry ids: ${decision.binding.evidenceEntryIds.join(", ")}`
+      ? `Discovery evidence references (not claim support): ${decision.binding.evidenceEntryIds.join(", ")}`
       : undefined,
     decision.candidates.length
       ? `Eligible choices: ${decision.candidates
@@ -547,7 +589,7 @@ function extractExplicitProjectName(sourceText: string | undefined) {
     .filter((value): value is string => Boolean(value))
     .filter(
       (value) =>
-        !new Set(["Current", "New", "Previous", "The", "This", "Your"]).has(
+        !new Set(["Current", "New", "Previous", "The", "This", "Your", "Which", "What", "Whose"]).has(
           value
         )
     );
@@ -564,65 +606,6 @@ export function projectBindingMatchesProjectHint(
     projectId: binding.projectId,
     projectName: binding.projectName,
   });
-}
-
-export function collectProjectBindingCandidates(
-  entries: RetrievedMemoryEntry[]
-) {
-  const groups = new Map<
-    string,
-    {
-      projectId?: string;
-      projectName: string;
-      entries: RetrievedMemoryEntry[];
-    }
-  >();
-
-  for (const item of entries) {
-    if (!resolveRetrievedMemoryRole(item).anchorEligible) continue;
-    const projectName = item.entry.projectName?.trim();
-    const projectId = item.entry.projectId?.trim();
-    if (!projectName && !projectId) continue;
-    const displayName = projectName || projectId!;
-    const key = normalizeProjectIdentity(projectId || displayName);
-    if (!key) continue;
-    const existing = groups.get(key);
-    if (existing) {
-      existing.entries.push(item);
-      if (!existing.projectId && projectId) existing.projectId = projectId;
-      if (existing.projectName === existing.projectId && projectName) {
-        existing.projectName = projectName;
-      }
-    } else {
-      groups.set(key, {
-        projectId,
-        projectName: displayName,
-        entries: [item],
-      });
-    }
-  }
-
-  return Array.from(groups.values())
-    .map<ProjectBindingCandidate>((group) => {
-      const ordered = [...group.entries].sort(
-        (left, right) => right.score - left.score
-      );
-      return {
-        projectId: group.projectId,
-        projectName: group.projectName,
-        primaryEntryId: ordered[0].entry.id,
-        evidenceEntryIds: Array.from(
-          new Set(ordered.map((item) => item.entry.id))
-        ),
-        identityAliases: collectProjectIdentityAliases(
-          group.projectName,
-          group.projectId,
-          ordered
-        ),
-        score: ordered[0].score,
-      };
-    })
-    .sort((left, right) => right.score - left.score);
 }
 
 function createProjectBinding({
@@ -730,19 +713,6 @@ function isProjectBindingTopicCompatible(
   );
 }
 
-function findExplicitProjectAlias(
-  sourceText: string | undefined,
-  candidate: Pick<
-    ProjectBindingCandidate,
-    "projectId" | "projectName" | "identityAliases"
-  >
-) {
-  return (
-    findExplicitCanonicalProjectIdentity(sourceText, candidate) ??
-    findProjectIdentityAlias(sourceText, candidate)
-  );
-}
-
 function findExplicitCanonicalProjectIdentity(
   sourceText: string | undefined,
   candidate: Pick<
@@ -785,48 +755,11 @@ function findMatchingCandidate(
   selection: string
 ) {
   const matches = candidates.filter((candidate) =>
-    projectIdentityMatches(selection, candidate) ||
-      Boolean(findExplicitProjectAlias(selection, candidate))
+    [candidate.projectId, candidate.projectName].some((identity) =>
+      identity && normalizeProjectAlias(selection) === normalizeProjectAlias(identity)
+    )
   );
   return matches.length === 1 ? matches[0] : undefined;
-}
-
-function collectProjectIdentityAliases(
-  projectName: string,
-  projectId: string | undefined,
-  entries: RetrievedMemoryEntry[]
-) {
-  const rawAliases = [
-    projectName,
-    projectId,
-    ...entries.flatMap(({ entry }) => [
-      entry.title,
-      ...entry.tags,
-      ...entry.keywords,
-    ]),
-  ].filter((value): value is string => Boolean(value?.trim()));
-
-  return Array.from(
-    new Set(rawAliases.flatMap(buildDiscriminativeProjectAliases))
-  );
-}
-
-function buildDiscriminativeProjectAliases(value: string) {
-  const tokens = tokenizeProjectEvidence(value).filter(
-    (token) =>
-      !GENERIC_PROJECT_IDENTITY_TERMS.has(token) &&
-      !PROJECT_ALIAS_STOP_TERMS.has(token)
-  );
-  if (tokens.length < 2) return [];
-  if (tokens.length <= 4) return [tokens.join(" ")];
-
-  const aliases: string[] = [];
-  for (const size of [4, 3]) {
-    for (let index = 0; index + size <= tokens.length; index += 1) {
-      aliases.push(tokens.slice(index, index + size).join(" "));
-    }
-  }
-  return aliases;
 }
 
 function normalizeProjectAlias(value: string) {
@@ -886,21 +819,6 @@ const GENERIC_PROJECT_IDENTITY_TERMS = new Set([
   "tool",
   "app",
   "application",
-]);
-
-const PROJECT_ALIAS_STOP_TERMS = new Set([
-  "a",
-  "an",
-  "and",
-  "api",
-  "apis",
-  "for",
-  "in",
-  "of",
-  "on",
-  "the",
-  "to",
-  "with",
 ]);
 
 const PROJECT_FEATURE_TERMS = new Set([

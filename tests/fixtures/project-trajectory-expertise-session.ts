@@ -1,6 +1,6 @@
 import type {
   FactAnchorState,
-  InterviewPlaybookPhase,
+  RecordedInterviewPlaybookPhase,
   ProjectTrajectoryChildContinuity,
 } from "../../src/lib/meeting/types.js";
 
@@ -10,7 +10,7 @@ export interface ProjectTrajectoryReplayTurn {
   expected?: {
     projectId: string;
     projectName: string;
-    phase: InterviewPlaybookPhase;
+    phase: RecordedInterviewPlaybookPhase;
     factAnchorState: FactAnchorState;
     childContinuity: ProjectTrajectoryChildContinuity;
   };

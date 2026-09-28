@@ -382,7 +382,7 @@ test("hides an old project parent behind a committed new-parent settlement", () 
       reason: "memory candidate",
       sourceTurnIds: ["turn-oasis"],
     },
-    playbookPhase: "project_narrative",
+    playbookPhase: "project_summary",
     supportedFactAnchors: ["mem_oasis_ndjson"],
   });
   const codingSettlement = settlement({
@@ -403,7 +403,7 @@ test("hides an old project parent behind a committed new-parent settlement", () 
       questionType: "project-deep-dive",
       relation: "unknown",
       projectAnchor: "Oasis",
-      playbookPhase: "project_narrative",
+      playbookPhase: "project_summary",
     },
   });
 
@@ -645,7 +645,7 @@ test("keeps the committed project parent visible for a project follow-up", () =>
       reason: "memory candidate",
       sourceTurnIds: ["turn-oasis"],
     },
-    playbookPhase: "architecture_decision",
+    playbookPhase: "project_QA",
     supportedFactAnchors: ["mem_oasis_ndjson"],
   });
   const view = buildEffectiveAdvisorSettlementView({
@@ -665,7 +665,7 @@ test("keeps the committed project parent visible for a project follow-up", () =>
 
   assert.equal(view.parentId, "parent-oasis");
   assert.equal(view.projectAnchor, "Oasis");
-  assert.equal(view.playbookPhase, "architecture_decision");
+  assert.equal(view.playbookPhase, "project_QA");
   assert.deepEqual(view.supportedFactAnchors, ["mem_oasis_ndjson"]);
 });
 

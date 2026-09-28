@@ -109,6 +109,9 @@ export function consumeRevisionStableTopologyBinding<
     };
   }
   const previousRelation = settlement.relation;
+  if (settlement.relationAuthoritySource === "manual-correction") {
+    return { settlement, consumed: false, reason: "explicit-manual-relation-preserved" as const, previousRelation };
+  }
   const projected = {
     ...settlement,
     relation: binding.relation,
@@ -151,7 +154,8 @@ function isEffectiveSettlement(
 }
 
 export class EffectiveQuestionSourceLedger {
-  private readonly records: EffectiveQuestionSourceRecord[] = [];
+  private records: EffectiveQuestionSourceRecord[] = [];
+  private retainedParent?: RetainedParentSourceReferences;
 
   constructor(private readonly maxEntries = 96) {}
 
@@ -159,12 +163,131 @@ export class EffectiveQuestionSourceLedger {
     const index = this.records.findIndex(
       (candidate) => candidate.recordId === record.recordId
     );
-    if (index >= 0) this.records[index] = cloneRecord(record);
-    else this.records.push(cloneRecord(record));
-    if (this.records.length > this.maxEntries) {
-      this.records.splice(0, this.records.length - this.maxEntries);
-    }
+    const next = [...this.records];
+    if (index >= 0) next[index] = cloneRecord(record);
+    else next.push(cloneRecord(record));
+    this.records = this.trimRecords(next);
     return cloneRecord(record);
+  }
+
+  getRetainedParentSourceReferences() {
+    return this.retainedParent;
+  }
+
+  // Retention changes only reference existing source-owner storage. The original
+  // records remain subject to the total entry budget; oversized slots fail closed.
+  retainParentSources(input: {
+    sessionId: string;
+    parentId: string;
+    originLogicalQuestionUnitId?: string;
+    requiredTurnIds: readonly string[];
+    requiredObservationIds: readonly string[];
+  }) {
+    const records = this.list().filter(record => record.sessionId === input.sessionId &&
+      record.owner.parentId === input.parentId && record.owner.kind === "parent-mainline");
+    const turns = new Set(records.flatMap(record => record.sourceTurnIds));
+    const observations = new Set(records.flatMap(record => record.sourceObservationIds ?? []));
+    const budget = Math.min(24, Math.max(0, this.maxEntries - 1));
+    if (!records.length || records.length > budget ||
+      (!input.originLogicalQuestionUnitId && !input.requiredTurnIds.length && !input.requiredObservationIds.length) ||
+      (input.originLogicalQuestionUnitId && !records.some(record => record.logicalQuestionUnitId === input.originLogicalQuestionUnitId)) ||
+      input.requiredTurnIds.some(id => !turns.has(id)) || input.requiredObservationIds.some(id => !observations.has(id))) {
+      this.retainedParent = undefined;
+      return undefined;
+    }
+    this.retainedParent = Object.freeze({
+      sessionId: input.sessionId, parentId: input.parentId,
+      sources: Object.freeze(records.map(record => Object.freeze({
+        recordId: record.recordId, logicalQuestionUnitId: record.logicalQuestionUnitId,
+        logicalQuestionRevision: record.logicalQuestionRevision, sourceHash: record.sourceHash,
+      }))),
+    });
+    return this.retainedParent;
+  }
+
+  restoreRetainedParentSourceReferences(expected: RetainedParentSourceReferences | undefined, previous: RetainedParentSourceReferences | undefined) {
+    if (this.retainedParent !== expected) return false;
+    this.retainedParent = previous;
+    return true;
+  }
+
+  releaseRetainedParentSources() {
+    this.retainedParent = undefined;
+  }
+
+  getRetainedParentSourceEvidence(input: {
+    sessionId: string;
+    runtimeEpoch: number;
+    parentId: string;
+    availableObservationIds: readonly string[];
+  }): RetainedParentSourceEvidence | undefined {
+    const retained = this.retainedParent;
+    if (retained?.sessionId !== input.sessionId || retained.parentId !== input.parentId) return undefined;
+    const records: EffectiveQuestionSourceRecord[] = [];
+    for (const reference of retained.sources) {
+      const record = this.findLogicalQuestion({ ...input,
+        logicalQuestionUnitId: reference.logicalQuestionUnitId, logicalQuestionRevision: reference.logicalQuestionRevision });
+      if (!record || record.recordId !== reference.recordId || record.sourceHash !== reference.sourceHash ||
+        record.owner.parentId !== input.parentId || record.owner.kind !== "parent-mainline") return undefined;
+      records.push(record);
+    }
+    const observationIds = [...new Set(records.flatMap(record => record.sourceObservationIds ?? []))];
+    const available = new Set(input.availableObservationIds);
+    return { sessionId: input.sessionId, parentId: input.parentId, records, observationIds,
+      missingObservationIds: observationIds.filter(id => !available.has(id)),
+      retainedTextBytes: records.reduce((size, record) => size + new TextEncoder().encode(record.text).length, 0),
+      retainedRecordBytes: new TextEncoder().encode(JSON.stringify(records)).length };
+  }
+
+  prepareOwnerCorrection(input: {
+    operationId: string;
+    sessionId: string;
+    runtimeEpoch: number;
+    logicalQuestionUnitId: string;
+    logicalQuestionRevision: number;
+    sourceHash: string;
+    expectedOwner: EffectiveQuestionSourceOwner;
+    nextOwner: EffectiveQuestionSourceOwner;
+    relation: RevisionStableTopologyRelation;
+    restoredParentId?: string;
+    availableObservationIds?: readonly string[];
+    now?: number;
+  }): PreparedEffectiveSourceOwnerCorrection | undefined {
+    const source = this.findLogicalQuestion(input);
+    if (!source || source.sourceHash !== input.sourceHash || !sameSourceOwner(source.owner, input.expectedOwner)) return undefined;
+    if (source.sourceObservationIds?.some(id => !input.availableObservationIds?.includes(id))) return undefined;
+    if (input.restoredParentId) {
+      const evidence = this.getRetainedParentSourceEvidence({ ...input,
+        parentId: input.restoredParentId, availableObservationIds: input.availableObservationIds ?? [] });
+      if (!evidence || evidence.missingObservationIds.length || input.nextOwner.parentId !== input.restoredParentId) return undefined;
+    }
+    const recordId = `${source.recordId}:manual-owner:${input.operationId}`;
+    if (this.records.some(record => record.recordId === recordId)) return undefined;
+    return {
+      previousRecords: this.records,
+      previousRetention: this.retainedParent,
+      expectedOwner: { ...input.expectedOwner },
+      nextRecord: { ...cloneRecord(source), recordId, owner: { ...input.nextOwner }, relation: input.relation,
+        settledAt: Math.max(input.now ?? Date.now(), source.settledAt + 1) },
+      releaseRetention: !!input.restoredParentId,
+    };
+  }
+
+  installPreparedOwnerCorrection(prepared: PreparedEffectiveSourceOwnerCorrection) {
+    if (prepared.installedRecords || this.records !== prepared.previousRecords || this.retainedParent !== prepared.previousRetention) return false;
+    if (prepared.releaseRetention) this.retainedParent = undefined;
+    this.records = this.trimRecords([...this.records, cloneRecord(prepared.nextRecord)]);
+    prepared.installedRecords = this.records;
+    return true;
+  }
+
+  rollbackPreparedOwnerCorrection(prepared: PreparedEffectiveSourceOwnerCorrection) {
+    if (!prepared.installedRecords) return true;
+    if (this.records !== prepared.installedRecords) return false;
+    this.records = prepared.previousRecords;
+    this.retainedParent = prepared.previousRetention;
+    prepared.installedRecords = undefined;
+    return true;
   }
 
   list() {
@@ -208,8 +331,51 @@ export class EffectiveQuestionSourceLedger {
   }
 
   clear() {
-    this.records.length = 0;
+    this.records = [];
+    this.retainedParent = undefined;
   }
+
+  private trimRecords(records: EffectiveQuestionSourceRecord[]) {
+    const retainedIds = new Set(this.retainedParent?.sources.map(source => source.recordId));
+    const next = [...records];
+    while (next.length > this.maxEntries) {
+      const index = next.findIndex(record => !retainedIds.has(record.recordId));
+      if (index < 0) break;
+      next.splice(index, 1);
+    }
+    return next;
+  }
+}
+
+export interface RetainedParentSourceReferences {
+  readonly sessionId: string;
+  readonly parentId: string;
+  readonly sources: readonly Readonly<Pick<EffectiveQuestionSourceRecord,
+    "recordId" | "logicalQuestionUnitId" | "logicalQuestionRevision" | "sourceHash">>[];
+}
+
+export interface RetainedParentSourceEvidence {
+  sessionId: string;
+  parentId: string;
+  records: EffectiveQuestionSourceRecord[];
+  observationIds: string[];
+  missingObservationIds: string[];
+  retainedTextBytes: number;
+  retainedRecordBytes: number;
+}
+
+export interface PreparedEffectiveSourceOwnerCorrection {
+  previousRecords: EffectiveQuestionSourceRecord[];
+  previousRetention?: RetainedParentSourceReferences;
+  expectedOwner: EffectiveQuestionSourceOwner;
+  nextRecord: EffectiveQuestionSourceRecord;
+  releaseRetention: boolean;
+  installedRecords?: EffectiveQuestionSourceRecord[];
+}
+
+function sameSourceOwner(left: EffectiveQuestionSourceOwner, right: EffectiveQuestionSourceOwner) {
+  return left.kind === right.kind && left.parentId === right.parentId &&
+    (left.kind === "parent-mainline" || right.kind === "active-child" && left.childId === right.childId);
 }
 
 export function resolveRevisionStableTopologyBinding(input: {

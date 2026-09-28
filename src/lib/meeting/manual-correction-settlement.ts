@@ -14,6 +14,57 @@ import {
   type CanonicalQuestionType,
 } from "./task-taxonomy.js";
 import type { ManualCorrectionScope } from "./types.js";
+import { authorizeManualCorrectionIntent, type ManualCorrectionCapabilityContext, type ManualCorrectionIntent } from "./manual-correction-intent.js";
+
+export function settleManualCorrectionIntent(input: {
+  operationId: string;
+  context: ManualCorrectionCapabilityContext;
+  correctedType: CanonicalQuestionType;
+  intent: ManualCorrectionIntent;
+}) {
+  const authorization = authorizeManualCorrectionIntent(input.context, input.correctedType, input.intent);
+  if (!authorization.authorized) return authorization;
+  const { currentQuestion, runtime, manualCorrectionRevision } = input.context;
+  const capability = authorization.capability;
+  const settlement = settleCurrentQuestion({
+    operationId: input.operationId,
+    currentQuestion,
+    activeParentId: runtime.parent?.id,
+    activeParentRevision: runtime.parent?.revisions,
+    manualCorrectionRevision,
+    manualProposal: {
+      source: "manual-correction",
+      sessionId: currentQuestion.sessionId,
+      runtimeEpoch: currentQuestion.runtimeEpoch,
+      logicalQuestionUnitId: currentQuestion.logicalQuestionUnitId,
+      revision: currentQuestion.revision,
+      sourceHash: currentQuestion.sourceHash,
+      questionType: input.correctedType,
+      relation: capability.relation,
+      action: "answer",
+      confidence: 1,
+      typeEvidenceAuthorized: true,
+      relationEvidenceAuthorized: true,
+      actionEvidenceAuthorized: true,
+      expectedParentId: runtime.parent?.id,
+      expectedParentRevision: runtime.parent?.revisions,
+      manualCorrectionRevision,
+      reasons: ["explicit-manual-question-type-correction", `explicit-manual-intent:${input.intent.kind}`],
+    },
+    policy: {
+      runtimeMutationAuthorized: true, questionComplete: true, commitParent: true,
+      allowRuntimeTypeAdjudication: false, allowLlmRelationRepair: false, allowLlmActionRepair: false,
+    },
+  });
+  return {
+    authorized: true as const,
+    capability,
+    settlement: capability.intent.kind === "retype-parent"
+      ? authorizeManualCorrectionLifecycle({ settlement, scope: capability.scope,
+          activeParentId: runtime.parent?.id, activeParentType: runtime.parent?.stableKind })
+      : settlement,
+  };
+}
 
 export interface ManualQuestionTypeCorrectionSettlementResult {
   settlement: CurrentQuestionSettlementDecision;
@@ -114,7 +165,14 @@ export function settleManualQuestionTypeCorrection(input: {
     ],
   };
   const deterministicRelation =
-    input.revisionStableRelation === "new-parent" &&
+    // A newly admitted child correction changes ownership. Historical mainline
+    // binding only protects revisions which preserve that ownership.
+    input.relationOperationLeaseAuthorized &&
+    (input.relationCandidate?.relation === "child-probe" ||
+      input.orderedRelationProposal?.relation === "child-probe" && input.orderedRelationProposal.relationEvidenceAuthorized === true) &&
+    input.revisionStableRelation !== "child-probe"
+      ? undefined
+      : input.revisionStableRelation === "new-parent" &&
     !isParentCanonicalQuestionType(input.correctedType)
       ? undefined
       : input.correctedType === "unknown"

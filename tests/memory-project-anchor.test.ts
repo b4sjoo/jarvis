@@ -77,6 +77,18 @@ test("strict project anchor exempts global reusable guidance", () => {
   );
 });
 
+test("global sharing does not exempt facts with another project's canonical identity", () => {
+  assert.equal(isMemoryProjectAnchorCompatible(makeMemoryEntry({
+    scope: "global", type: "resume_fact", projectId: "other-project", projectName: "Other Project",
+  }), "Agentic Memory"), false);
+});
+
+test("global non-evidentiary guidance retains its existing sharing behavior", () => {
+  assert.equal(isMemoryProjectAnchorCompatible(makeMemoryEntry({
+    scope: "global", type: "interview_framework", projectId: "other-project", projectName: "Other Project",
+  }), "Agentic Memory"), true);
+});
+
 function makeMemoryEntry(overrides: Partial<MemoryEntry>): MemoryEntry {
   const now = 1_779_000_000_000;
   return {

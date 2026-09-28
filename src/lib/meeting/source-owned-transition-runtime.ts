@@ -49,12 +49,35 @@ export function resolveSourceOwnedRuntimeTransition(input: {
   return runtimeBefore.parent ? "replace-parent" : "create-parent";
 }
 
-export function commitSourceOwnedTransitionToRuntime(input: {
+interface SourceOwnedRuntimePreparationInput {
   candidate: SourceOwnedTransitionCandidate;
   runtimeBefore: SourceOwnedRuntimeSnapshot;
   expectedTaskRuntimeRevision: number;
   currentSessionId: string;
   currentRuntimeEpoch: number;
+  now?: number;
+}
+
+// A pure proposal shared by automatic runtime commits and explicit correction
+// Plans. readyToCommit grants no durable state or publication authority.
+export function prepareSourceOwnedRuntimeTransition(input: SourceOwnedRuntimePreparationInput) {
+  const sourceResult = prepareSourceOwnedTransition({
+    candidate: input.candidate,
+    currentTask: input.runtimeBefore.parent,
+    currentSessionId: input.currentSessionId,
+    currentRuntimeEpoch: input.currentRuntimeEpoch,
+    now: input.now,
+  });
+  const revisionMatches = input.runtimeBefore.revision === input.expectedTaskRuntimeRevision;
+  return {
+    sourceResult,
+    expectedTaskRuntimeRevision: input.expectedTaskRuntimeRevision,
+    readyToCommit: revisionMatches && sourceResult.candidate.state === "committed" && sourceResult.mutationApplied,
+    reason: revisionMatches ? sourceResult.reason : "task-runtime-revision-mismatch",
+  };
+}
+
+export function commitSourceOwnedTransitionToRuntime(input: SourceOwnedRuntimePreparationInput & {
   commitRuntime: (input: {
     sourceResult: SourceOwnedTransitionPreparationResult;
     runtimeBefore: SourceOwnedRuntimeSnapshot;
@@ -63,30 +86,14 @@ export function commitSourceOwnedTransitionToRuntime(input: {
     runtimeResult: SourceOwnedRuntimeMutationResult;
     runtimeTransition: MeetingTaskRuntimeTransitionKind;
   };
-  now?: number;
 }): SourceOwnedDurableTransitionReceipt {
-  const sourceResult = prepareSourceOwnedTransition({
-    candidate: input.candidate,
-    currentTask: input.runtimeBefore.parent,
-    currentSessionId: input.currentSessionId,
-    currentRuntimeEpoch: input.currentRuntimeEpoch,
-    now: input.now,
-  });
-  if (input.runtimeBefore.revision !== input.expectedTaskRuntimeRevision) {
+  const prepared = prepareSourceOwnedRuntimeTransition(input);
+  const { sourceResult } = prepared;
+  if (!prepared.readyToCommit) {
     return {
       sourceResult,
       expectedTaskRuntimeRevision: input.expectedTaskRuntimeRevision,
-      reason: "task-runtime-revision-mismatch",
-    };
-  }
-  if (
-    sourceResult.candidate.state !== "committed" ||
-    !sourceResult.mutationApplied
-  ) {
-    return {
-      sourceResult,
-      expectedTaskRuntimeRevision: input.expectedTaskRuntimeRevision,
-      reason: sourceResult.reason,
+      reason: prepared.reason,
     };
   }
 

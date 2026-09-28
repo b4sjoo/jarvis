@@ -156,11 +156,11 @@ test("shares one correction lifecycle commit boundary across correction paths", 
   );
   assert.match(
     source,
-    /correctionScopeDecision\.scope === "same-question-retype"[\s\S]*commitCorrectionLifecycleWithManager\(/
+    /prepareManualCorrectionIntentTransition\([\s\S]*commitCorrectionLifecycleWithManager\(/
   );
   assert.match(
     source,
-    /correctionScopeDecision\.scope === "same-question-retype"[\s\S]*explicitTaskMutationCommand:\s*\{\s*kind: "replace-parent",\s*type: parentAfter\.stableKind,\s*topic: parentAfter\.topic/
+    /explicitTaskMutationCommand: correctionIntentTransition\.command/
   );
   assert.match(
     source,
@@ -206,34 +206,32 @@ test("hands a no-parent Screen correction to Advisor from its committed source",
   );
 });
 
-test("stops manual correction before consuming a rejected relation", () => {
+test("stops manual correction before consuming a rejected explicit intent", () => {
   const source = readFileSync("src/hooks/useMeetingAssistant.ts", "utf8");
   const correction = source.slice(
     source.indexOf("  const correctActiveQuestionType = useCallback"),
     source.indexOf("  const resolveCurrentSuggestionQuestionLineage")
   );
-  const relationWait = correction.indexOf(
-    "await resolveOrderedTaskRelationWithinWindow({"
+  const preparation = correction.indexOf(
+    "const correctionIntentTransition = prepareManualCorrectionIntentTransition({"
   );
   const terminalGuard = correction.indexOf(
-    'if (resolution.terminalDisposition !== "resolved")',
-    relationWait
+    'if (!correctionIntentTransition.authorized)',
+    preparation
   );
   const relationRead = correction.indexOf(
-    "orderedCorrectionRelation = resolution.decision",
-    relationWait
+    "correctionCurrentQuestionSettlement = correctionIntentTransition.settlement",
+    preparation
   );
 
-  assert.ok(relationWait >= 0);
-  assert.ok(terminalGuard > relationWait && terminalGuard < relationRead);
+  assert.ok(preparation >= 0);
+  assert.ok(terminalGuard > preparation && terminalGuard < relationRead);
   assert.match(
     correction.slice(terminalGuard, relationRead),
     /finalizeCorrection\([\s\S]*return;/
   );
-  assert.match(
-    correction.slice(relationRead),
-    /manualCorrectionRelationWaitError[\s\S]*throw error;/
-  );
+  assert.doesNotMatch(correction, /await resolveOrderedTaskRelationWithinWindow\(/);
+  assert.doesNotMatch(correction, /scheduleTaskRelationAdjudication\(/);
 });
 
 test("keeps the current parent when correction-owned relation adjudication abstains", () => {
@@ -1518,7 +1516,7 @@ test("retypes a parent in place while resetting incompatible runtime state", () 
     makeActiveTask({ questionType: "coding" }),
     "project-deep-dive"
   );
-  const playbook = makePlaybook("project-deep-dive", "project_narrative");
+  const playbook = makePlaybook("project-deep-dive", "project_summary");
 
   const next = applyManualQuestionTypeCorrectionToParent({
     parent,
@@ -1531,8 +1529,8 @@ test("retypes a parent in place while resetting incompatible runtime state", () 
   assert.equal(next.id, parent.id);
   assert.equal(next.stableKind, "project-deep-dive");
   assert.equal(next.playbook, playbook);
-  assert.equal(next.playbookPhase, "project_narrative");
-  assert.deepEqual(next.phaseProgress, { project_narrative: true });
+  assert.equal(next.playbookPhase, "project_summary");
+  assert.deepEqual(next.phaseProgress, { project_summary: true });
   assert.deepEqual(next.supportedFactAnchors, []);
   assertPureParentPayload(next);
   assert.equal(next.whiteboardArtifact, undefined);

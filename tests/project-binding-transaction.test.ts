@@ -46,7 +46,7 @@ test("rebind invalidates stale project state atomically", () => {
   assert.equal(result.committed, true);
   assert.equal(result.task?.projectBinding?.projectId, "agentic-memory");
   assert.deepEqual(result.task?.supportedFactAnchors, []);
-  assert.equal(result.task?.playbookPhase, "project_narrative");
+  assert.equal(result.task?.playbookPhase, "project_summary");
   assert.equal(result.task?.child, undefined);
   assert.equal(result.task?.whiteboardArtifact, undefined);
   assert.equal(result.invalidateProjectState, true);
@@ -182,8 +182,8 @@ function makeParent(
     canonicalQuestionSourceTurnIds: ["turn_1"],
     supportedFactAnchors: ["mem_old"],
     projectBinding: undefined,
-    playbookPhase: "project_narrative",
-    phaseProgress: { project_narrative: true },
+    playbookPhase: "project_summary",
+    phaseProgress: { project_summary: true },
     child: {
       id: "child_1",
       createdAt: 1,
@@ -201,7 +201,7 @@ function makeParent(
       domainTrack: "general_sd",
       archetypeIds: [],
       selectedOverlayIds: [],
-      currentPhase: "project_narrative",
+      currentPhase: "project_summary",
       content: "graph TD",
       title: "Architecture",
       summary: "Architecture",

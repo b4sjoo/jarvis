@@ -51,7 +51,7 @@ test("does not treat playbook labels as supported fact anchors", () => {
       playbook: {
         id: "project_deep_dive",
         label: "Project Deep Dive",
-        phase: "project_narrative",
+        phase: "project_summary",
         questionType: "project-deep-dive",
         confidence: 0.9,
         reason: "test",

@@ -14,7 +14,7 @@ import {
 import { formatAdvisorEvidencePacketForPrompt } from "./advisor-evidence-packet.js";
 import { formatInterviewPlaybookForPrompt, withInterviewPlaybookPhase } from "./interview-playbook.js";
 import { formatActiveMeetingTaskForPrompt } from "./active-meeting-task.js";
-import { formatFactAnchorDecisionForPrompt } from "./fact-anchor-guardrail.js";
+import { formatFactAnchorDecisionForPrompt, PROJECT_FACT_RESPONSE_BOUNDARY } from "./fact-anchor-guardrail.js";
 import { formatPlaybookPhaseDecisionForPrompt } from "./playbook-phase.js";
 import { formatProjectBindingDecisionForPrompt } from "./project-binding.js";
 import {
@@ -53,11 +53,11 @@ export function buildAdvisorSystemPrompt() {
     "If memory conflicts with the current task, follow the current task and mention the conflict only if it is useful.",
     "When using memory for behavioral or interview answers, do not add unsupported metrics, timelines, dates, or impact claims. If memory only supports a qualitative outcome, keep the outcome qualitative.",
     "For behavioral and project-deep-dive answers, supported facts can come from eligible fact-evidence memory, authoritative visible screen text, authoritative Them transcript, explicitly activated preparation facts, or explicit user correction. Manual company/type defaults, a previous assistant answer, a Me attempted answer, memory guidance, or an answer template are not fact sources by themselves.",
-    "If a project-deep-dive prompt lacks a supported project anchor, keep first-person claims fact-neutral and directly answer any general analysis, tradeoff, or explicitly hypothetical example that the question supports. Ask a clarifying question only when a missing fact materially changes the answer.",
+    PROJECT_FACT_RESPONSE_BOUNDARY,
     "If there is screen context but no transcript, treat it as visible screen content only, not as something a colleague said.",
     "If an active screen task is present, use it as the anchor and treat new transcript as clarification, follow-up, correction, or a possible strong task switch.",
     "Never claim certainty about facts not present in the transcript or screen context.",
-    "For normal meeting help, return at most three short bullets. For screen-anchored tasks, use the requested sections.",
+    "For normal meeting help, return at most three short bullets, except when the response playbook explicitly selects project_summary: follow that grounded 3-5 minute project-summary contract inside Answer. For screen-anchored tasks, use the requested sections.",
   ].join(" ");
 }
 
@@ -74,6 +74,8 @@ export function buildAdvisorUserMessage(
   context: AdvisorPromptContext,
   options: AdvisorUserMessageOptions = {}
 ) {
+  const projectSummary = context.interviewPlaybook?.questionType === "project-deep-dive" &&
+    (context.playbookPhaseDecision?.phase ?? context.interviewPlaybook.phase) === "project_summary";
   const latestTurn = context.latestTurn
     ? `${context.latestTurn.speaker}: ${context.latestTurn.text}`
     : "None";
@@ -266,7 +268,7 @@ export function buildAdvisorUserMessage(
         responseAction,
         answerProfile
       ),
-      ...buildMeetingAnswerContractInstructions(answerProfile),
+      ...buildMeetingAnswerContractInstructions(answerProfile, { projectSummary }),
       ...buildResponseConfigInstructions(options.responseConfig),
       "</output>"
     );
@@ -305,7 +307,7 @@ export function buildAdvisorUserMessage(
       "If the transcript is a strong task switch, do not silently reuse or clear the old task. Put '-' for Answer, Approach, Code, and Complexity, then ask a yes/no Clarifying question such as 'Should I treat this as a new task?'.",
       "If the transcript is low-value chatter or logistics, output a single dash and do not re-solve the active task.",
       "If <clarifying_feedback> answers a task-switch confirmation with Yes, ask the user to capture or state the new task. If it answers No, continue with the current active task.",
-      ...buildMeetingAnswerContractInstructions(answerProfile),
+      ...buildMeetingAnswerContractInstructions(answerProfile, { projectSummary }),
       "For coding tasks, 中文思路 must stay Chinese while Question, Answer, Approach, Complexity, Clarifying question, and Clarifying options must default to meeting-ready English. Whiteboard must be '-'. The Code section must use the selected/requested programming language.",
       "Do not invent colleagues, speakers, or hidden requirements.",
       ...buildModeInstructions(mode),
@@ -323,6 +325,7 @@ export function buildAdvisorUserMessage(
     "<output>",
     "If help is useful, follow the canonical answer contract below:",
     ...buildMeetingAnswerContractInstructions(answerProfile, {
+      projectSummary,
       hasTranscript,
     }),
     "If it only contains jargon, put the simple Chinese definition under 中文思路 and use '-' for Answer and Clarifying question.",
@@ -430,7 +433,7 @@ function buildResponseConfigInstructions(
 
 function buildMeetingAnswerContractInstructions(
   profile: MeetingAnswerProfile,
-  context: { hasTranscript?: boolean } = {}
+  context: { hasTranscript?: boolean; projectSummary?: boolean } = {}
 ) {
   const chineseThinking = context.hasTranscript === false
     ? "中文思路: 用中文简洁说明可见内容的回答路径。"
@@ -490,7 +493,9 @@ function buildMeetingAnswerContractInstructions(
   return [
     "Use this exact compact-spoken profile:",
     chineseThinking,
-    "Answer: one to three ready-to-say professional sentences in the requested meeting language, or '-' if no answer is useful.",
+    context.projectSummary
+      ? "Answer: a grounded 3-5 minute ready-to-say project summary in four parts: background and scale, personal responsibilities, architecture and tradeoffs, retrospective and refactoring. This phase contract overrides general short-answer length preferences. If the current ask explicitly requests a specific technical detail, answer that detail directly instead of forcing an introduction. Do not invent facts to fill the duration."
+      : "Answer: one to three ready-to-say professional sentences in the requested meeting language, or '-' if no answer is useful.",
     ...clarification,
     ...authorityEvidence,
   ];

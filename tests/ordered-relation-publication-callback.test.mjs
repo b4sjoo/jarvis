@@ -72,13 +72,13 @@ const finalizeCorrectionSource = findNamedDeclaration(
   sourceFile,
   "finalizeCorrection"
 ).initializer.getText(sourceFile);
-const typeCorrectionRelationTerminalSource = findDescendant(
+const typeCorrectionIntentTerminalSource = findDescendant(
   typeCorrectionDeclaration,
   (node) =>
     ts.isIfStatement(node) &&
     node.expression
       .getText(sourceFile)
-      .includes('resolution.terminalDisposition !== "resolved"')
+      .includes('!correctionIntentTransition.authorized')
 ).getText(sourceFile);
 const termCorrectionDeclaration = findNamedDeclaration(
   sourceFile,
@@ -1304,7 +1304,7 @@ test("ends an owned Screen after post-model Preparation staleness", { concurrenc
   assert.ok(terminalReasons.includes("preparation-context-revision-mismatch"));
 });
 
-test("terminalizes Type Correction client errors before reading a Relation decision", { concurrency: false }, async () => {
+test("terminalizes a stale explicit Type Correction intent before mutation", { concurrency: false }, async () => {
   const metadata = {};
   const finished = [];
   const recorded = [];
@@ -1358,35 +1358,28 @@ test("terminalizes Type Correction client errors before reading a Relation decis
   );
   const consume = vm.runInContext(
     transpile(
-      `(async (resolution) => { ${typeCorrectionRelationTerminalSource}; return "continued"; })`
+      `(async (correctionIntentTransition) => { ${typeCorrectionIntentTerminalSource}; return "continued"; })`
     ),
     context
   );
   const result = await consume({
-    terminalDisposition: "client-error",
-    operationAuthorization: {
-      authorized: true,
-      reason: "source-operation-current",
-    },
-    decision: { relation: "new-parent" },
+    authorized: false,
+    reason: "task-runtime-revision-mismatch",
   });
 
   assert.equal(result, undefined);
-  assert.equal(metadata.manualCorrectionRelationOperationAuthorized, false);
-  assert.equal(metadata.manualCorrectionRelationTerminalDisposition, "client-error");
   assert.equal(ui.manualQuestionTypeCorrection.status, "failed");
   assert.equal(ui.manualQuestionTypeCorrection.regenerationStatus, "idle");
   assert.equal(ui.manualQuestionTypeCorrection.regenerationRetryable, false);
-  assert.match(ui.error, /task type was not changed/);
+  assert.match(ui.error, /task-runtime-revision-mismatch/);
   assert.equal(ui.partialSuggestion, "");
   assert.equal(recorded.length, 1);
-  assert.deepEqual(finished, [
-    [
-      "type-correction-trace",
-      "cancelled",
-      "Runtime relation model configuration failed. The task type was not changed.",
-    ],
-  ]);
+  assert.equal(finished.length, 1);
+  assert.equal(finished[0][0], "type-correction-trace");
+  assert.equal(finished[0][1], "cancelled");
+  const body = typeCorrectionDeclaration.initializer.arguments[0].getText(sourceFile);
+  assert.doesNotMatch(body, /scheduleTaskRelationAdjudication\(/);
+  assert.match(body, /prepareManualCorrectionIntentTransition\(/);
 });
 
 test("terminalizes Term Correction client errors without starting Advisor", { concurrency: false }, async () => {

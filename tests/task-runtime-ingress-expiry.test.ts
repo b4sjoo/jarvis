@@ -27,6 +27,10 @@ import {
   projectBoundedGeneratedContinuityForTask,
 } from "../src/lib/meeting/bounded-recent-history.js";
 import { setTestActiveParent } from "./helpers/meeting-task-runtime.js";
+import { composeCanonicalTurnCandidate } from "../src/lib/meeting/logical-question-unit.js";
+import { createLogicalQuestionUnitLease } from "../src/lib/meeting/logical-question-ownership.js";
+import { createProvisionalCurrentQuestion } from "../src/lib/meeting/current-question-settlement.js";
+import { getManualCorrectionCapabilities } from "../src/lib/meeting/manual-correction-intent.js";
 
 const source = readFileSync("src/hooks/useMeetingAssistant.ts", "utf8");
 const file = ts.createSourceFile("hook.ts", source, ts.ScriptTarget.Latest, true);
@@ -66,6 +70,8 @@ function compile(name: string, context: vm.Context, stopAfter?: string) {
 
 function harness() {
   const manager = new MeetingContextManager();
+  const ledger = new EffectiveQuestionSourceLedger();
+  manager.setEffectiveQuestionSourceLedger(ledger);
   setTestActiveParent(manager, {
     id: "expiring-owner", source: "voice", stableKind: "general-system-design", topic: "Design a cache",
     playbookPhase: "requirement_clarification", phaseProgress: {}, supportedFactAnchors: [],
@@ -84,7 +90,8 @@ function harness() {
     indexAuthorizedEffectiveSourceRecords, resolveAuthorizedEffectiveSourceContext,
     projectEffectiveTaskSourceView, projectBoundedGeneratedContinuityForTask,
     clearBoundedGeneratedContinuity,
-    effectiveQuestionSourceLedgerRef: { current: new EffectiveQuestionSourceLedger() },
+    effectiveQuestionSourceLedgerRef: { current: ledger },
+    createProvisionalCurrentQuestion, getManualCorrectionCapabilities,
     contextManagerRef: { current: manager }, runtimeEpochRef: { current: 7 },
     runtimeActiveRef: { current: true }, activeRef: { current: true },
     shutdownRequestedRef: { current: false },
@@ -95,6 +102,7 @@ function harness() {
     traceStoreRef: { current: new MeetingTraceStore() },
     flushPendingSentenceCompletion: () => {},
     latestManualCorrectionTargetRef: { current: undefined },
+    logicalQuestionUnitRef: { current: undefined },
     recordManualRuntimeAction: () => {},
   });
   const reuseInputReader = callback("readArtifactReuseInputs");
@@ -103,6 +111,8 @@ function harness() {
   }).outputText, context);
   compile("buildEffectiveAdvisorBasePromptContext", context);
   compile("buildAdvisorJob", context);
+  compile("readManualCorrectionContext", context);
+  compile("readManualCorrectionMenu", context);
   return { manager, context };
 }
 
@@ -159,9 +169,24 @@ for (const [name, snapshotName, args] of [
     t.mock.method(Date, "now", () => now);
     const h = harness();
     const before = h.manager.getTaskRuntimeState();
+    let invocation;
+    if (name === "correctActiveQuestionType") {
+      const turn = { id: "correction-turn", text: "Implement a cache.", speaker: "them" as const,
+        source: "system-audio" as const, isFinal: true, startedAt: 10, endedAt: 20 };
+      h.manager.addTranscriptTurn(turn);
+      const unit = composeCanonicalTurnCandidate({ sessionId: h.manager.getState().sessionId, runtimeEpoch: 7, currentTurn: turn });
+      h.context.latestManualCorrectionTargetRef.current = { logicalQuestionUnit: unit, logicalQuestionLease: createLogicalQuestionUnitLease(unit) };
+      h.context.logicalQuestionUnitRef.current = unit;
+      const menu = h.context.readManualCorrectionMenu("coding");
+      const option = menu.options.find((item: { id: string }) => item.id === "independent");
+      assert.ok(option);
+      invocation = { correctionIntent: option.intent, correctionTarget: menu.target };
+    }
     now = 101;
     compile(name, h.context, snapshotName);
-    const snapshot = await h.context[name](...args);
+    const snapshot = name === "correctActiveQuestionType"
+      ? await h.context[name]("coding", "normal-mode", invocation)
+      : await h.context[name](...args);
     assert.equal(snapshot.activeMeetingTask, undefined);
     assert.equal(snapshot.taskRuntime.revision, before.revision + 1);
     assert.equal(snapshot.taskRuntime.lastMutation.kind, "expire");

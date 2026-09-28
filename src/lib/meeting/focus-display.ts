@@ -117,6 +117,12 @@ const readDisplay = object({
   }),
   audioInputWarning: optional(object({ label: string, detail: string })),
   showClarifyingQuestion: boolean, clarifyingQuestion: string,
+  projectChoice: optional(object({
+    key: string, displayTarget,
+    currentProject: optional(object({ id: string, name: string })),
+    options: array(object({ id: string, label: string, value: string })),
+    canSelect: boolean, canReselect: boolean,
+  })),
   showClarifyingBooleanFallback: boolean, selectedClarifyingAnswerLabel: text,
   clarifyingSelectionState: text, clarifyingSelectionMessage: text,
   isTaskSwitchClarifyingQuestion: boolean, interviewTypes: array(string),

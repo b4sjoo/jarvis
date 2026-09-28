@@ -91,51 +91,36 @@ test("changes the coding output contract with the committed phase", () => {
 });
 
 test("changes project deep-dive guidance with the committed phase", () => {
-  const narrative = selectInterviewPlaybook({
+  const summary = selectInterviewPlaybook({
     query: "Tell me about your Agentic Memory project.",
     questionType: "project-deep-dive",
   });
-  const architecture = withInterviewPlaybookPhase(
-    narrative,
-    "architecture_decision"
-  );
-  const validation = withInterviewPlaybookPhase(
-    narrative,
-    "validation_reliability"
-  );
-  const impact = withInterviewPlaybookPhase(narrative, "impact_lessons");
+  const qa = withInterviewPlaybookPhase(summary, "project_QA");
 
+  assert.equal(summary?.phase, "project_summary");
   assert.match(
-    formatInterviewPlaybookForPrompt(narrative),
-    /30-45 second spoken introduction/
+    formatInterviewPlaybookForPrompt(summary),
+    /speakable 3-5 minute project introduction/
   );
   assert.match(
-    formatInterviewPlaybookForPrompt(narrative),
-    /product judgment, tradeoff, or future improvement/i
+    formatInterviewPlaybookForPrompt(summary),
+    /four parts inside the existing Answer section/i
   );
   assert.match(
-    formatInterviewPlaybookForPrompt(narrative),
-    /instead of restarting the project introduction/i
+    formatInterviewPlaybookForPrompt(summary),
+    /explicit technical question directly, even on the first LQU/i
   );
   assert.match(
-    formatInterviewPlaybookForPrompt(architecture),
-    /viable alternatives/
+    formatInterviewPlaybookForPrompt(qa),
+    /In project_QA, directly answer the current question/
   );
   assert.match(
-    formatInterviewPlaybookForPrompt(architecture),
-    /Include my ownership only when the current ask needs it/i
+    formatInterviewPlaybookForPrompt(qa),
+    /explicitly requested overview or retrospective is still a valid current answer/i
   );
   assert.match(
-    formatInterviewPlaybookForPrompt(validation),
-    /tests, traces, rollout checks/
-  );
-  assert.match(
-    formatInterviewPlaybookForPrompt(validation),
-    /Describe how I debugged it only when the current ask needs personal experience/i
-  );
-  assert.match(
-    formatInterviewPlaybookForPrompt(impact),
-    /known limitations/
+    formatInterviewPlaybookForPrompt(qa),
+    /Manual Next\/Back phase-continuation intent takes priority/
   );
 });
 

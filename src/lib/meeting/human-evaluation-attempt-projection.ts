@@ -65,7 +65,7 @@ export function buildHumanEvaluationAttemptEvidenceV2(input: {
     ...projectAttemptPrimaryAskTargetV2(input),
   };
   const traceIds = [input.trace.id];
-  if (input.trace.metadata?.settledExecutionPlanTaskMutationCommand === "replace-parent" &&
+  if (!observed.manualCorrectionEvidence && input.trace.metadata?.settledExecutionPlanTaskMutationCommand === "replace-parent" &&
     readString(input.trace.metadata?.parentCorrectionTraceId)) {
     const correctionTrace = resolveLinkedCorrectionLifecycleTrace({
       trace: input.trace, traces: input.traces ?? [], traceIndex: input.traceIndex,

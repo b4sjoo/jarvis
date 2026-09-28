@@ -867,6 +867,8 @@ export function applyManualQuestionTypeCorrectionToParent({
       child: {
         ...parent.child,
         questionType: decision.correctedType,
+        artifactId: parent.child.questionType === decision.correctedType
+          ? parent.child.artifactId : undefined,
         phaseState: preserveOrCreateCodingChildPhaseState({
           questionType: decision.correctedType,
           existing: parent.child.phaseState,

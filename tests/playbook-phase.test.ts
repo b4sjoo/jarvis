@@ -301,21 +301,20 @@ test("child probes preserve the parent phase", () => {
   assert.deepEqual(progress, { requirements: true, design_framing: true });
 });
 
-test("project deep dive records hard problem and tradeoff progress", () => {
+test("project deep dive no longer treats technical wording as phase authority", () => {
   const decision = decidePlaybookPhaseProgression({
     questionType: "project-deep-dive",
     playbookId: "project_deep_dive",
-    currentPhase: "project_narrative",
-    phaseProgress: { project_narrative: true, project_context: true },
+    currentPhase: "project_summary",
+    phaseProgress: { project_summary: true },
     latestTurnText:
       "What was the hardest technical challenge, and why did you choose that design alternative?",
     relation: "followup-parent",
   });
 
-  assert.equal(decision.phase, "architecture_decision");
-  assert.ok(decision.flags.includes("hard_problem"));
-  assert.ok(decision.flags.includes("tradeoff_decision"));
-  assert.equal(decision.flags.includes("tradeoffs_wrapup"), false);
+  assert.equal(decision.phase, "project_summary");
+  assert.equal(decision.action, "stay");
+  assert.deepEqual(decision.flags, []);
 });
 
 test("keeps broad project words as evidence without advancing the phase", () => {
@@ -327,68 +326,38 @@ test("keeps broad project words as evidence without advancing the phase", () => 
     const decision = decidePlaybookPhaseProgression({
       questionType: "project-deep-dive",
       playbookId: "project_deep_dive",
-      currentPhase: "project_narrative",
-      phaseProgress: { project_narrative: true, project_context: true },
+      currentPhase: "project_summary",
+      phaseProgress: { project_summary: true },
       latestTurnText,
       relation: "followup-parent",
     });
 
-    assert.equal(decision.phase, "project_narrative", latestTurnText);
+    assert.equal(decision.phase, "project_summary", latestTurnText);
     assert.equal(decision.action, "stay", latestTurnText);
   }
 });
 
-test("project deep dive advances through evidence-led phases without regressing", () => {
-  const validation = decidePlaybookPhaseProgression({
-    questionType: "project-deep-dive",
-    playbookId: "project_deep_dive",
-    currentPhase: "architecture_decision",
-    phaseProgress: {
-      project_narrative: true,
-      architecture_decision: true,
-    },
-    latestTurnText:
-      "What failed during rollout, and how did you debug and validate the recovery?",
-    relation: "followup-parent",
-  });
-  const nonRegressing = decidePlaybookPhaseProgression({
-    questionType: "project-deep-dive",
-    playbookId: "project_deep_dive",
-    currentPhase: "validation_reliability",
-    phaseProgress: {
-      project_narrative: true,
-      architecture_decision: true,
-      validation_reliability: true,
-    },
-    latestTurnText: "Why did you choose that architecture?",
-    relation: "followup-parent",
-  });
-  const impact = decidePlaybookPhaseProgression({
-    questionType: "project-deep-dive",
-    playbookId: "project_deep_dive",
-    currentPhase: "validation_reliability",
-    phaseProgress: {
-      project_narrative: true,
-      architecture_decision: true,
-      validation_reliability: true,
-    },
-    latestTurnText:
-      "What was the impact, what did you learn, and what would you improve next?",
-    relation: "followup-parent",
-  });
-
-  assert.equal(validation.phase, "validation_reliability");
-  assert.equal(nonRegressing.phase, "validation_reliability");
-  assert.equal(impact.phase, "impact_lessons");
+test("project QA permits technical topics in any order without extra progression", () => {
+  for (const latestTurnText of [
+    "What failed during rollout, and how did you debug and validate the recovery?",
+    "Why did you choose that architecture?",
+    "What was the impact, what did you learn, and what would you improve next?",
+    "Please summarize the project again.",
+  ]) {
+    const decision = decidePlaybookPhaseProgression({
+      questionType: "project-deep-dive",
+      currentPhase: "project_QA",
+      latestTurnText,
+      relation: "followup-parent",
+    });
+    assert.equal(decision.phase, "project_QA");
+    assert.equal(decision.action, "stay");
+  }
 });
 
-test("manual next walks project deep dive through four coarse phases", () => {
+test("manual next walks project deep dive through two phases and stops", () => {
   const makeTask = (
-    phase:
-      | "project_narrative"
-      | "architecture_decision"
-      | "validation_reliability"
-      | "impact_lessons"
+    phase: "project_summary" | "project_QA"
   ) => ({
     id: "task-project",
     runtimeRevision: 1,
@@ -405,26 +374,16 @@ test("manual next walks project deep dive through four coarse phases", () => {
     },
   });
 
-  const architecture = decideManualNextPhaseTransition(
-    makeTask("project_narrative")
-  );
-  const validation = decideManualNextPhaseTransition(
-    makeTask("architecture_decision")
-  );
-  const impact = decideManualNextPhaseTransition(
-    makeTask("validation_reliability")
-  );
+  const qa = decideManualNextPhaseTransition(makeTask("project_summary"));
   const terminal = decideManualNextPhaseTransition(
-    makeTask("impact_lessons")
+    makeTask("project_QA")
   );
 
-  assert.equal(architecture.phase, "architecture_decision");
-  assert.ok(architecture.flags.includes("tradeoff_decision"));
-  assert.equal(validation.phase, "validation_reliability");
-  assert.ok(validation.flags.includes("validation_debugging"));
-  assert.equal(impact.phase, "impact_lessons");
-  assert.ok(impact.flags.includes("impact_lesson"));
-  assert.equal(terminal.phase, "impact_lessons");
+  assert.equal(qa.phase, "project_QA");
+  assert.deepEqual(qa.flags, []);
+  assert.equal(terminal.phase, "project_QA");
+  assert.equal(terminal.action, "stay");
+  assert.equal(terminal.guardStatus, "blocked-no-next-phase");
 });
 
 test("manual next deterministically advances general system design to whiteboard", () => {
@@ -666,7 +625,7 @@ test("initializes a playbook from the catalog only when phase is absent", () => 
   const retained = resolvePlaybookState({
     questionType: "project-deep-dive",
     playbookId: "project_deep_dive",
-    phase: "validation_reliability",
+    phase: "project_QA",
   });
 
   assert.deepEqual(initialized, {
@@ -675,7 +634,7 @@ test("initializes a playbook from the catalog only when phase is absent", () => 
     phaseCompatible: true,
   });
   assert.deepEqual(retained, {
-    phase: "validation_reliability",
+    phase: "project_QA",
     initializedFromStart: false,
     phaseCompatible: true,
   });

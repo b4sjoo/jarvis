@@ -32,7 +32,7 @@ import {
   formatInterviewSessionContextForPrompt,
 } from "./interview-session-context";
 import { formatInterviewPlaybookForPrompt, withInterviewPlaybookPhase } from "./interview-playbook";
-import { formatFactAnchorDecisionForPrompt } from "./fact-anchor-guardrail";
+import { formatFactAnchorDecisionForPrompt, PROJECT_FACT_RESPONSE_BOUNDARY } from "./fact-anchor-guardrail";
 import { formatProjectBindingDecisionForPrompt } from "./project-binding";
 import { formatPlaybookPhaseDecisionForPrompt } from "./playbook-phase";
 
@@ -716,6 +716,7 @@ function buildScreenTaskUserMessage({
     "For behavioral interview questions, use a concrete first-person story only when eligible fact-evidence supports a relevant story. Otherwise answer the current judgment with a bounded framework or explicit hypothetical example. Do not invent facts, employers, project names, teammates, metrics, timelines, or outcomes from guidance, templates, overlays, or unsupported visible text.",
     "Obey <fact_anchor_guardrail> whenever it requires personal evidence, even if the screen preflight classified the question as coding, field knowledge, system design, or unknown. Missing personal evidence limits first-person claims; it does not by itself require an empty Answer, project selection, or clarification when a bounded analysis or explicit hypothetical example can answer the request.",
     "Obey <project_binding>. A bound project is the exclusive source identity for first-person project facts in this parent task. If Action is needs-selection, do not choose or blend projects silently for facts; still answer any non-factual analysis directly.",
+    PROJECT_FACT_RESPONSE_BOUNDARY,
     "If <fact_anchor_guardrail> Action is answer-with-caveats, use only supported facts and avoid unsupported employers, project names, teammates, dates, metrics, ownership, or impact claims.",
     "For answer-with-caveats, preserve a useful general method, tradeoff analysis, or explicitly hypothetical recommendation. Omit unsupported first-person hard facts instead of refusing the entire answer.",
     "Use <interview_session_context> to personalize behavioral interview answers across screen tasks. If the target company is Amazon and injected memory includes Leadership Principle guidance, internally classify the visible question to the closest principle, demonstrate Strength signals, and avoid Concern signals. Do not explicitly name the principle unless asked or useful.",
@@ -764,7 +765,9 @@ function buildScreenTaskUserMessage({
     "Clarifying options: 2-4 short option labels if the clarification is a choice, otherwise '-'.",
     "If it is a project deep-dive question, output:",
     "中文思路: 对需要经历事实的问题概括项目背景、角色、架构、难点与证据边界；对产品判断、tradeoff或future improvement概括有界分析或假设方案。",
-    "Answer: when supported personal facts are required, give a compact first-person technical project narrative grounded in memory. Otherwise answer the current product or technical judgment directly with a bounded analysis or explicit hypothetical example; do not invent facts, metrics, employers, teammates, timelines, or outcomes.",
+    (playbookPhaseDecision?.phase ?? interviewPlaybook?.phase) === "project_summary"
+      ? "Answer: a grounded 3-5 minute project summary covering background and scale, personal responsibilities, architecture and tradeoffs, retrospective and refactoring. This phase contract overrides general short-answer preferences. An explicitly requested technical detail still takes priority over an introduction; do not invent facts to fill the duration."
+      : "Answer: directly answer the current technical project question using supported facts. For independent product judgment, tradeoffs or hypothetical design, give bounded analysis without inventing personal facts, metrics, employers, teammates, timelines or outcomes.",
     "Approach: use project context, role, architecture, hard problem, decision/tradeoff, validation/debugging, impact, and lesson only when supported facts answer the ask. Otherwise organize the requested analysis around constraints, alternatives, decision, and tradeoff.",
     "Whiteboard: -",
     "Code: -",

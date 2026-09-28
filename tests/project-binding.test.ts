@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { buildMemoryProjectDirectory } from "../src/lib/memory/project-directory.js";
 import {
   formatProjectBindingDecisionForTrace,
   resolveProjectBinding,
@@ -11,7 +12,24 @@ import type {
 } from "../src/lib/memory/types.js";
 import type { ProjectBinding } from "../src/lib/meeting/types.js";
 
-test("binds the only eligible evidence project without a model decision", () => {
+for (const determiner of ["Which", "What", "Whose"]) {
+  test(`open ${determiner.toLowerCase()} project question does not invent a restricted project name`, () => {
+    const decision = resolveProjectBinding({
+      questionType: "project-deep-dive", relation: "new-parent",
+      currentSourceText: `${determiner} project would you like to discuss?`,
+      memoryContext: makeMemoryResult([
+        makeEvidence("mem_a", "project-a", "Project A"),
+        makeEvidence("mem_b", "project-b", "Project B"),
+      ]),
+    });
+    assert.equal(decision.action, "needs-selection");
+    assert.notEqual(decision.sourceAuthority, "interviewer-explicit");
+    assert.deepEqual(decision.topicEvidence?.explicitProjectNames, []);
+    assert.equal(decision.candidates.length, 2);
+  });
+}
+
+test("requires confirmation of the only eligible evidence project", () => {
   const decision = resolveProjectBinding({
     questionType: "project-deep-dive",
     relation: "new-parent",
@@ -22,14 +40,14 @@ test("binds the only eligible evidence project without a model decision", () => 
     now: 100,
   });
 
-  assert.equal(decision.action, "bind");
-  assert.equal(decision.binding?.projectName, "Agentic Memory");
-  assert.equal(decision.binding?.primaryEntryId, "mem_agentic_overview");
-  assert.deepEqual(decision.binding?.evidenceEntryIds, [
+  assert.equal(decision.action, "needs-selection");
+  assert.equal(decision.binding, undefined);
+  assert.equal(decision.candidates[0]?.projectName, "Agentic Memory");
+  assert.deepEqual(decision.candidates[0]?.evidenceEntryIds, [
     "mem_agentic_overview",
     "mem_agentic_tradeoff",
   ]);
-  assert.equal(decision.binding?.revision, 1);
+  assert.equal(decision.changed, false);
 });
 
 test("does not bind a sole conflicting candidate over an explicit project name", () => {
@@ -431,9 +449,9 @@ test("a new parent does not inherit the old project binding", () => {
     now: 300,
   });
 
-  assert.equal(decision.action, "bind");
-  assert.equal(decision.binding?.projectId, "model-interface");
-  assert.equal(decision.binding?.revision, 1);
+  assert.equal(decision.action, "needs-selection");
+  assert.equal(decision.binding, undefined);
+  assert.equal(decision.candidates[0]?.projectId, "model-interface");
 });
 
 test("a screen project hint without eligible evidence cannot bind", () => {
@@ -500,6 +518,14 @@ function makeMemoryResult(
   entries: RetrievedMemoryEntry[]
 ): MemoryRetrievalResult {
   return {
+    projectDirectory: buildMemoryProjectDirectory({
+      entries: entries.map((item) => item.entry),
+      telemetry: {
+        cacheState: "hit", cacheHit: true, cacheLookupMs: 0,
+        snapshotVersion: 1, snapshotGeneration: 0, snapshotAgeMs: 0,
+        authorityRevision: 0, databaseAcquireMs: 0, databaseReadMs: 0, rowMappingMs: 0,
+      },
+    }),
     entries,
     contextText: entries.map((entry) => entry.injectedContent).join("\n"),
     totalChars: entries.reduce(

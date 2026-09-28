@@ -21,6 +21,9 @@ import type {
 } from "./types";
 import { detectPersonalEvidenceRequirement } from "./personal-evidence-guardrail.js";
 
+export const PROJECT_FACT_RESPONSE_BOUNDARY =
+  "For a request about the candidate's actual project or contributions, use the bound project and its eligible facts. If project identity is missing, offer the authorized project choices or a necessary clarification; never replace a real experience with generic first-person claims such as 'my contributions typically'. If a project is already bound but a specific contribution or mechanism is unsupported, retain that identity, state the local evidence gap and answer the supported portion. Missing retrieved evidence does not prove the candidate did not do the work. Project selection proves identity, not every claim about that project. Answer independent product-sense, tradeoff and hypothetical questions directly, clearly labeling hypothetical examples rather than blocking the whole answer on selection.";
+
 const GENERIC_ANCHOR_TITLES = new Set([
   "behavioral story",
   "behavioral interview story selector",
@@ -402,6 +405,9 @@ export function formatFactAnchorDecisionForPrompt(
       : undefined,
     decision.action === "answer-with-caveats"
       ? "Bounded answer rule: directly answer the substantive analysis, tradeoff, or recommendation with explicit hypotheticals when useful. Do not present unsupported first-person experience, project ownership, customer history, metrics, dates, or outcomes as fact. Missing fact evidence alone does not require project selection or clarification."
+      : undefined,
+    decision.requiredFor === "project-deep-dive"
+      ? PROJECT_FACT_RESPONSE_BOUNDARY
       : undefined,
     decision.claimSupportDecisions.length
       ? `Allowed claim anchors: ${decision.claimSupportDecisions

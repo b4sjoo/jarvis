@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { buildMemoryProjectDirectory } from "../src/lib/memory/project-directory.js";
 import test from "node:test";
 import { buildRuntimeMemoryRoleTelemetry } from "../src/lib/memory/runtime-role.js";
 import type {
@@ -304,6 +305,14 @@ function makeMemoryResult(): MemoryRetrievalResult {
     (spec, index) => makeRetrievedMemoryEntry(spec, 100 - index)
   );
   return {
+    projectDirectory: buildMemoryProjectDirectory({
+      entries: entries.map((item) => item.entry),
+      telemetry: {
+        cacheState: "hit", cacheHit: true, cacheLookupMs: 0,
+        snapshotVersion: 1, snapshotGeneration: 0, snapshotAgeMs: 0,
+        authorityRevision: 0, databaseAcquireMs: 0, databaseReadMs: 0, rowMappingMs: 0,
+      },
+    }),
     entries,
     contextText: entries.map((entry) => entry.injectedContent).join("\n"),
     totalChars: entries.reduce(

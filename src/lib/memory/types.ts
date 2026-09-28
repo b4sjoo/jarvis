@@ -246,6 +246,7 @@ export interface MemoryImportSummary {
 }
 
 export interface MemoryRetrievalRequest {
+  memoryStage?: "candidate-discovery" | "prompt-injection";
   preparationPurpose?: PreparationRetrievalPurpose;
   sessionId?: string;
   query: string;
@@ -360,7 +361,29 @@ export interface RetrievedMemoryEntry {
   runtimeRole?: RuntimeMemoryRoleDecision;
 }
 
+/** Discovery references only; these IDs never authorize answer claims. */
+export interface MemoryProjectCandidate {
+  projectId?: string;
+  projectName: string;
+  primaryEntryId: string;
+  evidenceEntryIds: string[];
+  identityAliases: string[];
+  score: number;
+}
+
+export interface MemoryProjectDirectory {
+  status: "ready" | "unavailable";
+  candidates: MemoryProjectCandidate[];
+  snapshotVersion: number;
+  snapshotGeneration: number;
+  authorityRevision: number;
+  snapshotSessionId?: string;
+  rejectedEntries: Array<{ entryId: string; reason: string }>;
+  degradedReason?: string;
+}
+
 export interface MemoryRetrievalResult {
+  projectDirectory?: MemoryProjectDirectory;
   entries: RetrievedMemoryEntry[];
   contextText: string;
   totalChars: number;
@@ -424,6 +447,7 @@ export interface MemoryInterviewFamilyResolutionTelemetry {
 }
 
 export interface MemoryRetrievalPerformance {
+  projectDirectoryBuildMs?: number;
   totalMs: number;
   cacheState:
     | "hit"

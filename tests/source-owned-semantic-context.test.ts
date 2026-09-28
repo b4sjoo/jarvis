@@ -23,7 +23,7 @@ function task(parentId = "parent-oasis"): ActiveMeetingTask {
       id: parentId,
       questionType: "project-deep-dive",
       topic: "Oasis reliability tradeoffs",
-      playbookPhase: "architecture_decision",
+      playbookPhase: "project_QA",
       phaseProgress: {},
       supportedFactAnchors: [],
       createdAt: 1,

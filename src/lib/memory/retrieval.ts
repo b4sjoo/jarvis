@@ -25,6 +25,7 @@ import {
   type MemoryUsageFlushResult,
 } from "./retrieval-runtime";
 import { isMemoryProjectAnchorCompatible } from "./project-anchor.js";
+import { buildMemoryProjectDirectory } from "./project-directory.js";
 import {
   gateDiagramOverlayEntriesByDomain,
   isDiagramOverlayMemoryEntry,
@@ -69,6 +70,7 @@ export interface MemoryRetrievalRuntimeCallbacks {
 }
 
 export async function retrieveMemoryContext({
+  memoryStage,
   preparationPurpose,
   sessionId,
   query,
@@ -97,6 +99,9 @@ callbacks: MemoryRetrievalRuntimeCallbacks = {}): Promise<MemoryRetrievalResult>
     loader: loadMemoryEntriesForSnapshot,
   });
   const entries = snapshot.entries;
+  const directoryStartedAt = monotonicNow();
+  const projectDirectory = buildMemoryProjectDirectory(snapshot);
+  const projectDirectoryBuildMs = elapsedMs(directoryStartedAt);
   const policyScoringStartedAt = monotonicNow();
   const rejectRecorder = createMemoryRejectRecorder();
   const overlayRejectRecorder = createMemoryRejectRecorder();
@@ -124,6 +129,29 @@ callbacks: MemoryRetrievalRuntimeCallbacks = {}): Promise<MemoryRetrievalResult>
     eligibilityQueryChars: eligibilityQueryDecision.query.length,
     retrievalQueryChars: query.length,
   });
+  if (memoryStage === "candidate-discovery") {
+    return {
+      projectDirectory,
+      entries: [],
+      contextText: "",
+      totalChars: 0,
+      candidateCount: entries.length,
+      eligibleCount: 0,
+      rejectedCount: 0,
+      rejectSummary: [],
+      policySnapshot,
+      performance: {
+        ...snapshot.telemetry,
+        projectDirectoryBuildMs,
+        totalMs: elapsedMs(totalStartedAt),
+        policyScoringMs: 0,
+        budgetFormattingMs: 0,
+        usageEnqueueMs: 0,
+        usageAddedEntryCount: 0,
+        usageQueueDepth: runtime.getUsageQueueDepth(),
+      },
+    };
+  }
   const eligibleEntries: MemoryEntry[] = [];
   const effectiveDiagramDomainQuery =
     diagramDomainQuery === undefined ? query : diagramDomainQuery;
@@ -407,6 +435,7 @@ callbacks: MemoryRetrievalRuntimeCallbacks = {}): Promise<MemoryRetrievalResult>
       };
 
   const performance: MemoryRetrievalPerformance = {
+    projectDirectoryBuildMs,
     totalMs: elapsedMs(totalStartedAt),
     cacheState: snapshot.telemetry.cacheState,
     cacheHit: snapshot.telemetry.cacheHit,
@@ -459,6 +488,7 @@ callbacks: MemoryRetrievalRuntimeCallbacks = {}): Promise<MemoryRetrievalResult>
   );
 
   return {
+    projectDirectory,
     entries: budgeted.entries,
     contextText,
     totalChars: budgeted.totalChars,
@@ -491,6 +521,23 @@ export async function flushMemoryContextUsage() {
   return getSharedMemoryRetrievalRuntime().flushUsage();
 }
 
+export function formatMemoryProjectDirectoryForTrace(
+  directory: MemoryRetrievalResult["projectDirectory"]
+): Record<string, unknown> {
+  if (!directory) return { memoryProjectDirectoryStatus: "not-loaded" };
+  return {
+    memoryProjectDirectoryStatus: directory.status,
+    memoryProjectDirectorySnapshotVersion: directory.snapshotVersion,
+    memoryProjectDirectorySnapshotGeneration: directory.snapshotGeneration,
+    memoryProjectDirectoryAuthorityRevision: directory.authorityRevision,
+    memoryProjectDirectorySessionId: directory.snapshotSessionId,
+    memoryProjectDirectoryCandidateCount: directory.candidates.length,
+    memoryProjectDirectoryCandidates: directory.candidates,
+    memoryProjectDirectoryRejectedEntries: directory.rejectedEntries,
+    memoryProjectDirectoryDegradedReason: directory.degradedReason,
+  };
+}
+
 export function formatMemoryRetrievalPerformanceForTrace(
   performance: MemoryRetrievalPerformance | undefined
 ) {
@@ -501,6 +548,7 @@ export function formatMemoryRetrievalPerformanceForTrace(
     memoryCacheHit: performance.cacheHit,
     memoryCacheLookupMs: performance.cacheLookupMs,
     memorySnapshotVersion: performance.snapshotVersion,
+    memoryProjectDirectoryBuildMs: performance.projectDirectoryBuildMs,
     memorySnapshotGeneration: performance.snapshotGeneration,
     memorySnapshotAgeMs: performance.snapshotAgeMs,
     memorySnapshotSessionId: performance.snapshotSessionId,
@@ -799,6 +847,17 @@ function getEntryEligibilityDecision(
   }
 
   const runtimeRole = classifyRuntimeMemoryRole(entry);
+  if (
+    projectId && runtimeRole.anchorEligible &&
+    (entry.projectId || entry.projectName) && entry.projectId !== projectId
+  ) {
+    return {
+      eligible: false as const,
+      reason: "settled-project-binding-mismatch" as const,
+      familyGateDecision,
+      familyGateEvaluationMs,
+    };
+  }
   const effectiveProjectAnchor =
     memoryPolicy?.strictProjectAnchor ?? projectAnchor;
   const projectFactEligibilityDecision =

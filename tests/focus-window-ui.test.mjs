@@ -59,6 +59,7 @@ test("Task170 production React receivers, shared renderer and embedded Focus wit
     import { EMPTY_MEETING_FOCUS_SNAPSHOT as empty } from './src/lib/meeting/focus-window';
     import { createMeetingFocusPublisher } from './src/lib/meeting/focus-window-protocol';
     import { createMeetingFocusDisplayModel } from './src/lib/meeting/focus-display';
+    import { getManualCorrectionCapabilities } from './src/lib/meeting/manual-correction-intent';
     import { createPhaseOutputUiFixture } from './tests/helpers/phase-output-ui-fixture';
     import { createFocusOwnerDisplayFixture } from './tests/helpers/focus-owner-display-fixture';
     import { buildMeetingAnswerDisplayModel } from './src/lib/meeting/meeting-answer-display';
@@ -79,7 +80,21 @@ test("Task170 production React receivers, shared renderer and embedded Focus wit
     };
     window.__focusBus = bus; window.__focusInvokes = invokes;
     const publisherEndpoint = {subscribe:receive=>bus.listen('meeting-focus-action',receive),send:payload=>bus.emit('meeting-focus-snapshot',payload)};
-    let publisher = createMeetingFocusPublisher({transport:publisherEndpoint, publisherInstanceId:'A', onAction:action=>actions.push(action), onError:error=>errors.push(error.message)});
+    // UI/transport evidence only: production pure capabilities, no transaction/Advisor success stub.
+    function readCorrectionMenu(correctedType, displayTarget) {
+      const target = {sessionId:displayTarget.sessionId,runtimeEpoch:1,logicalQuestionUnitId:displayTarget.logicalQuestionUnitId??'lqu-A',
+        logicalQuestionRevision:displayTarget.logicalQuestionRevision??1,sourceHash:'source-A',manualCorrectionRevision:0,
+        taskRuntimeRevision:1,owner:{kind:'parent-mainline',parentId:'parent-A'}};
+      const context = {target,currentSessionId:target.sessionId,currentRuntimeEpoch:1,manualCorrectionRevision:0,runtime:{revision:1,parent:{id:'parent-A',stableKind:'general-system-design',topic:'Service design'}},
+        source:{...target,relation:'followup-parent'},currentQuestion:{sessionId:target.sessionId,runtimeEpoch:1,
+          logicalQuestionUnitId:target.logicalQuestionUnitId,revision:target.logicalQuestionRevision,sourceHash:'source-A',sourceTurnIds:['turn-A'],sourceObservationIds:[]}};
+      return {correctedType,target,...getManualCorrectionCapabilities(context,correctedType)};
+    }
+    function onAction(action) {
+      actions.push(action);
+      if(action.type==='request-correction-menu') void publisher.respondCorrectionMenu(action,readCorrectionMenu(action.correctedType,action.displayTarget));
+    }
+    let publisher = createMeetingFocusPublisher({transport:publisherEndpoint, publisherInstanceId:'A', onAction, onError:error=>errors.push(error.message)});
     const roots = Object.fromEntries(['answer','controls','embedded','normal-technical','normal-general'].map(id=>[id,createRoot(document.getElementById(id))]));
     roots.answer.render(<MeetingFocusWindow kind='answer'/>); roots.controls.render(<MeetingFocusWindow kind='controls'/>);
     function renderEmbedded(d) {
@@ -94,7 +109,9 @@ test("Task170 production React receivers, shared renderer and embedded Focus wit
         speechCorrectionInput='' speechCorrections={[]} status='listening' error={null} audioInputLiveness={null} isBusy={d.isBusy} audioControl={d.audioControl}
         showClarifyingQuestion={d.showClarifyingQuestion} clarifyingQuestion={d.clarifyingQuestion} clarifyingOptions={d.sections.clarifyingOptions}
         showClarifyingBooleanFallback={d.showClarifyingBooleanFallback} isTaskSwitchClarifyingQuestion={d.isTaskSwitchClarifyingQuestion}
-        onCorrectQuestionType={noop} onForceAdvise={noop} onSpeechCorrectionInputChange={noop} onSpeechCorrectionSubmit={noop} onSpeechCorrectionDeactivate={noop}
+        typeCorrectionMenu={{displayTarget:d.advisePin?.target??{sessionId:''},requestMenu:readCorrectionMenu,
+          onSelect:selection=>actions.push({type:'correct-question-type',source:'focus-mode',correctedType:selection.correctedType,
+            displayTarget:selection.displayTarget,correctionTarget:selection.target,correctionIntent:selection.option.intent})}} onForceAdvise={noop} onSpeechCorrectionInputChange={noop} onSpeechCorrectionSubmit={noop} onSpeechCorrectionDeactivate={noop}
         onToggleAudio={noop} onClarifyingAnswer={noop} onNewTaskConfirmation={noop} onSameTaskConfirmation={noop} onDismissClarifyingQuestion={noop} onBriefChange={noop} />);
     }
     window.__focus = {
@@ -118,7 +135,7 @@ test("Task170 production React receivers, shared renderer and embedded Focus wit
         await this.publish({phaseOutputNotice:result.notice, sections:result.sections});
         return result;
       },
-      async restart() { publisher.dispose(); publisher = createMeetingFocusPublisher({transport:publisherEndpoint,publisherInstanceId:'B',onAction:action=>actions.push(action),onError:error=>errors.push(error.message)}); await publisher.start(); await publisher.publish(source); },
+      async restart() { publisher.dispose(); publisher = createMeetingFocusPublisher({transport:publisherEndpoint,publisherInstanceId:'B',onAction,onError:error=>errors.push(error.message)}); await publisher.start(); await publisher.publish(source); },
       inject(payload) { return bus.emit('meeting-focus-snapshot',payload); },
       ack(role) { return publisher.getLatestApplied(role); },
       remount() { roots.controls.unmount(); roots.controls = createRoot(document.getElementById('controls')); roots.controls.render(<MeetingFocusWindow kind='controls'/>); }
@@ -310,16 +327,21 @@ test("Task170 production React receivers, shared renderer and embedded Focus wit
       await page.locator('#controls').getByPlaceholder('Correction: RAG not rec / Glean').waitFor();
       await page.waitForFunction(()=>window.__focus.ack('controls')?.publisherInstanceId==='B');
     });
-    await t.test("Term cancel and type correction keep their existing payloads; version errors preserve applied state", async () => {
-      await page.evaluate(()=>window.__focus.publish({speechCorrections:[{id:'term-170',input:'RAG not rec',from:'rec',to:'RAG',appliedCount:1,activeQuestion:{disposition:'current-question-overlay',regenerationStatus:'running'}}]}));
+    await t.test("Term cancel and two-step type correction preserve identity; version errors preserve applied state", async () => {
+      await page.evaluate(()=>window.__focus.publish({advisePin:{locked:false,backgroundUpdated:false,target:{sessionId:'menu-session',logicalQuestionUnitId:'lqu-A',logicalQuestionRevision:1}},speechCorrections:[{id:'term-170',input:'RAG not rec',from:'rec',to:'RAG',appliedCount:1,activeQuestion:{disposition:'current-question-overlay',regenerationStatus:'running'}}]}));
+      await page.waitForFunction(()=>window.__focus.ack('controls')?.displayTarget?.sessionId==='menu-session');
       await page.locator('#controls').getByRole('button',{name:'Stop correction rec',exact:true}).click();
       assert.deepEqual(await page.evaluate(()=>window.__focus.actions.at(-1)),{type:'deactivate-correction',correctionId:'term-170'});
       await page.locator('#controls').getByRole('button',{name:'Field',exact:true}).click();
+      assert.equal(await page.evaluate(()=>window.__focus.actions.at(-1).type),'request-correction-menu');
+      await page.getByRole('group',{name:'Correction actions'}).getByRole('button').first().click();
       const correctionAction = await page.evaluate(()=>window.__focus.actions.at(-1));
       assert.match(correctionAction.actionId,/^manual_action_/);
       assert.equal(typeof correctionAction.requestedAt,'number');
-      const {actionId, requestedAt, ...correctionIntent} = correctionAction;
-      assert.deepEqual(correctionIntent,{type:'correct-question-type',correctedType:'field-knowledge',source:'focus-mode'});
+      assert.equal(correctionAction.type,'correct-question-type');
+      assert.equal(correctionAction.correctedType,'field-knowledge');
+      assert.deepEqual(correctionAction.correctionIntent,{kind:'new-child',parentId:'parent-A'});
+      assert.equal(correctionAction.correctionTarget.logicalQuestionUnitId,'lqu-A');
       const before=await page.evaluate(()=>window.__focus.ack('answer'));
       await page.evaluate(()=>window.__focus.inject({...window.__focus.sent.filter(m=>m.event==='meeting-focus-snapshot').at(-1).payload,schemaVersion:999}));
       assert.match(await page.locator('#answer').getByRole('alert').textContent(),/Unsupported Focus snapshot version/);
@@ -346,13 +368,18 @@ test("Task170 production React receivers, shared renderer and embedded Focus wit
       assert.deepEqual(await page.evaluate(()=>window.__focus.ack('answer').displayTarget),target);
       await page.locator('#controls').getByRole('button',{name:'Field',exact:true}).click();
       assert.deepEqual((await page.evaluate(()=>window.__focus.actions.at(-1))).displayTarget,target);
+      await page.getByRole('button',{name:'Cancel type correction',exact:true}).click();
+      await page.getByRole('button',{name:'Cancel type correction',exact:true}).waitFor({state:'hidden'});
       await page.evaluate(target=>window.__focus.publish({advisePin:{locked:false,backgroundUpdated:false,target}}),target);
       await page.waitForFunction(()=>window.__focus.ack('controls')?.adviseLocked === false);
       for (const surface of ['answer','embedded','normal-technical','normal-general']) {
         assert.equal(await page.locator('#'+surface).getByRole('button',{name:'Lock question',exact:true}).getAttribute('aria-pressed'),'false');
       }
       await page.locator('#controls').getByRole('button',{name:'Field',exact:true}).click();
-      assert.equal(Object.hasOwn(await page.evaluate(()=>window.__focus.actions.at(-1)),'displayTarget'),false);
+      assert.deepEqual((await page.evaluate(()=>window.__focus.actions.at(-1))).displayTarget,target,
+        'unlocked correction also retains the displayed target at menu open');
+      await page.getByRole('button',{name:'Cancel type correction',exact:true}).click();
+      await page.getByRole('button',{name:'Cancel type correction',exact:true}).waitFor({state:'hidden'});
       await page.evaluate(()=>window.__focus.publish({advisePin:undefined}));
     });
     await t.test("B selected real owner metadata keeps A labels/summary across B and shows committed A changes before regeneration", async () => {

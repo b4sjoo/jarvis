@@ -53,6 +53,8 @@ import { createMeetingFocusConsumer } from "@/lib/meeting/focus-window-protocol"
 import { FactGuardrailNotice } from "./fact-guardrail-notice";
 import { PhaseOutputNotice } from "./phase-output-notice";
 import { AdvisePinButton } from "./advise-pin-button";
+import { TypeCorrectionMenuButton, type TypeCorrectionMenuActions } from "./type-correction-menu";
+import { ProjectChoiceControl } from "./project-choice-control";
 import { formatChineseThinkingText } from "@/lib/meeting/meeting-display-text";
 import { MeetingMarkdownText } from "./meeting-markdown-text";
 
@@ -116,9 +118,8 @@ export function MeetingFocusWindow({ kind }: { kind: MeetingFocusWindowKind }) {
 
   const snapshot = envelope?.payload ?? EMPTY_MEETING_FOCUS_SNAPSHOT;
   const sendFocusAction = (action: MeetingFocusUserAction) => {
-    const scoped = (action.type === "correct-question-type" ||
-      (action.type === "response-action" &&
-        (action.action === "previous-phase" || action.action === "next-phase"))) &&
+    const scoped = (action.type === "response-action" &&
+        (action.action === "previous-phase" || action.action === "next-phase")) &&
       snapshot.advisePin?.locked && !action.displayTarget
       ? { ...action, displayTarget: snapshot.advisePin.target }
       : action;
@@ -128,11 +129,20 @@ export function MeetingFocusWindow({ kind }: { kind: MeetingFocusWindowKind }) {
     if (requested.type === "correct-question-type") console.info("[type-correction-focus-requested]", requested);
     void consumerRef.current?.dispatch(requested);
   };
+  const typeCorrectionMenu: TypeCorrectionMenuActions = {
+    displayTarget: snapshot.advisePin?.target ?? { sessionId: "" },
+    requestMenu: (type, target, signal) => consumerRef.current
+      ? consumerRef.current.requestCorrectionMenu(type, target, signal)
+      : Promise.reject(new Error("Focus is not ready. Reopen the type menu.")),
+    onSelect: selection => sendFocusAction({ type: "correct-question-type", source: "focus-mode",
+      correctedType: selection.correctedType, displayTarget: selection.displayTarget,
+      correctionTarget: selection.target, correctionIntent: selection.option.intent }),
+  };
   return <div className="contents" data-focus-window={kind}
     data-focus-publisher={envelope?.publisherInstanceId} data-focus-sequence={envelope?.sequence}>
-    {protocolError ? <div role="alert" className="fixed inset-x-2 top-2 z-50 rounded-sm border border-destructive bg-background p-2 text-xs text-destructive">{protocolError}</div> : null}
+    {protocolError || snapshot.error ? <div role="alert" className="fixed inset-x-2 top-2 z-50 rounded-sm border border-destructive bg-background p-2 text-xs text-destructive">{protocolError || snapshot.error}</div> : null}
     {kind === "controls"
-      ? <MeetingFocusControlsWindow snapshot={snapshot} sendFocusAction={sendFocusAction} />
+      ? <MeetingFocusControlsWindow snapshot={snapshot} sendFocusAction={sendFocusAction} typeCorrectionMenu={typeCorrectionMenu} />
       : <MeetingFocusAnswerWindow snapshot={snapshot} sendFocusAction={sendFocusAction} />}
   </div>;
 }
@@ -241,6 +251,15 @@ function MeetingFocusAnswerWindow({
               </section>
             ) : null}
 
+            {snapshot.projectChoice ? <section className="min-w-0 border-t border-border/70 py-3">
+              <ProjectChoiceControl presentation={snapshot.projectChoice}
+                selectedLabel={snapshot.selectedClarifyingAnswerLabel}
+                selectionState={snapshot.clarifyingSelectionState}
+                selectionMessage={snapshot.clarifyingSelectionMessage}
+                onSelect={selection => sendFocusAction({ type: "clarifying-answer", answer: "option",
+                  option: selection.option, displayTarget: selection.displayTarget,
+                  projectChoice: { key: selection.key, reselect: selection.reselect } })} />
+            </section> : null}
             {snapshot.showClarifyingQuestion ? (
               <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3">
                 <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
@@ -251,7 +270,7 @@ function MeetingFocusAnswerWindow({
                   className={cn(WRAP_TEXT_CLASS, "text-xs leading-5")}
                   value={snapshot.clarifyingQuestion}
                 />
-                <FocusClarifyingActionButtons snapshot={snapshot} sendFocusAction={sendFocusAction} />
+                {!snapshot.projectChoice?.canSelect ? <FocusClarifyingActionButtons snapshot={snapshot} sendFocusAction={sendFocusAction} /> : null}
               </section>
             ) : null}
 
@@ -280,9 +299,11 @@ function MeetingFocusAnswerWindow({
 function MeetingFocusControlsWindow({
   snapshot,
   sendFocusAction,
+  typeCorrectionMenu,
 }: {
   snapshot: MeetingFocusSnapshot;
   sendFocusAction: (action: MeetingFocusUserAction) => void;
+  typeCorrectionMenu: TypeCorrectionMenuActions;
 }) {
   const [correction, setCorrection] = useState("");
   const transcriptMeasureRef = useRef<HTMLParagraphElement>(null);
@@ -300,18 +321,6 @@ function MeetingFocusControlsWindow({
       : undefined;
 
   const updateInterviewTypes = (type: InterviewBriefType) => {
-    const correctionTarget = toCanonicalFocusQuestionType(type);
-    if (hasCorrectableQuestion) {
-      if (correctionTarget) {
-        sendFocusAction({
-          type: "correct-question-type",
-          correctedType: correctionTarget,
-          source: "focus-mode",
-        });
-      }
-      return;
-    }
-
     sendFocusAction({
       type: "update-interview-types",
       interviewTypes: toggleInterviewBriefType(
@@ -457,12 +466,17 @@ function MeetingFocusControlsWindow({
               <AlertCircleIcon className="h-4 w-4 text-destructive" />
             </span>
           ) : null}
-          <div className="flex min-w-0 flex-nowrap gap-1.5">
+          <div className="flex min-w-0 flex-wrap gap-1.5">
             {interviewBriefTypeOptions.map((option) => {
               const selected = hasCorrectableQuestion
                 ? toCanonicalFocusQuestionType(option.id) ===
                   snapshot.effectiveQuestionType
                 : interviewTypes.includes(option.id);
+              const correctedType = toCanonicalFocusQuestionType(option.id);
+              if (hasCorrectableQuestion && correctedType) return <TypeCorrectionMenuButton
+                key={option.id} {...typeCorrectionMenu} correctedType={correctedType}
+                selected={selected} label={option.shortLabel} title={option.label}
+                className="h-8 min-w-[64px] shrink-0 px-1.5 text-[10px]" />;
               return (
                 <Button
                   key={option.id}
@@ -477,26 +491,15 @@ function MeetingFocusControlsWindow({
               );
             })}
             {hasCorrectableQuestion ? (
-              <Button
+              <TypeCorrectionMenuButton
                 key="field-knowledge"
-                size="sm"
-                variant={
-                  snapshot.effectiveQuestionType === "field-knowledge"
-                    ? "default"
-                    : "outline"
-                }
+                {...typeCorrectionMenu}
+                correctedType="field-knowledge"
+                selected={snapshot.effectiveQuestionType === "field-knowledge"}
+                label="Field"
                 className="h-8 min-w-[64px] shrink-0 px-1.5 text-[10px]"
                 title="Field knowledge"
-                onClick={() =>
-                  sendFocusAction({
-                    type: "correct-question-type",
-                    correctedType: "field-knowledge",
-                    source: "focus-mode",
-                  })
-                }
-              >
-                Field
-              </Button>
+              />
             ) : null}
           </div>
           <Button

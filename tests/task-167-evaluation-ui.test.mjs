@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import test from "node:test";
+import vm from "node:vm";
 import ts from "typescript";
 import { build } from "esbuild";
 import { compile } from "@tailwindcss/node";
@@ -28,6 +29,97 @@ assert.ok(selectionStart > 0 && selectionEnd > selectionStart);
 const attemptSelection = source.slice(selectionStart, selectionEnd);
 let playwright;
 try { playwright = createRequire(import.meta.url)(process.env.JARVIS_PLAYWRIGHT_MODULE ?? "playwright"); } catch {}
+
+async function manualCorrectionReceiptFixture() {
+  // Reuse Darwin's actual writer fixture, without executing its test registrations.
+  const file = path.join(root, "tests/manual-correction-observation.test.ts");
+  const fixtureAst = ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true);
+  const declarations = fixtureAst.statements.filter(node => ts.isFunctionDeclaration(node) || ts.isVariableStatement(node) ||
+    (ts.isImportDeclaration(node) && node.moduleSpecifier.text !== "node:test"));
+  const bundle = await build({ stdin: { contents: declarations.map(node => node.getText(fixtureAst)).join("\n") +
+    "\nexport { committed, buildHumanEvaluationAttemptEvidenceV2, evaluateTaskSettlementTupleCompatibilityV2 };",
+    loader: "ts", resolveDir: path.dirname(file) }, bundle: true, write: false, platform: "node", format: "cjs", external: ["typescript"] });
+  const module = { exports: {} };
+  return vm.compileFunction(bundle.outputFiles[0].text + "\nreturn module.exports;", ["module", "exports", "require"])(
+    module, module.exports, createRequire(import.meta.url));
+}
+
+test("MC8 UI tuple validators consume only committed Observed evidence, not the menu intent", async () => {
+  const production = await manualCorrectionReceiptFixture();
+  const { trace } = production.committed("merge-recent-parent");
+  const variables = new Map();
+  const scan = node => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) variables.set(node.name.text, node);
+    if (ts.isFunctionDeclaration(node) && node.name) variables.set(node.name.text, node);
+    ts.forEachChild(node, scan);
+  };
+  scan(ast);
+  const evaluate = (name, env) => vm.runInNewContext(ts.transpileModule(
+    `(${(ts.isFunctionDeclaration(variables.get(name)) ? variables.get(name) : variables.get(name).initializer).getText(ast)})`,
+    { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }
+  ).outputText, env);
+  assert.ok(Array.from(evaluate("evaluationTaskRelations", {})).includes("followup-parent"));
+  assert.ok(Array.from(evaluate("evaluationParentActions", {})).includes("resume"));
+  const cases = [
+    [trace, true],
+    [{ ...trace, status: "error" }, true],
+    [{ ...trace, metadata: { ...trace.metadata, manualCorrectionIntentReceipt: undefined } }, false],
+    [{ ...trace, status: "cancelled", metadata: { ...trace.metadata, correctionAtomicCommitAuthorized: false } }, false],
+    [{ ...trace, metadata: { ...trace.metadata, taskLifecycleExecutionPlanId: "foreign-plan" } }, false],
+  ];
+  const criticalPanel = variables.get("CriticalMomentEvaluationPanel");
+  let criticalRelationSelect, criticalObservedInput;
+  const findBindings = node => {
+    if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(ast) === "CriticalMomentButtonGroup" &&
+        node.attributes.properties.some(prop => prop.name?.getText(ast) === "label" && prop.initializer?.text === "Expected relation")) {
+      criticalRelationSelect = node.attributes.properties.find(prop => prop.name?.getText(ast) === "onSelect").initializer.expression;
+    }
+    ts.forEachChild(node, findBindings);
+  };
+  findBindings(criticalPanel);
+  const findObservedInput = node => {
+    if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(ast) === "CriticalMomentEvaluationPanel") {
+      criticalObservedInput = node.attributes.properties.find(prop => prop.name?.getText(ast) === "observed").initializer.expression;
+    }
+    ts.forEachChild(node, findObservedInput);
+  };
+  findObservedInput(ast);
+  const evaluateNode = (node, env) => vm.runInNewContext(ts.transpileModule(`(${node.getText(ast)})`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
+  }).outputText, env);
+  for (const [candidate, compatible] of cases) {
+    const observed = production.buildHumanEvaluationAttemptEvidenceV2({ trace: candidate, traces: [candidate] }).observed;
+    assert.equal(Boolean(observed.manualCorrectionEvidence), compatible);
+    const facts = [];
+    const env = { evaluateTaskSettlementTupleCompatibilityV2: production.evaluateTaskSettlementTupleCompatibilityV2,
+      expectedQuestionType: "ai-ml-system-design", expectedRelation: "followup-parent", expectedParentAction: "resume",
+      observedSnapshotV2: observed, observed, recordGroundTruth: fact => facts.push(fact), setTaskFixOpen() {}, trace: candidate,
+    };
+    env.expectedSettlementCompatibility = evaluate("expectedSettlementCompatibility", env);
+    assert.equal(env.expectedSettlementCompatibility.compatible, compatible);
+    assert.equal(evaluate("settlementCompatibility", env).compatible, compatible, "Critical Moment uses supplied Observed, not candidate traces");
+    let selectedAction = "resume";
+    evaluateNode(criticalRelationSelect, { ...env,
+      normalizeEvaluationTaskRelation: evaluate("normalizeEvaluationTaskRelation", { evaluationTaskRelations: evaluate("evaluationTaskRelations", {}) }),
+      setExpectedRelation() {}, setExpectedParentAction: update => { selectedAction = update(selectedAction); },
+    })("followup-parent");
+    assert.equal(selectedAction, compatible ? "resume" : "preserve", "relation selection preserves resume only with the committed merge evidence");
+    evaluate("recordCorrectedTaskSettlement", env)();
+    assert.equal(facts.length, compatible ? 1 : 0, "ordinary Save never bypasses the tuple guard");
+    if (compatible) {
+      assert.equal(evaluate("observedSettlementCompatibility", { ...env, observedRelation: observed.relation,
+        observedParentAction: observed.parentAction }).compatible, true);
+      assert.equal(facts[0].expectedParentAction, "resume");
+    }
+  }
+  const observed = production.buildHumanEvaluationAttemptEvidenceV2({ trace, traces: [trace] }).observed;
+  const joinEnv = { latestCriticalMomentGroundTruth: { projectionId: "exact-projection" },
+    latestCriticalMomentCandidate: { sessionId: "mc8-session" },
+    meeting: { humanEvaluationProjectionsV2: [{ projectionId: "exact-projection", sessionId: "mc8-session", observed }] } };
+  assert.equal(evaluateNode(criticalObservedInput, joinEnv), observed);
+  assert.equal(evaluateNode(criticalObservedInput, { ...joinEnv, latestCriticalMomentGroundTruth: {} }), undefined);
+  assert.equal(evaluateNode(criticalObservedInput, { ...joinEnv, latestCriticalMomentCandidate: { sessionId: "other-session" } }), undefined);
+});
 
 test("E167-8: evaluation production bindings retire V1 writers and keep runtime intervention paths", () => {
   const panel = source.slice(source.indexOf("const TraceHumanEvaluationPanel ="), source.indexOf("const TraceClassifierMetadata ="));
@@ -249,6 +341,10 @@ test("E167-8: real production React JSX, optional labels, specialist facts and p
       assert.equal((await lastFact()).expectedRelation, "none");
       assert.equal((await lastFact()).expectedParentAction, "preserve");
       await page.evaluate(() => window.__evaluation.commit());
+      await page.waitForFunction(() => {
+        const fact = window.__evaluation.projection.activeFacts["expected-task-settlement"]?.fact;
+        return fact?.expectedRelation === "none" && fact.expectedParentAction === "preserve";
+      });
       assert.equal((await snapshot()).projection.verdicts.taskSettlementCorrect, true);
       await group("task-settlement").getByRole("button", { name: "Fix", exact: true }).click();
       await choose(group("task-settlement"), "Expected relation", "child-probe");
@@ -297,6 +393,47 @@ test("E167-8: real production React JSX, optional labels, specialist facts and p
         await page.getByText("Human evaluation", { exact: true }).click();
         assert.ok((await group("task-settlement").textContent()).includes(`settlement: ${relation} / ${action}`), id);
         assert.equal(await page.locator("[data-evaluation-advise-only]").count(), adviseOnly ? 1 : 0, id);
+        assert.equal((await snapshot()).calls.length, 0, id);
+      }
+    });
+    await t.test("MC8 real merge receipt enables Correct/Save without override; menu-only and stale receipts stay guarded", async () => {
+      const production = await manualCorrectionReceiptFixture();
+      const { trace: merged } = production.committed("merge-recent-parent");
+      for (const status of ["success", "error"]) {
+        await page.evaluate(trace => window.__evaluation.loadTrace(trace), { ...merged, id: "merge-" + status, status });
+        await page.getByText("Human evaluation", { exact: true }).click();
+        assert.match(await group("task-settlement").textContent(), /settlement: followup-parent\s*\/\s*resume/);
+        assert.equal((await snapshot()).projection.observed.manualCorrectionEvidence.authority, "manual-correction-durable-receipt");
+        await group("task-settlement").getByRole("button", { name: "Correct", exact: true }).click();
+        assert.equal((await lastFact()).expectedParentAction, "resume");
+        assert.equal((await lastFact()).expectedParentId, "A");
+        await group("task-settlement").getByRole("button", { name: "Fix", exact: true }).click();
+        await choose(group("task-settlement"), "Expected type", "AI/ML design");
+        await choose(group("task-settlement"), "Expected relation", "followup-parent");
+        await choose(group("task-settlement"), "Expected parent action", "resume");
+        assert.equal(await group("task-settlement").getByRole("button", { name: "Expert override", exact: true }).count(), 0);
+        const save = group("task-settlement").getByRole("button", { name: "Save settlement", exact: true });
+        assert.equal(await save.isDisabled(), false);
+        await save.click();
+        assert.equal((await snapshot()).calls.length, 2);
+        assert.equal((await lastFact()).expectedRelation, "followup-parent");
+        assert.equal((await lastFact()).expectedParentAction, "resume");
+      }
+      for (const [id, patch] of [
+        ["menu-only", { manualCorrectionIntentReceipt: undefined }],
+        ["not-committed", { correctionAtomicCommitAuthorized: false }],
+        ["foreign-plan", { taskLifecycleExecutionPlanId: "foreign-plan" }],
+      ]) {
+        await page.evaluate(trace => window.__evaluation.loadTrace(trace), { ...merged, id,
+          metadata: { ...merged.metadata, ...patch } });
+        await page.getByText("Human evaluation", { exact: true }).click();
+        assert.equal((await snapshot()).projection.observed.manualCorrectionEvidence, undefined);
+        await group("task-settlement").getByRole("button", { name: "Fix", exact: true }).click();
+        await choose(group("task-settlement"), "Expected type", "AI/ML design");
+        await choose(group("task-settlement"), "Expected relation", "followup-parent");
+        await choose(group("task-settlement"), "Expected parent action", "resume");
+        await group("task-settlement").getByRole("button", { name: "Expert override", exact: true }).waitFor();
+        assert.equal(await group("task-settlement").getByRole("button", { name: "Save settlement", exact: true }).isDisabled(), true);
         assert.equal((await snapshot()).calls.length, 0, id);
       }
     });

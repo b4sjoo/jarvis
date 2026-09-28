@@ -683,14 +683,7 @@ function applyTransition(
   }
 
   if (candidate.kind === "resume-parent") {
-    if (!currentTask.child) {
-      return {
-        task: currentTask,
-        mutationApplied: false,
-        reason: "already-applied",
-      };
-    }
-    const capsule = currentTask.child.returnCapsule;
+    const capsule = currentTask.child?.returnCapsule;
     if (capsule) {
       const incompatibility = validateParentReturnCapsule(
         currentTask,
@@ -704,13 +697,41 @@ function applyTransition(
         };
       }
     }
+    const restoredPhase = capsule?.parentPhase ?? currentTask.playbookPhase;
+    const phaseDecision = candidate.phaseDecision;
+    // The existing candidate/parent lease has already been validated. Only the
+    // admitted PDD mainline transition may advance while returning from a child.
+    const advanceProjectMainline =
+      currentTask.stableKind === "project-deep-dive" &&
+      candidate.questionType === "project-deep-dive" &&
+      Boolean(candidate.logicalQuestionUnitId) &&
+      restoredPhase === "project_summary" &&
+      phaseDecision?.source === "automatic" &&
+      phaseDecision.action === "advance" &&
+      phaseDecision.phaseFrom === restoredPhase &&
+      phaseDecision.phase === "project_QA";
+    if (!currentTask.child && !advanceProjectMainline) {
+      return {
+        task: currentTask,
+        mutationApplied: false,
+        reason: "already-applied",
+      };
+    }
+    const resumedPhase = advanceProjectMainline ? "project_QA" : restoredPhase;
     return {
       task: {
         ...currentTask,
-        playbook: capsule
-          ? withPlaybookPhase(currentTask.playbook, capsule.parentPhase)
+        playbook: capsule || advanceProjectMainline
+          ? withPlaybookPhase(currentTask.playbook, resumedPhase)
           : currentTask.playbook,
-        playbookPhase: capsule?.parentPhase ?? currentTask.playbookPhase,
+        playbookPhase: resumedPhase,
+        phaseProgress: advanceProjectMainline
+          ? applyPlaybookPhaseDecisionToProgress(
+              currentTask.phaseProgress,
+              phaseDecision,
+              restoredPhase
+            )
+          : currentTask.phaseProgress,
         supportedFactAnchors: capsule
           ? [...capsule.allowedFactAnchorIds]
           : currentTask.supportedFactAnchors,

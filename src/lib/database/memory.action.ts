@@ -258,7 +258,7 @@ function buildProjects(
   const projectMap = new Map<string, MemoryProject>();
 
   for (const item of [...sources, ...entries]) {
-    if (item.scope !== "project" || !item.projectId) continue;
+    if (!item.projectId) continue;
     const existing = projectMap.get(item.projectId);
     const name = item.projectName || item.projectId;
     projectMap.set(item.projectId, {

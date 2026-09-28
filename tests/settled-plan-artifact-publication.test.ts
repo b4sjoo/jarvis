@@ -37,7 +37,7 @@ function activeTask(playbook: SelectedInterviewPlaybook): ActiveMeetingTask {
       id: "design-parent",
       questionType: "ai-ml-system-design",
       topic: "Design a RAG service.",
-      playbookPhase: "architecture_decision",
+      playbookPhase: "project_QA",
       phaseProgress: {},
       supportedFactAnchors: [],
       revisions: 2,

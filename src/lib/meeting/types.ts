@@ -357,12 +357,19 @@ export type InterviewPlaybookPhase =
   | "solution_planning"
   | "requirement_clarification"
   | "design_framing"
+  | "project_summary"
+  | "project_QA"
+  | "concept_explanation"
+  | "follow_up";
+
+// Historical recordings and human Expected retain their original phase labels.
+// Runtime tasks and playbooks continue to use InterviewPlaybookPhase only.
+export type RecordedInterviewPlaybookPhase =
+  | InterviewPlaybookPhase
   | "project_narrative"
   | "architecture_decision"
   | "validation_reliability"
-  | "impact_lessons"
-  | "concept_explanation"
-  | "follow_up";
+  | "impact_lessons";
 
 export interface SelectedInterviewPlaybook {
   id: InterviewPlaybookId;
@@ -1854,8 +1861,8 @@ export interface ProjectTrajectoryHumanEvaluation {
   detectedProjectBindingRevision?: number;
   expectedProjectId?: string;
   expectedProjectName?: string;
-  detectedPhase?: InterviewPlaybookPhase;
-  expectedPhase?: InterviewPlaybookPhase;
+  detectedPhase?: RecordedInterviewPlaybookPhase;
+  expectedPhase?: RecordedInterviewPlaybookPhase;
   detectedFactAnchorState?: FactAnchorState;
   expectedFactAnchorState?: FactAnchorState;
   detectedChildContinuity?: ProjectTrajectoryChildContinuity;

@@ -26,12 +26,15 @@ import {
 import { collectConfirmedMeFacts, shouldIncludeTurnInAdvisorPrompt } from "./transcript-fusion.js";
 import {
   cloneMeetingTaskRuntimeState,
+  equalTaskRuntimeValues,
   createMeetingTaskRuntimeState,
   projectActiveMeetingTask,
   reduceMeetingTaskRuntimeMutation,
   type AnswerArtifactSection,
   type MeetingTaskRuntimeTransitionKind,
 } from "./active-meeting-task.js";
+import type { ManualCorrectionAdmission, RecentManualCorrectionParent } from "./manual-correction-intent.js";
+import type { EffectiveQuestionSourceLedger, PreparedEffectiveSourceOwnerCorrection, RetainedParentSourceReferences } from "./effective-question-source-ledger.js";
 
 const DEFAULT_TRANSCRIPT_WINDOW_MS = 2 * 60 * 1000;
 const DEFAULT_MAX_SCREEN_OBSERVATIONS = 5;
@@ -53,6 +56,17 @@ export interface PreparedMeetingTaskRuntimeTransition {
   installedState?: MeetingTaskRuntimeState;
   previousDeadlineControl?: MeetingTaskDeadlineControl;
   installedDeadlineControl?: MeetingTaskDeadlineControl;
+  transition: MeetingTaskRuntimeTransitionKind;
+  recentParentToRestore?: string;
+  previousRecentParent?: RecentManualCorrectionParent;
+  previousAdmission?: ManualCorrectionAdmission;
+  installedRecentParent?: RecentManualCorrectionParent;
+  installedAdmission?: ManualCorrectionAdmission;
+  expectedAdmission?: ManualCorrectionAdmission;
+  expectedRecentParent?: RecentManualCorrectionParent;
+  sourceOwnerCorrection?: PreparedEffectiveSourceOwnerCorrection;
+  previousSourceRetention?: RetainedParentSourceReferences;
+  installedSourceRetention?: RetainedParentSourceReferences;
 }
 
 export interface PreparedMeetingTaskDeadlineUpdate {
@@ -71,6 +85,9 @@ export class MeetingContextManager {
   private state: StoredMeetingContextState;
   private taskRuntimeState: MeetingTaskRuntimeState;
   private taskDeadlineControl: MeetingTaskDeadlineControl = {};
+  private recentManualCorrectionParent?: RecentManualCorrectionParent;
+  private manualCorrectionAdmission?: ManualCorrectionAdmission;
+  private effectiveQuestionSources?: EffectiveQuestionSourceLedger;
   private readonly transcriptWindowMs: number;
   private readonly maxScreenObservations: number;
 
@@ -126,6 +143,9 @@ export class MeetingContextManager {
       options.interviewSessionBrief ?? this.state.interviewSessionBrief;
     this.taskRuntimeState = createMeetingTaskRuntimeState();
     this.taskDeadlineControl = {};
+    this.recentManualCorrectionParent = undefined;
+    this.manualCorrectionAdmission = undefined;
+    this.effectiveQuestionSources?.releaseRetainedParentSources();
     this.state = {
       sessionId: options.sessionId ?? createMeetingId("meeting"),
       startedAt: Date.now(),
@@ -199,12 +219,16 @@ export class MeetingContextManager {
   }
 
   addScreenObservation(observation: ScreenObservation) {
+    const observations = [...this.state.screenObservations.filter(item => item.id !== observation.id), observation];
+    const retained = this.getRecentManualCorrectionSources(Number.MAX_SAFE_INTEGER);
+    const retainedIds = new Set(retained?.observationIds ?? []);
+    while (observations.length > this.maxScreenObservations) {
+      const index = observations.findIndex(item => !retainedIds.has(item.id));
+      observations.splice(index >= 0 ? index : 0, 1);
+    }
     this.state = {
       ...this.state,
-      screenObservations: [
-        ...this.state.screenObservations,
-        observation,
-      ].slice(-this.maxScreenObservations),
+      screenObservations: observations,
     };
   }
 
@@ -224,6 +248,63 @@ export class MeetingContextManager {
 
   getTaskRuntimeState() {
     return cloneMeetingTaskRuntimeState(this.taskRuntimeState);
+  }
+
+  getRecentManualCorrectionParent() {
+    return cloneManualCorrectionState(this.recentManualCorrectionParent);
+  }
+
+  setEffectiveQuestionSourceLedger(ledger: EffectiveQuestionSourceLedger) {
+    if (this.effectiveQuestionSources && this.effectiveQuestionSources !== ledger) {
+      this.effectiveQuestionSources.releaseRetainedParentSources();
+      this.recentManualCorrectionParent = undefined;
+    }
+    this.effectiveQuestionSources = ledger;
+  }
+
+  getRecentManualCorrectionSources(runtimeEpoch: number) {
+    const recent = this.recentManualCorrectionParent;
+    if (!recent) return undefined;
+    const evidence = this.effectiveQuestionSources?.getRetainedParentSourceEvidence({
+      sessionId: this.state.sessionId, runtimeEpoch, parentId: recent.parent.id,
+      availableObservationIds: this.state.screenObservations.filter(observation => !!observation.imageBase64).map(observation => observation.id),
+    });
+    if (!evidence) return undefined;
+    const observations = this.state.screenObservations.filter(observation => evidence.observationIds.includes(observation.id));
+    return { ...evidence, retainedImageCount: observations.filter(observation => !!observation.imageBase64).length,
+      retainedImageBase64Bytes: observations.reduce((size, observation) => size + (observation.imageBase64?.length ?? 0), 0) };
+  }
+
+  getManualCorrectionAdmission() {
+    return cloneManualCorrectionState(this.manualCorrectionAdmission);
+  }
+
+  // Called at source admission, before generation. Retries and corrections of
+  // the same LQU never remove a previously observed second-question fact.
+  recordTaskQuestionAdmission(input: {
+    sessionId: string;
+    parentId: string;
+    childId?: string;
+    logicalQuestionUnitId: string;
+  }) {
+    const parent = this.taskRuntimeState.parent;
+    if (input.sessionId !== this.state.sessionId || !parent || input.parentId !== parent.id ||
+      (input.childId && input.childId !== parent.child?.id)) return false;
+    const previous = this.manualCorrectionAdmission ?? createManualCorrectionAdmission(parent);
+    const child = parent.child ? previous.child?.childId === parent.child.id ? { ...previous.child }
+      : { childId: parent.child.id, hasAdditionalLogicalQuestionUnit: false } : undefined;
+    if (child && input.childId === child.childId) {
+      if (!child.originLogicalQuestionUnitId) child.originLogicalQuestionUnitId = input.logicalQuestionUnitId;
+      else if (child.originLogicalQuestionUnitId !== input.logicalQuestionUnitId) child.hasAdditionalLogicalQuestionUnit = true;
+    }
+    this.manualCorrectionAdmission = {
+      ...previous,
+      hasAdditionalLogicalQuestionUnit: previous.hasAdditionalLogicalQuestionUnit ||
+        !previous.originLogicalQuestionUnitId || previous.originLogicalQuestionUnitId !== input.logicalQuestionUnitId,
+      hasChildHistory: previous.hasChildHistory || !!input.childId,
+      child,
+    };
+    return true;
   }
 
   getTaskDeadlineControl(): MeetingTaskDeadlineControl {
@@ -297,6 +378,8 @@ export class MeetingContextManager {
     parent?: ActiveInterviewParent | null;
     screenAttachment?: ActiveScreenTask | null;
     deadlineDelta?: MeetingTaskDeadlineDelta;
+    recentParentToRestore?: string;
+    sourceOwnerCorrection?: PreparedEffectiveSourceOwnerCorrection;
     appliedAt?: number;
   }) {
     const prepared = this.prepareTaskRuntimeTransition(input);
@@ -312,6 +395,8 @@ export class MeetingContextManager {
     parent?: ActiveInterviewParent | null;
     screenAttachment?: ActiveScreenTask | null;
     deadlineDelta?: MeetingTaskDeadlineDelta;
+    recentParentToRestore?: string;
+    sourceOwnerCorrection?: PreparedEffectiveSourceOwnerCorrection;
     appliedAt?: number;
   }): PreparedMeetingTaskRuntimeTransition {
     const previousState = cloneMeetingTaskRuntimeState(this.taskRuntimeState);
@@ -333,6 +418,11 @@ export class MeetingContextManager {
       previousState,
       result,
       deadlineDelta,
+      transition: input.transition,
+      recentParentToRestore: input.recentParentToRestore,
+      expectedAdmission: this.manualCorrectionAdmission,
+      expectedRecentParent: this.recentManualCorrectionParent,
+      sourceOwnerCorrection: input.sourceOwnerCorrection,
     };
   }
 
@@ -350,6 +440,60 @@ export class MeetingContextManager {
       };
     }
     if (!prepared.result.authorized) return prepared.result;
+    const recentSources = prepared.recentParentToRestore
+      ? this.getRecentManualCorrectionSources(Number.MAX_SAFE_INTEGER) : undefined;
+    const correctedSource = prepared.sourceOwnerCorrection?.nextRecord;
+    if (correctedSource?.sourceObservationIds?.some(id => !this.state.screenObservations.some(
+      observation => observation.id === id && !!observation.imageBase64))) {
+      return { state: this.getTaskRuntimeState(), authorized: false, mutationApplied: false, reason: "invalid-transition" as const };
+    }
+    const sourceOwnerBefore = prepared.sourceOwnerCorrection?.expectedOwner;
+    if (sourceOwnerBefore && (sourceOwnerBefore.parentId !== this.taskRuntimeState.parent?.id ||
+      (sourceOwnerBefore.kind === "active-child"
+        ? sourceOwnerBefore.childId !== this.taskRuntimeState.parent?.child?.id
+        : !!this.taskRuntimeState.parent?.child))) {
+      return { state: this.getTaskRuntimeState(), authorized: false, mutationApplied: false, reason: "invalid-transition" as const };
+    }
+    if (correctedSource && (correctedSource.sessionId !== this.state.sessionId ||
+      correctedSource.owner.parentId !== prepared.result.state.parent?.id ||
+      (correctedSource.owner.kind === "active-child"
+        ? correctedSource.owner.childId !== prepared.result.state.parent?.child?.id
+        : !!prepared.result.state.parent?.child))) {
+      return { state: this.getTaskRuntimeState(), authorized: false, mutationApplied: false, reason: "invalid-transition" as const };
+    }
+    if (sourceOwnerBefore?.kind === "active-child" && correctedSource?.relation === "followup-parent" &&
+      correctedSource.owner.kind === "parent-mainline" &&
+      (this.manualCorrectionAdmission !== prepared.expectedAdmission ||
+        this.manualCorrectionAdmission?.child?.childId !== sourceOwnerBefore.childId ||
+        this.manualCorrectionAdmission.child.originLogicalQuestionUnitId !== correctedSource.logicalQuestionUnitId ||
+        this.manualCorrectionAdmission.child.hasAdditionalLogicalQuestionUnit)) {
+      return { state: this.getTaskRuntimeState(), authorized: false, mutationApplied: false, reason: "invalid-transition" as const };
+    }
+    if (prepared.recentParentToRestore &&
+      (this.recentManualCorrectionParent?.parent.id !== prepared.recentParentToRestore ||
+        !recentSources || recentSources.missingObservationIds.length > 0 ||
+        this.recentManualCorrectionParent !== prepared.expectedRecentParent ||
+        this.manualCorrectionAdmission !== prepared.expectedAdmission ||
+        this.manualCorrectionAdmission?.hasAdditionalLogicalQuestionUnit ||
+        this.manualCorrectionAdmission?.hasChildHistory ||
+        !this.manualCorrectionAdmission?.originLogicalQuestionUnitId ||
+        this.recentManualCorrectionParent.replacedByParentId !== this.taskRuntimeState.parent?.id ||
+        prepared.result.state.parent?.id !== prepared.recentParentToRestore ||
+        !prepared.sourceOwnerCorrection?.releaseRetention ||
+        prepared.sourceOwnerCorrection.nextRecord.logicalQuestionUnitId !== this.manualCorrectionAdmission.originLogicalQuestionUnitId ||
+        prepared.sourceOwnerCorrection.nextRecord.owner.parentId !== prepared.recentParentToRestore ||
+        prepared.sourceOwnerCorrection.nextRecord.owner.kind !== "parent-mainline" ||
+        prepared.sourceOwnerCorrection.nextRecord.relation !== "followup-parent" ||
+        prepared.result.state.screenAttachment !== undefined ||
+        !equalTaskRuntimeValues(prepared.result.state.parent, {
+          ...this.recentManualCorrectionParent.parent, child: undefined,
+          updatedAt: prepared.result.state.parent.updatedAt,
+          revisions: this.recentManualCorrectionParent.parent.revisions + 1,
+          latestScreenObservationId: prepared.sourceOwnerCorrection.nextRecord.sourceObservationIds?.at(-1) ??
+            this.recentManualCorrectionParent.parent.latestScreenObservationId,
+        }))) {
+      return { state: this.getTaskRuntimeState(), authorized: false, mutationApplied: false, reason: "invalid-transition" as const };
+    }
     if (prepared.deadlineDelta &&
       (!prepared.result.mutationApplied ||
         !validTaskDeadlineDelta(prepared.deadlineDelta, prepared.result.state))) {
@@ -360,8 +504,60 @@ export class MeetingContextManager {
         reason: "invalid-transition" as const,
       };
     }
+    if (prepared.sourceOwnerCorrection &&
+      !this.effectiveQuestionSources?.installPreparedOwnerCorrection(prepared.sourceOwnerCorrection)) {
+      return { state: this.getTaskRuntimeState(), authorized: false, mutationApplied: false, reason: "revision-mismatch" as const };
+    }
     prepared.previousDeadlineControl = this.taskDeadlineControl;
-    if (prepared.result.mutationApplied) this.taskRuntimeState = prepared.result.state;
+    prepared.previousSourceRetention = prepared.sourceOwnerCorrection?.previousRetention ?? this.effectiveQuestionSources?.getRetainedParentSourceReferences();
+    prepared.previousRecentParent = this.recentManualCorrectionParent;
+    prepared.previousAdmission = this.manualCorrectionAdmission;
+    if (prepared.result.mutationApplied) {
+      const before = this.taskRuntimeState;
+      const after = prepared.result.state;
+      if (prepared.recentParentToRestore) {
+        this.manualCorrectionAdmission = {
+          ...this.recentManualCorrectionParent!.admission,
+          child: undefined,
+          hasAdditionalLogicalQuestionUnit: true,
+        };
+        this.recentManualCorrectionParent = undefined;
+      } else if (before.parent?.id !== after.parent?.id && after.parent) {
+        this.recentManualCorrectionParent = before.parent ? {
+          sessionId: this.state.sessionId,
+          parent: cloneManualCorrectionState({ ...before.parent, child: undefined }),
+          replacedByParentId: after.parent.id,
+          admission: cloneManualCorrectionState(this.manualCorrectionAdmission ?? createManualCorrectionAdmission(before.parent)),
+        } : undefined;
+        if (before.parent) {
+          const requiredObservationIds = [before.parent.startObservationId, before.parent.latestScreenObservationId].filter((id): id is string => !!id);
+          const retained = this.effectiveQuestionSources?.retainParentSources({
+            sessionId: this.state.sessionId, parentId: before.parent.id,
+            originLogicalQuestionUnitId: this.recentManualCorrectionParent?.admission.originLogicalQuestionUnitId,
+            requiredTurnIds: [...new Set([before.parent.startTurnId, ...(before.parent.canonicalQuestionSourceTurnIds ?? [])].filter((id): id is string => !!id))],
+            requiredObservationIds,
+          });
+          if (retained) {
+            const evidence = this.getRecentManualCorrectionSources(Number.MAX_SAFE_INTEGER);
+            if (!evidence || evidence.missingObservationIds.length || evidence.observationIds.length >= this.maxScreenObservations) {
+              this.effectiveQuestionSources?.releaseRetainedParentSources();
+            }
+          }
+        }
+        this.manualCorrectionAdmission = createManualCorrectionAdmission(after.parent);
+      } else if (after.parent) {
+        const admission = this.manualCorrectionAdmission ?? createManualCorrectionAdmission(after.parent);
+        this.manualCorrectionAdmission = { ...admission,
+          hasChildHistory: admission.hasChildHistory || !!after.parent.child,
+          child: after.parent.child ? admission.child?.childId === after.parent.child.id ? admission.child
+            : { childId: after.parent.child.id, hasAdditionalLogicalQuestionUnit: false } : undefined,
+        };
+      }
+      this.taskRuntimeState = after;
+    }
+    prepared.installedRecentParent = this.recentManualCorrectionParent;
+    prepared.installedAdmission = this.manualCorrectionAdmission;
+    prepared.installedSourceRetention = this.effectiveQuestionSources?.getRetainedParentSourceReferences();
     prepared.installedState = this.taskRuntimeState;
     this.taskDeadlineControl = applyTaskDeadlineDelta(
       this.taskDeadlineControl, prepared.deadlineDelta, this.taskRuntimeState
@@ -377,6 +573,9 @@ export class MeetingContextManager {
     if (
       this.state.sessionId !== prepared.expectedSessionId ||
       this.taskRuntimeState !== prepared.installedState ||
+      this.recentManualCorrectionParent !== prepared.installedRecentParent ||
+      this.manualCorrectionAdmission !== prepared.installedAdmission ||
+      this.effectiveQuestionSources?.getRetainedParentSourceReferences() !== prepared.installedSourceRetention ||
       this.taskDeadlineControl.parent !== prepared.installedDeadlineControl?.parent ||
       this.taskDeadlineControl.screen !== prepared.installedDeadlineControl?.screen ||
       ((!prepared.installedDeadlineControl?.parent || !prepared.installedDeadlineControl?.screen) &&
@@ -384,7 +583,13 @@ export class MeetingContextManager {
     ) {
       return false;
     }
+    if (prepared.sourceOwnerCorrection) {
+      if (!this.effectiveQuestionSources?.rollbackPreparedOwnerCorrection(prepared.sourceOwnerCorrection)) return false;
+    } else if (this.effectiveQuestionSources && !this.effectiveQuestionSources.restoreRetainedParentSourceReferences(
+      prepared.installedSourceRetention, prepared.previousSourceRetention)) return false;
     if (prepared.result.mutationApplied) this.taskRuntimeState = prepared.previousState;
+    this.recentManualCorrectionParent = prepared.previousRecentParent;
+    this.manualCorrectionAdmission = prepared.previousAdmission;
     this.taskDeadlineControl = prepared.previousDeadlineControl!;
     prepared.installedState = undefined;
     prepared.previousDeadlineControl = undefined;
@@ -571,6 +776,11 @@ export class MeetingContextManager {
     });
     if (result.mutationApplied) {
       this.taskRuntimeState = result.state;
+      if (!result.state.parent || mutation.kind === "clear" && mutation.scope !== "screen") {
+        this.recentManualCorrectionParent = undefined;
+        this.manualCorrectionAdmission = undefined;
+        this.effectiveQuestionSources?.releaseRetainedParentSources();
+      }
       this.taskDeadlineControl = applyTaskDeadlineDelta(
         this.taskDeadlineControl, undefined, this.taskRuntimeState
       );
@@ -650,6 +860,21 @@ export class MeetingContextManager {
       .map((entry) => `${entry.term}: ${entry.definition}`)
       .join("\n");
   }
+}
+
+function createManualCorrectionAdmission(parent: ActiveInterviewParent): ManualCorrectionAdmission {
+  return {
+    parentId: parent.id,
+    originLogicalQuestionUnitId: parent.sourceQuestionUnitId ??
+      (parent.originQuestionId?.startsWith("lqu:") ? parent.originQuestionId.slice(4) : undefined),
+    hasAdditionalLogicalQuestionUnit: false,
+    hasChildHistory: !!parent.child,
+    child: parent.child ? { childId: parent.child.id, hasAdditionalLogicalQuestionUnit: false } : undefined,
+  };
+}
+
+function cloneManualCorrectionState<T>(value: T): T {
+  return value === undefined ? value : JSON.parse(JSON.stringify(value)) as T;
 }
 
 function cloneTaskDeadlineDelta(delta: MeetingTaskDeadlineDelta): MeetingTaskDeadlineDelta {

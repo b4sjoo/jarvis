@@ -141,7 +141,7 @@ test("keeps Screen project deep dives available for bounded product judgment", (
 
   assert.match(
     source,
-    /current product or technical judgment directly with a bounded analysis/i
+    /independent product judgment, tradeoffs or hypothetical design, give bounded analysis/i
   );
   assert.match(
     source,
