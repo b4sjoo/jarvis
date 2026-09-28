@@ -2,13 +2,14 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { build } from "esbuild";
 import ts from "typescript";
 
 const root = process.cwd();
 const require = createRequire(import.meta.url);
-const playwright = require(process.env.JARVIS_PLAYWRIGHT_MODULE ?? "playwright");
+export const playwright = require(process.env.JARVIS_PLAYWRIGHT_MODULE ?? "playwright");
 const mainSource = readFileSync("src/pages/app/components/meeting/index.tsx", "utf8");
 const main = ts.createSourceFile("main.tsx", mainSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const focus = ts.createSourceFile("focus.tsx", readFileSync("src/pages/app/components/meeting/focus-window.tsx", "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -37,7 +38,7 @@ const fixtureBundle = await build({ entryPoints: ["tests/fixtures/project-select
   platform: "node", format: "cjs", write: false, logLevel: "silent" });
 const fixtureModule = { exports: {} };
 new Function("module", "exports", "require", fixtureBundle.outputFiles[0].text)(fixtureModule, fixtureModule.exports, require);
-const fixtures = fixtureModule.exports;
+export const fixtures = fixtureModule.exports;
 
 const externalModules = {
   "@/contexts": `export const useApp=()=>window.__s63.app;`,
@@ -66,7 +67,7 @@ const externalModules = {
   "@/components": `export * from './src/components/ui/button'; export * from './src/components/ui/popover';`,
 };
 
-async function browserBundle() {
+export async function browserBundle(additionalPlugins = []) {
   return build({ stdin: { loader: "tsx", resolveDir: root, contents: `
     import React,{useCallback,useState,useRef,useEffect} from 'react';
     import {createRoot} from 'react-dom/client';
@@ -139,7 +140,7 @@ async function browserBundle() {
     createRoot(document.getElementById('root')).render(<Entry/>);
   ` }, bundle: true, write: false, format: "iife", platform: "browser", jsx: "automatic", logLevel: "silent",
     alias: { "@": path.join(root, "src") }, define: { "import.meta.env.DEV": "true", "import.meta.env.PROD": "false", "process.env.NODE_ENV": '"development"' },
-    plugins: [{ name: "s63-external-boundaries", setup(builder) {
+    plugins: [...additionalPlugins, { name: "s63-external-boundaries", setup(builder) {
       builder.onResolve({ filter: /.*/ }, args => {
         if(args.path==='s63:actual-memory-action')return {path:path.join(root,'src/lib/database/memory.action.ts'),namespace:'s63-actual'};
         const name = args.path.startsWith(`${root}/src/`) ? `@/${path.relative(`${root}/src`, args.path)}` : args.path;
@@ -153,7 +154,7 @@ async function browserBundle() {
   });
 }
 
-async function readRecordedSelectionTrace(page, requestId, state) {
+export async function readRecordedSelectionTrace(page, requestId, state) {
   await page.waitForFunction(({requestId,state})=>Array.from(window.__s63.writes.entries()).some(([file,payload])=>{
     if(!file.startsWith('traces/')||!file.endsWith('.json'))return false;
     try {
@@ -168,7 +169,7 @@ async function readRecordedSelectionTrace(page, requestId, state) {
     .find(trace=>trace?.metadata?.clarifyingRequestId===requestId),requestId);
 }
 
-async function runConsumerCase(t,bundle,browser,execution) {
+export async function openProjectSelectionBrowserHost(t,bundle,browser,execution) {
   const context=await browser.newContext();
   try {
     const page = await context.newPage();
@@ -329,6 +330,13 @@ async function runConsumerCase(t,bundle,browser,execution) {
         trace:window.__s63.meeting.traces.map(t=>({status:t.status,metadata:Object.fromEntries(Object.entries(t.metadata??{}).filter(([k])=>/projectBinding|currentOnly|effectiveQuestion|effectiveAdvisor|projectSelection|settlement.*Parent/i.test(k)))}))})))}`);
       throw error;
     }
+    return {page,context,failures};
+  } catch(error) {await context.close();throw error;}
+}
+
+async function runConsumerCase(t,bundle,browser,execution) {
+  const {page,context,failures}=await openProjectSelectionBrowserHost(t,bundle,browser,execution);
+  try {
     const before=await page.evaluate(()=>({id:window.__s63.meeting.taskRuntime.parent.id,
       phase:window.__s63.meeting.taskRuntime.parent.playbookPhase,binding:window.__s63.meeting.taskRuntime.parent.projectBinding,
       sessionId:window.__s63.meeting.meetingSessionId,epoch:JSON.parse(window.__s63.observed.projectChoice.key)[1]}));
@@ -545,6 +553,7 @@ async function runConsumerCase(t,bundle,browser,execution) {
   } finally { await context.close(); }
 }
 
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
 test('S63 finite real consumer executions',{timeout:120000},async t=>{
   const enabled=new Set((process.env.S63_EXECUTIONS??fixtures.S63_CONSUMER_EXECUTIONS.map(item=>item.executionId).join(',')).split(','));
   const implemented=new Set(fixtures.S63_CONSUMER_EXECUTIONS.map(item=>item.executionId));
@@ -562,3 +571,4 @@ test('S63 finite real consumer executions',{timeout:120000},async t=>{
     }
   }finally{await browser.close();}
 });
+}
