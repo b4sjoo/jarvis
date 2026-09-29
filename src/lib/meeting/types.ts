@@ -1140,6 +1140,8 @@ export interface AdvisorSuggestion {
   presentationArtifactAuthority?:
     ScreenPresentationArtifactAuthoritySource;
   factGuardrailNotice?: FactGuardrailVisibleNotice;
+  /** Frozen from this answer's binding decision; generated options cannot select a project. */
+  projectIdentityPending?: boolean;
   basedOnTurnIds: string[];
   basedOnObservationIds: string[];
   confidence: "low" | "medium" | "high";

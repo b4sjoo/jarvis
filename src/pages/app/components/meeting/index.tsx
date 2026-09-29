@@ -830,6 +830,7 @@ export const MeetingAssistant = ({
   const clarifyingQuestion = displaySuggestionSections.clarifyingQuestion.trim();
   const rawClarifyingOptions = displaySuggestionSections.clarifyingOptions ?? [];
   const displayedSuggestion = adviseDisplay.stable?.suggestion;
+  const projectIdentityPending = displayedSuggestion?.projectIdentityPending === true;
   const projectChoice = meeting.readProjectChoicePresentation(adviseDisplay.target);
   const clarifyingQuestionOwner =
     displayedSuggestion?.questionLineage?.questionInstanceId ??
@@ -844,10 +845,12 @@ export const MeetingAssistant = ({
       buildClarifyingOptionDisplayModel({
         question: clarifyingQuestion,
         options: rawClarifyingOptions,
+        projectIdentityPending,
       }),
     [
       clarifyingQuestion,
       rawClarifyingOptions,
+      projectIdentityPending,
     ]
   );
   const clarifyingOptions = clarifyingOptionDisplay.options;
@@ -863,7 +866,7 @@ export const MeetingAssistant = ({
     clarifyingQuestion && dismissedQuestionKey !== clarifyingQuestionKey
   );
   const isTaskSwitchClarifyingQuestion =
-    isTaskSwitchQuestion(clarifyingQuestion);
+    !projectIdentityPending && isTaskSwitchQuestion(clarifyingQuestion);
   useEffect(() => {
     if (!clarifyingSelection) return;
     if (activeClarifyingSelection) return;

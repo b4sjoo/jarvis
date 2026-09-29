@@ -169,7 +169,7 @@ async function harness(t, replacement = false) {
     env.adviseDisplay = read();
     env.displaySuggestionSections = env.adviseDisplay.sections;
     env.displayTargetKey = JSON.stringify(env.adviseDisplay.target);
-    for (const name of ["clarifyingQuestion", "rawClarifyingOptions", "projectChoice", "clarifyingOptionDisplay", "clarifyingOptions"]) {
+    for (const name of ["clarifyingQuestion", "rawClarifyingOptions", "displayedSuggestion", "projectIdentityPending", "projectChoice", "clarifyingOptionDisplay", "clarifyingOptions"]) {
       env[name] = evaluate(`(${variable(main, name).initializer.getText(main)})`, env);
     }
     env.showClarifyingQuestion = Boolean(env.clarifyingQuestion);

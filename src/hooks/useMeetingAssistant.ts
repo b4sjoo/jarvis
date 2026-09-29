@@ -132,7 +132,7 @@ import {
 } from "@/lib/meeting/manual-correction-intent";
 import { prepareManualCorrectionIntentTransition } from "@/lib/meeting/manual-correction-transition";
 import { buildProjectMainlinePhaseAdmission } from "@/lib/meeting/project-mainline-phase-admission";
-import { getProjectSelectionCapability } from "@/lib/meeting/project-binding";
+import { getProjectSelectionCapability, isProjectIdentityPending } from "@/lib/meeting/project-binding";
 import { formatMemoryProjectDirectoryForTrace } from "@/lib/memory/retrieval";
 import type { ProjectChoicePresentation, ProjectChoiceSelection } from "@/lib/meeting/focus-window";
 import type { ExplicitProjectSelection } from "@/lib/meeting/types";
@@ -14057,11 +14057,7 @@ export function useMeetingAssistant() {
       projectAnchor:
         settledExecutionPlan?.memoryPolicy.projectAnchor ??
         advisorProjectAnchor,
-      explicitProjectSelection:
-        options.explicitProjectSelection ?? (options.clarifyingFeedback?.answer === "option"
-          ? options.clarifyingFeedback.answerValue ??
-            options.clarifyingFeedback.answerLabel
-          : undefined),
+      explicitProjectSelection: options.explicitProjectSelection,
       explicitSelectionSource: "user-selection",
       currentSourceText: advisorCurrentQuestionEvidenceText,
       sourceTurnIds:
@@ -15190,11 +15186,10 @@ export function useMeetingAssistant() {
         question:
           parsedMeetingAnswer.sections.clarifyingQuestion ?? "",
         options: parsedMeetingAnswer.sections.clarifyingOptions,
-        projectBindingNeedsSelection:
-          projectBindingDecision.action === "needs-selection",
-        projectBindingCandidates: projectBindingDecision.candidates,
+        projectIdentityPending: isProjectIdentityPending(projectBindingDecision),
       });
       const clarifyingOptionMetadata = {
+        clarifyingProjectIdentityPending: isProjectIdentityPending(projectBindingDecision),
         clarifyingQuestionPresent: Boolean(
           parsedMeetingAnswer.sections.clarifyingQuestion?.trim()
         ),
@@ -15923,6 +15918,9 @@ export function useMeetingAssistant() {
           generationAuthorizedArtifacts.includes("whiteboard"),
         factGuardrailNotice:
           factAnchorOutputDecision.visibleNotice,
+        projectIdentityPending: artifactPublicationBase
+          ? artifactPublicationBase.suggestion.projectIdentityPending
+          : isProjectIdentityPending(projectBindingDecision),
         transientPersonalStatus: transientPersonalStatusDecision
           ? {
               domain: transientPersonalStatusDecision.domain,
@@ -29834,9 +29832,18 @@ export function useMeetingAssistant() {
               auditDurationMs: screenFactAnchorOutputAuditDurationMs,
             }
           );
+        const screenClarifyingDisplay = buildClarifyingOptionDisplayModel({
+          question: parsedScreenMeetingAnswer.sections.clarifyingQuestion ?? "",
+          options: parsedScreenMeetingAnswer.sections.clarifyingOptions,
+          projectIdentityPending: isProjectIdentityPending(screenProjectBindingDecision),
+        });
         traceStoreRef.current.updateMetadata(
           trace.id,
-          screenFactAnchorOutputMetadata
+          { ...screenFactAnchorOutputMetadata,
+            clarifyingProjectIdentityPending: isProjectIdentityPending(screenProjectBindingDecision),
+            clarifyingOptionSource: screenClarifyingDisplay.source,
+            clarifyingOptionCount: screenClarifyingDisplay.options.length,
+            clarifyingBooleanFallbackUsed: screenClarifyingDisplay.showBooleanFallback },
         );
         const screenFactAnchorOutputStepId =
           traceStoreRef.current.startStep(
@@ -30422,6 +30429,7 @@ export function useMeetingAssistant() {
                 screenPresentationAuthorizedArtifacts.includes("whiteboard"),
               factGuardrailNotice:
                 screenFactAnchorOutputDecision.visibleNotice,
+              projectIdentityPending: isProjectIdentityPending(screenProjectBindingDecision),
               presentationArtifactAuthority: "manual-screen",
             }
           : {
@@ -34491,6 +34499,14 @@ export function useMeetingAssistant() {
     ): Promise<ClarifyingQuestionInteractionOutcome> => {
       const requestId = createMeetingId("clarifying_request");
       const displayed = manualAdviseDisplayRef.current.capture(interaction?.displayTarget);
+      if (!interaction?.projectChoice && displayed?.stable?.suggestion.projectIdentityPending &&
+          (answer === "option" || answer === "yes" || answer === "no")) {
+        sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+          stage: "project-generated-choice-rejected", requestId,
+          displayTarget: displayed.target, reason: "project-choice-requires-trusted-directory",
+        });
+        return { requestId, state: "failed", reason: "project-choice-requires-trusted-directory" };
+      }
       if (!interaction?.projectChoice && (interaction?.displayTarget || manualAdviseDisplayRef.current.locked) &&
           (!displayed?.stable || displayed.stable.suggestion.id !== stableAnswerRevisionRef.current?.suggestion.id)) {
         return { requestId, state: "stale", reason: "display-target-changed" };

@@ -375,6 +375,11 @@ export function getProjectSelectionCapability({
   return { available: true, reason: decision.reason, candidates: decision.candidates };
 }
 
+export function isProjectIdentityPending(decision: ProjectBindingDecision | undefined) {
+  return Boolean(decision && !decision.binding &&
+    (decision.action === "needs-selection" || decision.action === "invalidate"));
+}
+
 export function formatProjectBindingDecisionForPrompt(
   decision: ProjectBindingDecision | undefined
 ) {
@@ -405,6 +410,9 @@ export function formatProjectBindingDecisionForPrompt(
     decision.action === "invalidate"
       ? "Invalidation rule: do not use the previous project binding or its fact evidence until a compatible project is selected."
       : undefined,
+    isProjectIdentityPending(decision)
+      ? "Project choice UI rule: project identity is selected through the application's trusted project menu, not model-generated Clarifying options. Output 'Clarifying options: -' while project identity is unresolved. If Eligible choices is none, ask for the actual project or missing material; do not invent a project, technical category or preference menu. Keep useful analysis and necessary clarification prose available."
+      : "Clarifying options may clarify technical requirements or scope; they must not act as a project identity menu. Project reselection uses the application's trusted menu.",
     decision.binding
       ? "Continuity rule: use this project for all first-person facts in the parent task. Other project memory may not replace it; global guidance remains non-evidentiary assistance."
       : undefined,

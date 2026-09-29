@@ -53,12 +53,20 @@ export function buildClarifyingOptionDisplayModel({
   options,
   projectBindingCandidates,
   projectBindingNeedsSelection = false,
+  projectIdentityPending = false,
 }: {
   question: string;
   options?: ClarifyingQuestionOption[];
   projectBindingCandidates?: ProjectBindingClarifyingCandidate[];
   projectBindingNeedsSelection?: boolean;
+  projectIdentityPending?: boolean;
 }): ClarifyingOptionDisplayModel {
+  if (projectIdentityPending) {
+    return {
+      options: [], source: "none", showBooleanFallback: false,
+      misleadingBooleanFallbackPrevented: Boolean(question.trim()),
+    };
+  }
   const structuredOptions = normalizeClarifyingOptions(options ?? []);
   if (structuredOptions.length) {
     return buildDisplayModel(structuredOptions, "structured-answer");
