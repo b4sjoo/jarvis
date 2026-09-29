@@ -354,7 +354,7 @@ export function formatProjectDeepDivePhaseContract(
     "  2. My concrete responsibilities: personal implementation work, ownership, and team boundaries.",
     "  3. Architecture and tradeoffs: main data/request path, key decisions, alternatives, and reasons for the choices.",
     "  4. Retrospective and redesign: supported results, limitations, and what I would change now, clearly labelled as future proposals.",
-    "- The 3-5 minute target replaces the generic three-short-bullets, one-to-three-sentences, compact-answer, and project-intro time limits only for this Summary. It is a content target, not a timer or word quota; a new question may interrupt it immediately.",
+    "- The 3-5 minute target replaces the generic three-short-bullets, one-to-three-sentences, compact-answer, and project-intro time limits only for this Summary. It is a content target, not a timer or word quota; a new question may interrupt it immediately. Evidence sufficiency takes priority: give a shorter grounded answer or necessary clarification when facts are sparse; never substitute a hypothetical project for requested actual experience.",
     "- Keep the long body in Answer. Chinese thinking may provide brief navigation; do not duplicate the Summary there or create new top-level parser fields, a separate Summary artifact, Code, or Whiteboard.",
   ].join("\n");
 }

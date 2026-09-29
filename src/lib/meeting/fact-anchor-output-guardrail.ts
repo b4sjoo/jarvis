@@ -20,6 +20,7 @@ export interface FactAnchorOutputDecision {
   commitSource: FactAnchorOutputCommitSource;
   reason:
     | "fact-anchor-not-required"
+    | "citation-contract-checked"
     | "matching-authority-contract"
     | "missing-answer-disposition"
     | "missing-supporting-anchor"
@@ -39,9 +40,9 @@ export interface FactAnchorOutputDecision {
   sanitizedClaimCount: number;
   preservedClaimCount: number;
   sanitizedSections: string[];
-  bilingualClaimSetCoherent: boolean;
-  hypotheticalOnlyAfterSanitize: boolean;
-  boundaryClaimPreservedCount: number;
+  bilingualClaimSetCoherent?: boolean;
+  hypotheticalOnlyAfterSanitize?: boolean;
+  boundaryClaimPreservedCount?: number;
   visibleNotice?: FactGuardrailVisibleNotice;
   shadowWouldCommitSource?: Exclude<
     FactAnchorOutputCommitSource,
@@ -83,9 +84,11 @@ export function projectFactAnchorStreamingPartial(input: {
   }
 
   const artifactBoundary = findArtifactSectionBoundary(input.content);
+  const metadataBoundary = /(?:^|\n)(?:Answer disposition|Supporting anchor IDs)\s*:/iu.exec(input.content)?.index ?? -1;
+  const boundaries = [artifactBoundary, metadataBoundary].filter((index) => index >= 0);
   const answerOnlyContent =
-    artifactBoundary >= 0
-      ? input.content.slice(0, artifactBoundary)
+    boundaries.length
+      ? input.content.slice(0, Math.min(...boundaries))
       : input.content;
   const completedBoundary = findCompletedSentenceBoundary(answerOnlyContent);
   if (completedBoundary <= 0) {
@@ -99,11 +102,12 @@ export function projectFactAnchorStreamingPartial(input: {
   }
 
   const completedContent = answerOnlyContent.slice(0, completedBoundary);
-  const supportSpans = collectSelectedSupportSpans(input.decision!);
-  const sanitized = sanitizeCompletedStreamingText(
-    completedContent,
-    supportSpans
-  );
+  const sanitized = input.decision!.requiredFor === "personal-logistics"
+    ? sanitizeCompletedStreamingText(
+        completedContent,
+        collectSelectedSupportSpans(input.decision!)
+      )
+    : { text: completedContent, removed: 0 };
   return {
     visibleContent: sanitized.text,
     bufferingEnabled: true,
@@ -170,6 +174,29 @@ function enforceFactAnchorOutputInEnforcementMode({
     return {
       ...authorizeOriginal(parsedAnswer, "generation-contract-deferred"),
       unsupportedAnchorIds,
+    };
+  }
+
+  // Narrative truth belongs to the evidence-constrained Advisor, not token overlap.
+  if (decision.requiredFor !== "personal-logistics") {
+    const original = authorizeOriginal(parsedAnswer, "citation-contract-checked");
+    if (!unsupportedAnchorIds.length) return original;
+    const effectiveAnswer = {
+      ...parsedAnswer,
+      supportingAnchorIds: parsedAnswer.supportingAnchorIds.filter(
+        (id) => decision.supportedAnchorIds.includes(id)
+      ),
+    };
+    const effectiveContent = serializeMeetingAnswer(effectiveAnswer);
+    return {
+      ...original,
+      modelOutputAuthorized: false,
+      commitSource: "sanitized-model-output",
+      reason: "unsupported-anchor-id",
+      effectiveContent,
+      effectiveAnswer: { ...effectiveAnswer, rawContent: effectiveContent },
+      unsupportedAnchorIds,
+      sanitizedSections: ["supportingAnchorIds"],
     };
   }
 
@@ -284,7 +311,8 @@ export function formatFactAnchorOutputDecisionForTrace(
     factAnchorReportedIds: decision.reportedAnchorIds,
     factAnchorUnsupportedIds: decision.unsupportedAnchorIds,
     factAnchorClaimSanitizationApplied:
-      decision.commitSource === "sanitized-model-output",
+      decision.commitSource === "sanitized-model-output" &&
+      (decision.sanitizedClaimCount > 0 || Boolean(decision.fallbackMode)),
     factAnchorSanitizedClaimCount: decision.sanitizedClaimCount,
     factAnchorPreservedClaimCount: decision.preservedClaimCount,
     factAnchorSanitizedSections: decision.sanitizedSections,
@@ -304,15 +332,18 @@ export function formatFactAnchorOutputDecisionForTrace(
       false,
     factAnchorShadowWouldCommitSource:
       decision.shadowWouldCommitSource,
-    unsupportedFirstPersonHardClaimCount:
-      decision.sanitizedClaimCount,
-    unsupportedAssertiveFactClaimCount:
-      decision.sanitizedClaimCount,
-    sanitizedHardClaimCount: decision.sanitizedClaimCount,
+    // Action counts are not independent semantic labels or factual accuracy.
+    factAnchorSemanticVerificationPerformed: false,
+    factAnchorOutputObservationOnly: decision.reason === "shadow-observed",
+    factAnchorRemovedCitationCount:
+      decision.commitSource === "sanitized-model-output"
+        ? decision.unsupportedAnchorIds.length
+        : 0,
+    factAnchorLegacyLexicalRemovedUnitCount: decision.sanitizedClaimCount,
     boundedSynthesisCommitCount:
-      decision.commitSource === "sanitized-model-output" ? 1 : 0,
+      decision.commitSource === "sanitized-model-output" && decision.fallbackMode ? 1 : 0,
     wholeAnswerReplacementCount:
-      0,
+      decision.commitSource === "sanitized-model-output" && decision.fallbackMode ? 1 : 0,
     factGuardrailNoticeShown: Boolean(decision.visibleNotice),
     factGuardrailCommitMode: decision.fallbackMode,
     factGuardrailFallbackReason: decision.visibleNotice
@@ -344,9 +375,6 @@ function authorizeOriginal(
     sanitizedClaimCount: 0,
     preservedClaimCount: 0,
     sanitizedSections: [],
-    bilingualClaimSetCoherent: true,
-    hypotheticalOnlyAfterSanitize: false,
-    boundaryClaimPreservedCount: 0,
   };
 }
 

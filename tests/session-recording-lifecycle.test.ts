@@ -27,6 +27,8 @@ import {
 } from "../src/lib/meeting/runtime-regression.js";
 import { createManualRuntimeActionEvent } from "../src/lib/meeting/manual-runtime-action.js";
 import { parseMeetingAnswer } from "../src/lib/meeting/meeting-answer.js";
+import { buildFactAnchorDecision } from "../src/lib/meeting/fact-anchor-guardrail.js";
+import { enforceFactAnchorOutput, formatFactAnchorOutputDecisionForTrace } from "../src/lib/meeting/fact-anchor-output-guardrail.js";
 import type {
   PreparationArtifactEvaluation,
   PreparationArtifactUseReceipt,
@@ -3602,6 +3604,40 @@ test("OP6: manual aggregate export surfaces write failure without sealing the re
   await assert.rejects(manager.flushAggregates(), /checkpoint unavailable/);
   assert.equal(manager.getState().lifecycle, "active");
   await manager.stop();
+});
+
+test("FR5: recording retains raw output and citation action without inventing semantic truth", async () => {
+  const native = new ControlledRecordingInvoke();
+  const manager = new SessionRecordingManager(undefined, native.invoke);
+  await manager.start(START_OPTIONS);
+  const traceId = "fact-output-contract";
+  const decision = buildFactAnchorDecision({
+    questionType: "project-deep-dive", questionText: "Explain your project.",
+    personalEvidenceGuardrailMode: "enforcement",
+  });
+  const raw = "Answer: I improved latency by 40%.\nAnswer disposition: factual-with-anchor\nSupporting anchor IDs: wrong-project";
+  const output = enforceFactAnchorOutput({ decision, parsedAnswer: parseMeetingAnswer(raw) });
+  const metadata = formatFactAnchorOutputDecisionForTrace(output);
+  manager.recordModelInput({ traceId, label: "advisor input", value: "No memory context was injected." });
+  manager.recordModelOutput({ traceId, label: "advisor raw output", value: raw });
+  manager.recordFactAnchorDecision(traceId, { source: "advisor-output", ...metadata });
+  manager.recordTrace(buildCompletedTrace(traceId, Date.now(), metadata), "manual");
+  await manager.stop();
+  const rawWrite = native.calls.find(call =>
+    stringArg(call, "relativePath").includes("/outputs/") && stringArg(call, "payload") === raw);
+  assert.ok(rawWrite);
+  const event = native.calls.filter(call => stringArg(call, "relativePath") === "timeline.jsonl")
+    .flatMap(call => stringArg(call, "payload").trim().split("\n").map(line => JSON.parse(line)))
+    .find(row => row.kind === "fact-anchor-decision");
+  assert.ok(event);
+  const serialized = JSON.stringify(event);
+  assert.match(serialized, /"factAnchorRemovedCitationCount":1/);
+  assert.match(serialized, /"factAnchorSemanticVerificationPerformed":false/);
+  assert.match(serialized, /"wholeAnswerReplacementCount":0/);
+  assert.doesNotMatch(serialized, /unsupportedFirstPersonHardClaimCount|unsupportedAssertiveFactClaimCount/);
+  assert.match(output.effectiveAnswer.sections.answer!, /40%/);
+  assert.deepEqual(output.effectiveAnswer.supportingAnchorIds, []);
+  // This is serialization proof. The unsupported 40% remains a semantic failure.
 });
 
 const START_OPTIONS = {
