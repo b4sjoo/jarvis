@@ -95,7 +95,8 @@ test("prompt projects only bounded semantic fields and reuses payload metadata",
   assert.equal(model.semanticPayloadDigest, runtime.hashRuntimeSemanticPayload(payload));
   assert.equal(model.modelVisibleChars, model.systemPrompt.length + model.userMessage.length);
   assert.doesNotMatch(model.userMessage, /secret-|private KMB|opaque|currentLQU/);
-  for (const rule of ["affirmative", "comparison", "negation", "conditional", "brief project name", "single available candidate", "not A, discuss B", "non-unique", "Do not output confidence"]) {
+  for (const rule of ["affirmative", "comparison", "negation", "conditional", "brief project name", "single available candidate", "not A, discuss B", "non-unique", "Do not output confidence",
+    "Return null for elimination alone", "explicit commitment to discuss the remaining one", "final STT utterance can still be semantically incomplete", "even when only one candidate seems possible"]) {
     assert.ok(model.systemPrompt.includes(rule), rule);
   }
 });

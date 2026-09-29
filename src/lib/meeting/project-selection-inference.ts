@@ -11,7 +11,7 @@ import { parseRuntimeJsonObject } from "./runtime-json-object.js";
 
 export const PROJECT_SELECTION_INFERENCE_SCHEMA_VERSION = 1;
 export const PROJECT_SELECTION_INFERENCE_PROMPT_VERSION =
-  "project-selection-inference-v1";
+  "project-selection-inference-v2";
 export const PROJECT_SELECTION_INFERENCE_MAX_OUTPUT_CHARS = 4_096;
 export const PROJECT_SELECTION_INFERENCE_INPUT_LIMITS = Object.freeze({
   currentQuestionChars: 4_000,
@@ -90,9 +90,10 @@ export function buildProjectSelectionInferencePrompts(
       "Select exactly one existing candidate only when the current Me utterance establishes it as the subject to discuss next.",
       "Mere mention, experience statements, comparison, negation, hypothetical or conditional preferences are not affirmative choices.",
       "A brief project name can be a choice in this pending selection context. A single available candidate alone is not a choice.",
+      "Rejecting candidates only excludes them; it does not affirmatively select a remaining candidate, even when all other candidates are rejected. Return null for elimination alone. An explicit commitment to discuss the remaining one can select it when that reference is uniquely resolvable from the bounded context.",
       "For 'not A, discuss B', select B. For 'I worked on A and B', or 'if we discuss reliability, I might choose A', return null.",
       "Use the question and bounded selection context only to resolve the current utterance, including references such as 'the second one'.",
-      "If a reference, shared alias, incomplete STT fragment or multiple choices leave the target non-unique, return null. Do not guess or complete missing speech.",
+      "A final STT utterance can still be semantically incomplete. Return null when the commitment or its target is unfinished, even when only one candidate seems possible; do not complete missing speech. If a reference, shared alias or multiple choices leave the target non-unique, return null.",
       "Return JSON only with exactly schemaVersion, projectId and evidenceSpans. schemaVersion must be 1.",
       "For a choice, projectId must copy exactly one candidate projectKey and evidenceSpans must contain 1 to 4 distinct verbatim substrings of the current meText, each at most 512 characters, that support the choice.",
       "For no definite choice, return {\"schemaVersion\":1,\"projectId\":null,\"evidenceSpans\":[]}.",
