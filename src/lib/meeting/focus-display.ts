@@ -109,6 +109,8 @@ const readDisplay = object({
   statusLabel: string,
   error: (value) => value === null ? null : string(value),
   factGuardrailNotice: optional(object({ kind: string, message: string })),
+  factRiskReview: optional(object({ answerKey: string, status: string, reason: text,
+    flags: array(object({ section: string, quote: string, reason: string, sourceIds: array(string) })) })),
   phaseOutputNotice: text,
   artifactReuseNotice: text,
   isBusy: boolean,

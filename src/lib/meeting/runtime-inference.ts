@@ -9,6 +9,7 @@ export type RuntimeInferenceOperationKind =
   | "question-type-adjudication"
   | "response-opportunity-inference"
   | "project-selection-inference"
+  | "fact-risk-review"
   | "meeting-metadata-inference"
   | "whiteboard-syntax-repair"
   | "task-relation-adjudication"
@@ -140,6 +141,10 @@ const DEFINITIONS: Record<
     maxOutputTokens: 512,
     quiescenceMs: 0,
     maxStartsPerBudgetSlot: 1,
+  },
+  "fact-risk-review": {
+    workloadClass: "runtime", operationKind: "fact-risk-review", providerTier: "intelligent",
+    lane: "background", timeoutMs: 10_000, maxOutputTokens: 2048, quiescenceMs: 0, maxStartsPerBudgetSlot: 1,
   },
   "whiteboard-syntax-repair": {
     workloadClass: "runtime",

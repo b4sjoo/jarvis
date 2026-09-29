@@ -118,6 +118,7 @@ function harness() {
       if (ts.isPropertyAccessExpression(child) && child.name.text === "current" && ts.isIdentifier(child.expression)) {
         globals[child.expression.text] ??= { current: Object.assign(new Map(), {
           cancelAll: () => cancellations.push(child.expression.getText(parsed)),
+          cancel: () => cancellations.push(child.expression.getText(parsed)),
           reset: () => cancellations.push(child.expression.getText(parsed)),
         }) };
       }

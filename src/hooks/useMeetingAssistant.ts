@@ -133,6 +133,7 @@ import {
 import { prepareManualCorrectionIntentTransition } from "@/lib/meeting/manual-correction-transition";
 import { buildProjectMainlinePhaseAdmission } from "@/lib/meeting/project-mainline-phase-admission";
 import { getProjectSelectionCapability, isProjectIdentityPending } from "@/lib/meeting/project-binding";
+import { captureFactRiskReviewInput, FactRiskReviewRuntime, requestFactRiskReview, buildFactRiskReviewPrompts } from "@/lib/meeting/fact-risk-review";
 import { formatMemoryProjectDirectoryForTrace } from "@/lib/memory/retrieval";
 import type { ProjectChoicePresentation, ProjectChoiceSelection } from "@/lib/meeting/focus-window";
 import type { ExplicitProjectSelection } from "@/lib/meeting/types";
@@ -3486,6 +3487,23 @@ export function useMeetingAssistant() {
     );
   }
   const projectSelectionIngressRef = useRef<((turn: TranscriptTurn, traceId: string) => void) | undefined>(undefined);
+  const [, setFactRiskReviewRevision] = useState(0);
+  const factRiskReviewRuntimeRef = useRef<FactRiskReviewRuntime | null>(null);
+  if (!factRiskReviewRuntimeRef.current) {
+    factRiskReviewRuntimeRef.current = new FactRiskReviewRuntime(runtimeInferenceProviderAdmissionRef.current,
+      () => setFactRiskReviewRevision(revision => revision + 1),
+      event => {
+        const traceId = typeof event.traceId === "string" ? event.traceId : undefined;
+        sessionRecordingManagerRef.current?.recordCaptureLifecycle({ ...event, stage: `fact-risk-review:${event.stage}` });
+        if (traceId) {
+          traceStoreRef.current.updateMetadata(traceId, { factRiskReview: event });
+          const trace = traceStoreRef.current.getTrace(traceId);
+          if (trace && trace.status !== "running") {
+            sessionRecordingManagerRef.current?.refreshRecordedTrace(trace, getAutoExportTrigger(trace));
+          }
+        }
+      });
+  }
   const whiteboardSyntaxRepairRuntimeRef = useRef<
     RuntimeInferenceOperationRuntime<
       WhiteboardSyntaxRepairJob,
@@ -5750,6 +5768,7 @@ export function useMeetingAssistant() {
     evidenceRequirementRuntimeRef.current?.cancelAll("superseded");
     sourceLinkageAdjudicationRuntimeRef.current?.cancelAll("superseded");
     projectSelectionInferenceRuntimeRef.current?.cancelAll("superseded");
+    factRiskReviewRuntimeRef.current?.cancel();
     whiteboardSyntaxRepairRuntimeRef.current?.cancelAll("superseded");
     whiteboardSyntaxRepairAttemptKeysRef.current.clear();
     taskBoundaryCandidateRef.current = undefined;
@@ -15918,6 +15937,10 @@ export function useMeetingAssistant() {
           generationAuthorizedArtifacts.includes("whiteboard"),
         factGuardrailNotice:
           factAnchorOutputDecision.visibleNotice,
+        factRiskReviewInput: artifactPublicationBase
+          ? artifactPublicationBase.suggestion.factRiskReviewInput
+          : captureFactRiskReviewInput({ decision: factAnchorDecision, question: advisorCurrentQuestionEvidenceText,
+              evidence: memoryContext?.contextText, sourceIds: memoryContext?.entries.map(item => item.entry.id) }),
         projectIdentityPending: artifactPublicationBase
           ? artifactPublicationBase.suggestion.projectIdentityPending
           : isProjectIdentityPending(projectBindingDecision),
@@ -30429,6 +30452,9 @@ export function useMeetingAssistant() {
                 screenPresentationAuthorizedArtifacts.includes("whiteboard"),
               factGuardrailNotice:
                 screenFactAnchorOutputDecision.visibleNotice,
+              factRiskReviewInput: captureFactRiskReviewInput({ decision: screenFactAnchorDecision,
+                question: screenPrimaryAskEvidenceText, evidence: memoryContext?.contextText,
+                sourceIds: memoryContext?.entries.map(item => item.entry.id) }),
               projectIdentityPending: isProjectIdentityPending(screenProjectBindingDecision),
               presentationArtifactAuthority: "manual-screen",
             }
@@ -37266,6 +37292,7 @@ export function useMeetingAssistant() {
       evidenceRequirementRuntimeRef.current?.cancelAll("disposed");
       sourceLinkageAdjudicationRuntimeRef.current?.cancelAll("disposed");
       projectSelectionInferenceRuntimeRef.current?.cancelAll("disposed");
+      factRiskReviewRuntimeRef.current?.clear();
       whiteboardSyntaxRepairRuntimeRef.current?.cancelAll("disposed");
       const regression = runtimeRegressionRunRef.current;
       if (regression) {
@@ -37335,6 +37362,7 @@ export function useMeetingAssistant() {
       evidenceRequirementRuntimeRef.current?.cancelAll("disposed");
       sourceLinkageAdjudicationRuntimeRef.current?.cancelAll("disposed");
       projectSelectionInferenceRuntimeRef.current?.cancelAll("disposed");
+      factRiskReviewRuntimeRef.current?.clear();
       whiteboardSyntaxRepairRuntimeRef.current?.cancelAll("disposed");
       void semanticTaxonomyRuntimeRef.current?.dispose("meeting-hook-unmounted");
     };
@@ -37412,7 +37440,50 @@ export function useMeetingAssistant() {
       stage: "advise-display-applied", surface, displayTarget: target,
       manualAdvisePinActive: locked ?? manualAdviseDisplayRef.current.locked, appliedAt,
     });
-  }, [refreshRecordedCompletedTrace]);
+    const displayed = manualAdviseDisplayRef.current.capture(target);
+    if (!shutdownRequestedRef.current && displayed?.stable && !displayed.streaming &&
+        displayed.stable.sessionId === contextManagerRef.current.getState().sessionId) {
+      factRiskReviewRuntimeRef.current?.retain([stableAnswerRevisionRef.current, manualAdviseDisplayRef.current.selectedStable]);
+      factRiskReviewRuntimeRef.current?.start(displayed.stable, async input => {
+        const route = resolveRuntimeInferenceModelRouteFromSnapshot({ snapshot: meetingModelProviderSnapshotRef.current,
+          operationKind: "fact-risk-review", reason: "visible-answer-fact-review" });
+        if (!route.provider) throw new Error("fact-risk-provider-unavailable");
+        const prompts = buildFactRiskReviewPrompts(input.context, input.answer);
+        const traceId = displayed.stable!.suggestion.sourceTraceId;
+        const metadata = { answerKey: input.answerKey, surface, remainingMs: input.remainingMs,
+          mode: state.settings.personalEvidenceGuardrailMode, ...formatRuntimeInferenceModelRouteForTrace(route) };
+        if (traceId) {
+          traceStoreRef.current.recordInput(traceId, "fact risk review input", formatTraceModelInput(prompts.systemPrompt, prompts.userMessage), metadata);
+          sessionRecordingManagerRef.current?.recordModelInput({ traceId, label: "fact risk review input",
+            value: formatTraceModelInput(prompts.systemPrompt, prompts.userMessage), metadata });
+        }
+        const result = await requestFactRiskReview({ ...input, provider: route.provider, selectedProvider: route.selectedProvider,
+          executionIdentity: { requestId: `fact-risk:${input.answerKey}`, executionPlanId: `fact-risk:${input.answerKey}`,
+            sessionId: displayed.stable!.sessionId!, runtimeEpoch: displayed.stable!.runtimeEpoch ?? runtimeEpochRef.current } });
+        if (traceId) {
+          traceStoreRef.current.recordOutput(traceId, "fact risk review output", result.response.rawOutput,
+            { ...metadata, providerDisposition: result.response.providerDisposition, parsed: result.parsed.ok });
+          sessionRecordingManagerRef.current?.recordModelOutput({ traceId, label: "fact risk review output",
+            value: result.response.rawOutput, metadata: { ...metadata, providerDisposition: result.response.providerDisposition, parsed: result.parsed.ok } });
+          refreshRecordedCompletedTrace(traceId);
+        }
+        return result.parsed;
+      });
+    }
+    const review = displayed?.stable ? factRiskReviewRuntimeRef.current?.read(displayed.stable) : undefined;
+    if (review?.status === "completed" && state.settings.personalEvidenceGuardrailMode === "enforcement" && target.traceId) {
+      const trace = traceStoreRef.current.getTraces().find(item => item.id === target.traceId);
+      if (trace?.metadata?.factRiskReviewDisplayAnswerKey !== review.answerKey) {
+        traceStoreRef.current.updateMetadata(target.traceId, { factRiskReviewDisplayAnswerKey: review.answerKey,
+          factRiskReviewDisplaySurface: surface, factRiskReviewDisplayFlagCount: review.flags.length });
+        refreshRecordedCompletedTrace(target.traceId);
+      }
+    }
+  }, [refreshRecordedCompletedTrace, state.settings.personalEvidenceGuardrailMode]);
+
+  useEffect(() => {
+    factRiskReviewRuntimeRef.current?.retain([stableAnswerRevisionRef.current, manualAdviseDisplayRef.current.selectedStable]);
+  });
 
   const toggleAdvisePin = useCallback((invocation: ManualRuntimeActionInvocation = {}) => {
     const actionId = invocation.actionId ?? createMeetingId("manual_action");
@@ -37459,6 +37530,8 @@ export function useMeetingAssistant() {
     ...state,
     selectAdviseDisplay,
     recordAdviseDisplayApplied,
+    readFactRiskReview: (stable: StableAnswerRevision | null | undefined) => state.settings.personalEvidenceGuardrailMode === "enforcement"
+      ? factRiskReviewRuntimeRef.current?.read(stable) : undefined,
     toggleAdvisePin,
     meetingSessionId: presentationSessionId,
     currentQuestionForEvaluation,

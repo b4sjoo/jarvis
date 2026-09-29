@@ -73,6 +73,7 @@ export async function browserBundle(additionalPlugins = []) {
     import {createRoot} from 'react-dom/client';
     import {useMeetingAssistant} from './src/hooks/useMeetingAssistant';
     import {ProjectChoiceControl} from './src/pages/app/components/meeting/project-choice-control';
+    import {FactRiskNotice} from './src/pages/app/components/meeting/fact-risk-notice';
     import {buildMeetingAnswerDisplayModel} from './src/lib/meeting/meeting-answer-display';
     import {buildClarifyingOptionDisplayModel} from './src/lib/meeting/clarifying-options';
     import {createMeetingFocusPublisher,createMeetingFocusConsumer} from './src/lib/meeting/focus-window-protocol';
@@ -93,6 +94,7 @@ export async function browserBundle(additionalPlugins = []) {
       const sendFocusAction=action=>consumer.current.dispatch(action);
       if(!snapshot)return null;
       return <><pre data-answer>{snapshot.sections.primaryAnswer}</pre>
+        <FactRiskNotice result={snapshot.factRiskReview}/>
         <ProjectChoiceControl presentation={snapshot.projectChoice} selectionState={snapshot.clarifyingSelectionState}
           selectedLabel={snapshot.selectedClarifyingAnswerLabel} onSelect={${focusChoiceSelect}}/></>;
     }
@@ -100,6 +102,7 @@ export async function browserBundle(additionalPlugins = []) {
       const meeting=useMeetingAssistant();
       const adviseDisplay=meeting.selectAdviseDisplay(buildMeetingAnswerDisplayModel({content:meeting.partialSuggestion}));
       const projectChoice=meeting.readProjectChoicePresentation(adviseDisplay.target);
+      const factRiskReview=adviseDisplay.streaming?undefined:meeting.readFactRiskReview(adviseDisplay.stable);
       const [selection,setClarifyingSelection]=useState(null);
       const [,setDismissedQuestionKey]=useState(null);
       const clarifyingQuestion=adviseDisplay.sections.clarifyingQuestion;
@@ -112,6 +115,8 @@ export async function browserBundle(additionalPlugins = []) {
       const clarifyingOptionDisplay=${initializer("clarifyingOptionDisplay")};
       const clarifyingOptions=clarifyingOptionDisplay.options;
       const displayTargetKey=JSON.stringify(adviseDisplay.target);
+      useEffect(()=>{if(window.__s63.surface==='normal')meeting.recordAdviseDisplayApplied(adviseDisplay.target,'normal-mode');},
+        [displayTargetKey,adviseDisplay.locked,factRiskReview?.answerKey,factRiskReview?.status,meeting.recordAdviseDisplayApplied]);
       const handleClarifyingAnswer=${initializer("handleClarifyingAnswer")};
       const handleProjectChoice=${initializer("handleProjectChoice")};
       const focusActionHandlerRef=useRef(null);
@@ -126,7 +131,7 @@ export async function browserBundle(additionalPlugins = []) {
           if(event.event==='applied'&&event.displayTarget)meetingRef.current.recordAdviseDisplayApplied(event.displayTarget,'focus-mode',event.adviseLocked);},
       });
       useEffect(()=>{void focusPublisherRef.current.start();return()=>focusPublisherRef.current.dispose();},[]);
-      const payload={...EMPTY_MEETING_FOCUS_SNAPSHOT,active:true,
+      const payload={...EMPTY_MEETING_FOCUS_SNAPSHOT,active:true,factRiskReview,
         sections:{...adviseDisplay.sections,clarifyingOptions},showClarifyingBooleanFallback:clarifyingOptionDisplay.showBooleanFallback,
         advisePin:{target:adviseDisplay.target,locked:adviseDisplay.locked,backgroundUpdated:adviseDisplay.backgroundUpdated},
         projectChoice,selectedClarifyingAnswerLabel:activeClarifyingSelection?.label,clarifyingSelectionState:activeClarifyingSelection?.status,
@@ -135,10 +140,11 @@ export async function browserBundle(additionalPlugins = []) {
       const payloadKey=JSON.stringify(payload);
       useEffect(()=>{if(window.__s63.surface==='focus')void focusPublisherRef.current.publish(payload);},[payloadKey]);
       window.__s63.meeting=meeting;
-      window.__s63.observed={selection,activeClarifyingSelection,projectChoice,adviseDisplay,clarifyingOptionDisplay};
+      window.__s63.observed={selection,activeClarifyingSelection,projectChoice,adviseDisplay,clarifyingOptionDisplay,factRiskReview};
       useEffect(()=>{if(selection)window.__s63.selections.push(structuredClone(selection));},[selection]);
       if(window.__s63.surface==='focus')return <FocusEntry/>;
       return <><pre data-answer>{adviseDisplay.sections.primaryAnswer}</pre>
+        <FactRiskNotice result={factRiskReview}/>
         <ProjectChoiceControl presentation={projectChoice} selectionState={activeClarifyingSelection?.status}
           selectedLabel={activeClarifyingSelection?.label} onSelect={handleProjectChoice}/></>;
     }
@@ -186,7 +192,7 @@ export async function openProjectSelectionBrowserHost(t,bundle,browser,execution
       await route.abort();
     });
     await page.goto("https://s63.fixture/");
-    await page.evaluate(({memory,answers,question,nextQuestion,surface,source}) => {
+    await page.evaluate(({memory,answers,question,nextQuestion,surface,source,holdFactReview,guardrailMode}) => {
       const listeners = new Map();
       const transports = new Map();
       const writes = new Map();
@@ -200,7 +206,7 @@ export async function openProjectSelectionBrowserHost(t,bundle,browser,execution
       const pixels=canvas.getContext('2d');pixels.fillStyle='white';pixels.fillRect(0,0,1000,300);
       pixels.fillStyle='black';pixels.font='22px sans-serif';pixels.fillText(question,25,120);
       const imageBase64=canvas.toDataURL('image/png').split(',')[1];
-      window.__s63 = { calls, unexpected, memory, usage: [], writes, binaryWrites, requests: [],surface,source,selections:[],
+      window.__s63 = { calls, unexpected, memory, answers, holdFactReview, usage: [], writes, binaryWrites, requests: [],surface,source,selections:[],
         protocolErrors:[],protocolEvents:[],transportMessages:[],transportDeliveries:[],imageBase64,
         providerWaiters:[],providerBlocked:0,
         storageWaiters:[],storageBlocked:0,
@@ -269,7 +275,8 @@ export async function openProjectSelectionBrowserHost(t,bundle,browser,execution
           unexpected.push(name); throw new Error('Uncontrolled native command: '+name);
         },
       };
-      localStorage.setItem('meeting_assistant_settings',JSON.stringify({debugMode:true,microphoneContextEnabled:false,semanticTaxonomyMode:'off',useMemory:true}));
+      localStorage.setItem('meeting_assistant_settings',JSON.stringify({debugMode:true,microphoneContextEnabled:false,semanticTaxonomyMode:'off',useMemory:true,
+        personalEvidenceGuardrailMode:guardrailMode??'enforcement'}));
       window.Worker=class { constructor(){throw new Error('External model worker unavailable in S63 fixture');} };
       window.fetch=async (url,init)=>{
         if(String(url)!=='https://s63.fixture/provider') throw new Error('Uncontrolled fetch: '+url);
@@ -280,7 +287,15 @@ export async function openProjectSelectionBrowserHost(t,bundle,browser,execution
         const request={system,user,imageUrls:input.messages.flatMap(message=>Array.isArray(message.content)?message.content.filter(item=>item.type==='image_url').map(item=>item.image_url.url):[])};
         window.__s63.requests.push(request);
         let response;
-        if(system.includes('Classify only the question type')) response=JSON.stringify({v:1,t:currentQuestion===nextQuestion?'coding':'project-deep-dive',c:0.99,e:currentQuestion});
+        if(system.startsWith('Identify factual commitments')) {
+          request.factRiskReview=true;
+          const content=input.messages.find(m=>m.role==='user').content;
+          const payload=JSON.parse(typeof content==='string'?content:content.find(c=>c.type==='text').text);
+          if(window.__s63.holdFactReview){window.__s63.factReviewBlocked=true;await new Promise(resolve=>window.__s63.releaseFactReview=resolve);}
+          response=JSON.stringify({v:1,flags:payload.answerSections.answer.includes('40%')
+            ? [{section:'answer',quote:'40%',reason:'Measurement needs verification.',sourceIds:[]}] : []});
+        }
+        else if(system.includes('Classify only the question type')) response=JSON.stringify({v:1,t:currentQuestion===nextQuestion?'coding':'project-deep-dive',c:0.99,e:currentQuestion});
         else if(system.includes('Return exactly the fields v,d,c,t,r')) response=JSON.stringify({v:4,d:'o',c:0.99,t:[0],r:'ask'});
         else if(system.startsWith('You are a fast metadata extractor')) response=JSON.stringify({question,focusedEvidenceSummary:null,questionType:'project-deep-dive',askFrame:'past-project',topicDomain:'backend',projectAnchor:null,programmingLanguage:null,confidence:0.99,isBehavioralInterview:false,amazonLeadershipPrinciple:null});
         else if(system.startsWith('You are a live meeting co-pilot')||system.startsWith('You are Jarvis, a private live meeting assistant')) {
@@ -306,7 +321,8 @@ export async function openProjectSelectionBrowserHost(t,bundle,browser,execution
           'data: '+JSON.stringify({choices:[{delta:{},finish_reason:'stop'}]})+'\n\ndata: [DONE]\n\n',{headers:{'Content-Type':'text/event-stream'}});
       };
     }, {memory:inputs.memory??fixtures.S63_MEMORY,answers:inputs.answers??fixtures.S63_PROVIDER_ANSWERS,question:fixtures.S63_SOURCE_QUESTION,
-      nextQuestion:fixtures.S63_NEXT_SOURCE_QUESTION,surface:execution.surface,source:execution.source});
+      nextQuestion:fixtures.S63_NEXT_SOURCE_QUESTION,surface:execution.surface,source:execution.source,
+      holdFactReview:inputs.holdFactReview??false,guardrailMode:inputs.guardrailMode});
     await page.addScriptTag({ content: bundle.outputFiles[0].text });
     try {
       await page.waitForFunction(() => Boolean(window.__s63.meeting), undefined, { timeout: 10000 });

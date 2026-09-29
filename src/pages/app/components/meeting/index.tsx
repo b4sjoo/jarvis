@@ -153,6 +153,7 @@ import {
 import { WhiteboardViewer } from "./whiteboard-viewer";
 import { createMeetingFocusPublisher } from "@/lib/meeting/focus-window-protocol";
 import { FactGuardrailNotice } from "./fact-guardrail-notice";
+import { FactRiskNotice } from "./fact-risk-notice";
 import { PhaseOutputNotice } from "./phase-output-notice";
 import { AdvisePinButton } from "./advise-pin-button";
 import { TypeCorrectionMenuButton, type TypeCorrectionMenuActions } from "./type-correction-menu";
@@ -657,6 +658,7 @@ export const MeetingAssistant = ({
     ]
   );
   const adviseDisplay = meeting.selectAdviseDisplay(runtimeSuggestionSections);
+  const factRiskReview = adviseDisplay.streaming ? undefined : meeting.readFactRiskReview(adviseDisplay.stable);
   const displaySuggestionSections = adviseDisplay.sections;
   const displayTargetKey = JSON.stringify(adviseDisplay.target);
   const artifactReuseNotice = meeting.traces.find(trace => trace.id === adviseDisplay.target.traceId)?.metadata?.artifactReuseCommitted === true
@@ -664,7 +666,8 @@ export const MeetingAssistant = ({
   useEffect(() => {
     if (!open || (isFocusMode && focusWindowsVisible)) return;
     meeting.recordAdviseDisplayApplied(adviseDisplay.target, isFocusMode ? "focus-mode" : "normal-mode");
-  }, [displayTargetKey, adviseDisplay.locked, open, isFocusMode, focusWindowsVisible, meeting.recordAdviseDisplayApplied]);
+  }, [displayTargetKey, adviseDisplay.locked, open, isFocusMode, focusWindowsVisible, meeting.recordAdviseDisplayApplied,
+    factRiskReview?.answerKey, factRiskReview?.status]);
   const factGuardrailNotice =
     (adviseDisplay.locked ? adviseDisplay.stable?.suggestion : meeting.latestSuggestion)?.factGuardrailNotice;
   const latestReliableAnswerPreview = useMemo(
@@ -1028,6 +1031,7 @@ export const MeetingAssistant = ({
       statusLabel: meetingStatusLabel,
       error: meeting.error,
       factGuardrailNotice,
+      factRiskReview,
       phaseOutputNotice: adviseDisplay.locked && selectedTaskDisplay?.affiliated === false
         ? undefined : meeting.phaseOutputNotice,
       artifactReuseNotice,
@@ -1099,6 +1103,7 @@ export const MeetingAssistant = ({
       editableBriefForFocus.interviewTypes,
       focusModeActive,
       factGuardrailNotice,
+      factRiskReview,
       meeting.phaseOutputNotice,
       isBusy,
       isTaskSwitchClarifyingQuestion,
@@ -1904,6 +1909,7 @@ export const MeetingAssistant = ({
               hasCorrectableQuestion={focusSnapshot.hasCorrectableQuestion}
               effectiveQuestionType={focusSnapshot.effectiveQuestionType}
               factGuardrailNotice={focusSnapshot.factGuardrailNotice}
+              factRiskReview={focusSnapshot.factRiskReview}
               phaseOutputNotice={focusSnapshot.phaseOutputNotice}
               artifactReuseNotice={focusSnapshot.artifactReuseNotice}
               transientPersonalStatusLabel={
@@ -2346,6 +2352,7 @@ export const MeetingAssistant = ({
                         label="Approach"
                         value={focusSnapshot.sections.approach || "Not needed yet."}
                       />
+                      <FactRiskNotice result={focusSnapshot.factRiskReview} />
                     </div>
                   </section>
 
@@ -2407,6 +2414,10 @@ export const MeetingAssistant = ({
                     />
                   </section>
 
+                  {focusSnapshot.factRiskReview ? <section className="min-w-0 border-t border-border/70 p-3">
+                    <div className="text-xs font-semibold">Approach</div>
+                    <FactRiskNotice result={focusSnapshot.factRiskReview} />
+                  </section> : null}
                   {focusSnapshot.sections.code ||
                   focusSnapshot.sections.complexity ? (
                     <CodingArtifactSection
@@ -3194,6 +3205,7 @@ const FocusModePanel = ({
   hasCorrectableQuestion,
   effectiveQuestionType,
   factGuardrailNotice,
+  factRiskReview,
   phaseOutputNotice,
   artifactReuseNotice,
   transientPersonalStatusLabel,
@@ -3242,6 +3254,7 @@ const FocusModePanel = ({
   hasCorrectableQuestion: boolean;
   effectiveQuestionType?: CanonicalQuestionType;
   factGuardrailNotice?: AdvisorSuggestion["factGuardrailNotice"];
+  factRiskReview?: MeetingFocusSnapshot["factRiskReview"];
   phaseOutputNotice?: string;
   artifactReuseNotice?: string;
   transientPersonalStatusLabel?: string;
@@ -3343,7 +3356,7 @@ const FocusModePanel = ({
               />
             </section>
 
-            {suggestionSections.approach ? (
+            {suggestionSections.approach || factRiskReview ? (
               <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3">
                 <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
                   <MessageSquareTextIcon className="h-3.5 w-3.5" />
@@ -3353,6 +3366,7 @@ const FocusModePanel = ({
                   className={cn(WRAP_TEXT_CLASS, "text-xs leading-5")}
                   value={suggestionSections.approach}
                 />
+                {factRiskReview ? <FactRiskNotice result={factRiskReview} /> : null}
               </section>
             ) : null}
 

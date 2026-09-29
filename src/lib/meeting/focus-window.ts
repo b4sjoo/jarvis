@@ -1,5 +1,6 @@
 import type { AnswerDeliveryPresentation } from "./meeting-presentation-contracts.js";
 import type { AdviseDisplayTarget } from "./manual-advise-display.js";
+import type { FactRiskReviewResult } from "./types.js";
 import type {
   ClarifyingQuestionAnswer,
   ClarifyingQuestionOption,
@@ -219,6 +220,7 @@ export type MeetingFocusSnapshot = FocusReadonly<{
   statusLabel: string;
   error: string | null;
   factGuardrailNotice?: FactGuardrailVisibleNotice;
+  factRiskReview?: FactRiskReviewResult;
   phaseOutputNotice?: string;
   artifactReuseNotice?: string;
   isBusy: boolean;

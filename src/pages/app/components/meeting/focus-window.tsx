@@ -51,6 +51,7 @@ import {
 import { WhiteboardViewer } from "./whiteboard-viewer";
 import { createMeetingFocusConsumer } from "@/lib/meeting/focus-window-protocol";
 import { FactGuardrailNotice } from "./fact-guardrail-notice";
+import { FactRiskNotice } from "./fact-risk-notice";
 import { PhaseOutputNotice } from "./phase-output-notice";
 import { AdvisePinButton } from "./advise-pin-button";
 import { TypeCorrectionMenuButton, type TypeCorrectionMenuActions } from "./type-correction-menu";
@@ -200,7 +201,7 @@ function MeetingFocusAnswerWindow({
               />
             </section>
 
-            {sections.approach ? (
+            {sections.approach || snapshot.factRiskReview ? (
               <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3">
                 <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
                   <MessageSquareTextIcon className="h-3.5 w-3.5" />
@@ -210,6 +211,7 @@ function MeetingFocusAnswerWindow({
                   className={cn(WRAP_TEXT_CLASS, "text-xs leading-5")}
                   value={sections.approach}
                 />
+                <FactRiskNotice result={snapshot.factRiskReview} />
               </section>
             ) : null}
 

@@ -14,6 +14,28 @@ import type { AIResponseTerminalOutcome } from "../functions/ai-response-events.
 
 export type TranscriptSpeaker = "them" | "me" | "unknown";
 
+export interface FactRiskReviewInput {
+  readonly unavailableReason?: string;
+  readonly question: string;
+  readonly evidence: string;
+  readonly eligibleFactIds: readonly string[];
+  readonly sourceIds: readonly string[];
+}
+
+export interface FactRiskReviewFinding {
+  readonly section: "answer";
+  readonly quote: string;
+  readonly reason: string;
+  readonly sourceIds: readonly string[];
+}
+
+export interface FactRiskReviewResult {
+  readonly answerKey: string;
+  readonly status: "pending" | "completed" | "failed" | "skipped";
+  readonly flags: readonly FactRiskReviewFinding[];
+  readonly reason?: string;
+}
+
 export type MeetingAssistantStatus =
   | "idle"
   | "starting"
@@ -1140,6 +1162,7 @@ export interface AdvisorSuggestion {
   presentationArtifactAuthority?:
     ScreenPresentationArtifactAuthoritySource;
   factGuardrailNotice?: FactGuardrailVisibleNotice;
+  factRiskReviewInput?: FactRiskReviewInput;
   /** Frozen from this answer's binding decision; generated options cannot select a project. */
   projectIdentityPending?: boolean;
   basedOnTurnIds: string[];

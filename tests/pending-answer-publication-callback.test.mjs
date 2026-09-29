@@ -321,6 +321,8 @@ function createHarness(options = {}) {
       generationResultLedger
     );
   const environment = {
+    shutdownRequestedRef: { current: false },
+    factRiskReviewRuntimeRef: { current: null },
     ...imports,
     Date,
     performance: { now: () => now },

@@ -216,6 +216,7 @@ test("B2 current source: real Voice publication advances to B while historical s
 
 function bindRuntimeReset(h) {
   const noop = () => {};
+  h.env.factRiskReviewRuntimeRef = { current: null };
   for (const name of ["pendingAnswerResolutionCommitByTraceRef", "semanticTaxonomyEvidenceByTurnRef",
     "questionTypeAdjudicationCandidateCacheRef", "whiteboardSyntaxRepairAttemptKeysRef",
     "answerRevisionByQuestionRef", "cancelledAdvisorTurnIdsRef", "effectiveQuestionSourceLedgerRef"]) {
