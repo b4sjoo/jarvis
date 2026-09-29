@@ -1,4 +1,5 @@
 import { createMeetingId } from "./meeting-id.js";
+import { formatMeetingResponseLanguage } from "./response-language.js";
 import type { PlaybookPhaseDecision } from "./playbook-phase-contracts.js";
 import type { ActiveMeetingTask } from "./meeting-task-contracts.js";
 import type { WhiteboardFormatPreference } from "./types.js";
@@ -725,14 +726,14 @@ function buildScreenTaskUserMessage({
     "Supporting anchor IDs: for factual-with-anchor, list only the exact supported anchor IDs from <fact_anchor_guardrail> that the answer actually uses, separated by '|'. For every other disposition, output '-'. Never invent, shorten, or translate an anchor ID.",
     "If it is a coding/algorithm question, output:",
     "中文思路: 用中文简洁说明当前 Coding phase 拥有的解题步骤、关键不变量和边界条件；只有 optimized candidate 可见时才说明为什么最优。",
-    "Answer: directly state the solution candidate required by <interview_playbook> and <playbook_phase_state> in meeting-ready English, not Chinese.",
-    "Approach: explain the reasoning for that same visible candidate in a few direct English bullets or short English sentences, without runnable implementation code or a different algorithm.",
+    "Answer: directly state the solution candidate required by <interview_playbook> and <playbook_phase_state> in the requested meeting language.",
+    "Approach: explain the reasoning for that same visible candidate in a few direct bullets or short sentences in the requested meeting language, without runnable implementation code or a different algorithm.",
     "Whiteboard: -",
     "Code: when Code is required by <playbook_phase_state>, provide code in the selected/requested language, or Python if no language is visible; otherwise '-'.",
-    "Complexity: when Complexity is required by <playbook_phase_state>, include time and space complexity for the same visible candidate in English; otherwise '-'.",
-    "Question: restate the exact visible problem or the best focused version in English.",
-    "Clarifying question: one click-answerable English question if a constraint is missing, otherwise '-'.",
-    "Clarifying options: 2-4 short English option labels when the clarifying question has concrete choices; put each option on its own line or separate with '|'. Use '-' only for yes/no questions or when no concrete choices exist.",
+    "Complexity: when Complexity is required by <playbook_phase_state>, include time and space complexity for the same visible candidate in the requested meeting language; otherwise '-'.",
+    "Question: restate the exact visible problem or the best focused version in the requested meeting language.",
+    "Clarifying question: one click-answerable question in the requested meeting language if a constraint is missing, otherwise '-'.",
+    "Clarifying options: 2-4 short option labels in the requested meeting language when the clarifying question has concrete choices; put each option on its own line or separate with '|'. Use '-' only for yes/no questions or when no concrete choices exist.",
     "If it is a behavioral interview question, output:",
     "中文思路: 若有贴题且受支持的故事，用中文概括故事、主线动作、风险/取舍和表达边界；否则概括当前判断的有界回答框架。",
     "Answer: when a relevant supported story exists, give a compact first-person story that directly answers what happened and the decision path. Otherwise give a compact bounded framework or explicit hypothetical example without claiming personal experience.",
@@ -989,26 +990,15 @@ function inferProjectAnchor(text: string) {
 function formatScreenTaskResponsePreferences(
   config: MeetingResponseConfig | undefined
 ) {
-  if (!config) {
-    return "Length: normal\nNatural language: auto";
-  }
-
   const length =
-    config.length === "short"
+    config?.length === "short"
       ? "short; keep sections compact while preserving required labels"
-      : config.length === "detailed"
+      : config?.length === "detailed"
         ? "detailed; include more reasoning or implementation detail when useful"
         : "normal; use the default compact Jarvis style";
-  const language =
-    config.language === "english"
-      ? "English; use meeting-ready English for prose"
-      : config.language === "chinese"
-        ? "Chinese; explain prose in concise Chinese while preserving technical terms"
-        : "auto; follow visible task and transcript context";
-
   return [
     `Length: ${length}`,
-    `Natural language: ${language}`,
+    formatMeetingResponseLanguage(config?.language),
     "Programming language for code must still follow visible screen language, transcript constraints, then Python default.",
   ].join("\n");
 }

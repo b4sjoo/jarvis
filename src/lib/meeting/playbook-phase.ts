@@ -310,7 +310,7 @@ export function formatCodingPlaybookPhaseContract(
     "- Establish input/output shape, signature or interface, units, ordering, mutation, duplicate or missing-input behavior, and relevant error semantics.",
     "- For endpoint or API-shaped tasks, clarify request, response, status/error behavior, state, and dependency failures without treating them as a separate question type.",
     "- Explain the simplest correct baseline, including brute force when useful.",
-    "- Assume the listener has no programming or algorithm background. Explain the mechanics in plain spoken English.",
+    "- Assume the listener has no programming or algorithm background. Explain the mechanics in plain spoken language following the meeting response preference.",
     "- Walk through one small example and state the baseline complexity inside Approach.",
     "- Do not emit Code or Complexity in this phase. The goal is shared understanding, not implementation.",
     formatCodingSolutionManifestContract("baseline"),

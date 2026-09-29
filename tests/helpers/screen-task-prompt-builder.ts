@@ -11,6 +11,7 @@ import { formatPlaybookPhaseDecisionForPrompt } from "../../src/lib/meeting/play
 import { formatBoundedParentReadContextForPrompt } from "../../src/lib/meeting/response-only-task-scope.js";
 import { formatCapacityEstimationGuardrailForPrompt, resolveCapacityEstimationGuardrail } from "../../src/lib/meeting/capacity-estimation-guardrail.js";
 import { SCREEN_FOCUSED_CODE_EXPLANATION_INSTRUCTION } from "../../src/lib/meeting/screen-task-system-prompt.js";
+import { formatMeetingResponseLanguage } from "../../src/lib/meeting/response-language.js";
 
 // Execute production composition with real pure dependencies, without loading
 // native capture or provider code from the service's module initialization.
@@ -35,6 +36,6 @@ export function loadScreenTaskPromptBuilder() {
     PROJECT_FACT_RESPONSE_BOUNDARY,
     formatProjectBindingDecisionForPrompt, formatPlaybookPhaseDecisionForPrompt,
     formatBoundedParentReadContextForPrompt, formatCapacityEstimationGuardrailForPrompt,
-    resolveCapacityEstimationGuardrail, SCREEN_FOCUSED_CODE_EXPLANATION_INSTRUCTION,
+    resolveCapacityEstimationGuardrail, SCREEN_FOCUSED_CODE_EXPLANATION_INSTRUCTION, formatMeetingResponseLanguage,
   }) as (input: Record<string, unknown>) => string;
 }
