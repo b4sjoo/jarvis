@@ -5,7 +5,7 @@ import {
 } from "../src/lib/meeting/question-type-adjudication.js";
 import {
   buildQuestionTypeAdjudicationOutcomeReport,
-} from "../src/lib/meeting/question-type-adjudication-outcome.js";
+} from "../scripts/lib/question-type-adjudication-outcome.js";
 
 const decision = {
   recordedAt: 10,

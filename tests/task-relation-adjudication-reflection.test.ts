@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildTaskRelationAdjudicationReflectionReport } from "../src/lib/meeting/task-relation-adjudication-reflection.js";
+import { buildTaskRelationAdjudicationReflectionReport } from "../scripts/lib/task-relation-adjudication-reflection.js";
 import type { QuestionHumanEvaluation } from "../src/lib/meeting/types.js";
 
 test("aggregates independent relation agreement and labeled failure modes", () => {

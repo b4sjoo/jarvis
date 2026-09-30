@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildQuestionTypeAdjudicationOutcomeReport as build, type QuestionTypeAdjudicationRecordedDecision } from "../src/lib/meeting/question-type-adjudication-outcome.js";
+import { buildQuestionTypeAdjudicationOutcomeReport as build, type QuestionTypeAdjudicationRecordedDecision } from "../scripts/lib/question-type-adjudication-outcome.js";
 
 const decision: QuestionTypeAdjudicationRecordedDecision = { recordedAt: 1, sessionId: "session_recording_a", traceId: "type", metadata: {
   questionTypeAdjudicationOperationId: "T", questionTypeAdjudicationParseValid: false,

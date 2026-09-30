@@ -13,15 +13,15 @@ import {
   type LongitudinalSessionManifest,
   type LongitudinalTraceSummary,
   type LongitudinalTranscriptTurn,
-} from "../src/lib/meeting/session-longitudinal-evaluation.js";
+} from "./lib/session-longitudinal-evaluation.js";
 import { writeDerivedEvaluationProvenance } from "./lib/derived-evaluation-provenance.js";
 import { readRuntimeTraceEvidence, missingAdjudicationEvidenceFiles, type RuntimeTraceEvidence } from "./lib/recorded-trace-evidence.js";
 import {
   buildTaskRelationAdjudicationReflectionReport,
   type TaskRelationAdjudicationRecordedDecision,
-} from "../src/lib/meeting/task-relation-adjudication-reflection.js";
-import { buildTaskRelationAuthorityConvergenceReportV1 } from "../src/lib/meeting/task-relation-authority-convergence.js";
-import { buildQuestionTypeAdjudicationOutcomeReport, type QuestionTypeAdjudicationRecordedDecision } from "../src/lib/meeting/question-type-adjudication-outcome.js";
+} from "./lib/task-relation-adjudication-reflection.js";
+import { buildTaskRelationAuthorityConvergenceReportV1 } from "./lib/task-relation-authority-convergence.js";
+import { buildQuestionTypeAdjudicationOutcomeReport, type QuestionTypeAdjudicationRecordedDecision } from "./lib/question-type-adjudication-outcome.js";
 import type { QuestionTypeAdjudicationOutcomeEvent } from "../src/lib/meeting/question-type-adjudication.js";
 import { projectMeetingMetadataEvaluationObservation } from "../src/lib/meeting/meeting-metadata-evaluation.js";
 import { resolveCommittedSourceTransitionLifecycleEvidence } from "../src/lib/meeting/task-settlement-tuple.js";

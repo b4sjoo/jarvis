@@ -2,10 +2,10 @@ import type {
   QuestionTypeAdjudicationOutcomeDisposition,
   QuestionTypeAdjudicationOutcomeEvent,
   QuestionTypeAdjudicationOutcomeStage,
-} from "./question-type-adjudication.js";
-import type { CanonicalQuestionType } from "./task-taxonomy.js";
-import { normalizeCanonicalQuestionType } from "./task-taxonomy.js";
-import type { HumanEvaluationProjectionV2, HumanGroundTruthEventV2 } from "./human-ground-truth-v2.js";
+} from "../../src/lib/meeting/question-type-adjudication.js";
+import type { CanonicalQuestionType } from "../../src/lib/meeting/task-taxonomy.js";
+import { normalizeCanonicalQuestionType } from "../../src/lib/meeting/task-taxonomy.js";
+import type { HumanEvaluationProjectionV2, HumanGroundTruthEventV2 } from "../../src/lib/meeting/human-ground-truth-v2.js";
 
 export interface QuestionTypeAdjudicationRecordedDecision {
   recordedAt: number;

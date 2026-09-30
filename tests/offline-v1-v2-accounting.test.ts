@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildTaskRelationAdjudicationReflectionReport as build } from "../src/lib/meeting/task-relation-adjudication-reflection.js";
+import { buildTaskRelationAdjudicationReflectionReport as build } from "../scripts/lib/task-relation-adjudication-reflection.js";
 import { createHumanGroundTruthEventV2, deriveHumanEvaluationProjectionV2 } from "../src/lib/meeting/human-ground-truth-v2.js";
 import type { QuestionHumanEvaluation } from "../src/lib/meeting/types.js";
 

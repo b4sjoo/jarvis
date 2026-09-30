@@ -6,7 +6,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import path from "node:path";
-import { detectTaxonomyEvaluationLanguage } from "../../src/lib/meeting/taxonomy-evaluation.js";
+import { detectTaxonomyEvaluationLanguage } from "./taxonomy-evaluation.js";
 import { normalizeCanonicalQuestionType } from "../../src/lib/meeting/task-taxonomy.js";
 import {
   assignGroupedCorpusSplits,

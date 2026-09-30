@@ -8,7 +8,7 @@ import {
 import {
   buildSessionProcedureV1,
   type SessionProcedureTimelineEvent,
-} from "../src/lib/meeting/session-procedure.js";
+} from "../scripts/lib/session-procedure.js";
 import { createManualRuntimeActionEvent } from "../src/lib/meeting/manual-runtime-action.js";
 import { createRuntimeRegressionStepEvent } from "../src/lib/meeting/runtime-regression.js";
 

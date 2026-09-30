@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildQuestionTypeAdjudicationOutcomeReport, offlineIdentityMatches, type QuestionTypeAdjudicationRecordedDecision } from "../src/lib/meeting/question-type-adjudication-outcome.js";
-import { buildTaskRelationAdjudicationReflectionReport } from "../src/lib/meeting/task-relation-adjudication-reflection.js";
+import { buildQuestionTypeAdjudicationOutcomeReport, offlineIdentityMatches, type QuestionTypeAdjudicationRecordedDecision } from "../scripts/lib/question-type-adjudication-outcome.js";
+import { buildTaskRelationAdjudicationReflectionReport } from "../scripts/lib/task-relation-adjudication-reflection.js";
 import { createQuestionTypeAdjudicationOutcomeEvent } from "../src/lib/meeting/question-type-adjudication.js";
 import { createHumanGroundTruthEventV2, deriveHumanEvaluationProjectionV2 } from "../src/lib/meeting/human-ground-truth-v2.js";
 

@@ -7,7 +7,7 @@ import {
   type HumanEvaluationProjectionV2,
 } from "../src/lib/meeting/human-ground-truth-v2.js";
 import { buildCompactTraceSummary } from "../src/lib/meeting/session-recording.js";
-import { buildSessionLongitudinalEvaluationReport } from "../src/lib/meeting/session-longitudinal-evaluation.js";
+import { buildSessionLongitudinalEvaluationReport } from "../scripts/lib/session-longitudinal-evaluation.js";
 import { upsertQuestionHumanEvaluation } from "../src/lib/meeting/human-evaluation.js";
 import type { MeetingTrace } from "../src/lib/meeting/types.js";
 import { PROJECT_TRAJECTORY_EXPERTISE_REPLAY } from "./fixtures/project-trajectory-expertise-session.js";

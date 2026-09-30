@@ -2,12 +2,12 @@ import type {
   HumanExpectedParentAction,
   InterviewTaskRelation,
   QuestionHumanEvaluation,
-} from "./types.js";
+} from "../../src/lib/meeting/types.js";
 import type {
   TaskRelationProductionApplicability,
   TaskRelationSemanticValidity,
 } from "./task-relation-counterfactual-branch.js";
-import type { HumanEvaluationProjectionV2 } from "./human-ground-truth-v2.js";
+import type { HumanEvaluationProjectionV2 } from "../../src/lib/meeting/human-ground-truth-v2.js";
 import { mergeOfflineDecisionSnapshots, offlineIdentityMatches, resolveOfflineHumanTruth } from "./question-type-adjudication-outcome.js";
 
 export interface TaskRelationAdjudicationRecordedDecision {

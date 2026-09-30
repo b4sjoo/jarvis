@@ -9,9 +9,9 @@ import type {
   TaskRelationAdjudicationReflectionRow,
   TaskRelationRateMetric,
 } from "./task-relation-adjudication-reflection.js";
-import type { RuntimeTaskRelation } from "./task-relation-adjudication.js";
-import type { HumanExpectedParentAction } from "./types.js";
-import { evaluateTaskSettlementTupleCompatibilityV2 } from "./task-settlement-tuple.js";
+import type { RuntimeTaskRelation } from "../../src/lib/meeting/task-relation-adjudication.js";
+import type { HumanExpectedParentAction } from "../../src/lib/meeting/types.js";
+import { evaluateTaskSettlementTupleCompatibilityV2 } from "../../src/lib/meeting/task-settlement-tuple.js";
 
 export const TASK_RELATION_CONVERGENCE_REPORT_VERSION = 1 as const;
 

@@ -3,7 +3,7 @@ import test from "node:test";
 import {
   buildAnswerSufficiencyReflectionReport,
   type RecordedAnswerSufficiencyDecision,
-} from "../src/lib/meeting/answer-sufficiency-reflection.js";
+} from "../scripts/lib/answer-sufficiency-reflection.js";
 import type { AnswerSufficiencyDecision } from "../src/lib/meeting/answer-sufficiency.js";
 
 test("answer sufficiency reflection prefers the semantic late join and separates detectors", () => {

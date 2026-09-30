@@ -30,7 +30,7 @@ test("does not schedule the legacy Combined Intent observer", () => {
   assert.match(shared, /function projectLogicalQuestionForAdjudication/);
   assert.match(shared, /function authorizeTaxonomyAdjudicationLease/);
   assert.doesNotMatch(shared, /function (?:buildTaxonomyAdjudicationPrompts|parseTaxonomyAdjudicationOutput|decideTaxonomyAdjudicationBudget)/);
-  assert.equal(existsSync("src/lib/meeting/taxonomy-adjudication-reflection.ts"), true);
+  assert.equal(existsSync("scripts/lib/taxonomy-adjudication-reflection.ts"), true);
 });
 
 test("keeps the ordered split chain without scheduling Direct Relation", () => {

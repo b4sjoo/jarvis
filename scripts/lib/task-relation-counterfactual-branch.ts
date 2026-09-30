@@ -1,4 +1,4 @@
-import type { RuntimeTaskRelation } from "./task-relation-adjudication.js";
+import type { RuntimeTaskRelation } from "../../src/lib/meeting/task-relation-adjudication.js";
 import {
   buildTaskGraphArtifactV1,
   type TaskGraphArtifactV1,

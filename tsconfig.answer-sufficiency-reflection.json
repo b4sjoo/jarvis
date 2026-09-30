@@ -16,6 +16,6 @@
   "include": [
     "src/vite-env.d.ts",
     "scripts/reflect-answer-sufficiency-session.ts",
-    "src/lib/meeting/answer-sufficiency-reflection.ts"
+    "scripts/lib/answer-sufficiency-reflection.ts"
   ]
 }

@@ -12,7 +12,7 @@ import {
   buildSessionLongitudinalEvaluationReport,
   renderSessionLongitudinalEvaluationMarkdown,
   type LongitudinalSessionInput,
-} from "../src/lib/meeting/session-longitudinal-evaluation.js";
+} from "../scripts/lib/session-longitudinal-evaluation.js";
 import { loadSessionHumanEvaluationConsumerView } from "../scripts/session-human-evaluation-v2.js";
 import { projectHumanEvaluationsForLegacyConsumers } from "../src/lib/meeting/human-evaluation-v2-consumers.js";
 

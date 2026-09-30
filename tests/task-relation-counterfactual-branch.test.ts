@@ -4,7 +4,7 @@ import {
   buildTaskRelationCounterfactualBranchV1,
   type TaskRelationCounterfactualBranchInputV1,
   type TaskRelationCounterfactualOperationV1,
-} from "../src/lib/meeting/task-relation-counterfactual-branch.js";
+} from "../scripts/lib/task-relation-counterfactual-branch.js";
 
 const source = {
   manifestHash: "manifest-relation-a",

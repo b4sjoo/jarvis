@@ -5,7 +5,7 @@ import {
   evaluateLongitudinalSessionEvidenceScope,
   renderSessionLongitudinalEvaluationMarkdown,
   type LongitudinalSessionInput,
-} from "../src/lib/meeting/session-longitudinal-evaluation.js";
+} from "../scripts/lib/session-longitudinal-evaluation.js";
 import {
   createHumanGroundTruthEventV2,
   deriveHumanEvaluationProjectionV2,

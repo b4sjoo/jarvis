@@ -1,11 +1,11 @@
 import type {
   HumanEvaluationProjectionV2,
   HumanGroundTruthEventV2,
-} from "./human-ground-truth-v2.js";
-import type { ManualRuntimeActionEventV1 } from "./manual-runtime-action.js";
-import type { RuntimeRegressionStepEventV1 } from "./runtime-regression.js";
-import type { ManualCorrectionIntent } from "./manual-correction-intent.js";
-import { readManualCorrectionIntent, readCommittedManualCorrectionEvidence, type CommittedManualCorrectionEvidence } from "./task-settlement-tuple.js";
+} from "../../src/lib/meeting/human-ground-truth-v2.js";
+import type { ManualRuntimeActionEventV1 } from "../../src/lib/meeting/manual-runtime-action.js";
+import type { RuntimeRegressionStepEventV1 } from "../../src/lib/meeting/runtime-regression.js";
+import type { ManualCorrectionIntent } from "../../src/lib/meeting/manual-correction-intent.js";
+import { readManualCorrectionIntent, readCommittedManualCorrectionEvidence, type CommittedManualCorrectionEvidence } from "../../src/lib/meeting/task-settlement-tuple.js";
 
 export const SESSION_PROCEDURE_SCHEMA_VERSION = 1 as const;
 

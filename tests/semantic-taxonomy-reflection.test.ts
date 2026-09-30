@@ -3,7 +3,7 @@ import test from "node:test";
 import {
   buildSemanticTaxonomyReflectionReport,
   renderSemanticTaxonomyReflectionMarkdown,
-} from "../src/lib/meeting/semantic-taxonomy-reflection.js";
+} from "../scripts/lib/semantic-taxonomy-reflection.js";
 
 test("joins late semantic evidence to HITL labels and reports rescue quality", () => {
   const report = buildSemanticTaxonomyReflectionReport({

@@ -2,23 +2,23 @@ import {
   CANONICAL_QUESTION_TYPES,
   normalizeCanonicalQuestionType,
   type CanonicalQuestionType,
-} from "./task-taxonomy.js";
+} from "../../src/lib/meeting/task-taxonomy.js";
 import {
   resolveCriticalMomentExpectedFacts,
   type CriticalMomentExpectedFacts,
-} from "./critical-moment-ground-truth.js";
+} from "../../src/lib/meeting/critical-moment-ground-truth.js";
 import {
   deriveHumanEvaluationProjectionV2,
   type HumanEvaluationProjectionV2,
-} from "./human-ground-truth-v2.js";
-import { partitionHumanEvaluationProjectionsForPrecisionV2 } from "./human-evaluation-v2-consumers.js";
+} from "../../src/lib/meeting/human-ground-truth-v2.js";
+import { partitionHumanEvaluationProjectionsForPrecisionV2 } from "../../src/lib/meeting/human-evaluation-v2-consumers.js";
 import type { TaskRelationAdjudicationReflectionReport } from "./task-relation-adjudication-reflection.js";
 import type { TaskRelationAuthorityConvergenceReportV1 } from "./task-relation-authority-convergence.js";
 import {
   projectObservedParentAction,
   type CommittedLifecycleEvidence,
-} from "./task-settlement-tuple.js";
-import type { HumanEvaluationTaskRelation } from "./types.js";
+} from "../../src/lib/meeting/task-settlement-tuple.js";
+import type { HumanEvaluationTaskRelation } from "../../src/lib/meeting/types.js";
 
 export interface LongitudinalSessionManifest {
   sessionId?: string;

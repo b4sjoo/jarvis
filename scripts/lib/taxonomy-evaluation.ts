@@ -3,7 +3,7 @@ import {
   normalizeCanonicalQuestionType,
   type CanonicalQuestionType,
   type QuestionTypeInferenceDecision,
-} from "./task-taxonomy.js";
+} from "../../src/lib/meeting/task-taxonomy.js";
 
 export type TaxonomyEvaluationLanguage = "en" | "zh" | "mixed";
 export type TaxonomyEvaluationSplit = "train" | "calibration" | "held-out";

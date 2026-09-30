@@ -16,7 +16,7 @@
   "include": [
     "src/vite-env.d.ts",
     "scripts/reflect-semantic-taxonomy-session.ts",
-    "src/lib/meeting/semantic-taxonomy-reflection.ts",
+    "scripts/lib/semantic-taxonomy-reflection.ts",
     "src/lib/meeting/task-taxonomy.ts",
     "src/lib/memory/types.ts"
   ]

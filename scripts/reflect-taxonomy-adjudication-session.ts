@@ -7,20 +7,20 @@ import {
   renderTaxonomyAdjudicationReflectionMarkdown,
   type TaxonomyAdjudicationCompactTrace,
   type TaxonomyAdjudicationRecordedDecision,
-} from "../src/lib/meeting/taxonomy-adjudication-reflection.js";
+} from "./lib/taxonomy-adjudication-reflection.js";
 import {
   buildTaskRelationAdjudicationReflectionReport,
   renderTaskRelationAdjudicationReflectionMarkdown,
   type TaskRelationAdjudicationRecordedDecision,
-} from "../src/lib/meeting/task-relation-adjudication-reflection.js";
+} from "./lib/task-relation-adjudication-reflection.js";
 import {
   buildTaskRelationAuthorityConvergenceReportV1,
   renderTaskRelationAuthorityConvergenceMarkdown,
-} from "../src/lib/meeting/task-relation-authority-convergence.js";
+} from "./lib/task-relation-authority-convergence.js";
 import {
   renderQuestionTypeAdjudicationOutcomeMarkdown,
   type QuestionTypeAdjudicationRecordedDecision,
-} from "../src/lib/meeting/question-type-adjudication-outcome.js";
+} from "./lib/question-type-adjudication-outcome.js";
 import type { QuestionTypeAdjudicationOutcomeEvent } from "../src/lib/meeting/question-type-adjudication.js";
 import {
   loadSessionHumanEvaluationConsumerView,

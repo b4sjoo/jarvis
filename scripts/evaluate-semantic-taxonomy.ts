@@ -5,7 +5,7 @@ import {
   evaluateTaxonomyCorpus,
   splitTaxonomyEvaluationCorpus,
   type TaxonomyEvaluationExample,
-} from "../src/lib/meeting/taxonomy-evaluation.js";
+} from "./lib/taxonomy-evaluation.js";
 import {
   resolveHybridQuestionType,
   scoreSemanticTaxonomyEmbedding,

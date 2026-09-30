@@ -4,7 +4,7 @@ import {
   buildTaskGraphArtifactV1,
   type TaskGraphReplayEventV1,
   type TaskGraphStateRef,
-} from "../src/lib/meeting/task-graph.js";
+} from "../scripts/lib/task-graph.js";
 
 const source = {
   manifestHash: "manifest-a",

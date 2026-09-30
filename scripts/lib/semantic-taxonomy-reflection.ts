@@ -2,7 +2,7 @@ import {
   CANONICAL_QUESTION_TYPES,
   normalizeCanonicalQuestionType,
   type CanonicalQuestionType,
-} from "./task-taxonomy.js";
+} from "../../src/lib/meeting/task-taxonomy.js";
 
 export interface SemanticTaxonomyRecordedDecision {
   recordedAt: number;

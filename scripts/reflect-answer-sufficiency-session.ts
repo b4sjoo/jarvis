@@ -5,7 +5,7 @@ import {
   buildAnswerSufficiencyReflectionReport,
   renderAnswerSufficiencyReflectionMarkdown,
   type RecordedAnswerSufficiencyDecision,
-} from "../src/lib/meeting/answer-sufficiency-reflection.js";
+} from "./lib/answer-sufficiency-reflection.js";
 import {
   loadSessionHumanEvaluationConsumerView,
   writeHumanEvaluationCompatibilityReport,

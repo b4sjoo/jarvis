@@ -3,7 +3,7 @@ import test from "node:test";
 import {
   buildTaxonomyAdjudicationReflectionReport,
   renderTaxonomyAdjudicationReflectionMarkdown,
-} from "../src/lib/meeting/taxonomy-adjudication-reflection.js";
+} from "../scripts/lib/taxonomy-adjudication-reflection.js";
 
 test("compares lexical, semantic, LLM, runtime, and human adjudication evidence", () => {
   const report = buildTaxonomyAdjudicationReflectionReport({

@@ -6,7 +6,7 @@ import {
   renderSemanticTaxonomyReflectionMarkdown,
   type SemanticTaxonomyRecordedDecision,
   type SemanticTaxonomyRuntimeTrace,
-} from "../src/lib/meeting/semantic-taxonomy-reflection.js";
+} from "./lib/semantic-taxonomy-reflection.js";
 import {
   loadSessionHumanEvaluationConsumerView,
   writeHumanEvaluationCompatibilityReport,

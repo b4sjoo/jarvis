@@ -29,7 +29,7 @@ import {
 } from "../src/lib/meeting/task-relation-adjudication.js";
 import {
   buildTaskRelationAdjudicationReflectionReport,
-} from "../src/lib/meeting/task-relation-adjudication-reflection.js";
+} from "../scripts/lib/task-relation-adjudication-reflection.js";
 import {
   SessionRecordingManager,
   type SessionRecordingInvoke,

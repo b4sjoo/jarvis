@@ -9,7 +9,7 @@ import {
   type PrivateQuestionEvaluationRecord,
   type PrivateTranscriptTurnRecord,
   type TaxonomyEvaluationExample,
-} from "../src/lib/meeting/taxonomy-evaluation.js";
+} from "./lib/taxonomy-evaluation.js";
 import { inferQuestionTypeDecisionFromText } from "../src/lib/meeting/task-taxonomy.js";
 import {
   summarizeHumanEvaluationProjectionMaterializationV2,

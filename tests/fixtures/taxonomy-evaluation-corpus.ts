@@ -1,4 +1,4 @@
-import type { TaxonomyEvaluationExample } from "../../src/lib/meeting/taxonomy-evaluation.js";
+import type { TaxonomyEvaluationExample } from "../../scripts/lib/taxonomy-evaluation.js";
 
 type ExampleSpec = Omit<
   TaxonomyEvaluationExample,

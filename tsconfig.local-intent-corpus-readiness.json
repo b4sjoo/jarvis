@@ -19,7 +19,7 @@
     "scripts/run-local-intent-annotation-workbench.ts",
     "scripts/lib/local-intent-corpus-*.ts",
     "scripts/lib/local-intent-annotation-*.ts",
-    "src/lib/meeting/taxonomy-evaluation.ts",
+    "scripts/lib/taxonomy-evaluation.ts",
     "src/lib/meeting/task-taxonomy.ts",
     "src/lib/memory/types.ts"
   ]

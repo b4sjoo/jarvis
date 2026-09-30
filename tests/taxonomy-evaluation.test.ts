@@ -7,7 +7,7 @@ import {
   importPrivateTaxonomyCorpus,
   importPrivateTaxonomySessionCorpus,
   splitTaxonomyEvaluationCorpus,
-} from "../src/lib/meeting/taxonomy-evaluation.js";
+} from "../scripts/lib/taxonomy-evaluation.js";
 import { inferQuestionTypeDecisionFromText } from "../src/lib/meeting/task-taxonomy.js";
 import { TAXONOMY_EVALUATION_CORPUS } from "./fixtures/taxonomy-evaluation-corpus.js";
 

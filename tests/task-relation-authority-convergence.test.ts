@@ -3,9 +3,9 @@ import test from "node:test";
 import {
   buildTaskRelationAdjudicationReflectionReport,
   type TaskRelationAdjudicationRecordedDecision,
-} from "../src/lib/meeting/task-relation-adjudication-reflection.js";
-import { buildTaskRelationAuthorityConvergenceReportV1 } from "../src/lib/meeting/task-relation-authority-convergence.js";
-import { buildSessionLongitudinalEvaluationReport } from "../src/lib/meeting/session-longitudinal-evaluation.js";
+} from "../scripts/lib/task-relation-adjudication-reflection.js";
+import { buildTaskRelationAuthorityConvergenceReportV1 } from "../scripts/lib/task-relation-authority-convergence.js";
+import { buildSessionLongitudinalEvaluationReport } from "../scripts/lib/session-longitudinal-evaluation.js";
 import type {
   HumanExpectedParentAction,
   InterviewTaskRelation,

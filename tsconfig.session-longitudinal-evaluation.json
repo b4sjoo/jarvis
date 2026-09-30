@@ -18,7 +18,7 @@
     "scripts/reflect-session-longitudinal-evaluation.ts",
     "src/lib/meeting/interview-company.ts",
     "src/lib/meeting/meeting-metadata-evaluation.ts",
-    "src/lib/meeting/session-longitudinal-evaluation.ts",
+    "scripts/lib/session-longitudinal-evaluation.ts",
     "src/lib/meeting/task-taxonomy.ts"
   ]
 }

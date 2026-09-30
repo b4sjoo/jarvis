@@ -1,10 +1,10 @@
 import {
   normalizeCanonicalQuestionType,
   type CanonicalQuestionType,
-} from "./task-taxonomy.js";
-import type { HumanEvaluationProjectionV2 } from "./human-ground-truth-v2.js";
+} from "../../src/lib/meeting/task-taxonomy.js";
+import type { HumanEvaluationProjectionV2 } from "../../src/lib/meeting/human-ground-truth-v2.js";
 import { buildQuestionTypeAdjudicationOutcomeReport, resolveOfflineHumanTruth, type QuestionTypeAdjudicationOutcomeReport, type QuestionTypeAdjudicationRecordedDecision } from "./question-type-adjudication-outcome.js";
-import type { QuestionTypeAdjudicationOutcomeEvent } from "./question-type-adjudication.js";
+import type { QuestionTypeAdjudicationOutcomeEvent } from "../../src/lib/meeting/question-type-adjudication.js";
 
 export interface TaxonomyAdjudicationRecordedDecision {
   recordedAt: number;

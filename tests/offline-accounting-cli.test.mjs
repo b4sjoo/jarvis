@@ -19,8 +19,8 @@ test("OJ4 shared builders and both CLIs agree without sealing incomplete evidenc
       execFileSync(path.join(repo, "node_modules/.bin/tsc"), ["-p", config, "--outDir", compiled], { cwd: repo });
   }
   const load = relative => import(pathToFileURL(path.join(compiled, relative)).href);
-  const { buildQuestionTypeAdjudicationOutcomeReport } = await load("src/lib/meeting/question-type-adjudication-outcome.js");
-  const { buildTaskRelationAdjudicationReflectionReport } = await load("src/lib/meeting/task-relation-adjudication-reflection.js");
+  const { buildQuestionTypeAdjudicationOutcomeReport } = await load("scripts/lib/question-type-adjudication-outcome.js");
+  const { buildTaskRelationAdjudicationReflectionReport } = await load("scripts/lib/task-relation-adjudication-reflection.js");
   const { createHumanGroundTruthEventV2, deriveHumanEvaluationProjectionV2 } = await load("src/lib/meeting/human-ground-truth-v2.js");
   const session = path.join(root, "recording");
   const metadata = {

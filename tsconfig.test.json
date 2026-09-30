@@ -18,7 +18,7 @@
     "tests/**/*.ts",
     "src/lib/meeting/programming-language.ts",
     "src/lib/meeting/task-taxonomy.ts",
-    "src/lib/meeting/taxonomy-evaluation.ts",
+    "scripts/lib/taxonomy-evaluation.ts",
     "src/lib/meeting/semantic-taxonomy-model.ts",
     "src/lib/meeting/semantic-taxonomy-runtime.protocol.ts",
     "src/lib/meeting/semantic-taxonomy-runtime.ts",
@@ -30,8 +30,8 @@
     "src/lib/meeting/answer-sufficiency.ts",
     "src/lib/meeting/answer-sufficiency-semantic-prototypes.ts",
     "src/lib/meeting/answer-sufficiency-semantic-resolver.ts",
-    "src/lib/meeting/answer-sufficiency-reflection.ts",
-    "src/lib/meeting/semantic-taxonomy-reflection.ts",
+    "scripts/lib/answer-sufficiency-reflection.ts",
+    "scripts/lib/semantic-taxonomy-reflection.ts",
     "model-manifests/*.json"
   ]
 }

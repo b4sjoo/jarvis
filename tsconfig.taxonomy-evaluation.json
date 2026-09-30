@@ -15,7 +15,7 @@
   },
   "include": [
     "scripts/evaluate-taxonomy-corpus.ts",
-    "src/lib/meeting/taxonomy-evaluation.ts",
+    "scripts/lib/taxonomy-evaluation.ts",
     "src/lib/meeting/task-taxonomy.ts",
     "src/lib/memory/types.ts"
   ]
