@@ -27,7 +27,7 @@ test("routes accepted production STT turns through one canonical ingress", () =>
   assert.match(ingress, /canonical-turn-ingress-admitted/);
   assert.match(ingress, /decideResponseOpportunityLocalRoute/);
   assert.match(ingress, /buildLogicalQuestionForTurn/);
-  assert.match(ingress, /scheduleSemanticTaxonomyShadow/);
+  assert.match(ingress, /scheduleQuestionRuntime/);
   assert.match(ingress, /scheduleAdvisorAfterQuestionTypeWindow/);
 });
 
@@ -53,7 +53,7 @@ test("joins every reviewed response opportunity before canonical publication and
     ingress.indexOf("      let runtimeAdjudication:")
   );
   const semanticScheduleAt = residualBranch.indexOf(
-    "runtimeAdjudication = scheduleSemanticTaxonomyShadow"
+    "runtimeAdjudication = scheduleQuestionRuntime"
   );
   const responseScheduleAt = residualBranch.indexOf(
     "scheduleResponseOpportunityInference({"

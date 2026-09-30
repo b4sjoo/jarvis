@@ -9,7 +9,7 @@ const source = readFileSync(
 
 test("does not schedule the legacy Combined Intent observer", () => {
   const start = source.indexOf(
-    "const scheduleSemanticTaxonomyShadow = useCallback"
+    "const prepareSemanticTaxonomyObservation = useCallback"
   );
   const end = source.indexOf(
     "const scheduleAdvisorAfterQuestionTypeWindow",

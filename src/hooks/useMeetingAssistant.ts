@@ -7454,18 +7454,12 @@ export function useMeetingAssistant() {
       traceId,
       taskId,
       request,
-      runtimeReleaseRequested = false,
     }: {
       traceId: string;
       taskId?: string;
       request: SourceLinkageAdjudicationRequest;
-      runtimeReleaseRequested?: boolean;
-    }): Promise<SourceLinkageRuntimeOutcome> | undefined => {
-      const evaluationActive =
-        debugModeRef.current ||
-        Boolean(sessionRecordingManagerRef.current?.getState().active);
-      if (!evaluationActive && !runtimeReleaseRequested) return;
-      const mode = runtimeReleaseRequested ? "enforcement" : "shadow";
+    }): Promise<SourceLinkageRuntimeOutcome> => {
+      const mode = "enforcement";
       const contextState = contextManagerRef.current.getState();
       const circuit = sourceLinkageAdjudicationCircuitRef.current.read(
         "source-linkage-adjudication",
@@ -7480,23 +7474,14 @@ export function useMeetingAssistant() {
           sourceLinkageDisposition: "provider-circuit-open",
           sourceLinkageMode: mode,
         });
-        if (runtimeReleaseRequested) {
-          return Promise.reject(new Error(
-            "Source linkage provider is unavailable. Check the Fast provider configuration and credentials."
-          ));
-        }
-        return Promise.resolve({
-          disposition: "provider-circuit-open",
-          leaseAuthorized: false,
-          validationMismatchedFacets: [],
-        });
+        return Promise.reject(new Error(
+          "Source linkage provider is unavailable. Check the Fast provider configuration and credentials."
+        ));
       }
       const modelRoute = resolveRuntimeInferenceModelRouteFromSnapshot({
         snapshot: meetingModelProviderSnapshotRef.current,
         operationKind: "source-linkage-adjudication",
-        reason: runtimeReleaseRequested
-          ? "manual-screen-source-linkage-release"
-          : "ambiguous-manual-screen-source-linkage-shadow",
+        reason: "manual-screen-source-linkage-release",
       });
       const routeMetadata =
         formatRuntimeInferenceModelRouteForTrace(modelRoute);
@@ -7522,16 +7507,9 @@ export function useMeetingAssistant() {
           sourceLinkageDisposition: "provider-configuration-error",
           sourceLinkageMode: mode,
         });
-        if (runtimeReleaseRequested) {
-          return Promise.reject(new Error(
-            "Source linkage requires a configured Fast provider."
-          ));
-        }
-        return Promise.resolve({
-          disposition: "provider-configuration-error",
-          leaseAuthorized: false,
-          validationMismatchedFacets: [],
-        });
+        return Promise.reject(new Error(
+          "Source linkage requires a configured Fast provider."
+        ));
       }
       const lease = createSourceLinkageAdjudicationLease({
         sessionId: contextState.sessionId,
@@ -7597,9 +7575,7 @@ export function useMeetingAssistant() {
             sessionId: contextState.sessionId,
             budgetKey: request.screenObservationId,
             budgetSlot: `${request.logicalQuestionUnitId}:${request.logicalQuestionUnitRevision}`,
-            budgetReason: runtimeReleaseRequested
-              ? "manual-screen-source-linkage-release"
-              : "ambiguous-manual-screen-source-linkage-shadow",
+            budgetReason: "manual-screen-source-linkage-release",
             traceId,
             lease,
             request,
@@ -7635,9 +7611,7 @@ export function useMeetingAssistant() {
             traceStoreRef.current.updateMetadata(traceId, metadata);
             stepId = traceStoreRef.current.startStep(
               traceId,
-              runtimeReleaseRequested
-                ? "Source linkage adjudication release"
-                : "Source linkage adjudication shadow",
+              "Source linkage adjudication release",
               metadata
             );
           },
@@ -7698,9 +7672,7 @@ export function useMeetingAssistant() {
                     ? providerDisposition
                     : !parsed?.ok
                     ? "invalid-output"
-                      : runtimeReleaseRequested
-                        ? "release-candidate"
-                        : "shadow-observed";
+                      : "release-candidate";
             const metadata = {
               ...scheduledMetadata,
               ...formatRuntimeInferenceSharedAdmissionForTrace(
@@ -7754,8 +7726,7 @@ export function useMeetingAssistant() {
                 settlement.error
               );
             }
-            if (runtimeReleaseRequested &&
-                (leaseAuthorized || settlement.disposition === "operation-mismatch")) {
+            if (leaseAuthorized || settlement.disposition === "operation-mismatch") {
               if (providerDisposition === "provider-auth-error") {
                 reject(new Error("Source linkage provider authentication failed. Check the Fast provider credentials."));
                 return;
@@ -20876,50 +20847,33 @@ export function useMeetingAssistant() {
     }), []);
 
 
-  const scheduleSemanticTaxonomyShadow = useCallback(
+  const prepareSemanticTaxonomyObservation = useCallback(
     ({
       turn,
       traceId,
       turnGateAction,
       logicalQuestionUnit,
-      questionTypeAxisConflict,
+      contextState,
+      classifierText,
+      relationText,
+      lexical,
     }: {
       turn: TranscriptTurn;
       traceId: string;
       turnGateAction: string;
       logicalQuestionUnit?: LogicalQuestionUnit;
-      questionTypeAxisConflict?: RuntimeAxisConflictDecision<
-        CanonicalQuestionType
-      >;
+      contextState: MeetingContextState;
+      classifierText: string;
+      relationText: string;
+      lexical: QuestionTypeInferenceDecision;
     }) => {
-      const contextState = contextManagerRef.current.getState();
       const sessionId = contextState.sessionId;
       const runtimeEpoch = runtimeEpochRef.current;
       const semanticTaxonomyMode = semanticTaxonomyModeRef.current;
       const runtime = semanticTaxonomyRuntimeRef.current!;
-      const classifierText =
-        getLogicalQuestionSemanticEvidenceText(logicalQuestionUnit) ||
-        turn.text;
       const activeParent = contextState.activeMeetingTask?.parent;
       const activeParentId = activeParent?.id;
       const activeParentRevision = activeParent?.revisions;
-      const currentBranchType = normalizeCanonicalQuestionType(
-        contextState.activeMeetingTask?.child?.questionType ??
-          activeParent?.questionType
-      );
-      const relationText = buildSemanticInterviewerIntentRelationText({
-        currentText: classifierText,
-        parent: readEffectiveSemanticTask(contextState.activeMeetingTask, logicalQuestionUnit)?.parent,
-      });
-      const lexical = inferQuestionTypeDecisionFromText(classifierText, {
-        interviewSessionBrief: contextState.interviewSessionBrief,
-      });
-      const structuredTypeHints = buildVoiceQuestionTypeStructuredHints({
-        lexical,
-        logicalQuestionUnit,
-        classifierText,
-        currentBranchType,
-      });
       const eligibility = decideSemanticTaxonomyShadowEligibility({
         speaker: turn.speaker,
         turnGateAction,
@@ -20959,254 +20913,243 @@ export function useMeetingAssistant() {
         lexical,
         metadata: initialMetadata,
       });
-      const questionTypeAdjudication = scheduleQuestionTypeAdjudication({
-        turn,
-        traceId,
-        turnGateAction,
-        logicalQuestionUnit,
-        lexical,
-        questionTypeAxisConflict,
-        authorizationLogicalQuestionUnit: logicalQuestionUnit,
-        structuredHints: structuredTypeHints,
-      });
-      const relationSourceLease = logicalQuestionUnit
-        ? createLogicalQuestionUnitLease(logicalQuestionUnit)
-        : undefined;
-      const taskRelationAdjudication = scheduleTaskRelationAdjudication({
-        turn,
-        traceId,
-        turnGateAction,
-        logicalQuestionUnit,
-        lexical,
-        authorizeSourceOperation: () =>
-          relationSourceLease
-            ? toTaskRelationOperationAuthorization(
-                authorizeLogicalQuestionUnitLease(
-                  relationSourceLease,
-                  logicalQuestionUnitRef.current
-                )
-              )
-            : {
-                authorized: false,
-                reason: "logical-question-missing",
-                mismatchedKey: "source",
-              },
-      });
-      const runtimeAdjudication: RuntimeAdjudicationScheduleHandle = {
-        questionType: questionTypeAdjudication,
-        taskRelation: taskRelationAdjudication,
-      };
-
-      if (!eligibility.eligible) {
-        sessionRecordingManagerRef.current?.recordSemanticTaxonomyDecision({
-          traceId,
-          taskId: contextState.activeMeetingTask?.id,
-          metadata: initialMetadata,
-        });
-        sessionRecordingManagerRef.current?.recordInterviewerIntentSemanticDecision({
-          traceId,
-          taskId: contextState.activeMeetingTask?.id,
-          metadata: initialMetadata,
-        });
-        return runtimeAdjudication;
-      }
-
-      const stepId = traceStoreRef.current.startStep(
-        traceId,
-        "Semantic taxonomy shadow",
-        {
-          turnId: turn.id,
-          sessionId,
-          runtimeEpoch,
-          lexicalType: lexical.type ?? "unknown",
-          mode: "shadow",
+      // Preserve initialization before formal dispatch, embedding after it.
+      return () => {
+        if (!eligibility.eligible) {
+          sessionRecordingManagerRef.current?.recordSemanticTaxonomyDecision({
+            traceId,
+            taskId: contextState.activeMeetingTask?.id,
+            metadata: initialMetadata,
+          });
+          sessionRecordingManagerRef.current?.recordInterviewerIntentSemanticDecision({
+            traceId,
+            taskId: contextState.activeMeetingTask?.id,
+            metadata: initialMetadata,
+          });
+          return;
         }
-      );
-      semanticEmbeddingRevisionRef.current += 1;
-      const semanticRequestRevision =
-        semanticEmbeddingRevisionRef.current;
-      void runtime
-        .embed(
+
+        const stepId = traceStoreRef.current.startStep(
+          traceId,
+          "Semantic taxonomy shadow",
           {
+            turnId: turn.id,
             sessionId,
             runtimeEpoch,
-            turnId: turn.id,
-            texts: activeParent
-              ? [classifierText, relationText]
-              : [classifierText],
-            kind: "query",
-          },
-          {
-            consumer: "interviewer-intent",
-            coalescingKey: `${sessionId}:current-question`,
-            revision: semanticRequestRevision,
-            onTelemetry: (telemetry) => {
-              recordSemanticEmbeddingRuntimeEvent({
-                traceId,
-                taskId: contextState.activeMeetingTask?.id,
-                telemetry,
-              });
+            lexicalType: lexical.type ?? "unknown",
+            mode: "shadow",
+          }
+        );
+        semanticEmbeddingRevisionRef.current += 1;
+        const semanticRequestRevision =
+          semanticEmbeddingRevisionRef.current;
+        void runtime
+          .embed(
+            {
+              sessionId,
+              runtimeEpoch,
+              turnId: turn.id,
+              texts: activeParent
+                ? [classifierText, relationText]
+                : [classifierText],
+              kind: "query",
             },
-          }
-        )
-        .then((embedding) => {
-          const currentContext = contextManagerRef.current.getState();
-          const stale =
-            currentContext.sessionId !== sessionId ||
-            runtimeEpochRef.current !== runtimeEpoch ||
-            currentContext.activeMeetingTask?.parent.id !== activeParentId ||
-            currentContext.activeMeetingTask?.parent.revisions !==
-              activeParentRevision ||
-            embedding.status === "stale";
-          if (stale) {
-            traceStoreRef.current.finishStep(
-              traceId,
-              stepId,
-              "cancelled",
-              {
-                semanticTaxonomyStaleResultDropped: true,
-                semanticTaxonomyTurnId: turn.id,
-                semanticTaxonomySessionId: sessionId,
-                semanticTaxonomyRuntimeEpoch: runtimeEpoch,
-                semanticTaxonomyCurrentSessionId: currentContext.sessionId,
-                semanticTaxonomyCurrentRuntimeEpoch: runtimeEpochRef.current,
-                ...formatSemanticInterviewerIntentForTrace(undefined, {
-                  embeddingStatus: embedding.status,
-                  parentId: activeParentId,
-                  parentRevision: activeParentRevision,
-                  logicalQuestionUnitId: logicalQuestionUnit?.id,
-                  logicalQuestionUnitRevision:
-                    logicalQuestionUnit?.revision,
-                  staleResultDropped: true,
-                }),
-              }
-            );
-            return;
-          }
+            {
+              consumer: "interviewer-intent",
+              coalescingKey: `${sessionId}:current-question`,
+              revision: semanticRequestRevision,
+              onTelemetry: (telemetry) => {
+                recordSemanticEmbeddingRuntimeEvent({
+                  traceId,
+                  taskId: contextState.activeMeetingTask?.id,
+                  telemetry,
+                });
+              },
+            }
+          )
+          .then((embedding) => {
+            const currentContext = contextManagerRef.current.getState();
+            const stale =
+              currentContext.sessionId !== sessionId ||
+              runtimeEpochRef.current !== runtimeEpoch ||
+              currentContext.activeMeetingTask?.parent.id !== activeParentId ||
+              currentContext.activeMeetingTask?.parent.revisions !==
+                activeParentRevision ||
+              embedding.status === "stale";
+            if (stale) {
+              traceStoreRef.current.finishStep(
+                traceId,
+                stepId,
+                "cancelled",
+                {
+                  semanticTaxonomyStaleResultDropped: true,
+                  semanticTaxonomyTurnId: turn.id,
+                  semanticTaxonomySessionId: sessionId,
+                  semanticTaxonomyRuntimeEpoch: runtimeEpoch,
+                  semanticTaxonomyCurrentSessionId: currentContext.sessionId,
+                  semanticTaxonomyCurrentRuntimeEpoch: runtimeEpochRef.current,
+                  ...formatSemanticInterviewerIntentForTrace(undefined, {
+                    embeddingStatus: embedding.status,
+                    parentId: activeParentId,
+                    parentRevision: activeParentRevision,
+                    logicalQuestionUnitId: logicalQuestionUnit?.id,
+                    logicalQuestionUnitRevision:
+                      logicalQuestionUnit?.revision,
+                    staleResultDropped: true,
+                  }),
+                }
+              );
+              return;
+            }
 
-          const semantic =
-            embedding.status === "success" && embedding.embeddings[0]
-              ? scoreSemanticTaxonomyEmbedding(embedding.embeddings[0])
-              : undefined;
-          const hybrid = resolveHybridQuestionType({ lexical, semantic });
-          const semanticIntent =
-            embedding.status === "success" && embedding.embeddings[0]
-              ? scoreSemanticInterviewerIntentEmbeddings({
-                  unitEmbedding: embedding.embeddings[0],
-                  relationEmbedding: embedding.embeddings[1],
-                  activeParentAvailable: Boolean(activeParent),
-                })
-              : undefined;
-          const metadata = {
-            ...formatSemanticTaxonomyShadowMetadata({
+            const semantic =
+              embedding.status === "success" && embedding.embeddings[0]
+                ? scoreSemanticTaxonomyEmbedding(embedding.embeddings[0])
+                : undefined;
+            const hybrid = resolveHybridQuestionType({ lexical, semantic });
+            const semanticIntent =
+              embedding.status === "success" && embedding.embeddings[0]
+                ? scoreSemanticInterviewerIntentEmbeddings({
+                    unitEmbedding: embedding.embeddings[0],
+                    relationEmbedding: embedding.embeddings[1],
+                    activeParentAvailable: Boolean(activeParent),
+                  })
+                : undefined;
+            const metadata = {
+              ...formatSemanticTaxonomyShadowMetadata({
+                turnId: turn.id,
+                sessionId,
+                runtimeEpoch,
+                lexical,
+                eligibility,
+                runtime: runtime.getSnapshot(),
+                embedding,
+                semantic,
+                hybrid,
+                mode: semanticTaxonomyMode,
+              }),
+              ...formatSemanticEmbeddingRuntimeTelemetryForTrace(
+                embedding.telemetry
+              ),
+              ...formatSemanticInterviewerIntentForTrace(semanticIntent, {
+                embeddingStatus: embedding.status,
+                durationMs: embedding.durationMs,
+                cacheHit:
+                  embedding.status === "success"
+                    ? embedding.cacheHit
+                    : false,
+                parentId: activeParentId,
+                parentRevision: activeParentRevision,
+                logicalQuestionUnitId: logicalQuestionUnit?.id,
+                logicalQuestionUnitRevision:
+                  logicalQuestionUnit?.revision,
+              }),
+              ...formatLogicalQuestionUnitForTrace(logicalQuestionUnit),
+            };
+            traceStoreRef.current.updateMetadata(traceId, metadata);
+            semanticTaxonomyEvidenceByTurnRef.current.set(turn.id, {
               turnId: turn.id,
               sessionId,
               runtimeEpoch,
               lexical,
-              eligibility,
-              runtime: runtime.getSnapshot(),
-              embedding,
-              semantic,
               hybrid,
-              mode: semanticTaxonomyMode,
-            }),
-            ...formatSemanticEmbeddingRuntimeTelemetryForTrace(
-              embedding.telemetry
-            ),
-            ...formatSemanticInterviewerIntentForTrace(semanticIntent, {
-              embeddingStatus: embedding.status,
-              durationMs: embedding.durationMs,
-              cacheHit:
-                embedding.status === "success"
-                  ? embedding.cacheHit
-                  : false,
-              parentId: activeParentId,
-              parentRevision: activeParentRevision,
-              logicalQuestionUnitId: logicalQuestionUnit?.id,
-              logicalQuestionUnitRevision:
-                logicalQuestionUnit?.revision,
-            }),
-            ...formatLogicalQuestionUnitForTrace(logicalQuestionUnit),
-          };
-          traceStoreRef.current.updateMetadata(traceId, metadata);
-          semanticTaxonomyEvidenceByTurnRef.current.set(turn.id, {
-            turnId: turn.id,
-            sessionId,
-            runtimeEpoch,
-            lexical,
-            hybrid,
-            metadata,
+              metadata,
+            });
+            while (semanticTaxonomyEvidenceByTurnRef.current.size > 32) {
+              const oldestTurnId =
+                semanticTaxonomyEvidenceByTurnRef.current.keys().next().value;
+              if (!oldestTurnId) break;
+              semanticTaxonomyEvidenceByTurnRef.current.delete(oldestTurnId);
+            }
+            traceStoreRef.current.finishStep(
+              traceId,
+              stepId,
+              embedding.status === "error" ? "error" : "success",
+              metadata,
+              embedding.status === "error" ? embedding.reason : undefined
+            );
+            sessionRecordingManagerRef.current?.recordSemanticTaxonomyDecision({
+              traceId,
+              taskId: contextState.activeMeetingTask?.id,
+              metadata,
+            });
+            sessionRecordingManagerRef.current?.recordInterviewerIntentSemanticDecision({
+              traceId,
+              taskId: contextState.activeMeetingTask?.id,
+              metadata,
+            });
+          })
+          .catch((error) => {
+            const metadata = {
+              ...initialMetadata,
+              taxonomySemanticEmbeddingStatus: "error",
+              taxonomySemanticEmbeddingReason:
+                error instanceof Error ? error.message : String(error),
+              taxonomyHybridOutcome: "semantic-unavailable",
+              taxonomyHybridSemanticDisposition: "abstain",
+              taxonomyHybridReason: "semantic-shadow-orchestration-error",
+              ...formatSemanticInterviewerIntentForTrace(undefined, {
+                embeddingStatus: "error",
+                parentId: activeParentId,
+                parentRevision: activeParentRevision,
+                logicalQuestionUnitId: logicalQuestionUnit?.id,
+                logicalQuestionUnitRevision:
+                  logicalQuestionUnit?.revision,
+              }),
+            };
+            traceStoreRef.current.updateMetadata(traceId, metadata);
+            traceStoreRef.current.finishStep(
+              traceId,
+              stepId,
+              "error",
+              metadata,
+              error
+            );
+            sessionRecordingManagerRef.current?.recordSemanticTaxonomyDecision({
+              traceId,
+              taskId: contextState.activeMeetingTask?.id,
+              metadata,
+            });
+            sessionRecordingManagerRef.current?.recordInterviewerIntentSemanticDecision({
+              traceId,
+              taskId: contextState.activeMeetingTask?.id,
+              metadata,
+            });
           });
-          while (semanticTaxonomyEvidenceByTurnRef.current.size > 32) {
-            const oldestTurnId =
-              semanticTaxonomyEvidenceByTurnRef.current.keys().next().value;
-            if (!oldestTurnId) break;
-            semanticTaxonomyEvidenceByTurnRef.current.delete(oldestTurnId);
-          }
-          traceStoreRef.current.finishStep(
-            traceId,
-            stepId,
-            embedding.status === "error" ? "error" : "success",
-            metadata,
-            embedding.status === "error" ? embedding.reason : undefined
-          );
-          sessionRecordingManagerRef.current?.recordSemanticTaxonomyDecision({
-            traceId,
-            taskId: contextState.activeMeetingTask?.id,
-            metadata,
-          });
-          sessionRecordingManagerRef.current?.recordInterviewerIntentSemanticDecision({
-            traceId,
-            taskId: contextState.activeMeetingTask?.id,
-            metadata,
-          });
-        })
-        .catch((error) => {
-          const metadata = {
-            ...initialMetadata,
-            taxonomySemanticEmbeddingStatus: "error",
-            taxonomySemanticEmbeddingReason:
-              error instanceof Error ? error.message : String(error),
-            taxonomyHybridOutcome: "semantic-unavailable",
-            taxonomyHybridSemanticDisposition: "abstain",
-            taxonomyHybridReason: "semantic-shadow-orchestration-error",
-            ...formatSemanticInterviewerIntentForTrace(undefined, {
-              embeddingStatus: "error",
-              parentId: activeParentId,
-              parentRevision: activeParentRevision,
-              logicalQuestionUnitId: logicalQuestionUnit?.id,
-              logicalQuestionUnitRevision:
-                logicalQuestionUnit?.revision,
-            }),
-          };
-          traceStoreRef.current.updateMetadata(traceId, metadata);
-          traceStoreRef.current.finishStep(
-            traceId,
-            stepId,
-            "error",
-            metadata,
-            error
-          );
-          sessionRecordingManagerRef.current?.recordSemanticTaxonomyDecision({
-            traceId,
-            taskId: contextState.activeMeetingTask?.id,
-            metadata,
-          });
-          sessionRecordingManagerRef.current?.recordInterviewerIntentSemanticDecision({
-            traceId,
-            taskId: contextState.activeMeetingTask?.id,
-            metadata,
-          });
-        });
-      return runtimeAdjudication;
+      };
     },
-    [
-      recordSemanticEmbeddingRuntimeEvent,
-      scheduleQuestionTypeAdjudication,
-      scheduleTaskRelationAdjudication,
-      readEffectiveSemanticTask,
-    ]
+    [recordSemanticEmbeddingRuntimeEvent]
   );
+
+  const scheduleQuestionRuntime = useCallback((input: {
+    turn: TranscriptTurn;
+    traceId: string;
+    turnGateAction: string;
+    logicalQuestionUnit?: LogicalQuestionUnit;
+    questionTypeAxisConflict?: RuntimeAxisConflictDecision<CanonicalQuestionType>;
+  }): RuntimeAdjudicationScheduleHandle => {
+    const { turn, traceId, turnGateAction, logicalQuestionUnit, questionTypeAxisConflict } = input;
+    const contextState = contextManagerRef.current.getState();
+    const classifierText = getLogicalQuestionSemanticEvidenceText(logicalQuestionUnit) || turn.text;
+    const activeParent = contextState.activeMeetingTask?.parent;
+    const currentBranchType = normalizeCanonicalQuestionType(
+      contextState.activeMeetingTask?.child?.questionType ?? activeParent?.questionType);
+    const relationText = buildSemanticInterviewerIntentRelationText({ currentText: classifierText,
+      parent: readEffectiveSemanticTask(contextState.activeMeetingTask, logicalQuestionUnit)?.parent });
+    const lexical = inferQuestionTypeDecisionFromText(classifierText, { interviewSessionBrief: contextState.interviewSessionBrief });
+    const structuredHints = buildVoiceQuestionTypeStructuredHints({ lexical, logicalQuestionUnit, classifierText, currentBranchType });
+    const observe = prepareSemanticTaxonomyObservation({ turn, traceId, turnGateAction, logicalQuestionUnit,
+      contextState, classifierText, relationText, lexical });
+    const questionType = scheduleQuestionTypeAdjudication({ turn, traceId, turnGateAction, logicalQuestionUnit,
+      lexical, questionTypeAxisConflict, authorizationLogicalQuestionUnit: logicalQuestionUnit, structuredHints });
+    const relationSourceLease = logicalQuestionUnit ? createLogicalQuestionUnitLease(logicalQuestionUnit) : undefined;
+    const taskRelation = scheduleTaskRelationAdjudication({ turn, traceId, turnGateAction, logicalQuestionUnit, lexical,
+      authorizeSourceOperation: () => relationSourceLease
+        ? toTaskRelationOperationAuthorization(authorizeLogicalQuestionUnitLease(relationSourceLease, logicalQuestionUnitRef.current))
+        : { authorized: false, reason: "logical-question-missing", mismatchedKey: "source" } });
+    observe();
+    return { questionType, taskRelation };
+  }, [prepareSemanticTaxonomyObservation, scheduleQuestionTypeAdjudication, scheduleTaskRelationAdjudication, readEffectiveSemanticTask]);
 
   const scheduleAdvisorAfterQuestionTypeWindow = useCallback(
     (input: ScheduleAdvisorAfterTypeWindowInput) => {
@@ -22618,7 +22561,7 @@ export function useMeetingAssistant() {
           "deterministic-no-output"
       ) {
         if (logicalQuestionUnit) {
-          scheduleSemanticTaxonomyShadow({
+          scheduleQuestionRuntime({
             turn,
             traceId,
             turnGateAction: taxonomyTurnGateAction,
@@ -22659,7 +22602,7 @@ export function useMeetingAssistant() {
         | RuntimeAdjudicationScheduleHandle
         | undefined;
       if (logicalQuestionUnit) {
-        runtimeAdjudication = scheduleSemanticTaxonomyShadow({
+        runtimeAdjudication = scheduleQuestionRuntime({
           turn,
           traceId,
           turnGateAction:
@@ -22736,7 +22679,7 @@ export function useMeetingAssistant() {
     }, [appendTranscriptTurnForTrace, buildLogicalQuestionForTurn, holdPendingConfirmation,
       publishCanonicalLogicalQuestionTarget, publishResponseRecoveryTarget, promoteMeTurnForFusion,
       scheduleAdvisor, scheduleAdvisorAfterQuestionTypeWindow, scheduleResponseOpportunityInference,
-      scheduleSemanticTaxonomyShadow]);
+      scheduleQuestionRuntime]);
   processPostBufferThemTurnRef.current = processPostBufferThemTurn;
 
   const processCanonicalTurnIngress = useCallback(
@@ -23040,7 +22983,7 @@ export function useMeetingAssistant() {
       scheduleAdvisorAfterQuestionTypeWindow,
       schedulePendingAnswerCommit,
       scheduleResponseOpportunityInference,
-      scheduleSemanticTaxonomyShadow,
+      scheduleQuestionRuntime,
     ]
   );
 
@@ -26831,7 +26774,6 @@ export function useMeetingAssistant() {
                 traceId: trace.id,
                 taskId: preflightContextState.activeMeetingTask?.id,
                 request: sourceLinkageRequest,
-                runtimeReleaseRequested: true,
               });
             if (sourceLinkageOutcomePromise) {
               const sourceLinkageOutcome = await sourceLinkageOutcomePromise;
@@ -35991,7 +35933,7 @@ export function useMeetingAssistant() {
         turn: reversalTurn,
         intentDecision: reversalIntent,
       });
-      const runtimeAdjudication = scheduleSemanticTaxonomyShadow({
+      const runtimeAdjudication = scheduleQuestionRuntime({
         turn: reversalTurn,
         traceId: trace.id,
         turnGateAction: "answer-refresh",
@@ -36014,7 +35956,7 @@ export function useMeetingAssistant() {
       cancelActiveAdvisorJob,
       publishCanonicalLogicalQuestionTarget,
       scheduleAdvisorAfterQuestionTypeWindow,
-      scheduleSemanticTaxonomyShadow,
+      scheduleQuestionRuntime,
       settleAwaitingVisualEvidenceRecovery,
     ]
   );

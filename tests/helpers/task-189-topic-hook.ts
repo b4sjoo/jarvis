@@ -121,7 +121,7 @@ export function buildTopicRelationRequest(manager: MeetingContextManager, ledger
 }
 
 export function buildTopicIntentInput(manager: MeetingContextManager, ledger: EffectiveQuestionSourceLedger, logicalQuestionUnit: LogicalQuestionUnit) {
-  return evaluateHookDeclarations("scheduleSemanticTaxonomyShadow", ["contextState", "classifierText", "activeParent", "relationText"], {
+  return evaluateHookDeclarations("scheduleQuestionRuntime", ["contextState", "classifierText", "activeParent", "relationText"], {
     ...topicGlobals(manager, ledger), logicalQuestionUnit, turn: { text: logicalQuestionUnit.normalizedText },
     getLogicalQuestionSemanticEvidenceText,
     buildSemanticInterviewerIntentRelationText: topicHookFunction("buildSemanticInterviewerIntentRelationText"),

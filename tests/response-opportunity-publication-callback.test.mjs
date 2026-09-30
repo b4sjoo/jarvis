@@ -84,6 +84,7 @@ for (const name of [
   "short-intent-gate", "logical-question-unit", "runtime-inference-health",
   "settled-advisor-execution-plan", "advisor-trigger-job", "stable-answer", "meeting-answer",
   "audio-drain-authorization",
+  "relation-decision-provenance",
 ]) {
   exports.push(`export * from "@/lib/meeting/${name}";`);
 }
@@ -205,7 +206,7 @@ function createHarness() {
     runtimeRegressionStepIdRef: { current: undefined },
     PENDING_CONFIRMATION_TTL_MS: 10_000,
     scheduleMeetingMetadataInference() {}, promoteMeTurnForFusion() {},
-    scheduleSemanticTaxonomyShadow: () => ({ taskRelation: {
+    scheduleQuestionRuntime: () => ({ taskRelation: {
       operationId: "relation", releaseWindowRequested: false, sourceKind: "voice",
       authorizeOperation: () => ({ authorized: true, reason: "source-operation-current" }),
     } }),
