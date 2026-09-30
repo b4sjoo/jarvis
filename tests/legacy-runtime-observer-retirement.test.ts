@@ -52,9 +52,10 @@ test("keeps the ordered split chain without scheduling Direct Relation", () => {
   );
   assert.doesNotMatch(block, /requestTaskRelationAdjudication\(\{/);
   assert.doesNotMatch(source, /taskRelationHandle\.outcome|initialNarrowScreenRelease|narrowScreenReleaseInput/);
-  const handle = source.slice(
-    source.indexOf("interface TaskRelationAdjudicationScheduleHandle"),
-    source.indexOf("interface TaskRelationOperationAuthorization")
+  const operation = readFileSync("src/lib/meeting/ordered-relation-operation.ts", "utf8");
+  const handle = operation.slice(
+    operation.indexOf("interface TaskRelationAdjudicationScheduleHandle"),
+    operation.indexOf("interface TaskRelationOperationAuthorization")
   );
   assert.doesNotMatch(handle, /^ {2}(?:admission|outcome):/m);
   assert.match(handle, /affinityOutcome/);

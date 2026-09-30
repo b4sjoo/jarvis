@@ -1,6 +1,7 @@
 import type { ActiveMeetingTask } from "../src/lib/meeting/meeting-task-contracts.js";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
@@ -934,16 +935,7 @@ test("normalizes unresolved-like provider outcomes to the active-owner null hypo
 });
 
 test("wires provider faults to finalization while stale source ownership fails closed", () => {
-  const resolverStart = meetingHookSource.indexOf(
-    "const resolveOrderedTaskRelationWithinWindow"
-  );
-  const resolverEnd = meetingHookSource.indexOf(
-    "const scheduleSemanticTaxonomyShadow",
-    resolverStart
-  );
-  assert.ok(resolverStart >= 0);
-  assert.ok(resolverEnd > resolverStart);
-  const resolver = meetingHookSource.slice(resolverStart, resolverEnd);
+  const resolver = readFileSync("src/lib/meeting/ordered-relation-operation.ts", "utf8");
 
   assert.match(resolver, /affinity-cutoff-expired/);
   assert.match(resolver, /freezeAffinityOutcome/);
@@ -960,9 +952,9 @@ test("wires provider faults to finalization while stale source ownership fails c
   assert.match(meetingHookSource, /deadline:\s*foregroundDeadline/);
   assert.match(
     resolver,
-    /readOrderedSettlementRemainingMs\(canonicalDeadline \?\? deadline\)/
+    /readOrderedSettlementRemainingMs\(canonicalDeadline \?\? deadline, dependencies.now\(\)\)/
   );
-  assert.match(resolver, /canonicalDeadline = createOrderedRelationCanonicalDeadline\(deadline\)/);
+  assert.match(resolver, /canonicalDeadline = createOrderedRelationCanonicalDeadline\(deadline, dependencies.now\(\)\)/);
   assert.match(resolver, /deadline\.deadlineAt = canonicalDeadline\.deadlineAt/);
   assert.match(resolver, /deadlineAt: canonicalDeadline\?\.deadlineAt/);
   assert.match(meetingHookSource, /ordered-chain-internal-error/);

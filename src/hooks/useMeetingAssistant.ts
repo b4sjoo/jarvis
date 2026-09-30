@@ -1,3 +1,6 @@
+import { resolveOrderedTaskRelationWithinWindow as resolveOrderedTaskRelationOperation,
+  type TaskRelationAdjudicationScheduleHandle, type TaskRelationOperationAuthorization,
+  type TaskRelationSplitCanonicalResult } from '@/lib/meeting/ordered-relation-operation';
 import type { MeetingTaskDeadlineDelta } from "../lib/meeting/meeting-task-contracts.js";
 import { ManualAdviseDisplay, type AdviseDisplaySnapshot, type AdviseDisplayTarget } from "../lib/meeting/manual-advise-display.js";
 import { UnpublishedArtifactSlot, type UnpublishedArtifactOffer, type UnpublishedArtifactCandidate } from "../lib/meeting/unpublished-artifact.js";
@@ -236,15 +239,10 @@ import {
   coordinateOrderedSettlement,
   createOrderedSettlementDeadline,
   createOrderedRelationPhaseBudget,
-  createOrderedRelationCanonicalDeadline,
   createOrderedSettlementReleaseGate,
   formatOrderedSettlementCoordinatorForTrace,
   formatOrderedSettlementReleaseForTrace,
-  readOrderedRelationAffinityRemainingMs,
-  readOrderedSettlementRemainingMs,
-  resolveOrderedRelationOperationTerminal,
   type OrderedRelationOperationTerminalDisposition,
-  type OrderedSettlementDeadline,
   type OrderedSettlementReleaseSource,
 } from "@/lib/meeting/ordered-settlement-coordinator";
 import {
@@ -264,7 +262,6 @@ import {
   cloneTaskRelationSplitAffinityResult,
   createTaskRelationOperationIdentity,
   createTaskRelationSplitLease,
-  decideOrderedTaskRelationResolution,
   filterTaskRelationAffinityOutcomeAtCutoff,
   formatFirstBatchRelationReleaseForTrace,
   formatOrderedTaskRelationResolutionForTrace,
@@ -2449,47 +2446,8 @@ interface QuestionTypeAdjudicationScheduleHandle {
   restrictRetryDeadlineAt?: (deadlineAt: number) => void;
 }
 
-interface TaskRelationAdjudicationScheduleHandle {
-  releaseWindowRequested: boolean;
-  affinityDeadlineAt?: number;
-  operationId?: string;
-  affinityOutcome?: Promise<TaskRelationSplitAffinityOutcome>;
-  readAffinityOutcome?: () => TaskRelationSplitAffinityOutcome;
-  freezeAffinityOutcome?: (
-    cutoffAt: number
-  ) => TaskRelationSplitAffinityOutcome;
-  revalidateAffinityOutcome?: (
-    outcome: TaskRelationSplitAffinityOutcome
-  ) => TaskRelationSplitAffinityOutcome;
-  authorizeOperation: () => TaskRelationOperationAuthorization;
-  canonicalOutcome?: Promise<TaskRelationSplitCanonicalResult>;
-  startCanonical?: (
-    input: {
-      foreground: boolean;
-      affinityOutcome?: TaskRelationSplitAffinityOutcome;
-      deadlineAt?: number;
-    }
-  ) => Promise<TaskRelationSplitCanonicalResult>;
-  cancelForegroundWork?: () => void;
-  currentQuestion?: ProvisionalCurrentQuestion;
-  deterministicProposal?: CurrentQuestionSettlementProposal;
-  localQuestionType?: CanonicalQuestionType;
-  sourceKind?: "voice" | "screen" | "mixed";
-}
 
-interface TaskRelationOperationAuthorization {
-  authorized: boolean;
-  reason: string;
-  mismatchedKey?: string;
-}
 
-interface TaskRelationSplitCanonicalResult {
-  operationId?: string;
-  outputHash?: string;
-  adjudication?: TaskRelationCanonicalShadowAdjudication;
-  unavailableReason?: string;
-  clientError?: boolean;
-}
 
 interface TaskRelationSplitScheduleHandle {
   operationId: string;
@@ -20916,268 +20874,12 @@ export function useMeetingAssistant() {
     [scheduleTaskRelationSplitRuntime, readEffectiveSemanticTask]
   );
 
-  const resolveOrderedTaskRelationWithinWindow = useCallback(
-    async (input: {
-      handle: TaskRelationAdjudicationScheduleHandle;
-      traceId: string;
-      currentQuestionType: CanonicalQuestionType;
-      currentQuestionTypeInherited?: boolean;
-      allowParentRetype?: boolean;
-      sourceKind: "voice" | "screen" | "mixed";
-      activeMeetingTask?: ActiveMeetingTask;
-      screenBoundaryPrior?: boolean;
-      screenTypeEvidenceAuthorized?: boolean;
-      waitBudgetMs: number;
-      deadline?: OrderedSettlementDeadline;
-    }) => {
-      const startedAt = Date.now();
-      const deadline =
-        input.deadline ??
-        createOrderedSettlementDeadline({
-          startedAt: input.handle.affinityDeadlineAt === undefined
-            ? startedAt
-            : input.handle.affinityDeadlineAt - ORDERED_RELATION_STAGE_BUDGET_MS,
-          budgetMs: input.waitBudgetMs,
-        });
-      const phaseBudget = createOrderedRelationPhaseBudget(deadline);
-      if (input.handle.affinityDeadlineAt !== undefined) {
-        phaseBudget.affinityCutoffAt = Math.min(phaseBudget.affinityCutoffAt, input.handle.affinityDeadlineAt);
-      }
-      let affinityOutcome = input.handle.readAffinityOutcome?.();
-      let affinitySnapshotFrozen = false;
-      let canonicalOutcome: TaskRelationSplitCanonicalResult | undefined;
-      let canonicalDeadline: OrderedSettlementDeadline | undefined;
-      let waitDisposition = "affinity-unavailable";
-      const readRemainingBudget = () =>
-        readOrderedSettlementRemainingMs(canonicalDeadline ?? deadline);
-      const readAffinityRemainingBudget = () =>
-        readOrderedRelationAffinityRemainingMs(phaseBudget);
-      const freezeAffinityOutcome = () => {
-        if (!affinitySnapshotFrozen) {
-          const observed =
-            input.handle.freezeAffinityOutcome?.(
-              phaseBudget.affinityCutoffAt
-            ) ??
-            filterTaskRelationAffinityOutcomeAtCutoff(
-              input.handle.readAffinityOutcome?.() ?? {
-                child: { unavailableReason: "affinity-unavailable" },
-                parent: { unavailableReason: "affinity-unavailable" },
-              },
-              phaseBudget.affinityCutoffAt
-            );
-          affinityOutcome = observed;
-          affinitySnapshotFrozen = true;
-        }
-        return input.handle.revalidateAffinityOutcome?.(
-          affinityOutcome ?? {
-            child: { unavailableReason: "affinity-unavailable" },
-            parent: { unavailableReason: "affinity-unavailable" },
-          }
-        ) ?? affinityOutcome;
-      };
-      if (input.handle.affinityOutcome && readAffinityRemainingBudget() > 0) {
-        try {
-          await withTimeout(
-            input.handle.affinityOutcome,
-            Math.max(1, readAffinityRemainingBudget()),
-            "Ordered relation affinity window expired."
-          );
-          waitDisposition = "affinity-settled";
-        } catch (error) {
-          if (
-            !(error instanceof Error) ||
-            error.message !== "Ordered relation affinity window expired."
-          ) {
-            throw error;
-          }
-          waitDisposition = "affinity-cutoff-expired";
-        }
-      }
-      affinityOutcome = freezeAffinityOutcome();
-      let decision = decideOrderedTaskRelationResolution({
-        sourceKind: input.sourceKind,
-        currentQuestionType: input.currentQuestionType,
-        allowParentRetype: input.allowParentRetype,
-        currentQuestionTypeInherited: input.currentQuestionTypeInherited ??
-          (input.sourceKind === "screen" && input.screenTypeEvidenceAuthorized === false),
-        activeParentQuestionType:
-          input.activeMeetingTask?.parent.questionType,
-        activeChildQuestionType:
-          input.activeMeetingTask?.child?.questionType,
-        hasActiveChild: Boolean(input.activeMeetingTask?.child),
-        childAffinity: affinityOutcome?.child.adjudication,
-        parentAffinity: affinityOutcome?.parent.adjudication,
-        screenBoundaryPrior: input.screenBoundaryPrior,
-        screenTypeEvidenceAuthorized:
-          input.screenTypeEvidenceAuthorized,
-      });
-      const affinityClientError = Boolean(affinityOutcome?.child.clientError || affinityOutcome?.parent.clientError);
-      if (decision.status === "unresolved" && !affinityClientError) {
-        canonicalDeadline = createOrderedRelationCanonicalDeadline(deadline);
-        // The same release gate follows the active phase, including event-loop drift.
-        deadline.deadlineAt = canonicalDeadline.deadlineAt;
-        deadline.budgetMs = deadline.deadlineAt - deadline.startedAt;
-      }
-      const canonicalPromise =
-        decision.status === "unresolved" && !affinityClientError && readRemainingBudget() > 0
-          ? input.handle.startCanonical?.({
-              foreground: true,
-              affinityOutcome,
-              deadlineAt: canonicalDeadline?.deadlineAt,
-            })
-          : undefined;
-      if (decision.status === "unresolved") {
-        waitDisposition =
-          !canonicalPromise
-            ? "canonical-skipped-no-budget"
-            : waitDisposition === "affinity-unavailable"
-            ? "canonical-started-without-affinity"
-            : "canonical-started-after-affinity";
-      }
-      if (
-        decision.status === "unresolved" &&
-        canonicalPromise &&
-        readRemainingBudget() > 0
-      ) {
-        try {
-          canonicalOutcome = await withTimeout(
-            canonicalPromise,
-            Math.max(1, readRemainingBudget()),
-            "Ordered relation canonical window expired."
-          );
-          waitDisposition = canonicalOutcome.adjudication
-            ? "canonical-settled"
-            : "canonical-unresolved";
-        } catch (error) {
-          if (
-            !(error instanceof Error) ||
-            error.message !== "Ordered relation canonical window expired."
-          ) {
-            throw error;
-          }
-          waitDisposition = "canonical-deadline-expired";
-        }
-        decision = decideOrderedTaskRelationResolution({
-          sourceKind: input.sourceKind,
-          currentQuestionType: input.currentQuestionType,
-          allowParentRetype: input.allowParentRetype,
-          currentQuestionTypeInherited: input.currentQuestionTypeInherited ??
-            (input.sourceKind === "screen" && input.screenTypeEvidenceAuthorized === false),
-          activeParentQuestionType:
-            input.activeMeetingTask?.parent.questionType,
-          activeChildQuestionType:
-            input.activeMeetingTask?.child?.questionType,
-          hasActiveChild: Boolean(input.activeMeetingTask?.child),
-          childAffinity: affinityOutcome?.child.adjudication,
-          parentAffinity: affinityOutcome?.parent.adjudication,
-          canonical: canonicalOutcome?.adjudication,
-          screenBoundaryPrior: input.screenBoundaryPrior,
-          screenTypeEvidenceAuthorized:
-            input.screenTypeEvidenceAuthorized,
-        });
-      }
-      if (decision.status === "unresolved") {
-        affinityOutcome = input.handle.revalidateAffinityOutcome?.(
-          affinityOutcome ?? {
-            child: { unavailableReason: "affinity-unavailable" },
-            parent: { unavailableReason: "affinity-unavailable" },
-          }
-        ) ?? affinityOutcome;
-        decision = decideOrderedTaskRelationResolution({
-          sourceKind: input.sourceKind,
-          currentQuestionType: input.currentQuestionType,
-          allowParentRetype: input.allowParentRetype,
-          currentQuestionTypeInherited: input.currentQuestionTypeInherited ??
-            (input.sourceKind === "screen" && input.screenTypeEvidenceAuthorized === false),
-          activeParentQuestionType:
-            input.activeMeetingTask?.parent.questionType,
-          activeChildQuestionType:
-            input.activeMeetingTask?.child?.questionType,
-          hasActiveChild: Boolean(input.activeMeetingTask?.child),
-          childAffinity: affinityOutcome?.child.adjudication,
-          parentAffinity: affinityOutcome?.parent.adjudication,
-          canonical: canonicalOutcome?.adjudication,
-          screenBoundaryPrior: input.screenBoundaryPrior,
-          screenTypeEvidenceAuthorized:
-            input.screenTypeEvidenceAuthorized,
-          finalizeWithNullHypothesis: true,
-        });
-      }
-      const foregroundClosed =
-        waitDisposition === "canonical-deadline-expired" ||
-        readRemainingBudget() === 0;
-      if (foregroundClosed) {
-        input.handle.cancelForegroundWork?.();
-      }
-      const operationAuthorization = input.handle.authorizeOperation();
-      const clientError = Boolean(
-        affinityOutcome?.child.clientError ||
-          affinityOutcome?.parent.clientError ||
-          canonicalOutcome?.clientError
-      );
-      const metadata = {
-        ...formatOrderedTaskRelationResolutionForTrace(decision),
-        taskRelationOrderedResolutionWaitBudgetMs: deadline.budgetMs,
-        taskRelationOrderedResolutionDeadlineAt: deadline.deadlineAt,
-        taskRelationOrderedResolutionAffinityCutoffAt:
-          phaseBudget.affinityCutoffAt,
-        taskRelationOrderedResolutionCanonicalBudgetMs:
-          phaseBudget.canonicalBudgetMs,
-        taskRelationOrderedResolutionCanonicalDeadlineAt: canonicalDeadline?.deadlineAt,
-        orderedSettlementForegroundDeadlineAt: deadline.deadlineAt,
-        orderedSettlementForegroundBudgetMs: deadline.budgetMs,
-        taskRelationOrderedResolutionRemainingMs:
-          readOrderedSettlementRemainingMs(deadline),
-        taskRelationOrderedResolutionSourceKind: input.sourceKind,
-        taskRelationOrderedResolutionWaitMs: Math.max(
-          0,
-          Date.now() - startedAt
-        ),
-        taskRelationOrderedResolutionWaitDisposition: waitDisposition,
-        taskRelationOrderedResolutionAffinityChildDisposition:
-          affinityOutcome?.child.adjudication
-            ? "available"
-            : affinityOutcome?.child.unavailableReason,
-        taskRelationOrderedResolutionAffinityParentDisposition:
-          affinityOutcome?.parent.adjudication
-            ? "available"
-            : affinityOutcome?.parent.unavailableReason,
-        taskRelationOrderedResolutionCanonicalDisposition:
-          canonicalOutcome?.adjudication
-            ? "available"
-            : canonicalOutcome?.unavailableReason,
-        taskRelationOrderedResolutionClientError: clientError,
-        taskRelationOrderedResolutionLateWorkCancelled:
-          foregroundClosed,
-        taskRelationOrderedResolutionOperationAuthorized:
-          operationAuthorization.authorized,
-        taskRelationOrderedResolutionOperationReason:
-          operationAuthorization.reason,
-        taskRelationOrderedResolutionOperationMismatchedKey:
-          operationAuthorization.mismatchedKey,
-        taskRelationOrderedResolutionOperationCancelled:
-          !operationAuthorization.authorized,
-      };
-      traceStoreRef.current.updateMetadata(input.traceId, metadata);
-      const terminalDisposition =
-        resolveOrderedRelationOperationTerminal({
-          operationAuthorized: operationAuthorization.authorized,
-          clientError,
-        });
-      if (terminalDisposition !== "resolved") {
-        input.handle.cancelForegroundWork?.();
-      }
-      return {
-        terminalDisposition,
-        decision,
-        affinityOutcome,
-        canonicalOutcome,
-        operationAuthorization,
-        metadata,
-      };
-    },
-    []
-  );
+  const resolveOrderedTaskRelationWithinWindow = useCallback((input: Parameters<typeof resolveOrderedTaskRelationOperation>[0]) =>
+    resolveOrderedTaskRelationOperation(input, {
+      now: Date.now,
+      withTimeout,
+      recordMetadata: (traceId, metadata) => traceStoreRef.current.updateMetadata(traceId, metadata),
+    }), []);
 
 
   const scheduleSemanticTaxonomyShadow = useCallback(

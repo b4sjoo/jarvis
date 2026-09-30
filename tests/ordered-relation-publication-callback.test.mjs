@@ -48,7 +48,6 @@ function findDescendant(node, predicate) {
 const callbackNames = [
   "scheduleTaskRelationSplitRuntime",
   "scheduleTaskRelationAdjudication",
-  "resolveOrderedTaskRelationWithinWindow",
   "scheduleAdvisorAfterQuestionTypeWindow",
 ];
 const callbackSources = callbackNames.map((name) => {
@@ -190,6 +189,8 @@ for (const name of [
 }
 
 const imports = {};
+const { resolveOrderedTaskRelationWithinWindow } = await import(pathToFileURL(
+  path.join(root, '.tmp-tests/src/lib/meeting/ordered-relation-operation.js')));
 for (const node of sourceFile.statements) {
   if (!ts.isImportDeclaration(node)) continue;
   const moduleName = node.moduleSpecifier.text;
@@ -488,6 +489,11 @@ function createHarness() {
   };
   const context = vm.createContext(environment);
   vm.runInContext(transpile(withTimeoutSource), context);
+  environment.resolveOrderedTaskRelationWithinWindow = input => resolveOrderedTaskRelationWithinWindow(input, {
+    now: () => clock.now,
+    withTimeout: environment.withTimeout,
+    recordMetadata: environment.traceStoreRef.current.updateMetadata,
+  });
   for (let index = 0; index < callbackNames.length; index += 1) {
     environment[callbackNames[index]] = vm.runInContext(
       transpile(`(${callbackSources[index]})`),
