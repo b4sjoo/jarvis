@@ -1,3 +1,4 @@
+import { prepareGeneratedAnswer, prepareGeneratedAnswerPartial } from "@/lib/meeting/generated-answer-consumer";
 import { resolveOrderedTaskRelationWithinWindow as resolveOrderedTaskRelationOperation,
   type TaskRelationAdjudicationScheduleHandle, type TaskRelationOperationAuthorization,
   type TaskRelationSplitCanonicalResult } from '@/lib/meeting/ordered-relation-operation';
@@ -454,7 +455,6 @@ import {
   decideRefreshAuthority,
   decideStableAnswerCommit,
   decideStagedAnswerPartial,
-  projectStagedAnswerOnlyContent,
   detectAnswerSufficiencyShadow,
   projectAnswerResolution,
   createAwaitingVisualEvidenceRecoveryFact,
@@ -575,7 +575,6 @@ import {
   serializeMeetingTraceMetrics,
   inferTrustedProgrammingLanguage,
   formatWhiteboardRenderValidationForTrace,
-  applyWhiteboardFormatPolicy,
   formatWhiteboardFormatPolicyForTrace,
   resolveWhiteboardFormatPreference,
   formatCapacityEstimationGuardrailForTrace,
@@ -845,8 +844,6 @@ import {
   buildSessionRecordingProviderSummary,
   buildFactAnchorDecision,
   detectPersonalEvidenceRequirement,
-  enforceFactAnchorOutput,
-  projectFactAnchorStreamingPartial,
   shouldBufferFactAnchorStreaming,
   formatFactAnchorOutputDecisionForTrace,
   formatFactAnchorDecisionForTrace,
@@ -4330,6 +4327,97 @@ export function useMeetingAssistant() {
     },
     []
   );
+
+  const observeGenerationCodingManifest = useCallback((input: {
+    enabled: boolean;
+    content: string;
+    phase: Parameters<typeof validateCodingSolutionManifestPhase>[0]["phase"];
+    cacheKey?: string;
+    cacheHit: boolean;
+    traceId?: string;
+  }) => {
+    if (!input.enabled) return input.content;
+    const extraction = extractCodingSolutionManifest(input.content);
+    const phaseDecision = validateCodingSolutionManifestPhase({ phase: input.phase, extraction });
+    if (phaseDecision.authorized && extraction.manifest && input.cacheKey) {
+      codingSolutionManifestCacheRef.current.set(input.cacheKey, extraction.manifest);
+    }
+    if (input.traceId) {
+      traceStoreRef.current.updateMetadata(input.traceId, {
+        ...formatCodingSolutionManifestForTrace({ extraction, phaseDecision, cacheHit: input.cacheHit }),
+        codingSolutionManifestCacheKey: input.cacheKey,
+        codingSolutionManifestObservationOnly: true,
+      });
+    }
+    return extraction.displayContent;
+  }, []);
+
+  const validateGeneratedWhiteboard = useCallback((input: {
+    whiteboard: string;
+    traceId?: string;
+    reusedValidation?: WhiteboardRenderValidationDecision;
+    readPrevious(): Parameters<typeof formatWhiteboardRenderValidationForTrace>[0]["before"];
+  }) => {
+    const stepId = input.traceId ? traceStoreRef.current.startStep(input.traceId, "Whiteboard render validation", {
+      candidateChars: input.whiteboard.length, answerStreamingIndependent: true,
+    }) : undefined;
+    const finish = (decision: WhiteboardRenderValidationDecision) => {
+      const metadata = formatWhiteboardRenderValidationForTrace({ decision, before: input.readPrevious() });
+      if (input.traceId) {
+        traceStoreRef.current.updateMetadata(input.traceId, metadata);
+        if (stepId) traceStoreRef.current.finishStep(input.traceId, stepId, "success", metadata);
+      }
+      return decision;
+    };
+    // A reused validation was synchronous before extraction; keep that fast path.
+    return input.reusedValidation
+      ? finish(input.reusedValidation)
+      : validateWhiteboardRenderCandidate({ whiteboard: input.whiteboard }).then(finish);
+  }, []);
+
+  const commitDirectGenerationAnswer = useCallback((input: {
+    lease: AnswerGenerationLease;
+    leaseAuthorization: ReturnType<typeof authorizeAnswerGenerationLease>;
+    expectedTaskRuntimeRevision: number;
+    currentTaskRuntimeRevision: number;
+    candidateAccepted: boolean;
+    candidate: StableAnswerRevision;
+    transition?: GenerationTaskRuntimeTransition;
+    authorizedArtifacts: AnswerArtifactSection[];
+    publicationOptions: Parameters<typeof prepareStableAnswerPublication>[1];
+    onTaskMutation?: (installed: boolean) => void;
+  }) => {
+    let publication: PreparedStableAnswerPublication | undefined;
+    const result = generationDerivedCommitCoordinatorRef.current.commitStaged({
+      lease: input.lease, leaseAuthorization: input.leaseAuthorization,
+      expectedTaskRuntimeRevision: input.expectedTaskRuntimeRevision,
+      currentTaskRuntimeRevision: input.currentTaskRuntimeRevision,
+      candidateAccepted: input.candidateAccepted,
+      visibleAnswerRevision: input.candidate.revision,
+      transition: input.transition ? {
+        kind: input.transition.transition,
+        prepare: () => prepareGenerationDerivedTaskRuntimeCommit(contextManagerRef.current, input.transition!, input.authorizedArtifacts),
+        install: prepared => {
+          const committed = contextManagerRef.current.commitPreparedTaskRuntimeTransition(prepared);
+          if (committed.authorized) input.onTaskMutation?.(true);
+          return committed;
+        },
+        rollback: prepared => {
+          input.onTaskMutation?.(false);
+          return contextManagerRef.current.rollbackPreparedTaskRuntimeTransition(prepared);
+        },
+      } : undefined,
+      publication: {
+        prepare: () => {
+          publication = prepareStableAnswerPublication(input.candidate, input.publicationOptions);
+          return publication;
+        },
+        install: installPreparedStableAnswerPublication,
+        rollback: rollbackPreparedStableAnswerPublication,
+      },
+    });
+    return { result, publication };
+  }, [prepareStableAnswerPublication, installPreparedStableAnswerPublication, rollbackPreparedStableAnswerPublication]);
 
   const finalizeStableAnswerPublication = useCallback(
     (prepared: PreparedStableAnswerPublication) => {
@@ -14895,32 +14983,30 @@ export function useMeetingAssistant() {
             return;
           }
           finalContent = event.accumulated;
-          const factAnchorStreamingPartial =
-            projectFactAnchorStreamingPartial({
-              decision: factAnchorDecision,
-              content: event.accumulated,
-            });
-          const stagedPartialContent = projectStagedAnswerOnlyContent(
-            factAnchorStreamingPartial.visibleContent
-          );
-          const automaticVoiceAuthorized =
-            automaticVoiceStreamingAuthorized();
-          const deliveryLockActive =
-            isStagedAnswerDeliveryLockActive();
-          const stagedPartialDecision = decideStagedAnswerPartial({
-            accumulated: stagedPartialContent,
-            explicitRequest: stagedAnswerDeliveryExplicitRequest,
-            automaticVoiceAuthorized,
-            stableAnswerPresent: Boolean(stableAnswerRevisionRef.current),
-            guardrailHeld:
-              !outputCommitAuthorization.authorized ||
-              (holdAdvisorPartialForFactAnchor &&
-                !stagedPartialContent.trim()) ||
-              !responseOpportunityGenerationAuthorized(),
-            deliveryLockActive,
-            hardOverride: advisorJob.refreshAuthority.hardOverride,
-            visibleStreamStarted: stagedAnswerDeliveryVisible,
+          const preparedPartial = prepareGeneratedAnswerPartial({
+            content: event.accumulated,
+            factAnchorDecision,
+            readDelivery: stagedPartialContent => {
+              const automaticVoiceAuthorized = automaticVoiceStreamingAuthorized();
+              const deliveryLockActive = isStagedAnswerDeliveryLockActive();
+              return {
+                explicitRequest: stagedAnswerDeliveryExplicitRequest,
+                automaticVoiceAuthorized,
+                stableAnswerPresent: Boolean(stableAnswerRevisionRef.current),
+                guardrailHeld:
+                  !outputCommitAuthorization.authorized ||
+                  (holdAdvisorPartialForFactAnchor && !stagedPartialContent.trim()) ||
+                  !responseOpportunityGenerationAuthorized(),
+                deliveryLockActive,
+                hardOverride: advisorJob.refreshAuthority.hardOverride,
+                visibleStreamStarted: stagedAnswerDeliveryVisible,
+              };
+            },
           });
+          const factAnchorStreamingPartial = preparedPartial.factPartial;
+          const stagedPartialContent = preparedPartial.content;
+          const stagedPartialDecision = preparedPartial.delivery;
+          const { automaticVoiceAuthorized = false, deliveryLockActive = false } = preparedPartial.deliveryInput;
           stagedAnswerDeliveryLastPartialReason = stagedPartialDecision.reason;
           if (
             !stagedPartialDecision.visible &&
@@ -15041,87 +15127,21 @@ export function useMeetingAssistant() {
         return;
       }
 
-      const codingManifestExtraction =
-        responseOwner.questionType === "coding"
-          ? extractCodingSolutionManifest(finalContent)
-          : undefined;
-      const codingManifestPhaseDecision = codingManifestExtraction
-        ? validateCodingSolutionManifestPhase({
-            phase:
-              settledExecutionPlan?.playbookPhase ??
-              advisorRuntimePlaybook?.phase,
-            extraction: codingManifestExtraction,
-          })
-        : undefined;
-      if (codingManifestExtraction) {
-        finalContent = codingManifestExtraction.displayContent;
-        if (
-          codingManifestPhaseDecision?.authorized &&
-          codingManifestExtraction.manifest &&
-          codingSolutionManifestKey
-        ) {
-          codingSolutionManifestCacheRef.current.set(
-            codingSolutionManifestKey,
-            codingManifestExtraction.manifest
-          );
-        }
-        if (traceId) {
-          traceStoreRef.current.updateMetadata(traceId, {
-            ...formatCodingSolutionManifestForTrace({
-              extraction: codingManifestExtraction,
-              phaseDecision: codingManifestPhaseDecision,
-              cacheHit: Boolean(cachedCodingSolutionManifest),
-            }),
-            codingSolutionManifestCacheKey:
-              codingSolutionManifestKey,
-            codingSolutionManifestObservationOnly: true,
-          });
-        }
-      }
+      finalContent = observeGenerationCodingManifest({
+        enabled: responseOwner.questionType === "coding", content: finalContent,
+        phase: settledExecutionPlan?.playbookPhase ?? advisorRuntimePlaybook?.phase,
+        cacheKey: codingSolutionManifestKey, cacheHit: Boolean(cachedCodingSolutionManifest), traceId,
+      });
 
-      let parsedMeetingAnswer = parseMeetingAnswer(finalContent, {
-        expectedProfile: advisorAnswerProfile,
+      const preparedAnswer = prepareGeneratedAnswer({ content: finalContent, profile: advisorAnswerProfile, factAnchorDecision,
+        whiteboardPreference: settledExecutionPlan?.whiteboardFormatPreference ?? resolveWhiteboardFormatPreference({
+          questionType: advisorQuestionType, artifactIntent: generationArtifactIntent, sourceQuestion: advisorQuestionSemanticEvidenceText }),
       });
-      const factAnchorOutputAuditStartedAt = performance.now();
-      const factAnchorOutputDecision = enforceFactAnchorOutput({
-        decision: factAnchorDecision,
-        parsedAnswer: parsedMeetingAnswer,
-        expectedProfile: advisorAnswerProfile,
-      });
-      finalContent = factAnchorOutputDecision.effectiveContent;
-      parsedMeetingAnswer = factAnchorOutputDecision.effectiveAnswer;
-      const factAnchorOutputAuditDurationMs =
-        performance.now() - factAnchorOutputAuditStartedAt;
-      const whiteboardFormatPolicyDecision =
-        applyWhiteboardFormatPolicy({
-          whiteboard: parsedMeetingAnswer.sections.whiteboard,
-          preference:
-            settledExecutionPlan?.whiteboardFormatPreference ??
-            resolveWhiteboardFormatPreference({
-              questionType: advisorQuestionType,
-              artifactIntent: generationArtifactIntent,
-              sourceQuestion: advisorQuestionSemanticEvidenceText,
-            }),
-        });
-      if (
-        whiteboardFormatPolicyDecision.effectiveWhiteboard &&
-        whiteboardFormatPolicyDecision.effectiveWhiteboard !==
-          parsedMeetingAnswer.sections.whiteboard
-      ) {
-        parsedMeetingAnswer = {
-          ...parsedMeetingAnswer,
-          sections: {
-            ...parsedMeetingAnswer.sections,
-            whiteboard:
-              whiteboardFormatPolicyDecision.effectiveWhiteboard,
-          },
-        };
-        finalContent = serializeMeetingAnswer(parsedMeetingAnswer);
-        parsedMeetingAnswer = {
-          ...parsedMeetingAnswer,
-          rawContent: finalContent,
-        };
-      }
+      finalContent = preparedAnswer.content;
+      let parsedMeetingAnswer = preparedAnswer.parsedAnswer;
+      const factAnchorOutputDecision = preparedAnswer.factDecision;
+      const factAnchorOutputAuditDurationMs = preparedAnswer.factAuditDurationMs;
+      const whiteboardFormatPolicyDecision = preparedAnswer.whiteboardDecision;
       const factAnchorOutputMetadata =
         formatFactAnchorOutputDecisionForTrace(factAnchorOutputDecision, {
           partialOutputHeld: holdAdvisorPartialForFactAnchor,
@@ -15424,41 +15444,12 @@ export function useMeetingAssistant() {
         parsedMeetingAnswer.sections.whiteboard &&
         whiteboardArtifactIntentAuthorized
       ) {
-        const whiteboardValidationStepId = traceId
-          ? traceStoreRef.current.startStep(
-              traceId,
-              "Whiteboard render validation",
-              {
-                candidateChars:
-                  parsedMeetingAnswer.sections.whiteboard.length,
-                answerStreamingIndependent: true,
-              }
-            )
-          : undefined;
-        whiteboardRenderValidation =
-          (reusedArtifactCandidate ? reusedWhiteboardValidation : undefined) ?? await validateWhiteboardRenderCandidate({
-            whiteboard: parsedMeetingAnswer.sections.whiteboard,
-          });
-        const whiteboardValidationMetadata =
-          formatWhiteboardRenderValidationForTrace({
-            decision: whiteboardRenderValidation,
-            before:
-              effectiveAdvisorSettlementView.parent?.whiteboardArtifact,
-          });
-        if (traceId) {
-          traceStoreRef.current.updateMetadata(
-            traceId,
-            whiteboardValidationMetadata
-          );
-          if (whiteboardValidationStepId) {
-            traceStoreRef.current.finishStep(
-              traceId,
-              whiteboardValidationStepId,
-              "success",
-              whiteboardValidationMetadata
-            );
-          }
-        }
+        const validation = validateGeneratedWhiteboard({
+          whiteboard: parsedMeetingAnswer.sections.whiteboard, traceId,
+          reusedValidation: reusedArtifactCandidate ? reusedWhiteboardValidation : undefined,
+          readPrevious: () => effectiveAdvisorSettlementView.parent?.whiteboardArtifact,
+        });
+        whiteboardRenderValidation = validation instanceof Promise ? await validation : validation;
         if (rejectStaleCommit("whiteboard-render-validation")) {
           rollbackStagedAnswerDelivery(
             "stale-whiteboard-render-validation"
@@ -16139,64 +16130,35 @@ export function useMeetingAssistant() {
             })
           );
         let advisorPublication: PreparedStableAnswerPublication | undefined;
-        const generationCommit =
-          generationDerivedCommitCoordinatorRef.current.commitStaged({
-            lease: answerGenerationLease,
-            leaseAuthorization: advisorLeaseAuthorization,
-            expectedTaskRuntimeRevision:
-              contextState.taskRuntime.revision,
-            currentTaskRuntimeRevision:
-              advisorCommitTaskRuntimeState.revision,
-            candidateAccepted: Boolean(
-              advisorResponseCandidate || reusedArtifactCandidate
-            ),
-            visibleAnswerRevision: candidateStableAnswer.revision,
-            transition: preparedAdvisorTransition.transition
-              ? {
-                  kind: preparedAdvisorTransition.transition.transition,
-                  prepare: () =>
-                    prepareGenerationDerivedTaskRuntimeCommit(
-                      contextManagerRef.current,
-                      preparedAdvisorTransition.transition!,
-                      generationAuthorizedArtifacts
-                    ),
-                  install: (prepared) =>
-                    contextManagerRef.current.commitPreparedTaskRuntimeTransition(
-                      prepared
-                    ),
-                  rollback: (prepared) =>
-                    contextManagerRef.current.rollbackPreparedTaskRuntimeTransition(
-                      prepared
-                    ),
-                }
-              : undefined,
-            publication: {
-              prepare: () => {
-                advisorPublication = prepareStableAnswerPublication(
-                  candidateStableAnswer,
-                  {
-                    presentationParent: preparedAdvisorTransition.transition?.parent,
-                    unpublishedArtifacts: { parsed: parsedMeetingAnswer, authorizedArtifacts: generationAuthorizedArtifacts,
-                      inputs: artifactReuseInputs },
-                    clearPrevious: resetVisibleSections,
-                    childSummary: continuity.childSummary,
-                    deadlineDelta: continuity.deadlineDelta,
-                    deadlineCalculatedAt: continuity.deadlineCalculatedAt,
-                    latestUsefulAnswerCommitted:
-                      preparedAdvisorTransition.latestUsefulAnswerCommitted,
-                    latestUsefulAnswerChars:
-                      preparedAdvisorTransition.latestUsefulAnswerChars,
-                    artifactOnly: Boolean(
-                      options.artifactRegenerationTarget
-                    ),
-                  }
-                );
-                return advisorPublication;
-              },
-              install: installPreparedStableAnswerPublication,
-              rollback: rollbackPreparedStableAnswerPublication,
+        const directCommit = commitDirectGenerationAnswer({
+          lease: answerGenerationLease,
+          leaseAuthorization: advisorLeaseAuthorization,
+          expectedTaskRuntimeRevision: contextState.taskRuntime.revision,
+          currentTaskRuntimeRevision: advisorCommitTaskRuntimeState.revision,
+          candidateAccepted: Boolean(
+            advisorResponseCandidate || reusedArtifactCandidate
+          ),
+          candidate: candidateStableAnswer,
+          transition: preparedAdvisorTransition.transition,
+          authorizedArtifacts: generationAuthorizedArtifacts,
+          publicationOptions: {
+            presentationParent: preparedAdvisorTransition.transition?.parent,
+            unpublishedArtifacts: {
+              parsed: parsedMeetingAnswer,
+              authorizedArtifacts: generationAuthorizedArtifacts,
+              inputs: artifactReuseInputs,
             },
-          });
+            clearPrevious: resetVisibleSections,
+            childSummary: continuity.childSummary,
+            deadlineDelta: continuity.deadlineDelta,
+            deadlineCalculatedAt: continuity.deadlineCalculatedAt,
+            latestUsefulAnswerCommitted: preparedAdvisorTransition.latestUsefulAnswerCommitted,
+            latestUsefulAnswerChars: preparedAdvisorTransition.latestUsefulAnswerChars,
+            artifactOnly: Boolean(options.artifactRegenerationTarget),
+          },
+        });
+        const generationCommit = directCommit.result;
+        advisorPublication = directCommit.publication;
         if (generationCommit.committed && advisorPublication) {
           if (
             !options.artifactRegenerationTarget &&
@@ -16736,11 +16698,12 @@ export function useMeetingAssistant() {
     buildEffectiveAdvisorBasePromptContext,
     readEffectiveSemanticTask,
     finishRunningAdvisorJobTrace,
+    commitDirectGenerationAnswer,
+    observeGenerationCodingManifest,
+    validateGeneratedWhiteboard,
     finalizeStableAnswerPublication,
     finalizeAnswerRecoveryAdjudication,
-    installPreparedStableAnswerPublication,
     loadMemoryForPrompt,
-    prepareStableAnswerPublication,
     queuePendingAnswerRevision,
     recordCommittedPlaybookPhaseTransition,
     recordPreparationArtifactUse,
@@ -16748,7 +16711,6 @@ export function useMeetingAssistant() {
     recordPreparationPromptGuidanceUses,
     recordQuestionTypeAdjudicationOutcome,
     releaseAdvisorJob,
-    rollbackPreparedStableAnswerPublication,
     resolveMeetingModelRoute,
     scheduleAnswerRecoveryAdjudications,
     scheduleQuestionOnlyVisualEvidenceCheck,
@@ -29325,25 +29287,18 @@ export function useMeetingAssistant() {
                 return;
               }
 
-              const factAnchorStreamingPartial =
-                projectFactAnchorStreamingPartial({
-                  decision: screenFactAnchorDecision,
-                  content: partialContent,
-                });
-              const stagedPartialContent = projectStagedAnswerOnlyContent(
-                factAnchorStreamingPartial.visibleContent
-              );
-              const stagedPartialDecision = decideStagedAnswerPartial({
-                accumulated: stagedPartialContent,
-                explicitRequest: true,
-                stableAnswerPresent: Boolean(
-                  stableAnswerRevisionRef.current
-                ),
-                guardrailHeld:
-                  holdScreenPartialForFactAnchor &&
-                  !stagedPartialContent.trim(),
-                visibleStreamStarted: screenStagedVisible,
+              const preparedPartial = prepareGeneratedAnswerPartial({
+                content: partialContent, factAnchorDecision: screenFactAnchorDecision,
+                readDelivery: stagedPartialContent => ({
+                  explicitRequest: true,
+                  stableAnswerPresent: Boolean(stableAnswerRevisionRef.current),
+                  guardrailHeld: holdScreenPartialForFactAnchor && !stagedPartialContent.trim(),
+                  visibleStreamStarted: screenStagedVisible,
+                }),
               });
+              const factAnchorStreamingPartial = preparedPartial.factPartial;
+              const stagedPartialContent = preparedPartial.content;
+              const stagedPartialDecision = preparedPartial.delivery;
               if (stagedPartialDecision.visible) {
                 displayedStreamRef.current = { traceId: trace.id, generationId: requestId, leaseId: screenGenerationLease!.id,
                   logicalQuestionUnitId: screenGenerationLease!.logicalQuestionUnitId ?? undefined,
@@ -29442,83 +29397,20 @@ export function useMeetingAssistant() {
           return;
         }
 
-        const screenCodingManifestExtraction = screenUsesCodingModel
-          ? extractCodingSolutionManifest(screenTaskContent)
-          : undefined;
-        const screenCodingManifestPhaseDecision =
-          screenCodingManifestExtraction
-            ? validateCodingSolutionManifestPhase({
-                phase: screenGenerationPhaseDecision.phase,
-                extraction: screenCodingManifestExtraction,
-              })
-            : undefined;
-        if (screenCodingManifestExtraction) {
-          screenTaskContent =
-            screenCodingManifestExtraction.displayContent;
-          if (
-            screenCodingManifestPhaseDecision?.authorized &&
-            screenCodingManifestExtraction.manifest &&
-            screenCodingManifestKey
-          ) {
-            codingSolutionManifestCacheRef.current.set(
-              screenCodingManifestKey,
-              screenCodingManifestExtraction.manifest
-            );
-          }
-          traceStoreRef.current.updateMetadata(trace.id, {
-            ...formatCodingSolutionManifestForTrace({
-              extraction: screenCodingManifestExtraction,
-              phaseDecision: screenCodingManifestPhaseDecision,
-              cacheHit: Boolean(cachedScreenCodingManifest),
-            }),
-            codingSolutionManifestCacheKey:
-              screenCodingManifestKey,
-            codingSolutionManifestObservationOnly: true,
-          });
-        }
+        screenTaskContent = observeGenerationCodingManifest({
+          enabled: screenUsesCodingModel, content: screenTaskContent,
+          phase: screenGenerationPhaseDecision.phase, cacheKey: screenCodingManifestKey,
+          cacheHit: Boolean(cachedScreenCodingManifest), traceId: trace.id,
+        });
 
-        let parsedScreenMeetingAnswer = parseMeetingAnswer(screenTaskContent, {
-          expectedProfile: screenAnswerProfile,
+        const screenPreparedAnswer = prepareGeneratedAnswer({ content: screenTaskContent, profile: screenAnswerProfile, factAnchorDecision: screenFactAnchorDecision,
+          whiteboardPreference: screenWhiteboardFormatPreference,
         });
-        const screenFactAnchorOutputAuditStartedAt = performance.now();
-        const screenFactAnchorOutputDecision = enforceFactAnchorOutput({
-          decision: screenFactAnchorDecision,
-          parsedAnswer: parsedScreenMeetingAnswer,
-          expectedProfile: screenAnswerProfile,
-        });
-        let committedScreenTaskContent =
-          screenFactAnchorOutputDecision.effectiveContent;
-        parsedScreenMeetingAnswer =
-          screenFactAnchorOutputDecision.effectiveAnswer;
-        const screenFactAnchorOutputAuditDurationMs =
-          performance.now() - screenFactAnchorOutputAuditStartedAt;
-        const screenWhiteboardFormatPolicyDecision =
-          applyWhiteboardFormatPolicy({
-            whiteboard:
-              parsedScreenMeetingAnswer.sections.whiteboard,
-            preference: screenWhiteboardFormatPreference,
-          });
-        if (
-          screenWhiteboardFormatPolicyDecision.effectiveWhiteboard &&
-          screenWhiteboardFormatPolicyDecision.effectiveWhiteboard !==
-            parsedScreenMeetingAnswer.sections.whiteboard
-        ) {
-          parsedScreenMeetingAnswer = {
-            ...parsedScreenMeetingAnswer,
-            sections: {
-              ...parsedScreenMeetingAnswer.sections,
-              whiteboard:
-                screenWhiteboardFormatPolicyDecision.effectiveWhiteboard,
-            },
-          };
-          committedScreenTaskContent = serializeMeetingAnswer(
-            parsedScreenMeetingAnswer
-          );
-          parsedScreenMeetingAnswer = {
-            ...parsedScreenMeetingAnswer,
-            rawContent: committedScreenTaskContent,
-          };
-        }
+        let committedScreenTaskContent = screenPreparedAnswer.content;
+        let parsedScreenMeetingAnswer = screenPreparedAnswer.parsedAnswer;
+        const screenFactAnchorOutputDecision = screenPreparedAnswer.factDecision;
+        const screenFactAnchorOutputAuditDurationMs = screenPreparedAnswer.factAuditDurationMs;
+        const screenWhiteboardFormatPolicyDecision = screenPreparedAnswer.whiteboardDecision;
         const screenPresentationArtifactAuthority =
           authorizeManualScreenPresentationArtifacts({
             requestedArtifacts: screenGenerationRequestedArtifacts,
@@ -29593,37 +29485,10 @@ export function useMeetingAssistant() {
           | WhiteboardRenderValidationDecision
           | undefined;
         if (parsedScreenMeetingAnswer.sections.whiteboard) {
-          const whiteboardValidationStepId =
-            traceStoreRef.current.startStep(
-              trace.id,
-              "Whiteboard render validation",
-              {
-                candidateChars:
-                  parsedScreenMeetingAnswer.sections.whiteboard.length,
-                answerStreamingIndependent: true,
-              }
-            );
-          screenWhiteboardRenderValidation =
-            await validateWhiteboardRenderCandidate({
-              whiteboard: parsedScreenMeetingAnswer.sections.whiteboard,
-            });
-          const whiteboardValidationMetadata =
-            formatWhiteboardRenderValidationForTrace({
-              decision: screenWhiteboardRenderValidation,
-              before:
-                contextManagerRef.current.getState().activeMeetingTask
-                  ?.parent.whiteboardArtifact,
-            });
-          traceStoreRef.current.updateMetadata(
-            trace.id,
-            whiteboardValidationMetadata
-          );
-          traceStoreRef.current.finishStep(
-            trace.id,
-            whiteboardValidationStepId,
-            "success",
-            whiteboardValidationMetadata
-          );
+          screenWhiteboardRenderValidation = await validateGeneratedWhiteboard({
+            whiteboard: parsedScreenMeetingAnswer.sections.whiteboard, traceId: trace.id,
+            readPrevious: () => contextManagerRef.current.getState().activeMeetingTask?.parent.whiteboardArtifact,
+          });
           if (rejectStaleScreenOperation("whiteboard-render-validation")) {
             return;
           }
@@ -30296,67 +30161,33 @@ export function useMeetingAssistant() {
               })
             );
           let screenPublication: PreparedStableAnswerPublication | undefined;
-          const generationCommit =
-            generationDerivedCommitCoordinatorRef.current.commitStaged({
-              lease: screenGenerationLease,
-              leaseAuthorization: screenLeaseAuthorization,
-              expectedTaskRuntimeRevision:
-                screenGenerationTaskRuntimeRevision,
-              currentTaskRuntimeRevision:
-                screenCommitTaskRuntimeState.revision,
-              candidateAccepted: Boolean(screenResponseCandidate),
-              visibleAnswerRevision: candidateStableAnswer.revision,
-              transition: preparedScreenTransition.transition
-                ? {
-                    kind: preparedScreenTransition.transition.transition,
-                    prepare: () =>
-                      prepareGenerationDerivedTaskRuntimeCommit(
-                        contextManagerRef.current,
-                        preparedScreenTransition.transition!,
-                        screenPresentationAuthorizedArtifacts
-                      ),
-                    install: (prepared) => {
-                      const result =
-                        contextManagerRef.current.commitPreparedTaskRuntimeTransition(
-                          prepared
-                        );
-                      if (result.authorized) {
-                        screenTaskResultCommitted = true;
-                      }
-                      return result;
-                    },
-                    rollback: (prepared) => {
-                      screenTaskResultCommitted = false;
-                      return contextManagerRef.current.rollbackPreparedTaskRuntimeTransition(
-                        prepared
-                      );
-                    },
-                  }
-                : undefined,
-              publication: {
-                prepare: () => {
-                  screenPublication = prepareStableAnswerPublication(
-                    candidateStableAnswer,
-                    {
-                      presentationParent: preparedScreenTransition.transition?.parent,
-                      unpublishedArtifacts: { parsed: nextSuggestion.meetingAnswer!,
-                        authorizedArtifacts: screenPresentationAuthorizedArtifacts, inputs: screenArtifactReuseInputs },
-                      clearPrevious: screenStartedNewInterviewParent,
-                      childSummary: screenGenerationContinuity?.childSummary,
-                      deadlineDelta: screenGenerationContinuity?.deadlineDelta,
-                      deadlineCalculatedAt: screenGenerationContinuity?.deadlineCalculatedAt,
-                      latestUsefulAnswerCommitted:
-                        preparedScreenTransition.latestUsefulAnswerCommitted,
-                      latestUsefulAnswerChars:
-                        preparedScreenTransition.latestUsefulAnswerChars,
-                    }
-                  );
-                  return screenPublication;
-                },
-                install: installPreparedStableAnswerPublication,
-                rollback: rollbackPreparedStableAnswerPublication,
+          const directCommit = commitDirectGenerationAnswer({
+            lease: screenGenerationLease,
+            leaseAuthorization: screenLeaseAuthorization,
+            expectedTaskRuntimeRevision: screenGenerationTaskRuntimeRevision,
+            currentTaskRuntimeRevision: screenCommitTaskRuntimeState.revision,
+            candidateAccepted: Boolean(screenResponseCandidate),
+            candidate: candidateStableAnswer,
+            transition: preparedScreenTransition.transition,
+            authorizedArtifacts: screenPresentationAuthorizedArtifacts,
+            publicationOptions: {
+              presentationParent: preparedScreenTransition.transition?.parent,
+              unpublishedArtifacts: {
+                parsed: nextSuggestion.meetingAnswer!,
+                authorizedArtifacts: screenPresentationAuthorizedArtifacts,
+                inputs: screenArtifactReuseInputs,
               },
-            });
+              clearPrevious: screenStartedNewInterviewParent,
+              childSummary: screenGenerationContinuity?.childSummary,
+              deadlineDelta: screenGenerationContinuity?.deadlineDelta,
+              deadlineCalculatedAt: screenGenerationContinuity?.deadlineCalculatedAt,
+              latestUsefulAnswerCommitted: preparedScreenTransition.latestUsefulAnswerCommitted,
+              latestUsefulAnswerChars: preparedScreenTransition.latestUsefulAnswerChars,
+            },
+            onTaskMutation: installed => { screenTaskResultCommitted = installed; },
+          });
+          const generationCommit = directCommit.result;
+          screenPublication = directCommit.publication;
           if (generationCommit.committed && screenPublication) {
             updatedContextState = contextManagerRef.current.getState();
             currentQuestionLineageRef.current = screenQuestionLineage;
@@ -30835,11 +30666,12 @@ export function useMeetingAssistant() {
       buildEffectiveAdvisorBasePromptContext,
       cancelActiveAdvisorJob,
       clearPendingAnswerCommitTimer,
+      commitDirectGenerationAnswer,
+      observeGenerationCodingManifest,
+      validateGeneratedWhiteboard,
       flushPendingSentenceCompletion,
       finalizeStableAnswerPublication,
-      installPreparedStableAnswerPublication,
       loadMemoryForPrompt,
-      prepareStableAnswerPublication,
       recordCommittedPlaybookPhaseTransition,
       recordPreparationArtifactUse,
       recordPreparationKmbHintUses,
@@ -30852,7 +30684,6 @@ export function useMeetingAssistant() {
       scheduleSourceLinkageAdjudication,
       scheduleTaskRelationAdjudication,
       scheduleWhiteboardSyntaxRepairShadow,
-      rollbackPreparedStableAnswerPublication,
       selectedAIProvider,
       settleAwaitingVisualEvidenceRecovery,
       screenshotConfiguration,

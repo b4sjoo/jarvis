@@ -486,8 +486,9 @@ test("prepared and deadline API calls are discovered from source and constrained
     assert.deepEqual(extraCalls.map((call) => call.method), methods);
     const overBudget = structuredClone(controlledAnalysis);
     overBudget.taskMutationCalls.push(...extraCalls);
+    const hookCalls = overBudget.taskMutationCalls.filter(call => call.file === "src/hooks/useMeetingAssistant.ts").length;
     assert.deepEqual(evaluate({ analysis: overBudget, contract }).errors, [
-      "task-writer: src/hooks/useMeetingAssistant.ts has 14 callsites; baseline allows 10",
+      `task-writer: src/hooks/useMeetingAssistant.ts has ${hookCalls} callsites; baseline allows 10`,
     ]);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

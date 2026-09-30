@@ -1,4 +1,6 @@
 import { createMeetingId } from "./meeting-id.js";
+import { streamPreparedMeetingGeneration } from "./meeting-generation-stream.js";
+import { MeetingAIResponseOutcomeError } from "./meeting-ai-response.js";
 import { formatMeetingResponseLanguage } from "./response-language.js";
 import type { PlaybookPhaseDecision } from "./playbook-phase-contracts.js";
 import type { ActiveMeetingTask } from "./meeting-task-contracts.js";
@@ -413,8 +415,9 @@ export async function solveScreenAnchoredTask({
     requestOptions,
   });
 
-  const result = await collectMeetingAIResponseCandidate({
-    events: fetchAIResponseEvents({
+  let candidate: Readonly<MeetingAIResponseCandidate> | undefined;
+  try {
+    for await (const event of streamPreparedMeetingGeneration(executionIdentity?.requestId ?? `screen-solve:${observation.id}`, {
       provider,
       selectedProvider,
       systemPrompt: SCREEN_TASK_SYSTEM_PROMPT,
@@ -442,13 +445,16 @@ export async function solveScreenAnchoredTask({
           activeMeetingTask?.runtimeRevision ??
           0,
       },
-    }),
-    onFirstContent: () => trace?.onFirstToken?.(),
-    onPartialContent: (content) => onPartialContent?.(content),
-    onPartialReset,
-    onTerminal: (outcome) => trace?.onTerminal?.(outcome),
-  });
-  const candidate = requireMeetingAIResponseCandidate(result);
+    }, trace)) {
+      if (event.type === "content-delta") onPartialContent?.(event.accumulated);
+      else if (event.type === "partial-reset") onPartialReset?.();
+      else candidate = event.candidate;
+    }
+  } catch (error) {
+    if (error instanceof MeetingAIResponseOutcomeError) onPartialReset?.();
+    throw error;
+  }
+  if (!candidate) throw new Error("AI response ended without a final outcome");
   onCandidate?.(candidate);
   const trimmed = candidate.content.trim();
 

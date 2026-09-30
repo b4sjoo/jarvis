@@ -16,7 +16,7 @@ const moduleNames = ["manual-advise-display", "unpublished-artifact", "meeting-a
   "advisor-trigger-job", "logical-question-ownership", "generation-result-ledger",
   "whiteboard-artifact", "whiteboard-format-policy", "context-manager", "response-artifact-authorization",
   "visual-evidence-recovery", "source-owned-transition-transaction",
-  "interview-playbook", "playbook-phase"];
+  "interview-playbook", "playbook-phase", "generated-answer-consumer", "fact-anchor-guardrail", "fact-anchor-output-guardrail"];
 for (const name of moduleNames) {
   Object.assign(modules, await import(pathToFileURL(path.join(root, `src/lib/meeting/${name}.js`))));
 }
@@ -82,12 +82,12 @@ function screenStreamHarness({ pinPrevious = false, revokeDuringStream = false }
   const env = {...modules,Date,structuredClone, trace:{id:"screen"}, screenGenerationLease,
     displayedStreamRef:ref, manualAdviseDisplayRef:{current:display}, stableAnswerRevisionRef:{current:previous.stable},
     screenAnalysisAbortRef:abortRef, analysisController:controller, boundVisualRecoveryFact:undefined,
-    screenFactAnchorDecision:{}, holdScreenPartialForFactAnchor:false, screenModelCompletedAt:undefined,
+    screenFactAnchorDecision:modules.buildFactAnchorDecision({questionType:"coding"}), holdScreenPartialForFactAnchor:false, screenModelCompletedAt:undefined,
     screenRuntimeToken: modules.createRuntimeCommitToken({ operationId: "screen-operation", pipeline: "screen", snapshot: runtimeSnapshot }),
     readRuntimeCommitSnapshot:()=>runtimeSnapshot, screenOperationCoordinatorRef:{current:{getActiveOperationId:()=>"screen-operation"}},
     contextManagerRef:{current:{getState:()=>({sessionId:"session"})}}, state,
     generationResultLedgerRef:{current:{getEntry:()=>undefined}},
-    projectFactAnchorStreamingPartial:({content})=>({visibleContent:content}),formatModelGenerationTimingForTrace:()=>({}),
+    formatModelGenerationTimingForTrace:()=>({}),
     traceStoreRef:{current:{updateMetadata:(_id,m)=>metadata.push(m)}},setState:update=>{state=update(state);env.state=state;},
     createMeetingId:kind=>`${kind}-${++ids}`,
     revokeIncompleteAdvisePin:(id,reason)=>{revoked.push({id,reason});display.revokeIncomplete(id);},

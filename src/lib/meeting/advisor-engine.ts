@@ -1,31 +1,10 @@
 import type { MeetingAdvisorRequest } from "./meeting-context-contracts.js";
-import { fetchAIResponseEvents } from "@/lib/functions";
-import type { AIResponseTerminalOutcome } from "@/lib/functions/ai-response-events";
 import { AdvisorSuggestion, ParsedMeetingAnswer } from "./types";
 import { buildAdvisorSystemPrompt, buildAdvisorUserMessage } from "./advisor-prompt";
 import { parseMeetingAnswer } from "./meeting-answer.js";
-import {
-  acceptMeetingAIResponseOutcome,
-  MeetingAIResponseOutcomeError,
-  type MeetingAIResponseCandidate,
-} from "./meeting-ai-response.js";
+import { streamPreparedMeetingGeneration, type MeetingGenerationEvent } from "./meeting-generation-stream.js";
 
-export type AdvisorEngineEvent =
-  | {
-      type: "content-delta";
-      requestId: string;
-      chunk: string;
-      accumulated: string;
-    }
-  | {
-      type: "partial-reset";
-      requestId: string;
-    }
-  | {
-      type: "candidate";
-      requestId: string;
-      candidate: Readonly<MeetingAIResponseCandidate>;
-    };
+export type AdvisorEngineEvent = MeetingGenerationEvent;
 
 export class AdvisorEngine {
   private currentAbortController: AbortController | null = null;
@@ -51,9 +30,6 @@ export class AdvisorEngine {
       responseConfig: request.responseConfig,
       answerProfile: request.answerProfile,
     });
-    let accumulated = "";
-    let firstTokenSeen = false;
-    const terminalOutcomes: Readonly<AIResponseTerminalOutcome>[] = [];
     const sourceImages = request.sourceImages ?? [];
 
     request.trace?.onRequest?.({
@@ -68,9 +44,8 @@ export class AdvisorEngine {
       requestOptions: request.requestOptions,
     });
 
-    let acceptedCandidate = false;
     try {
-      for await (const event of fetchAIResponseEvents({
+      for await (const event of streamPreparedMeetingGeneration(request.requestId, {
         provider: request.provider,
         selectedProvider: request.selectedProvider,
         systemPrompt,
@@ -81,51 +56,9 @@ export class AdvisorEngine {
         applyResponseSettings: false,
         requestOptions: request.requestOptions,
         executionIdentity: buildAdvisorExecutionIdentity(request),
-      })) {
-        if (event.type === "content-delta") {
-          if (!firstTokenSeen) {
-            firstTokenSeen = true;
-            request.trace?.onFirstToken?.();
-          }
-          accumulated += event.content;
-          yield {
-            type: "content-delta",
-            requestId: request.requestId,
-            chunk: event.content,
-            accumulated,
-          };
-          continue;
-        }
-
-        request.trace?.onTerminal?.(event.outcome);
-        terminalOutcomes.push(Object.freeze({ ...event.outcome }));
-        if (!event.outcome.final) {
-          accumulated = "";
-          yield { type: "partial-reset", requestId: request.requestId };
-          continue;
-        }
-
-        const result = acceptMeetingAIResponseOutcome(
-          event.outcome,
-          terminalOutcomes
-        );
-        if (!result.accepted) {
-          throw new MeetingAIResponseOutcomeError(
-            result.outcome,
-            result.attempts
-          );
-        }
-        acceptedCandidate = true;
-        accumulated = result.candidate.content;
-        request.trace?.onComplete?.(accumulated);
-        yield {
-          type: "candidate",
-          requestId: request.requestId,
-          candidate: result.candidate,
-        };
-      }
-      if (!acceptedCandidate) {
-        throw new Error("Advisor response ended without an accepted candidate");
+      }, request.trace)) {
+        if (event.type === "candidate") request.trace?.onComplete?.(event.candidate.content);
+        yield event;
       }
     } finally {
       if (this.currentAbortController === abortController) {

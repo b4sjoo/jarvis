@@ -56,6 +56,8 @@ function findFunctionSource(name) {
 }
 
 const callbackSources = {
+  observeGenerationCodingManifest: findCallbackSource("observeGenerationCodingManifest"),
+  validateGeneratedWhiteboard: findCallbackSource("validateGeneratedWhiteboard"),
   readStableAnswerForQuestion: findCallbackSource("readStableAnswerForQuestion"),
   isSelectedHistoricalQuestion: findCallbackSource("isSelectedHistoricalQuestion"),
   isQuestionHiddenByPin: findCallbackSource("isQuestionHiddenByPin"),
@@ -68,6 +70,7 @@ const callbackSources = {
   rollbackPreparedStableAnswerPublication: findCallbackSource(
     "rollbackPreparedStableAnswerPublication"
   ),
+  commitDirectGenerationAnswer: findCallbackSource("commitDirectGenerationAnswer"),
   finalizeStableAnswerPublication: findCallbackSource(
     "finalizeStableAnswerPublication"
   ),
@@ -151,6 +154,7 @@ for (const moduleName of [
   "meeting-answer-display",
   "response-action-target",
   "artifact-regeneration",
+  "coding-solution-manifest",
 ]) {
   const loaded = await import(
     pathToFileURL(
@@ -425,8 +429,8 @@ function publicationCommitSource(source) {
   const callback = parse(findCallbackSource(source === "voice" ? "runAdvisor" : "captureScreenContext"));
   const matches = [];
   const visit = (node) => {
-    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)
-      && node.expression.name.text === "commitStaged"
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)
+      && node.expression.text === "commitDirectGenerationAnswer"
       && node.arguments[0]?.getText(callback).includes(source === "voice"
         ? "deadlineDelta: continuity.deadlineDelta" : "deadlineDelta: screenGenerationContinuity?.deadlineDelta")) {
       matches.push(node.getText(callback));
@@ -494,7 +498,7 @@ function publishImmediate(h, candidate) {
     h.environment.readGenerationLeaseSnapshot({ lease: candidate.generationLease,
       authorizedArtifacts: ["answer"], candidateMutatedArtifacts: ["answer"],
       logicalQuestionUnitId: candidate.generationLease.logicalQuestionUnitId, logicalQuestionRevision: 1 }));
-  const result = h.evaluate(publicationCommitSource(candidate.source), {
+  const commit = h.evaluate(publicationCommitSource(candidate.source), {
     candidateStableAnswer: candidate.stable,
     answerGenerationLease: candidate.generationLease, screenGenerationLease: candidate.generationLease,
     advisorLeaseAuthorization: leaseAuthorization, screenLeaseAuthorization: leaseAuthorization,
@@ -510,7 +514,7 @@ function publishImmediate(h, candidate) {
     resetVisibleSections: false, screenStartedNewInterviewParent: false, options: {},
     advisorPublication: undefined, screenPublication: undefined,
   });
-  const prepared = h.environment[candidate.source === "voice" ? "advisorPublication" : "screenPublication"];
+  const {result, publication: prepared} = commit;
   if (result.committed) h.environment.finalizeStableAnswerPublication(prepared);
   return { result, prepared };
 }
@@ -529,6 +533,61 @@ function queueOutputCandidate(h, candidate) {
     taskRuntimeTransition: candidate.preparedTransition.transition,
   });
 }
+
+test("SG Whiteboard async validation preserves each real caller's late authorization check", async () => {
+  for (const kind of ["voice", "screen"]) {
+    let resolveValidation;
+    const validation = new Promise(resolve => { resolveValidation = resolve; });
+    const events = [];
+    const env = {
+      ...imports, Promise,
+      traceStoreRef: { current: {
+        startStep: () => { events.push("start"); return "step"; },
+        updateMetadata: () => events.push("metadata"),
+        finishStep: () => events.push("finish"),
+      } },
+      validateWhiteboardRenderCandidate: () => validation,
+      parsedMeetingAnswer: { sections: { whiteboard: "Client -> Service" } },
+      parsedScreenMeetingAnswer: { sections: { whiteboard: "Client -> Service" } },
+      traceId: "voice", trace: { id: "screen" }, reusedArtifactCandidate: undefined,
+      effectiveAdvisorSettlementView: {}, contextManagerRef: { current: { getState: () => ({}) } },
+      whiteboardRenderValidation: undefined, screenWhiteboardRenderValidation: undefined,
+      rejectStaleCommit: () => { events.push("stale"); return true; },
+      rejectStaleScreenOperation: () => { events.push("stale"); return true; },
+      rollbackStagedAnswerDelivery: () => events.push("rollback"),
+    };
+    const context = vm.createContext(env);
+    const evaluate = text => vm.runInContext(ts.transpileModule(text, {
+      compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
+    }).outputText, context);
+    env.validateGeneratedWhiteboard = evaluate(`(${callbackSources.validateGeneratedWhiteboard})`);
+    const blocks = [];
+    const visit = node => {
+      if (ts.isCallExpression(node) && node.expression.getText(sourceFile) === "validateGeneratedWhiteboard") {
+        let parent = node.parent;
+        while (!ts.isBlock(parent)) parent = parent.parent;
+        blocks.push(parent);
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sourceFile);
+    assert.equal(blocks.length, 2);
+    const result = evaluate(`(async () => { ${blocks[kind === "voice" ? 0 : 1].getText(sourceFile)} return "continued"; })()`);
+    assert.deepEqual(events, ["start"]);
+    resolveValidation(await imports.validateWhiteboardRenderCandidate({ whiteboard: "Client -> Service" }));
+    assert.equal(await result, undefined, "the real caller returns before later result/commit work");
+    assert.deepEqual(events, ["start", "metadata", "finish", "stale", ...(kind === "voice" ? ["rollback"] : [])]);
+    const cached = await imports.validateWhiteboardRenderCandidate({ whiteboard: "Client -> Service" });
+    events.length = 0;
+    env.validateWhiteboardRenderCandidate = () => { throw new Error("cached validation must not rerun"); };
+    const reused = env.validateGeneratedWhiteboard({
+      whiteboard: "Client -> Service", traceId: "reuse", reusedValidation: cached, readPrevious: () => undefined,
+    });
+    assert.equal(reused, cached);
+    assert.equal(typeof reused.then, "undefined", "cache hit must not introduce an async release point");
+    assert.deepEqual(events, ["start", "metadata", "finish"]);
+  }
+});
 
 test("O1/O5.1 Voice/Screen actual commitStaged callsites install summary/Visible/deadline660 without task mutation", () => {
   for (const source of ["voice", "screen"]) {
