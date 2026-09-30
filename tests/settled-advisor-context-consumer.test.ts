@@ -23,7 +23,6 @@ import {
 import { buildEffectiveAdvisorSettlementView } from "../src/lib/meeting/settled-advisor-execution-plan.js";
 import {
   projectEffectiveLogicalQuestionSources,
-  projectAdvisorTranscriptForLogicalQuestion,
 } from "../src/lib/meeting/logical-question-effective-projection.js";
 import {
   compileSettledAdvisorPromptContext,
@@ -302,8 +301,6 @@ test("C4 explicit empty scope and unavailable turns cannot revive raw corrected 
   const raw = turn("unrelated", "Design a car-sharing system.", 1_000);
   const f = fixture([raw]);
   remember(f.ledger, correct(f.unit(raw)));
-  const projection = projectAdvisorTranscriptForLogicalQuestion({ turns: [raw], includedTurnIds: [], effectiveRecords: f.ledger.list() });
-  assert.equal(projection.transcript, "");
   const result = consume(f, undefined);
   assert.equal(result.context.transcript, "");
   assert.equal(result.context.latestTurn, undefined);

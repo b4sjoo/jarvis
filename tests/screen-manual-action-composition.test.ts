@@ -35,7 +35,6 @@ import {
 import * as responseTargets from "../src/lib/meeting/response-action-target.js";
 import { selectInterviewPlaybook, withInterviewPlaybookPhase } from "../src/lib/meeting/interview-playbook.js";
 import { resolvePostModelContinuityAuthority } from "../src/lib/meeting/post-model-continuity-authority.js";
-import { decideInterviewTaskContinuityBranch } from "../src/lib/meeting/interview-task-continuity.js";
 import { resolveLatestScreenObservationId } from "../src/lib/meeting/source-owned-transition-transaction.js";
 import { isWhiteboardRevisionAuthorized } from "../src/lib/meeting/whiteboard-artifact.js";
 import type { TranscriptTurn } from "../src/lib/meeting/types.js";
@@ -238,7 +237,7 @@ test(`MR1 origin ${scope} Plan reaches post-model consumer without recreating it
   assert.equal(relation, "followup-parent");
   assert.equal(plan.taskRelation, "new-parent");
   const consume = evaluate(`(${declaration("updateInterviewTaskContinuityForAnswer").getText(hook)})`, {
-    decideInterviewTaskContinuityBranch, resolveLatestScreenObservationId, withInterviewPlaybookPhase,
+    resolveLatestScreenObservationId, withInterviewPlaybookPhase,
     isWhiteboardRevisionAuthorized, equalTaskRuntimeValues,
     applyPlaybookPhaseDecisionToProgress: phaseDecisions.applyPlaybookPhaseDecisionToProgress,
   });

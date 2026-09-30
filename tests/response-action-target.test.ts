@@ -4,9 +4,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { resolveResponseActionLogicalQuestionUnit, resolveVisibleAnswerResponseActionTarget } from "../src/lib/meeting/response-action-target.js";
 import { getLogicalQuestionAnswerFocusText } from "../src/lib/meeting/logical-question-unit.js";
-import {
-  projectAdvisorTranscriptForLogicalQuestion,
-} from "../src/lib/meeting/logical-question-effective-projection.js";
+import { resolveAuthorizedEffectiveSourceContext } from "../src/lib/meeting/authorized-effective-source-context.js";
 import type { StableAnswerRevision } from "../src/lib/meeting/stable-answer.js";
 
 import {
@@ -358,8 +356,9 @@ test("preserves term-correction provenance through visible-source reconstruction
     decision.logicalQuestionUnit?.sources[0]?.appliedSpeechCorrectionIds,
     ["correction-rag"]
   );
-  const transcript = projectAdvisorTranscriptForLogicalQuestion({
-    turns: meetingContext.transcriptTurns,
+  const { transcriptProjection: transcript } = resolveAuthorizedEffectiveSourceContext({
+    transcriptTurns: meetingContext.transcriptTurns,
+    selectedSourceTurnIds: decision.logicalQuestionUnit!.sourceTurnIds,
     logicalQuestionUnit: decision.logicalQuestionUnit,
     sessionId: "session-a",
     runtimeEpoch: 3,

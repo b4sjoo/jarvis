@@ -1,8 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  decideInterviewTaskContinuityBranch,
-} from "../src/lib/meeting/interview-task-continuity.js";
 import { MeetingContextManager } from "../src/lib/meeting/context-manager.js";
 import { createSourceOwnedTransitionCandidate } from "../src/lib/meeting/source-owned-transition-transaction.js";
 import {
@@ -21,98 +18,6 @@ import type {
   ActiveInterviewChild,
   ActiveInterviewParent,
 } from "../src/lib/meeting/types.js";
-
-test("keeps a coding probe as a child of a system-design parent", () => {
-  assert.deepEqual(
-    decideInterviewTaskContinuityBranch({
-      hasExistingParent: true,
-      existingParentQuestionType: "general-system-design",
-      candidateQuestionType: "coding",
-      relation: "child-probe",
-    }),
-    {
-      branch: "child-probe",
-      reason: "authoritative-child-relation-precedes-parent-eligibility",
-    }
-  );
-});
-
-test("keeps a coding probe under a project parent and preserves resume authority", () => {
-  assert.equal(
-    decideInterviewTaskContinuityBranch({
-      hasExistingParent: true,
-      existingParentQuestionType: "project-deep-dive",
-      candidateQuestionType: "coding",
-      relation: "child-probe",
-    }).branch,
-    "child-probe"
-  );
-  assert.equal(
-    decideInterviewTaskContinuityBranch({
-      hasExistingParent: true,
-      existingParentQuestionType: "ai-ml-system-design",
-      candidateQuestionType: "field-knowledge",
-      relation: "resume-parent",
-    }).branch,
-    "continue-parent"
-  );
-});
-
-test("allows an explicit new coding problem to replace the parent", () => {
-  assert.deepEqual(
-    decideInterviewTaskContinuityBranch({
-      hasExistingParent: true,
-      existingParentQuestionType: "general-system-design",
-      candidateQuestionType: "coding",
-      relation: "new-parent",
-    }),
-    {
-      branch: "new-parent",
-      reason: "relation-new-parent",
-    }
-  );
-});
-
-test("preserves the parent when relation evidence is unresolved", () => {
-  assert.deepEqual(
-    decideInterviewTaskContinuityBranch({
-      hasExistingParent: true,
-      existingParentQuestionType: "general-system-design",
-      candidateQuestionType: "coding",
-      relation: "unknown",
-    }),
-    {
-      branch: "preserve",
-      reason: "unresolved-relation-unknown",
-    }
-  );
-});
-
-test("does not continue an incompatible parent from a follow-up label alone", () => {
-  assert.deepEqual(
-    decideInterviewTaskContinuityBranch({
-      hasExistingParent: true,
-      existingParentQuestionType: "general-system-design",
-      candidateQuestionType: "coding",
-      relation: "followup-parent",
-    }),
-    {
-      branch: "preserve",
-      reason: "incompatible-type-without-new-parent-authority",
-    }
-  );
-});
-
-test("does not create a parent from an unscoped field-knowledge child", () => {
-  assert.equal(
-    decideInterviewTaskContinuityBranch({
-      hasExistingParent: false,
-      candidateQuestionType: "field-knowledge",
-      relation: "child-probe",
-    }).branch,
-    "preserve"
-  );
-});
 
 test("applies a child probe without replacing parent trajectory state", () => {
   const parent = makeParent();

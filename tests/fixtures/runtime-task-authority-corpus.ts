@@ -2,7 +2,6 @@ import type {
   CanonicalQuestionType,
   QuestionTypeInferenceDecision,
 } from "../../src/lib/meeting/task-taxonomy.js";
-import type { InterviewTaskRelation } from "../../src/lib/meeting/types.js";
 
 export interface ExplicitAskAuthorityFixture {
   id: string;
@@ -20,24 +19,6 @@ export interface AmbiguousTypeAuthorityFixture {
   currentLocalType?: CanonicalQuestionType;
   targetDisposition: "exact-high" | "abstain";
   targetType?: CanonicalQuestionType;
-}
-
-export interface LifecycleAuthorityFixture {
-  id: string;
-  hasExistingParent: boolean;
-  existingParentQuestionType?: CanonicalQuestionType;
-  candidateQuestionType?: CanonicalQuestionType;
-  relation: InterviewTaskRelation;
-  currentBranch:
-    | "child-probe"
-    | "new-parent"
-    | "continue-parent"
-    | "preserve";
-  targetBranch:
-    | "child-probe"
-    | "new-parent"
-    | "continue-parent"
-    | "preserve";
 }
 
 export const EXPLICIT_ASK_AUTHORITY_CORPUS: ExplicitAskAuthorityFixture[] = [
@@ -153,62 +134,6 @@ export const AMBIGUOUS_TYPE_AUTHORITY_CORPUS: AmbiguousTypeAuthorityFixture[] = 
     text: "Explain the model architecture.",
     currentLocalType: undefined,
     targetDisposition: "abstain",
-  },
-];
-
-export const LIFECYCLE_AUTHORITY_CORPUS: LifecycleAuthorityFixture[] = [
-  {
-    id: "unknown-relation-must-not-create-parent",
-    hasExistingParent: true,
-    existingParentQuestionType: "general-system-design",
-    candidateQuestionType: "coding",
-    relation: "unknown",
-    currentBranch: "new-parent",
-    targetBranch: "preserve",
-  },
-  {
-    id: "explicit-new-parent",
-    hasExistingParent: true,
-    existingParentQuestionType: "general-system-design",
-    candidateQuestionType: "coding",
-    relation: "new-parent",
-    currentBranch: "new-parent",
-    targetBranch: "new-parent",
-  },
-  {
-    id: "explicit-child-probe",
-    hasExistingParent: true,
-    existingParentQuestionType: "ai-ml-system-design",
-    candidateQuestionType: "field-knowledge",
-    relation: "child-probe",
-    currentBranch: "child-probe",
-    targetBranch: "child-probe",
-  },
-  {
-    id: "explicit-resume-parent",
-    hasExistingParent: true,
-    existingParentQuestionType: "ai-ml-system-design",
-    candidateQuestionType: "ai-ml-system-design",
-    relation: "resume-parent",
-    currentBranch: "continue-parent",
-    targetBranch: "continue-parent",
-  },
-  {
-    id: "no-parent-with-parent-eligible-type",
-    hasExistingParent: false,
-    candidateQuestionType: "behavioral",
-    relation: "unknown",
-    currentBranch: "new-parent",
-    targetBranch: "new-parent",
-  },
-  {
-    id: "unknown-candidate-type",
-    hasExistingParent: true,
-    existingParentQuestionType: "general-system-design",
-    candidateQuestionType: "unknown",
-    relation: "unknown",
-    currentBranch: "preserve",
-    targetBranch: "preserve",
   },
 ];
 

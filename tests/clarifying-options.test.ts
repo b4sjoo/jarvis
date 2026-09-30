@@ -5,7 +5,6 @@ import {
   getDisplayClarifyingOptions,
   isLikelyBooleanClarifyingQuestion,
   parseClarifyingOptionsText,
-  readProjectBindingClarifyingCandidates,
 } from "../src/lib/meeting/clarifying-options.js";
 
 test("parses labeled multi-line clarifying options", () => {
@@ -91,37 +90,12 @@ test("does not invent yes/no for a non-boolean question without options", () => 
   assert.deepEqual(model.options, []);
 });
 
-test("uses project binding candidates for a project selection question", () => {
-  const model = buildClarifyingOptionDisplayModel({
-    question: "Which verified project should I use for this answer?",
-    projectBindingNeedsSelection: true,
-    projectBindingCandidates: [
-      { projectId: "agentic-memory", projectName: "Agentic Memory" },
-      { projectId: "throttling", projectName: "Distributed Throttling" },
-    ],
-  });
-
-  assert.equal(model.source, "project-binding");
-  assert.equal(model.showBooleanFallback, false);
-  assert.deepEqual(
-    model.options.map((option) => [option.label, option.value]),
-    [
-      ["Agentic Memory", "agentic-memory"],
-      ["Distributed Throttling", "throttling"],
-    ]
-  );
-});
-
-test("structured options outrank project candidates", () => {
+test("structured options remain available for ordinary clarification", () => {
   const model = buildClarifyingOptionDisplayModel({
     question: "Which direction should I use?",
     options: [
       { id: "a", label: "Read path", value: "read" },
       { id: "b", label: "Write path", value: "write" },
-    ],
-    projectBindingNeedsSelection: true,
-    projectBindingCandidates: [
-      { projectId: "project", projectName: "Project" },
     ],
   });
 
@@ -130,24 +104,4 @@ test("structured options outrank project candidates", () => {
     model.options.map((option) => option.label),
     ["Read path", "Write path"]
   );
-});
-
-test("reads privacy-safe project candidates from binding trace metadata", () => {
-  const result = readProjectBindingClarifyingCandidates({
-    projectBindingAction: "needs-selection",
-    projectBindingCandidates: [
-      {
-        projectId: "agentic-memory",
-        projectName: "Agentic Memory",
-        primaryEntryId: "private-entry-id",
-      },
-      { projectName: "Distributed Throttling" },
-    ],
-  });
-
-  assert.equal(result.needsSelection, true);
-  assert.deepEqual(result.candidates, [
-    { projectId: "agentic-memory", projectName: "Agentic Memory" },
-    { projectName: "Distributed Throttling" },
-  ]);
 });

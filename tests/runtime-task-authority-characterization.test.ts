@@ -4,7 +4,6 @@ import {
   classifyInterviewTransitionTurn,
   reconcileInterviewTransitionTurnWithPrimaryAsk,
 } from "../src/lib/meeting/interview-section-transition.js";
-import { decideInterviewTaskContinuityBranch } from "../src/lib/meeting/interview-task-continuity.js";
 import { projectPrimaryAsk } from "../src/lib/meeting/primary-ask-projection.js";
 import {
   canQuestionTypeDecisionOverrideParent,
@@ -13,7 +12,6 @@ import {
 import {
   AMBIGUOUS_TYPE_AUTHORITY_CORPUS,
   EXPLICIT_ASK_AUTHORITY_CORPUS,
-  LIFECYCLE_AUTHORITY_CORPUS,
   summarizeLocalTypeDecision,
 } from "./fixtures/runtime-task-authority-corpus.js";
 
@@ -103,25 +101,4 @@ test("exact-only multilingual and high-level decisions carry runtime authority",
     assert.equal(decision.certainty, "exact-high", text);
     assert.equal(canQuestionTypeDecisionOverrideParent(decision), true, text);
   }
-});
-
-test("enforces lifecycle authority targets while retaining the legacy baseline", () => {
-  for (const fixture of LIFECYCLE_AUTHORITY_CORPUS) {
-    const decision = decideInterviewTaskContinuityBranch({
-      hasExistingParent: fixture.hasExistingParent,
-      existingParentQuestionType: fixture.existingParentQuestionType,
-      candidateQuestionType: fixture.candidateQuestionType,
-      relation: fixture.relation,
-    });
-    assert.equal(decision.branch, fixture.targetBranch, fixture.id);
-  }
-
-  const unsafeUnknownRelation = LIFECYCLE_AUTHORITY_CORPUS.find(
-    (fixture) => fixture.id === "unknown-relation-must-not-create-parent"
-  );
-  assert.ok(unsafeUnknownRelation);
-  assert.notEqual(
-    unsafeUnknownRelation.currentBranch,
-    unsafeUnknownRelation.targetBranch
-  );
 });

@@ -2,18 +2,12 @@ import type { ClarifyingOptionSource } from "./types.js";
 import type { ClarifyingQuestionOption } from "./types";
 
 const MAX_CLARIFYING_OPTIONS = 4;
-const MAX_PROJECT_CLARIFYING_OPTIONS = 3;
 
 export interface ClarifyingOptionDisplayModel {
   options: ClarifyingQuestionOption[];
   source: ClarifyingOptionSource;
   showBooleanFallback: boolean;
   misleadingBooleanFallbackPrevented: boolean;
-}
-
-export interface ProjectBindingClarifyingCandidate {
-  projectId?: string;
-  projectName: string;
 }
 
 export function parseClarifyingOptionsText(
@@ -51,14 +45,10 @@ export function getDisplayClarifyingOptions({
 export function buildClarifyingOptionDisplayModel({
   question,
   options,
-  projectBindingCandidates,
-  projectBindingNeedsSelection = false,
   projectIdentityPending = false,
 }: {
   question: string;
   options?: ClarifyingQuestionOption[];
-  projectBindingCandidates?: ProjectBindingClarifyingCandidate[];
-  projectBindingNeedsSelection?: boolean;
   projectIdentityPending?: boolean;
 }): ClarifyingOptionDisplayModel {
   if (projectIdentityPending) {
@@ -70,15 +60,6 @@ export function buildClarifyingOptionDisplayModel({
   const structuredOptions = normalizeClarifyingOptions(options ?? []);
   if (structuredOptions.length) {
     return buildDisplayModel(structuredOptions, "structured-answer");
-  }
-
-  if (projectBindingNeedsSelection) {
-    const projectOptions = buildProjectBindingOptions(
-      projectBindingCandidates ?? []
-    );
-    if (projectOptions.length) {
-      return buildDisplayModel(projectOptions, "project-binding");
-    }
   }
 
   const literalOptions = inferClarifyingOptionsFromQuestion(question);
@@ -101,36 +82,6 @@ export function buildClarifyingOptionDisplayModel({
     showBooleanFallback: false,
     misleadingBooleanFallbackPrevented: Boolean(question.trim()),
   };
-}
-
-export function readProjectBindingClarifyingCandidates(
-  metadata: Record<string, unknown> | undefined
-): {
-  needsSelection: boolean;
-  candidates: ProjectBindingClarifyingCandidate[];
-} {
-  const needsSelection = metadata?.projectBindingAction === "needs-selection";
-  if (!needsSelection || !Array.isArray(metadata.projectBindingCandidates)) {
-    return { needsSelection, candidates: [] };
-  }
-
-  const candidates = metadata.projectBindingCandidates
-    .map<ProjectBindingClarifyingCandidate | undefined>((value) => {
-      if (!value || typeof value !== "object") return undefined;
-      const candidate = value as Record<string, unknown>;
-      if (typeof candidate.projectName !== "string") return undefined;
-      const projectName = candidate.projectName.trim();
-      if (!projectName) return undefined;
-      return typeof candidate.projectId === "string"
-        ? { projectId: candidate.projectId, projectName }
-        : { projectName };
-    })
-    .filter(
-      (candidate): candidate is ProjectBindingClarifyingCandidate =>
-        Boolean(candidate)
-    );
-
-  return { needsSelection, candidates };
 }
 
 export function normalizeClarifyingOptions(options: ClarifyingQuestionOption[]) {
@@ -165,39 +116,6 @@ function buildDisplayModel(
     showBooleanFallback: false,
     misleadingBooleanFallbackPrevented: false,
   };
-}
-
-function buildProjectBindingOptions(
-  candidates: ProjectBindingClarifyingCandidate[]
-) {
-  const unique = candidates.reduce<ProjectBindingClarifyingCandidate[]>(
-    (result, candidate) => {
-      const identity = (candidate.projectId ?? candidate.projectName)
-        .trim()
-        .toLowerCase();
-      if (
-        identity &&
-        !result.some(
-          (item) =>
-            (item.projectId ?? item.projectName).trim().toLowerCase() ===
-            identity
-        )
-      ) {
-        result.push(candidate);
-      }
-      return result;
-    },
-    []
-  );
-
-  return unique.slice(0, MAX_PROJECT_CLARIFYING_OPTIONS).map((candidate, index) => ({
-    id: `project-${buildOptionId(
-      candidate.projectId ?? candidate.projectName,
-      index
-    )}`,
-    label: candidate.projectName,
-    value: candidate.projectId ?? candidate.projectName,
-  }));
 }
 
 function inferClarifyingOptionsFromQuestion(question: string) {

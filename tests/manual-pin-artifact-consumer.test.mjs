@@ -15,7 +15,7 @@ const moduleNames = ["manual-advise-display", "unpublished-artifact", "meeting-a
   "manual-question-type-correction", "bounded-recent-history", "suggestion-task",
   "advisor-trigger-job", "logical-question-ownership", "generation-result-ledger",
   "whiteboard-artifact", "whiteboard-format-policy", "context-manager", "response-artifact-authorization",
-  "visual-evidence-recovery", "interview-task-continuity", "source-owned-transition-transaction",
+  "visual-evidence-recovery", "source-owned-transition-transaction",
   "interview-playbook", "playbook-phase"];
 for (const name of moduleNames) {
   Object.assign(modules, await import(pathToFileURL(path.join(root, `src/lib/meeting/${name}.js`))));

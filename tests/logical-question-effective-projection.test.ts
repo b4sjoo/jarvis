@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { applyActiveQuestionTermCorrection } from "../src/lib/meeting/active-question-term-correction.js";
 import {
-  projectAdvisorTranscriptForLogicalQuestion,
   projectEffectiveLogicalQuestionSources,
   projectEffectiveSourceTurnGroup,
   projectEffectiveTextForSourceTurn,
@@ -13,7 +12,6 @@ import { buildResponseOpportunityRequest } from "../src/lib/meeting/response-opp
 import { projectLogicalQuestionForAdjudication } from "../src/lib/meeting/taxonomy-adjudication.js";
 import type {
   SpeechCorrection,
-  TranscriptTurn,
 } from "../src/lib/meeting/types.js";
 
 test("projects one corrected semantic source while preserving raw source identity", () => {
@@ -41,12 +39,9 @@ test("PC1 historical effective spans and current correction project at a later e
       const input = { effectiveRecords: [record], logicalQuestionUnit, sessionId: "session-1", runtimeEpoch };
       const single = projectEffectiveTextForSourceTurn({ ...input, turnId: "turn-1", text: corrected.sources[0].text });
       const batch = projectEffectiveSourceTurnGroup({ ...input, sources: [{ turnId: "turn-1", text: corrected.sources[0].text }] });
-      const transcript = projectAdvisorTranscriptForLogicalQuestion({ ...input, turns: [turn("turn-1", "them", corrected.sources[0].text, 1)] });
       assert.match(single.text, /RAG/);
       assert.equal(single.logicalQuestionRevision, corrected.revision);
       assert.equal(batch.sources[0].text, single.text);
-      assert.match(transcript.transcript, /RAG/);
-      assert.doesNotMatch(transcript.transcript, /ride-sharing/);
     }
   }
   assert.deepEqual(record, originalRecord);
@@ -84,141 +79,6 @@ test("uses the corrected projection for taxonomy and response opportunity", () =
   assert.doesNotMatch(taxonomy.text, /ride-sharing/i);
   assert.match(response.decisionSpans[0]?.text ?? "", /RAG/);
   assert.doesNotMatch(response.decisionSpans[0]?.text ?? "", /ride-sharing/i);
-});
-
-test("replaces covered Them turns only in the model transcript", () => {
-  const corrected = correct(unit("Design a ride-sharing system for delivery."));
-  const turns: TranscriptTurn[] = [
-    turn("turn-setup", "them", "Let us discuss architecture.", 1),
-    turn("turn-me", "me", "Do you mean an AI system?", 2),
-    turn("turn-1", "them", "Design a ride-sharing system for delivery.", 3),
-  ];
-  const projection = projectAdvisorTranscriptForLogicalQuestion({
-    turns,
-    includedTurnIds: turns.map((item) => item.id),
-    logicalQuestionUnit: corrected,
-  });
-
-  assert.equal(projection.replaced, true);
-  assert.match(projection.transcript, /Them: Let us discuss architecture/);
-  assert.match(projection.transcript, /Me: Do you mean an AI system/);
-  assert.match(
-    projection.transcript,
-    /Corrected LQU logical-question-1 revision 2/
-  );
-  assert.match(projection.transcript, /RAG/);
-  assert.doesNotMatch(projection.transcript, /ride-sharing/i);
-  assert.match(projection.latestTurn?.text ?? "", /RAG/);
-});
-
-test("projects a corrected parent LQU during a later follow-up", () => {
-  const correctedParent = correct(unit("Design a ride-sharing system for delivery."));
-  const followUp = makeUnit({
-    id: "logical-question-follow-up",
-    turnId: "turn-follow-up",
-    text: "What would you monitor in production?",
-    startedAt: 5,
-  });
-  const projection = projectAdvisorTranscriptForLogicalQuestion({
-    turns: [
-      turn("turn-1", "them", "Design a ride-sharing system for delivery.", 1),
-      turn("turn-follow-up", "them", followUp.normalizedText, 5),
-    ],
-    includedTurnIds: ["turn-1", "turn-follow-up"],
-    logicalQuestionUnit: followUp,
-    effectiveRecords: [modelRecord(correctedParent)],
-    sessionId: "session-1",
-    runtimeEpoch: 1,
-  });
-
-  assert.match(projection.transcript, /Design a RAG system/);
-  assert.match(projection.transcript, /What would you monitor/);
-  assert.doesNotMatch(projection.transcript, /ride-sharing/i);
-  assert.deepEqual(projection.projectedLogicalQuestionUnitIds, [
-    "logical-question-1",
-  ]);
-  assert.equal(projection.projectedTurnCount, 1);
-});
-
-test("projects multiple corrected LQUs while preserving Me and unrelated turns", () => {
-  const first = correct(unit("Design a ride-sharing system for delivery."));
-  const second = correct(
-    makeUnit({
-      id: "logical-question-2",
-      turnId: "turn-2",
-      text: "Compare ride-sharing retrieval options.",
-      startedAt: 4,
-    })
-  );
-  const projection = projectAdvisorTranscriptForLogicalQuestion({
-    turns: [
-      turn("turn-1", "them", "Design a ride-sharing system for delivery.", 1),
-      turn("turn-me", "me", "Do you mean RAG?", 2),
-      turn("turn-unrelated", "them", "Keep the answer concise.", 3),
-      turn("turn-2", "them", "Compare ride-sharing retrieval options.", 4),
-    ],
-    includedTurnIds: ["turn-1", "turn-me", "turn-unrelated", "turn-2"],
-    effectiveRecords: [modelRecord(first), modelRecord(second)],
-    sessionId: "session-1",
-    runtimeEpoch: 1,
-  });
-
-  assert.doesNotMatch(projection.transcript, /ride-sharing/i);
-  assert.match(projection.transcript, /Me: Do you mean RAG/);
-  assert.match(projection.transcript, /Them: Keep the answer concise/);
-  assert.deepEqual(projection.projectedLogicalQuestionUnitIds, [
-    "logical-question-1",
-    "logical-question-2",
-  ]);
-});
-
-test("lets an uncorrected in-flight revision supersede a corrected ledger record", () => {
-  const corrected = correct(unit("Design a ride-sharing system for delivery."));
-  const reversed = {
-    ...unit("Design a ride-sharing system for delivery."),
-    revision: corrected.revision + 1,
-    updatedAt: corrected.updatedAt + 1,
-  };
-  const projection = projectAdvisorTranscriptForLogicalQuestion({
-    turns: [
-      turn("turn-1", "them", "Design a ride-sharing system for delivery.", 1),
-    ],
-    logicalQuestionUnit: reversed,
-    effectiveRecords: [modelRecord(corrected)],
-    sessionId: "session-1",
-    runtimeEpoch: 1,
-  });
-
-  assert.equal(projection.replaced, false);
-  assert.match(projection.transcript, /ride-sharing/);
-  assert.doesNotMatch(projection.transcript, /Corrected LQU/);
-});
-
-test("keeps natural spoken corrections as raw conversation evidence", () => {
-  const naturalCorrection: EffectiveLogicalQuestionModelRecord = {
-    sessionId: "session-1",
-    runtimeEpoch: 1,
-    logicalQuestionUnitId: "logical-question-natural",
-    logicalQuestionRevision: 2,
-    sourceTurnIds: ["turn-old", "turn-natural-correction"],
-    text: "Design a RAG system.",
-    correctionIds: [],
-    updatedAt: 4,
-    settledAt: 5,
-  };
-  const projection = projectAdvisorTranscriptForLogicalQuestion({
-    turns: [
-      turn("turn-old", "them", "Design a ride-sharing system.", 1),
-      turn("turn-natural-correction", "them", "Sorry, I mean RAG.", 2),
-    ],
-    effectiveRecords: [naturalCorrection],
-    sessionId: "session-1",
-    runtimeEpoch: 1,
-  });
-
-  assert.equal(projection.replaced, false);
-  assert.match(projection.transcript, /ride-sharing/);
-  assert.match(projection.transcript, /Sorry, I mean RAG/);
 });
 
 test("projects one corrected setup turn without widening its source scope", () => {
@@ -267,40 +127,6 @@ test("projects every corrected source in a bounded setup group", () => {
     "Documents have access control lists."
   );
   assert.deepEqual(projection.correctionIds, ["correction-1"]);
-});
-
-test("an explicit empty source selection remains empty with corrected ledger evidence", () => {
-  const corrected = correct(unit("Design a ride-sharing system for delivery."));
-  const projection = projectAdvisorTranscriptForLogicalQuestion({
-    turns: [turn("turn-1", "them", "Design a ride-sharing system for delivery.", 1)],
-    includedTurnIds: [],
-    effectiveRecords: [modelRecord(corrected)],
-  });
-  assert.equal(projection.transcript, "");
-  assert.equal(projection.latestTurn, undefined);
-  assert.equal(projection.rawChars, 0);
-  assert.equal(projection.projectedTurnCount, 0);
-});
-
-test("partial corrected source selection bounds both transcript and latest-turn text", () => {
-  const original = unit("The ride-sharing corpus is private.");
-  const second = { turnId: "turn-2", text: "The ride-sharing index is public.", startedAt: 3, endedAt: 4 };
-  const corrected = correct({
-    ...original,
-    currentTurnId: second.turnId,
-    sourceTurnIds: ["turn-1", second.turnId],
-    sources: [...original.sources, second],
-    normalizedText: `${original.normalizedText} ${second.text}`,
-  });
-  const projection = projectAdvisorTranscriptForLogicalQuestion({
-    turns: [turn("turn-1", "them", original.normalizedText, 1), turn(second.turnId, "them", second.text, 3)],
-    includedTurnIds: [second.turnId],
-    effectiveRecords: [modelRecord(corrected)],
-  });
-  assert.match(projection.transcript, /RAG index is public/);
-  assert.match(projection.latestTurn?.text ?? "", /RAG index is public/);
-  assert.doesNotMatch(projection.transcript, /corpus is private|ride-sharing/);
-  assert.doesNotMatch(projection.latestTurn?.text ?? "", /corpus is private|ride-sharing/);
 });
 
 test("C4/C5 group selects ledger once while preserving order, repeated IDs and source metadata", () => {
@@ -462,22 +288,5 @@ function modelRecord(
     effectiveSourceTexts: projection.effectiveSourceTexts,
     updatedAt: logicalQuestionUnit.updatedAt,
     settledAt: logicalQuestionUnit.updatedAt,
-  };
-}
-
-function turn(
-  id: string,
-  speaker: "me" | "them",
-  text: string,
-  at: number
-): TranscriptTurn {
-  return {
-    id,
-    speaker,
-    text,
-    startedAt: at,
-    endedAt: at + 1,
-    isFinal: true,
-    source: speaker === "me" ? "microphone" : "system-audio",
   };
 }

@@ -145,6 +145,6 @@ test("O2: task phase/source changes and correction/Visible drift retain distinct
 test("O5.8: pure-generation task writer and same-owner compensation are retired", () => {
   const hook = readFileSync("src/hooks/useMeetingAssistant.ts", "utf8");
   assert.doesNotMatch(hook, /trySameOwnerAnswerCommitRebase|decideSameOwnerAnswerCommitRebase|same-owner-answer-commit-rebase/);
-  assert.doesNotMatch(readFileSync("src/lib/meeting/interview-task-continuity.ts", "utf8"), /commitVisibleUsefulAnswerToParent/);
+  assert.equal(existsSync("src/lib/meeting/interview-task-continuity.ts"), false);
   assert.equal(existsSync("src/lib/meeting/same-owner-answer-commit-rebase.ts"), false);
 });

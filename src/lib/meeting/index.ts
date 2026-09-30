@@ -57,7 +57,6 @@ export * from "./preparation-runtime-consumers";
 export * from "./preparation-runtime-provenance";
 export * from "./interview-session-context";
 export * from "./manual-question-type-correction";
-export * from "./interview-task-continuity";
 export * from "./task-relation-authority";
 export * from "./logical-question-unit";
 export * from "./logical-question-ownership";

@@ -144,7 +144,6 @@ for (const moduleName of [
   "visual-evidence-recovery",
   "bounded-recent-history",
   "suggestion-task",
-  "interview-task-continuity",
   "source-owned-transition-transaction",
   "interview-playbook",
   "playbook-phase",

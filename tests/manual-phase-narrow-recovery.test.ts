@@ -40,7 +40,6 @@ import {
   GenerationResultLedger,
 } from "../src/lib/meeting/generation-result-ledger.js";
 import { selectInterviewPlaybook, withInterviewPlaybookPhase } from "../src/lib/meeting/interview-playbook.js";
-import { decideInterviewTaskContinuityBranch } from "../src/lib/meeting/interview-task-continuity.js";
 import { buildManualScreenLogicalQuestionUnit } from "../src/lib/meeting/manual-screen-question-source.js";
 import { buildMeetingAnswerSummary, parseMeetingAnswer } from "../src/lib/meeting/meeting-answer.js";
 import type { AdvisorPromptContext, MeetingContextState } from "../src/lib/meeting/meeting-context-contracts.js";
@@ -315,7 +314,7 @@ function recoveryHarness() {
   const coordinator = new GenerationDerivedCommitCoordinator(resultLedger);
   const installed: string[] = [];
   const consumerEnvironment: Record<string, unknown> = {
-    decideInterviewTaskContinuityBranch, resolveLatestScreenObservationId,
+    resolveLatestScreenObservationId,
     withInterviewPlaybookPhase, isWhiteboardRevisionAuthorized,
     applyPlaybookPhaseDecisionToProgress, equalTaskRuntimeValues, buildMeetingAnswerSummary,
   };
