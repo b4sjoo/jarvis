@@ -160,6 +160,7 @@ import { TypeCorrectionMenuButton, type TypeCorrectionMenuActions } from "./type
 import type { ManualCorrectionMenuSelection, ProjectChoicePresentation, ProjectChoiceSelection } from "@/lib/meeting/focus-window";
 import type { AdviseDisplayTarget } from "@/lib/meeting/manual-advise-display";
 import type { CriticalMomentTimingCandidates, CriticalMomentTimingSelection } from "@/lib/meeting/critical-moment-timing";
+import { observeRelationDecisionProvenance } from "@/lib/meeting/relation-decision-provenance";
 import { ProjectChoiceControl } from "./project-choice-control";
 import { createMeetingFocusDisplayModel, projectSelectedFocusTask } from "@/lib/meeting/focus-display";
 import { formatChineseThinkingText } from "@/lib/meeting/meeting-display-text";
@@ -6089,6 +6090,7 @@ const TraceHumanEvaluationPanel = ({
     trace,
     traces,
   }).observed;
+  const relationProvenanceObservation = observeRelationDecisionProvenance(trace.metadata);
   const questionTypeObservation = projectQuestionTypeObservation({
     metadata: trace.metadata,
     fallbackCurrentQuestionType: detectedQuestionType,
@@ -6506,6 +6508,8 @@ const TraceHumanEvaluationPanel = ({
                 : ""}
             </div>
             <div>parent owner: {observedSnapshotV2.settledParentId ?? "none"}</div>
+            <div>relation carrier: {relationProvenanceObservation.executionSource ?? "unconfirmed"}
+              {" / ordered source: "}{relationProvenanceObservation.ordered?.stage ?? "unconfirmed"}</div>
             <div>branch owner: {observedSnapshotV2.settledBranchId ?? "none"}</div>
             <div>context owner: {observedSnapshotV2.contextOwnerId ?? "none"}</div>
             <div>

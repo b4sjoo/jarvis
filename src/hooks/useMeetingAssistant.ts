@@ -5,6 +5,7 @@ import { resolveOrderedTaskRelationWithinWindow as resolveOrderedTaskRelationOpe
 import type { MeetingTaskDeadlineDelta } from "../lib/meeting/meeting-task-contracts.js";
 import { ManualAdviseDisplay, type AdviseDisplaySnapshot, type AdviseDisplayTarget } from "../lib/meeting/manual-advise-display.js";
 import { buildCriticalMomentTimingCandidates, resolveCriticalMomentTimingSelection, type CriticalMomentTimingSelection } from "../lib/meeting/critical-moment-timing.js";
+import { createOrderedRelationProvenance } from "../lib/meeting/relation-decision-provenance.js";
 import { UnpublishedArtifactSlot, type UnpublishedArtifactOffer, type UnpublishedArtifactCandidate } from "../lib/meeting/unpublished-artifact.js";
 import { buildMeetingAnswerDisplayModel, overlayMeetingAnswerArtifacts, type MeetingAnswerDisplayModel } from "../lib/meeting/meeting-answer-display.js";
 import { humanEvaluationStore } from "../lib/meeting/human-evaluation-store.js";
@@ -21397,6 +21398,7 @@ export function useMeetingAssistant() {
           }),
           questionType: resolvedQuestionType,
           relation: resolvedOrderedRelation ?? "unknown",
+          orderedRelationProvenance: createOrderedRelationProvenance(currentQuestion, orderedRelation, taskRelationHandle?.operationId),
           preserveActiveChild: orderedRelation?.preserveActiveChild,
           confidence: Math.max(
             orderedType.confidence,
@@ -21423,7 +21425,8 @@ export function useMeetingAssistant() {
                 adjudication: relationCandidate,
                 expectedParentId: latestParent.id,
                 expectedParentRevision: latestParent.revisions,
-              }), preserveActiveChild: orderedRelation?.preserveActiveChild }
+              }), preserveActiveChild: orderedRelation?.preserveActiveChild,
+              orderedRelationProvenance: localProposal.orderedRelationProvenance }
             : undefined;
         const authoritativeTypeProposal:
           | CurrentQuestionSettlementProposal
@@ -27661,6 +27664,7 @@ export function useMeetingAssistant() {
             const orderedDeterministicProposal = {
               ...screenDeterministicSettlementProposal,
               relation: coordinatedRelation.relation ?? "none",
+              orderedRelationProvenance: createOrderedRelationProvenance(screenCurrentQuestion, coordinatedRelation, taskRelationAdjudicationHandle.operationId),
               preserveActiveChild: coordinatedRelation.preserveActiveChild,
               relationEvidenceAuthorized: coordinatedRelation.status === "resolved",
               reasons: [
@@ -27678,7 +27682,8 @@ export function useMeetingAssistant() {
                       preflightContextState.activeMeetingTask.parent.id,
                     expectedParentRevision:
                       preflightContextState.activeMeetingTask.parent.revisions,
-                  }), preserveActiveChild: coordinatedRelation.preserveActiveChild }
+                  }), preserveActiveChild: coordinatedRelation.preserveActiveChild,
+                  orderedRelationProvenance: orderedDeterministicProposal.orderedRelationProvenance }
                 : undefined;
             screenCurrentQuestionSettlement = settleCurrentQuestion({
               operationId: taskRelationAdjudicationHandle.operationId,
@@ -27780,6 +27785,8 @@ export function useMeetingAssistant() {
           const coordinatedRelation = screenCoordinatorDecision.relation;
           const coordinatedProposal: CurrentQuestionSettlementProposal = {
             ...screenDeterministicSettlementProposal,
+            orderedRelationProvenance: createOrderedRelationProvenance(screenCurrentQuestion, coordinatedRelation,
+              taskRelationAdjudicationHandle?.operationId),
             relation: coordinatedRelation.relation ?? "none",
             preserveActiveChild: coordinatedRelation.preserveActiveChild,
             relationEvidenceAuthorized: coordinatedRelation.status === "resolved",
@@ -35069,6 +35076,9 @@ export function useMeetingAssistant() {
                 manualCorrectionRevision:
                   manualCorrectionRevisionRef.current,
                 orderedRelation: effectiveOrderedRelation,
+                orderedRelationProvenance: revisionStableTopologyBinding ? undefined : createOrderedRelationProvenance(
+                  correctionCurrentQuestion,
+                  correctionCoordinatorDecision.relation, correctionRelationHandle?.operationId),
                 orderedRelationReason:
                   revisionStableTopologyBinding?.source ??
                   (correctionTargetOwnsActiveParent

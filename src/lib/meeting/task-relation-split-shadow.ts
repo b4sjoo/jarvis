@@ -2,6 +2,8 @@ import {
   createCurrentQuestionSourceSettlementId,
   type ProvisionalCurrentQuestion,
 } from "./current-question-settlement.js";
+import type { OrderedTaskRelationResolutionStage } from "./relation-decision-provenance.js";
+export type { OrderedTaskRelationResolutionStage } from "./relation-decision-provenance.js";
 import {
   buildRuntimeInferenceModelInput,
   hashRuntimeSemanticPayload,
@@ -399,11 +401,6 @@ export interface FirstBatchRelationReleaseDecision {
   currentEvidenceSpans: string[];
   parentEvidenceSpans: string[];
 }
-
-export type OrderedTaskRelationResolutionStage =
-  | "runtime-matrix"
-  | "canonical-relation"
-  | "source-topology-null-hypothesis";
 
 export type OrderedTaskRelationResolutionReason =
   | FirstBatchRelationReleaseReason

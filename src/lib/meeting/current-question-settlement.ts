@@ -14,6 +14,7 @@ import {
   type CanonicalQuestionType,
 } from "./task-taxonomy.js";
 import type { InterviewTaskRelation } from "./types.js";
+import { adoptedOrderedRelationProvenance, type OrderedRelationProvenance } from "./relation-decision-provenance.js";
 import {
   resolveCurrentQuestionSourceKind,
   type CurrentQuestionSourceKind,
@@ -111,6 +112,7 @@ export type CurrentQuestionSettlementProposalRejectionReason =
   | "llm-action-repair-disabled";
 
 export interface CurrentQuestionSettlementProposal {
+  orderedRelationProvenance?: OrderedRelationProvenance;
   source: CurrentQuestionSettlementProposalSource;
   sessionId: string;
   runtimeEpoch: number;
@@ -185,6 +187,7 @@ export interface CurrentQuestionSettlementPolicy {
 }
 
 export interface CurrentQuestionSettlementDecision {
+  orderedRelationProvenance?: OrderedRelationProvenance;
   settlementId: string;
   operationId?: string;
   logicalQuestionUnitId: string;
@@ -677,6 +680,8 @@ export function settleCurrentQuestion(input: {
 
   return {
     settlementId,
+    orderedRelationProvenance: relationSelection.authorized
+      ? adoptedOrderedRelationProvenance(relationSelection.proposal, input.currentQuestion) : undefined,
     operationId: input.operationId,
     logicalQuestionUnitId:
       input.currentQuestion.logicalQuestionUnitId,
@@ -1034,6 +1039,7 @@ export function formatCurrentQuestionSettlementForTrace(
       decision.typeAuthoritySource,
     currentQuestionSettlementRelationAuthoritySource:
       decision.relationAuthoritySource,
+    currentQuestionSettlementOrderedRelationProvenance: decision.orderedRelationProvenance ?? null,
     currentQuestionSettlementActionAuthoritySource:
       decision.actionAuthoritySource,
     currentQuestionSettlementTypeMutationAuthorized:

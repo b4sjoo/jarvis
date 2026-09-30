@@ -224,6 +224,7 @@ for (const moduleName of [
   "runtime-inference-runtime",
   "answer-generation-lease",
   "current-question-settlement",
+  "relation-decision-provenance",
   "ordered-settlement-coordinator",
   "meeting-model-route",
   "runtime-inference",

@@ -115,6 +115,7 @@ export function consumeRevisionStableTopologyBinding<
   const projected = {
     ...settlement,
     relation: binding.relation,
+    orderedRelationProvenance: undefined,
     relationAuthoritySource: "deterministic-fast-path" as const,
     relationMutationAuthorized: true,
     parentMutationAuthorized: false,

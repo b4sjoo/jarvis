@@ -49,6 +49,7 @@ export interface LongitudinalTranscriptTurn {
 }
 
 export interface LongitudinalTraceSummary {
+  relationDecisionProvenance?: import("../../src/lib/meeting/relation-decision-provenance.js").RelationDecisionProvenanceObservation;
   traceId: string;
   traceKind?: string;
   status?: string;
@@ -319,6 +320,12 @@ type TypeStage =
   | "runtime";
 
 export interface SessionLongitudinalEvaluationReport {
+  relationDecisionSources: {
+    derivationVersion: "task152-relation-provenance-v1";
+    confirmedOrderedCount: number;
+    unconfirmedOrderedCount: number;
+    rows: Array<{ sessionId: string; traceId: string; provenance?: LongitudinalTraceSummary["relationDecisionProvenance"] }>;
+  };
   humanDenominatorDerivationVersion: "task152-longitudinal-human-v1";
   humanEvidence: LongitudinalHumanEvidence[];
   humanProjectionDiagnostics: Array<{
@@ -975,6 +982,15 @@ export function buildSessionLongitudinalEvaluationReport(
 
   return {
     humanDenominatorDerivationVersion: "task152-longitudinal-human-v1",
+    relationDecisionSources: {
+      derivationVersion: "task152-relation-provenance-v1",
+      confirmedOrderedCount: production.filter(row => row.trace.relationDecisionProvenance?.ordered).length,
+      unconfirmedOrderedCount: production.filter(row => !row.trace.relationDecisionProvenance?.ordered).length,
+      rows: production.map(({ session, trace }) => ({
+        sessionId: session.manifest.sessionId ?? session.directory,
+        traceId: trace.traceId, provenance: trace.relationDecisionProvenance,
+      })),
+    },
     humanEvidence,
     humanProjectionDiagnostics,
     answerQuality: {
@@ -1942,6 +1958,9 @@ export function renderSessionLongitudinalEvaluationMarkdown(
     "",
     "## Relation Adjudication Shadow",
     "",
+    `Final Relation provenance derivation: ${report.relationDecisionSources.derivationVersion}`,
+    `Confirmed / unconfirmed Ordered sources: ${report.relationDecisionSources.confirmedOrderedCount} / ${report.relationDecisionSources.unconfirmedOrderedCount}`,
+    "Execution carriers remain separate from adopted Ordered stages. Missing provenance is not a Relation error or an incorrect human label.",
     `Sessions / operations / candidates / labeled: ${report.relationAdjudicationFunnel.sessionsObserved} / ${report.relationAdjudicationFunnel.operations} / ${report.relationAdjudicationFunnel.candidateAvailable} / ${report.relationAdjudicationFunnel.humanLabeled}`,
     `Deterministic/LLM agreement: ${formatRate(report.relationAdjudicationFunnel.deterministicAgreement)}`,
     `LLM / deterministic accuracy: ${formatRate(report.relationAdjudicationFunnel.llmAccuracy)} / ${formatRate(report.relationAdjudicationFunnel.deterministicAccuracy)}`,

@@ -27,6 +27,7 @@ import {
 } from "./current-question-settlement.js";
 import { normalizeRuntimeAdjudicationAuthorityLabel } from "./runtime-adjudication-authority.js";
 import type { CriticalMomentCandidate, CriticalMomentEvaluation } from "./critical-moment-evaluation.js";
+import { observeRelationDecisionProvenance, type RelationDecisionProvenanceObservation } from "./relation-decision-provenance.js";
 import type { HumanEvaluationProjectionV2, HumanGroundTruthEventV2 } from "./human-ground-truth-v2.js";
 import {
   buildHumanEvaluationProjectionMaterializationRevisionV2,
@@ -330,6 +331,7 @@ export interface SessionEffectiveCurrentQuestionSettlementSummary
 }
 
 export interface SessionCompactTraceSummary {
+  relationDecisionProvenance?: RelationDecisionProvenanceObservation;
   version: number;
   manualCorrectionEvidence?: CommittedManualCorrectionEvidence;
   correctionAtomicCommitAuthorized?: boolean;
@@ -4561,6 +4563,7 @@ export function buildCompactTraceSummary({
 
   return {
     version: SESSION_TRACE_SUMMARY_SCHEMA_VERSION,
+    relationDecisionProvenance: observeRelationDecisionProvenance(trace.metadata),
     sessionId,
     traceId: trace.id,
     traceKind: trace.kind,

@@ -152,6 +152,7 @@ export function resolveCorrectionOwnedTypeResettlement<
   minConfidence?: number;
   orderedRelation?: Exclude<CurrentQuestionRelation, "unknown">;
   orderedRelationReason?: string;
+  orderedRelationProvenance?: import("./relation-decision-provenance.js").OrderedRelationProvenance;
 }): CorrectionOwnedResettlementDecision {
   const activeParentType =
     normalizeCanonicalQuestionType(input.activeParentType) ?? "unknown";
@@ -198,6 +199,7 @@ export function resolveCorrectionOwnedTypeResettlement<
       ? {
           ...typeProposal,
           relation: input.orderedRelation,
+          orderedRelationProvenance: input.orderedRelationProvenance,
           relationEvidenceAuthorized: true,
           reasons: [
             ...(typeProposal.reasons ?? []),
