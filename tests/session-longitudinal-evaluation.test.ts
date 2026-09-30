@@ -436,8 +436,9 @@ test("builds product outcomes only from human-reviewed critical moments", () => 
   assert.equal(report.version, 2);
   assert.equal(report.productOutcomes.candidateCount, 4);
   assert.equal(report.productOutcomes.criticalMomentCount, 2);
-  assert.equal(report.productOutcomes.cmsr.numerator, 1);
-  assert.equal(report.productOutcomes.cmsr.denominator, 2);
+  assert.equal(report.productOutcomes.strictWithoutTiming.numerator, 1);
+  assert.equal(report.productOutcomes.strictWithoutTiming.denominator, 2);
+  assert.equal(report.productOutcomes.strictWithTiming.denominator, 1);
   assert.equal(
     report.productOutcomes.zeroTraceOpportunityMissRate.numerator,
     1

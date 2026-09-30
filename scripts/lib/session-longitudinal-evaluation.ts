@@ -371,14 +371,20 @@ export interface SessionLongitudinalEvaluationReport {
     observedTraceCoverage: RateMetric;
   };
   productOutcomes: {
+    derivationVersion: "task136-cmsr-dual-v1";
     candidateCount: number;
     reviewedCandidateCount: number;
     criticalMomentCount: number;
     notCriticalMomentCount: number;
     uncertainMomentCount: number;
     unresolvedCandidateCount: number;
-    cmsr: RateMetric;
-    strictSuccessCount: number;
+    strictWithoutTiming: RateMetric;
+    strictWithTiming: RateMetric;
+    missingTiming: {
+      firstUsefulAtOnly: number;
+      userSpeechStartAtOnly: number;
+      both: number;
+    };
     timingNotEvaluableCount: number;
     zeroTraceOpportunityMissRate: RateMetric;
     falseActivationRate: RateMetric;
@@ -638,7 +644,7 @@ export function buildSessionLongitudinalEvaluationReport(
     const tracesById = new Map(
       session.traceSummaries.map((trace) => [trace.traceId, trace])
     );
-    for (const candidate of candidates) {
+    for (const candidate of candidatesById.values()) {
       const evaluation = evaluationsByMoment.get(candidate.momentId);
       const traceIds = uniqueStrings([
         ...candidate.proposedTraceIds,
@@ -1470,11 +1476,10 @@ function buildProductOutcomes(
   const uncertain = reviewed.filter(
     ({ evaluation }) => evaluation?.eligibility === "uncertain"
   );
-  const strictSuccesses = critical.filter(({ evaluation }) => {
-    if (!evaluation?.useful || !evaluation.trustworthy) return false;
-    if (evaluation.naturalStart === false) return false;
-    return !isGuidanceLate(evaluation);
-  });
+  const passesUntimed = ({ evaluation }: JoinedCriticalMoment) =>
+    evaluation?.useful === true && evaluation.trustworthy === true &&
+    evaluation.naturalStart !== false;
+  const strictSuccesses = critical.filter(passesUntimed);
   const timingComparable = critical.filter(({ evaluation }) =>
     hasGuidanceBeforeSpeechEvidence(evaluation)
   );
@@ -1526,6 +1531,7 @@ function buildProductOutcomes(
   };
 
   return {
+    derivationVersion: "task136-cmsr-dual-v1",
     candidateCount: rows.length,
     reviewedCandidateCount: reviewed.length,
     criticalMomentCount: critical.length,
@@ -1533,8 +1539,22 @@ function buildProductOutcomes(
     uncertainMomentCount: uncertain.length,
     unresolvedCandidateCount:
       rows.length - critical.length - notCritical.length,
-    cmsr: rate(strictSuccesses.length, critical.length),
-    strictSuccessCount: strictSuccesses.length,
+    strictWithoutTiming: rate(strictSuccesses.length, critical.length),
+    strictWithTiming: rate(
+      timingComparable.filter((row) => passesUntimed(row) && !isGuidanceLate(row.evaluation)).length,
+      timingComparable.length
+    ),
+    missingTiming: {
+      firstUsefulAtOnly: critical.filter(({ evaluation }) =>
+        finiteNumber(evaluation?.firstUsefulAt) === undefined &&
+        finiteNumber(evaluation?.userSpeechStartAt) !== undefined).length,
+      userSpeechStartAtOnly: critical.filter(({ evaluation }) =>
+        finiteNumber(evaluation?.firstUsefulAt) !== undefined &&
+        finiteNumber(evaluation?.userSpeechStartAt) === undefined).length,
+      both: critical.filter(({ evaluation }) =>
+        finiteNumber(evaluation?.firstUsefulAt) === undefined &&
+        finiteNumber(evaluation?.userSpeechStartAt) === undefined).length,
+    },
     timingNotEvaluableCount: critical.filter(({ evaluation }) => {
       if (!evaluation?.useful || !evaluation.trustworthy) return false;
       return !hasGuidanceBeforeSpeechEvidence(evaluation);
@@ -1868,7 +1888,11 @@ export function renderSessionLongitudinalEvaluationMarkdown(
     `Critical moment candidates: ${report.productOutcomes.candidateCount}`,
     `Reviewed candidates: ${report.productOutcomes.reviewedCandidateCount}`,
     `Critical / not critical / uncertain / unresolved: ${report.productOutcomes.criticalMomentCount} / ${report.productOutcomes.notCriticalMomentCount} / ${report.productOutcomes.uncertainMomentCount} / ${report.productOutcomes.unresolvedCandidateCount}`,
-    `Critical Moment Success Rate: ${formatRate(report.productOutcomes.cmsr)}`,
+    `CMSR derivation: ${report.productOutcomes.derivationVersion}`,
+    `Strict CMSR without timing: ${formatRate(report.productOutcomes.strictWithoutTiming)}`,
+    `Strict CMSR with timing (comparable subset): ${formatRate(report.productOutcomes.strictWithTiming)}`,
+    "The timed rate is conditional on timing coverage, not an estimate for all critical moments. Reports using the earlier mixed CMSR definition are not directly comparable.",
+    `Missing timing (first useful only / speech start only / both): ${report.productOutcomes.missingTiming.firstUsefulAtOnly} / ${report.productOutcomes.missingTiming.userSpeechStartAtOnly} / ${report.productOutcomes.missingTiming.both}`,
     `Zero-trace opportunity miss rate: ${formatRate(report.productOutcomes.zeroTraceOpportunityMissRate)}`,
     `False activation on reviewed non-critical moments: ${formatRate(report.productOutcomes.falseActivationRate)}`,
     `Time to useful guidance: ${formatDistribution(report.productOutcomes.ttugMs)}`,

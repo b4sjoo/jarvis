@@ -77,7 +77,10 @@ async function main() {
         sessions: report.cohort.sessionCount,
         productionTraces: report.cohort.productionTraceCount,
         criticalMoments: report.productOutcomes.criticalMomentCount,
-        criticalMomentSuccessRate: report.productOutcomes.cmsr,
+        cmsrDerivationVersion: report.productOutcomes.derivationVersion,
+        strictCmsrWithoutTiming: report.productOutcomes.strictWithoutTiming,
+        strictCmsrWithTiming: report.productOutcomes.strictWithTiming,
+        timingCoverage: report.productOutcomes.guidanceBeforeSpeechCoverage,
         labeledCoverage: report.cohort.labeledTraceCoverage,
         releaseEvidenceEligible: report.evidenceScope.releaseEligible,
         excludedScriptedSessions:
