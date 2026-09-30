@@ -565,6 +565,7 @@ function productionRelationHandle(
   harness,
   {
     sourceKind = "voice",
+    runtimeReleaseRequested = true,
     currentQuestion: suppliedCurrentQuestion,
     authorizeSourceOperation = () => ({
       authorized: true,
@@ -623,15 +624,54 @@ function productionRelationHandle(
   const handle = harness.environment.scheduleTaskRelationSplitRuntime({
     traceId: "trace",
     request,
-    runtimeReleaseRequested: true,
+    runtimeReleaseRequested,
     authorizeSourceOperation,
   });
-  Object.assign(handle, {
-    releaseWindowRequested: true,
+  if (handle) Object.assign(handle, {
+    releaseWindowRequested: runtimeReleaseRequested,
     sourceKind,
     outcome: Promise.resolve({ operationId: handle.operationId }),
   });
   return { handle, executions };
+}
+
+for (const debug of [false, true]) for (const recording of [false, true]) for (const product of [false, true]) {
+  test(`D178 Split admission debug=${debug} recording=${recording} product=${product}`, { concurrency: false }, async () => {
+    const h = createHarness();
+    try {
+      h.environment.debugModeRef.current = debug;
+      const sink = { getState: () => ({ active: recording, sessionId: "recording-a" }),
+        recordModelInput() {}, recordModelOutput() {}, recordCaptureLifecycle() {}, recordTaskRelationSplitDecision() {},
+        recordTaskRelationDecision() {}, recordTaskRelationAdjudicationDecision() {}, recordTrace() {} };
+      h.environment.sessionRecordingManagerRef.current = sink;
+      h.environment.traceStoreRef.current.recordOutput = () => {};
+      const { handle, executions } = productionRelationHandle(h, { runtimeReleaseRequested: product });
+      await h.clock.advanceTo(500);
+      if (!debug && !product) {
+        assert.equal(handle, undefined);
+        assert.equal(executions.length, 0);
+        return;
+      }
+      assert.equal(executions.length, 2, "one Affinity operation, two physical candidates");
+      resolveRelationProvider(executions[0], JSON.stringify({ v: 1, d: "r", c: .99, q: "Implement a queue.", b: "Implement a cache." }));
+      await h.clock.advanceTo(600);
+      if (!product) {
+        assert.equal(executions.length, 4, "Debug observation still automatically starts Canonical");
+        resolveRelationProvider(executions[2], JSON.stringify({ schemaVersion: 3, relation: "followup-parent", confidence: .8,
+          currentQuestionEvidenceSpans: ["Implement a queue."], parentEvidenceSpans: ["Implement a cache."] }));
+        await h.clock.flush();
+        assert.equal(h.metadata.taskRelationParentAffinityObservationTrigger, "legacy-debug-preview-trigger");
+        assert.equal(h.metadata.taskRelationSplitCanonicalObservationTrigger, "legacy-debug-preview-trigger");
+        assert.equal(h.metadata.taskRelationParentAffinityAdmissionLane, "evaluation");
+        assert.equal(h.advisorCalls.length, 0);
+      } else {
+        assert.equal(h.metadata.taskRelationParentAffinityObservationTrigger, undefined);
+        assert.equal(h.metadata.taskRelationParentAffinityAdmissionLane, "critical");
+      }
+      handle.cancelForegroundWork();
+      await h.clock.flush();
+    } finally { h.restore(); }
+  });
 }
 
 function resolveRelationProvider(execution, rawOutput) {

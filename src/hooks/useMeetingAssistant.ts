@@ -7772,9 +7772,7 @@ export function useMeetingAssistant() {
       if (validation.valid || validation.candidateKind !== "mermaid") {
         return;
       }
-      const evaluationActive =
-        debugModeRef.current ||
-        Boolean(sessionRecordingManagerRef.current?.getState().active);
+      const evaluationActive = debugModeRef.current;
       const artifact = parent?.whiteboardArtifact;
       const renderState = artifact?.renderState;
       if (
@@ -7896,6 +7894,7 @@ export function useMeetingAssistant() {
         ...formatRuntimeInferenceOperationForTrace(
           "whiteboard-syntax-repair"
         ),
+        whiteboardRepairObservationTrigger: "legacy-debug-preview-trigger",
         ...routeMetadata,
         ...formatWhiteboardSyntaxRepairForTrace({
           lease,
@@ -17892,8 +17891,6 @@ export function useMeetingAssistant() {
       if (turn.speaker !== "them") return;
 
       const contextState = contextManagerRef.current.getState();
-      const recordingActive =
-        sessionRecordingManagerRef.current?.getState().active ?? false;
       const authoritativeCompany =
         contextState.interviewSessionContext?.targetCompany;
       const metadataMode =
@@ -17936,14 +17933,13 @@ export function useMeetingAssistant() {
       }
       if (
         authoritativeCompany &&
-        !debugModeRef.current &&
-        !recordingActive
+        !debugModeRef.current
       ) {
         traceStoreRef.current.updateMetadata(traceId, {
           meetingMetadataInferenceDisposition:
             "authoritative-observation-disabled",
           meetingMetadataInferenceSkipReason:
-            "authoritative-source-requires-debug-or-recording",
+            "authoritative-source-requires-debug-preview",
         });
         return;
       }
@@ -18036,6 +18032,7 @@ export function useMeetingAssistant() {
         ...baseMetadata,
         ...routeMetadata,
         meetingMetadataInferenceDisposition: "scheduled",
+        meetingMetadataInferenceObservationTrigger: authoritativeCompany ? "legacy-debug-preview-trigger" : undefined,
         meetingMetadataInferenceOperationId: lease.operationId,
         meetingMetadataInferenceRequestHash: requestHash,
         meetingMetadataInferencePromptVersion: request.promptVersion,
@@ -19873,9 +19870,7 @@ export function useMeetingAssistant() {
       runtimeReleaseRequested?: boolean;
       authorizeSourceOperation: ReadTaskRelationSourceOperationAuthorization;
     }): TaskRelationSplitScheduleHandle | undefined => {
-      const evaluationActive =
-        debugModeRef.current ||
-        Boolean(sessionRecordingManagerRef.current?.getState().active);
+      const evaluationActive = debugModeRef.current;
       if (!evaluationActive && !runtimeReleaseRequested) return;
       contextManagerRef.current.clearExpiredActiveMeetingTask();
       // Keep delayed observations with the recorder that owned their input.
@@ -20045,6 +20040,7 @@ export function useMeetingAssistant() {
             prompts.semanticPayloadDigest,
           [`${prefix}ModelVisibleChars`]: prompts.modelVisibleChars,
           [`${prefix}MutationBlocked`]: true,
+          [`${prefix}ObservationTrigger`]: runtimeReleaseRequested ? undefined : "legacy-debug-preview-trigger",
           [`${prefix}ExecutionStage`]: runtimeReleaseRequested
             ? "product"
             : "evaluation",
@@ -20367,6 +20363,7 @@ export function useMeetingAssistant() {
           taskRelationSplitParentPredecessorOutputHash:
             canonicalRequest.parentPredecessorOutputHash,
           taskRelationSplitCanonicalMutationBlocked: true,
+          taskRelationSplitCanonicalObservationTrigger: runtimeReleaseRequested ? undefined : "legacy-debug-preview-trigger",
           taskRelationSplitCanonicalForeground: foreground,
           taskRelationSplitCanonicalAdmissionLane: foreground
             ? "critical"
