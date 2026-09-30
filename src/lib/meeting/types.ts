@@ -60,6 +60,8 @@ export interface TranscriptTurn {
   speaker: TranscriptSpeaker;
   text: string;
   startedAt: number;
+  /** Capture-supplied speech start; absent for text input or inferred arrival times. */
+  speechStartedAt?: number;
   endedAt: number;
   isFinal: boolean;
   source: "system-audio" | "microphone";

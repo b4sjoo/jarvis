@@ -159,6 +159,7 @@ import { AdvisePinButton } from "./advise-pin-button";
 import { TypeCorrectionMenuButton, type TypeCorrectionMenuActions } from "./type-correction-menu";
 import type { ManualCorrectionMenuSelection, ProjectChoicePresentation, ProjectChoiceSelection } from "@/lib/meeting/focus-window";
 import type { AdviseDisplayTarget } from "@/lib/meeting/manual-advise-display";
+import type { CriticalMomentTimingCandidates, CriticalMomentTimingSelection } from "@/lib/meeting/critical-moment-timing";
 import { ProjectChoiceControl } from "./project-choice-control";
 import { createMeetingFocusDisplayModel, projectSelectedFocusTask } from "@/lib/meeting/focus-display";
 import { formatChineseThinkingText } from "@/lib/meeting/meeting-display-text";
@@ -3005,6 +3006,7 @@ export const MeetingAssistant = ({
               latestCriticalMomentCandidate ? (
                 <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3">
                   <CriticalMomentEvaluationPanel
+                    key={latestCriticalMomentCandidate.momentId}
                     candidate={latestCriticalMomentCandidate}
                     evaluation={latestCriticalMomentEvaluation}
                     groundTruth={latestCriticalMomentGroundTruth}
@@ -3014,6 +3016,8 @@ export const MeetingAssistant = ({
                           projection.projectionId === latestCriticalMomentGroundTruth.projectionId)?.observed
                       : undefined}
                     traces={latestCriticalMomentTraces}
+                    readTiming={() => meeting.readCriticalMomentTimingCandidates(latestCriticalMomentCandidate.momentId)}
+                    onConfirmTiming={(selection) => meeting.confirmCriticalMomentTiming(latestCriticalMomentCandidate.momentId, selection)}
                     onUpdate={(patch) =>
                       meeting.updateCriticalMomentEvaluation(
                         latestCriticalMomentCandidate.momentId,
@@ -5448,6 +5452,8 @@ const CriticalMomentEvaluationPanel = ({
   groundTruth,
   observed,
   traces,
+  readTiming,
+  onConfirmTiming,
   onUpdate,
   onRecordGroundTruth,
 }: {
@@ -5456,6 +5462,8 @@ const CriticalMomentEvaluationPanel = ({
   groundTruth: CriticalMomentExpectedFacts | undefined;
   observed?: HumanEvaluationProjectionV2["observed"];
   traces: MeetingTrace[];
+  readTiming: () => CriticalMomentTimingCandidates;
+  onConfirmTiming: (selection: CriticalMomentTimingSelection) => void;
   onUpdate: (patch: CriticalMomentOutcomeEvaluationPatch) => void;
   onRecordGroundTruth: (
     fact: HumanGroundTruthFactV2,
@@ -5467,6 +5475,7 @@ const CriticalMomentEvaluationPanel = ({
   ) => void;
 }) => {
   const failureReasons = evaluation?.failureReasons ?? [];
+  const [timing, setTiming] = useState<CriticalMomentTimingCandidates>({ speech: [], answers: [] });
   const [expectedQuestionType, setExpectedQuestionType] =
     useState<CanonicalQuestionType>();
   const [expectedRelation, setExpectedRelation] =
@@ -5575,6 +5584,7 @@ const CriticalMomentEvaluationPanel = ({
       }}
       onToggle={(event) => {
         if (event.currentTarget.open) {
+          setTiming(readTiming());
           evaluationOpenedAtRef.current ??= Date.now();
           expandedEvaluationRegionsRef.current.add(
             "critical-moment-review"
@@ -5781,15 +5791,20 @@ const CriticalMomentEvaluationPanel = ({
                       : "outline"
                   }
                   className="h-6 max-w-full px-2 font-mono text-[10px]"
-                  onClick={() =>
-                    onUpdate({
-                      traceIds: [trace.id],
-                      selectedUsefulTraceId: trace.id,
-                      firstUsefulAt: trace.endedAt,
-                    })
-                  }
+                  onClick={() => {
+                    const current = readTiming();
+                    setTiming(current);
+                    if (current.answers.some(answer => answer.traceId === trace.id)) {
+                      onConfirmTiming({ kind: "first-useful", traceId: trace.id });
+                    } else {
+                      onUpdate({ traceIds: [trace.id], selectedUsefulTraceId: trace.id,
+                        firstUsefulAt: undefined, selectedUsefulDisplayTarget: undefined,
+                        selectedUsefulDisplaySurface: undefined });
+                    }
+                  }}
                 >
                   {trace.id.slice(-12)}
+                  {timing.answers.some(answer => answer.traceId === trace.id) ? " / displayed" : " / timing unknown"}
                 </Button>
               ))}
             </div>
@@ -5798,6 +5813,26 @@ const CriticalMomentEvaluationPanel = ({
               No trace is available for selection.
             </div>
           )}
+          <Button size="sm" variant="outline" className="mt-1 h-6 px-2 text-[10px]"
+            onClick={() => onConfirmTiming({ kind: "first-useful", traceId: null })}>Clear useful answer time</Button>
+          <div className="mt-1 text-[10px] text-muted-foreground">
+            Display time: {evaluation?.firstUsefulAt === undefined ? "Unknown" : new Date(evaluation.firstUsefulAt).toLocaleTimeString()}
+          </div>
+        </div>
+
+        <div>
+          <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">Confirmed speech start</div>
+          <select aria-label="Confirmed speech start" className="w-full min-w-0 rounded-sm border bg-background p-1 text-xs"
+            value={evaluation?.userSpeechStartTurnId ?? ""}
+            onFocus={() => setTiming(readTiming())}
+            onChange={event => onConfirmTiming({ kind: "speech-start", turnId: event.target.value || null })}>
+            <option value="">Unknown</option>
+            {evaluation?.userSpeechStartTurnId && !timing.speech.some(item => item.turnId === evaluation.userSpeechStartTurnId) ?
+              <option value={evaluation.userSpeechStartTurnId}>{evaluation.userSpeechStartTurnId} (saved)</option> : null}
+            {timing.speech.map(item => <option key={item.turnId} value={item.turnId}>
+              {new Date(item.startedAt).toLocaleTimeString()} {item.text.slice(0, 160)}
+            </option>)}
+          </select>
         </div>
 
         <CriticalMomentBooleanGroup

@@ -71,6 +71,7 @@ export async function transcribeMeetingAudio({
       speaker,
       text: trimmedText,
       startedAt: startedAt ?? timestamp,
+      speechStartedAt: typeof startedAt === "number" && Number.isFinite(startedAt) ? startedAt : undefined,
       endedAt: endedAt ?? Date.now(),
       isFinal: true,
       source,

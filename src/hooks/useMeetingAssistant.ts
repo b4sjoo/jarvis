@@ -4,6 +4,7 @@ import { resolveOrderedTaskRelationWithinWindow as resolveOrderedTaskRelationOpe
   type TaskRelationSplitCanonicalResult } from '@/lib/meeting/ordered-relation-operation';
 import type { MeetingTaskDeadlineDelta } from "../lib/meeting/meeting-task-contracts.js";
 import { ManualAdviseDisplay, type AdviseDisplaySnapshot, type AdviseDisplayTarget } from "../lib/meeting/manual-advise-display.js";
+import { buildCriticalMomentTimingCandidates, resolveCriticalMomentTimingSelection, type CriticalMomentTimingSelection } from "../lib/meeting/critical-moment-timing.js";
 import { UnpublishedArtifactSlot, type UnpublishedArtifactOffer, type UnpublishedArtifactCandidate } from "../lib/meeting/unpublished-artifact.js";
 import { buildMeetingAnswerDisplayModel, overlayMeetingAnswerArtifacts, type MeetingAnswerDisplayModel } from "../lib/meeting/meeting-answer-display.js";
 import { humanEvaluationStore } from "../lib/meeting/human-evaluation-store.js";
@@ -8967,6 +8968,36 @@ export function useMeetingAssistant() {
     },
     []
   );
+
+  const readCriticalMomentTimingCandidates = useCallback((momentId: string) => {
+    const startedAt = performance.now();
+    const candidate = criticalMomentCandidatesRef.current.find(item => item.momentId === momentId);
+    if (!candidate) return { speech: [], answers: [] };
+    const context = contextManagerRef.current.getState();
+    const result = buildCriticalMomentTimingCandidates({ sessionId: context.sessionId, candidate,
+      candidates: criticalMomentCandidatesRef.current, turns: context.transcriptTurns,
+      traces: traceStoreRef.current.getTraces() });
+    sessionRecordingManagerRef.current?.recordCaptureLifecycle({ stage: "critical-moment-timing-candidates",
+      momentId, sessionId: candidate.sessionId, sourceTurnCount: context.transcriptTurns.length,
+      speechCandidateCount: result.speech.length, answerCandidateCount: result.answers.length,
+      speechEvidenceMissing: result.speech.length === 0, displayEvidenceMissing: result.answers.length === 0,
+      durationMs: performance.now() - startedAt });
+    return result;
+  }, []);
+
+  const confirmCriticalMomentTiming = useCallback((momentId: string, selection: CriticalMomentTimingSelection) => {
+    const startedAt = performance.now();
+    const context = contextManagerRef.current.getState();
+    const candidate = criticalMomentCandidatesRef.current.find(item => item.momentId === momentId);
+    if (!candidate || candidate.sessionId !== context.sessionId) return;
+    const candidates = readCriticalMomentTimingCandidates(momentId);
+    const patch = resolveCriticalMomentTimingSelection(candidates, selection);
+    if (patch) updateCriticalMomentEvaluation(momentId, patch);
+    sessionRecordingManagerRef.current?.recordCaptureLifecycle({ stage: "critical-moment-timing-confirmation",
+      momentId, sessionId: candidate.sessionId, selection, accepted: Boolean(patch),
+      speechCandidateCount: candidates.speech.length, answerCandidateCount: candidates.answers.length,
+      sourceTurnCount: context.transcriptTurns.length, durationMs: performance.now() - startedAt });
+  }, [readCriticalMomentTimingCandidates, updateCriticalMomentEvaluation]);
 
   const incrementAppliedSpeechCorrections = useCallback(
     (rules: SpeechCorrectionRule[]) => {
@@ -36965,6 +36996,9 @@ export function useMeetingAssistant() {
           advisorOutputAppliedToDisplay: true,
           advisorOutputFirstDisplayAppliedAt: appliedAt,
           advisorOutputFirstDisplaySurface: surface,
+          advisorOutputFirstDisplayTarget: target.sessionId === contextManagerRef.current.getState().sessionId &&
+            target.logicalQuestionUnitId === trace.metadata?.logicalQuestionUnitId &&
+            target.logicalQuestionRevision === trace.metadata?.logicalQuestionUnitRevision ? { ...target } : undefined,
         });
         refreshRecordedCompletedTrace(target.traceId);
       }
@@ -37124,6 +37158,8 @@ export function useMeetingAssistant() {
     recordHumanGroundTruthV2,
     recordCriticalMomentGroundTruthV2,
     updateCriticalMomentEvaluation,
+    readCriticalMomentTimingCandidates,
+    confirmCriticalMomentTiming,
     correctActiveQuestionType,
     readManualCorrectionMenu,
     regenerateSuggestion,

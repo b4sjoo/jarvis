@@ -1,5 +1,6 @@
 import { STORAGE_KEYS } from "../../config/constants.js";
 import { safeLocalStorage } from "../storage/helper.js";
+import type { AdviseDisplayTarget } from "./manual-advise-display.js";
 import {
   normalizeCanonicalQuestionType,
   type CanonicalQuestionType,
@@ -89,6 +90,9 @@ export interface CriticalMomentEvaluation {
   selectedUsefulTraceId?: string;
   firstUsefulAt?: number;
   userSpeechStartAt?: number;
+  userSpeechStartTurnId?: string;
+  selectedUsefulDisplayTarget?: AdviseDisplayTarget;
+  selectedUsefulDisplaySurface?: "normal-mode" | "focus-mode";
   useful?: boolean;
   trustworthy?: boolean;
   naturalStart?: boolean;
@@ -351,11 +355,12 @@ export function upsertCriticalMomentEvaluation(
       patch.opportunityEndAt ??
       existing?.opportunityEndAt ??
       candidate.opportunityEndAt,
-    selectedUsefulTraceId:
-      patch.selectedUsefulTraceId ?? existing?.selectedUsefulTraceId,
-    firstUsefulAt: patch.firstUsefulAt ?? existing?.firstUsefulAt,
-    userSpeechStartAt:
-      patch.userSpeechStartAt ?? existing?.userSpeechStartAt,
+    selectedUsefulTraceId: Object.hasOwn(patch, "selectedUsefulTraceId") ? patch.selectedUsefulTraceId : existing?.selectedUsefulTraceId,
+    firstUsefulAt: Object.hasOwn(patch, "firstUsefulAt") ? patch.firstUsefulAt : existing?.firstUsefulAt,
+    userSpeechStartAt: Object.hasOwn(patch, "userSpeechStartAt") ? patch.userSpeechStartAt : existing?.userSpeechStartAt,
+    userSpeechStartTurnId: Object.hasOwn(patch, "userSpeechStartTurnId") ? patch.userSpeechStartTurnId : existing?.userSpeechStartTurnId,
+    selectedUsefulDisplayTarget: Object.hasOwn(patch, "selectedUsefulDisplayTarget") ? patch.selectedUsefulDisplayTarget : existing?.selectedUsefulDisplayTarget,
+    selectedUsefulDisplaySurface: Object.hasOwn(patch, "selectedUsefulDisplaySurface") ? patch.selectedUsefulDisplaySurface : existing?.selectedUsefulDisplaySurface,
     useful: patch.useful ?? existing?.useful,
     trustworthy: patch.trustworthy ?? existing?.trustworthy,
     naturalStart: patch.naturalStart ?? existing?.naturalStart,
@@ -497,6 +502,9 @@ function normalizeCriticalMomentEvaluation(
         : undefined,
     firstUsefulAt: finiteNumber(evaluation.firstUsefulAt),
     userSpeechStartAt: finiteNumber(evaluation.userSpeechStartAt),
+    userSpeechStartTurnId: typeof evaluation.userSpeechStartTurnId === "string" ? evaluation.userSpeechStartTurnId : undefined,
+    selectedUsefulDisplayTarget: evaluation.selectedUsefulDisplayTarget,
+    selectedUsefulDisplaySurface: evaluation.selectedUsefulDisplaySurface === "normal-mode" || evaluation.selectedUsefulDisplaySurface === "focus-mode" ? evaluation.selectedUsefulDisplaySurface : undefined,
     useful: booleanValue(evaluation.useful),
     trustworthy: booleanValue(evaluation.trustworthy),
     naturalStart: booleanValue(evaluation.naturalStart),
