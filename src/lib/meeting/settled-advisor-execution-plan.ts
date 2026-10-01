@@ -1,4 +1,5 @@
-import type { ActiveMeetingTask } from "./meeting-task-contracts.js";
+import type { ActiveMeetingTask, TaskLifecycleCommand } from "./meeting-task-contracts.js";
+export type { TaskLifecycleCommand } from "./meeting-task-contracts.js";
 import type {
   WhiteboardFormatPreference,
   EffectiveInterviewTaskRelation,
@@ -57,8 +58,6 @@ import {
 import { resolvePlaybookRequiredArtifacts } from "./playbook-phase.js";
 import { resolveWhiteboardFormatPreference } from "./whiteboard-format-policy.js";
 
-import type { MeetingPhaseOwner } from "./meeting-task-runtime-transition.js";
-
 export interface SettledAdvisorMemoryPolicy {
   questionType: CurrentQuestionSettlementDecision["questionType"];
   useCase: MemoryUseCase;
@@ -94,31 +93,6 @@ export type SettledAdvisorArtifactIntent =
   | "revise-code"
   | "revise-complexity"
   | "revise-whiteboard";
-
-export type TaskLifecycleCommand =
-  | { kind: "preserve" }
-  | {
-      kind: "create-parent";
-      type: CanonicalQuestionType;
-      topic: string;
-    }
-  | {
-      kind: "replace-parent";
-      type: CanonicalQuestionType;
-      topic: string;
-    }
-  | {
-      kind: "attach-child";
-      type: CanonicalQuestionType;
-      question: string;
-    }
-  | { kind: "resume-parent" }
-  | {
-      kind: "set-phase";
-      owner: MeetingPhaseOwner;
-      phase: InterviewPlaybookPhase;
-    }
-  | { kind: "update-parent-context" };
 
 export interface SettledAdvisorExecutionPlan {
   id: string;

@@ -1,3 +1,15 @@
+import type { CanonicalQuestionType } from "./task-taxonomy.js";
+import type { InterviewPlaybookPhase } from "./types.js";
+
+export type TaskLifecycleCommand =
+  | { kind: "preserve" }
+  | { kind: "create-parent"; type: CanonicalQuestionType; topic: string }
+  | { kind: "replace-parent"; type: CanonicalQuestionType; topic: string }
+  | { kind: "attach-child"; type: CanonicalQuestionType; question: string }
+  | { kind: "resume-parent" }
+  | { kind: "set-phase"; owner: MeetingPhaseOwner; phase: InterviewPlaybookPhase }
+  | { kind: "update-parent-context" };
+
 export interface MeetingPhaseOwner {
   kind: "parent" | "child";
   id: string;

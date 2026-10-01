@@ -6,6 +6,7 @@ import type {
   MeetingTaskRuntimeState,
   MeetingTaskDeadlineControl,
   MeetingTaskDeadlineDelta,
+  TaskLifecycleCommand,
 } from "./meeting-task-contracts.js";
 
 import { createMeetingId } from "./meeting-id.js";
@@ -371,6 +372,7 @@ export class MeetingContextManager {
   commitTaskRuntimeTransition(input: {
     id: string;
     transition: MeetingTaskRuntimeTransitionKind;
+    command?: TaskLifecycleCommand;
     authorizedArtifacts?: readonly AnswerArtifactSection[];
     reason: string;
     expectedRevision?: number;
@@ -388,6 +390,7 @@ export class MeetingContextManager {
   prepareTaskRuntimeTransition(input: {
     id: string;
     transition: MeetingTaskRuntimeTransitionKind;
+    command?: TaskLifecycleCommand;
     authorizedArtifacts?: readonly AnswerArtifactSection[];
     reason: string;
     expectedRevision?: number;

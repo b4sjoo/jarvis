@@ -17,7 +17,9 @@ import type {
 import type {
   AnswerArtifactSection,
   MeetingTaskRuntimeTransitionKind,
+  TaskLifecycleCommand,
 } from "./meeting-task-runtime-transition.js";
+export type { TaskLifecycleCommand } from "./meeting-task-runtime-transition.js";
 
 export type ActiveMeetingTaskSource = "screen" | "voice" | "mixed";
 
@@ -150,6 +152,7 @@ export type MeetingTaskRuntimeMutation =
   | (MeetingTaskRuntimeMutationBase & {
       kind: "commit-transition";
       transition: MeetingTaskRuntimeTransitionKind;
+      command?: TaskLifecycleCommand;
       authorizedArtifacts?: readonly AnswerArtifactSection[];
       parent?: ActiveInterviewParent | null;
       screenAttachment?: ActiveScreenTask | null;
@@ -165,6 +168,10 @@ export interface MeetingTaskRuntimeMutationResult {
     | "preserved"
     | "revision-mismatch"
     | "invalid-transition"
+    | "command-type-mismatch"
+    | "command-topic-mismatch"
+    | "command-transition-mismatch"
+    | "incompatible-artifact-retained"
     | "parent-type-not-allowed"
     | "child-type-not-allowed";
 }
