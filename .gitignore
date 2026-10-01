@@ -15,6 +15,7 @@ dist-ssr
 *.local
 memories/
 docs/
+evidence/
 interview_preparation_workspace/
 public/models/
 public/transformers-wasm/
