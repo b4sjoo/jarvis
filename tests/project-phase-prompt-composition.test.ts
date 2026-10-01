@@ -74,7 +74,7 @@ function compose(parent: ActiveInterviewParent, decision: PlaybookPhaseDecision,
     personalEvidenceGuardrailMode: "enforcement",
   });
   const context = {
-    transcript: `Them: ${question}`, screenContext: "", rollingSummary: "", userProfileContext: "", glossaryText: "",
+    transcript: `Them: ${question}`, screenContext: "",
     taskRuntime: { revision: parent.revisions, parent }, activeMeetingTask, interviewPlaybook,
     playbookPhaseDecision: decision, factAnchorDecision,
     currentQuestionProjection: { answerFocusText: question, semanticEvidenceText: question, sourceTurnIds: ["current-turn"] },

@@ -131,9 +131,9 @@ function context(parentId = "parent-a"): MeetingContextState {
         revisions: 1,
       },
     },
-    rollingSummary: "",
-    userProfileContext: "",
-    glossary: [],
+
+
+
   };
 }
 

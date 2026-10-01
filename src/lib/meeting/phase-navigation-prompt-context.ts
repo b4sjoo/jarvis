@@ -6,7 +6,6 @@ import type { AdvisorEvidencePacket, MeetingResponseActionMode } from "./types.j
 const MAX_CURRENT_QUESTION_CHARS = 2_400;
 const MAX_SCREEN_QUESTION_CHARS = 2_400;
 const MAX_MEMORY_CONTEXT_CHARS = 6_000;
-const MAX_GLOSSARY_CHARS = 800;
 const MAX_ANSWER_CHARS = 1_000;
 const MAX_APPROACH_CHARS = 1_400;
 const MAX_CODE_CHARS = 2_800;
@@ -77,18 +76,15 @@ export function composePhaseNavigationPromptContext(input: {
     screenContext: screenQuestion
       ? boundText(screenQuestion, MAX_SCREEN_QUESTION_CHARS)
       : "",
-    responseOnlyParentReadContext: undefined,
+
     taskRuntime: {
       revision: input.promptContext.taskRuntime.revision,
       lastMutation: input.promptContext.taskRuntime.lastMutation,
     },
     activeMeetingTask: compactedTask,
-    rollingSummary: "",
-    userProfileContext: "",
-    glossaryText: boundText(
-      input.promptContext.glossaryText,
-      MAX_GLOSSARY_CHARS
-    ),
+
+
+
     memoryContext: boundText(
       input.promptContext.memoryContext,
       MAX_MEMORY_CONTEXT_CHARS

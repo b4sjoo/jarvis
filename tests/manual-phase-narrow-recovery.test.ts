@@ -182,7 +182,7 @@ function recoveryHarness() {
   const context: MeetingContextState = {
     sessionId: unit.sessionId, startedAt: 0, transcriptTurns: [],
     screenObservations: [{ id: "mr3-screen", capturedAt: 100, source: "full-screen", changed: true }],
-    rollingSummary: "", userProfileContext: "", glossary: [], taskRuntime: { revision: 0 },
+       taskRuntime: { revision: 0 },
   };
   let phaseHistory = createPlaybookPhaseHistoryState();
   let sequence = 0;
@@ -273,7 +273,7 @@ function recoveryHarness() {
       transcript: unit.normalizedText, screenContext: unit.normalizedText,
       taskRuntime: context.taskRuntime, activeMeetingTask: context.activeMeetingTask,
       interviewPlaybook: context.taskRuntime.parent?.playbook,
-      rollingSummary: "", userProfileContext: "", glossaryText: "",
+
     };
   }
   function job(action: "next-phase" | "narrow-context", promptContext: AdvisorPromptContext): AdvisorTriggerJob {

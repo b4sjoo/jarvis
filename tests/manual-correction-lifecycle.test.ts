@@ -319,8 +319,8 @@ test("A2 preserves parent origin/history and compiles General SD prompt with onl
     speaker: "them", isFinal: true, source: "system-audio",
   }));
   const compilation = compileSettledAdvisorPromptContext({
-    baseContext: { transcript: turns.map((t) => t.text).join("\n"), screenContext: "", rollingSummary: "",
-      userProfileContext: "", glossaryText: "", taskRuntime: { revision: 5 }, activeMeetingTask: reduction.activeMeetingTask,
+    baseContext: { transcript: turns.map((t) => t.text).join("\n"), screenContext: "",
+        taskRuntime: { revision: 5 }, activeMeetingTask: reduction.activeMeetingTask,
       interviewPlaybook: f.plan.playbook, latestTurn: turns[2] },
     contextReadScope: f.plan.contextReadScope, logicalQuestionUnit: f.resumed, transcriptTurns: turns,
     effectiveRecords: f.ledger.list(), sessionId, runtimeEpoch,

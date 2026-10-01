@@ -115,10 +115,6 @@ export function projectEffectiveAdvisorTaskContext(
       retrievalHints: context.advisorEvidencePacket.retrievalHints.flatMap((hint) =>
         hint.role === "continuity" ? continuity ? [{ ...hint, text: continuity.capsule }] : [] : [hint]),
     } : undefined,
-    responseOnlyParentReadContext: context.responseOnlyParentReadContext ? {
-      ...context.responseOnlyParentReadContext,
-      objective: context.responseOnlyParentReadContext.parentId === task?.parent.id
-        ? task.parent.topic.slice(0, 320) : "",
-    } : undefined,
+
   };
 }

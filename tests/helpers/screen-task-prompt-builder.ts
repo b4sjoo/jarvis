@@ -8,7 +8,6 @@ import { formatInterviewPlaybookForPrompt, withInterviewPlaybookPhase } from "..
 import { formatFactAnchorDecisionForPrompt, PROJECT_FACT_RESPONSE_BOUNDARY } from "../../src/lib/meeting/fact-anchor-guardrail.js";
 import { formatProjectBindingDecisionForPrompt } from "../../src/lib/meeting/project-binding.js";
 import { formatPlaybookPhaseDecisionForPrompt } from "../../src/lib/meeting/playbook-phase.js";
-import { formatBoundedParentReadContextForPrompt } from "../../src/lib/meeting/response-only-task-scope.js";
 import { formatCapacityEstimationGuardrailForPrompt, resolveCapacityEstimationGuardrail } from "../../src/lib/meeting/capacity-estimation-guardrail.js";
 import { SCREEN_FOCUSED_CODE_EXPLANATION_INSTRUCTION } from "../../src/lib/meeting/screen-task-system-prompt.js";
 import { formatMeetingResponseLanguage } from "../../src/lib/meeting/response-language.js";
@@ -35,7 +34,7 @@ export function loadScreenTaskPromptBuilder() {
     withInterviewPlaybookPhase, formatFactAnchorDecisionForPrompt,
     PROJECT_FACT_RESPONSE_BOUNDARY,
     formatProjectBindingDecisionForPrompt, formatPlaybookPhaseDecisionForPrompt,
-    formatBoundedParentReadContextForPrompt, formatCapacityEstimationGuardrailForPrompt,
+    formatCapacityEstimationGuardrailForPrompt,
     resolveCapacityEstimationGuardrail, SCREEN_FOCUSED_CODE_EXPLANATION_INSTRUCTION, formatMeetingResponseLanguage,
   }) as (input: Record<string, unknown>) => string;
 }

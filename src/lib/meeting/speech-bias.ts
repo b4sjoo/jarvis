@@ -98,10 +98,6 @@ export function buildSpeechBiasContext(
     }
   }
 
-  for (const entry of context.glossary) {
-    addTerm(entry.term, "glossary", "high");
-  }
-
   const activeTask = context.activeMeetingTask;
   if (activeTask) {
     const sourceOwnedTaskText = [

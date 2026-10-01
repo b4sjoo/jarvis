@@ -572,9 +572,9 @@ function buildSafePromptContext(input: {
       lastMutation: input.baseContext.taskRuntime.lastMutation,
     },
     activeMeetingTask: sanitizeActiveMeetingTask(input.activeMeetingTask),
-    rollingSummary: "",
-    userProfileContext: "",
-    glossaryText: "",
+
+
+
     memoryContext: undefined,
     interviewPlaybook: input.preserveTaskProcedure
       ? input.baseContext.interviewPlaybook

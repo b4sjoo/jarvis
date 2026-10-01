@@ -1,5 +1,4 @@
 import type {
-  AdvisorBoundedParentReadContext,
   AdvisorContextScopeSnapshot,
   AdvisorCurrentQuestionProjection,
   AdvisorEvidencePacket,
@@ -10,7 +9,6 @@ import type {
   DisplayTranscriptWindow,
   FactAnchorDecision,
   ForceAdviseTargetPresentation,
-  GlossaryEntry,
   InterviewSessionBrief,
   InterviewSessionContext,
   ManualQuestionTypeCorrection,
@@ -56,9 +54,9 @@ export interface MeetingContextState {
   interviewSessionContext?: InterviewSessionContext;
   taskRuntime: MeetingTaskRuntimeState;
   activeMeetingTask?: ActiveMeetingTask;
-  rollingSummary: string;
-  userProfileContext: string;
-  glossary: GlossaryEntry[];
+
+
+
   lastAdvisorRequestId?: string;
 }
 
@@ -67,14 +65,14 @@ export interface AdvisorPromptContext {
   advisorPromptSourceTurnIds?: string[];
   screenContext: string;
   currentQuestionProjection?: AdvisorCurrentQuestionProjection;
-  responseOnlyParentReadContext?: AdvisorBoundedParentReadContext;
+
   interviewSessionBrief?: InterviewSessionBrief;
   interviewSessionContext?: InterviewSessionContext;
   taskRuntime: MeetingTaskRuntimeState;
   activeMeetingTask?: ActiveMeetingTask;
-  rollingSummary: string;
-  userProfileContext: string;
-  glossaryText: string;
+
+
+
   memoryContext?: string;
   interviewPlaybook?: SelectedInterviewPlaybook;
   playbookPhaseDecision?: PlaybookPhaseDecision;

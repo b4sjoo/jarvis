@@ -22,9 +22,9 @@ test("gives the advisor a focused ask plus bounded semantic context", () => {
     transcript:
       "them: Now add surge pricing and explain which components need to change.",
     screenContext: "",
-    rollingSummary: "",
-    userProfileContext: "",
-    glossaryText: "",
+
+
+
     taskRuntime: { revision: 0 },
     currentQuestionProjection: {
       answerFocusText: "explain which components need to change.",
@@ -51,9 +51,9 @@ test("makes the settled Mermaid preference explicit in the system-design contrac
     {
       transcript: "them: Design a URL shortener.",
       screenContext: "",
-      rollingSummary: "",
-      userProfileContext: "",
-      glossaryText: "",
+
+
+
       taskRuntime: { revision: 0 },
       whiteboardFormatPreference: "mermaid",
     },
@@ -72,9 +72,9 @@ test("lets the coding phase own the visible solution instead of forcing optimal 
     {
       transcript: "them: Solve longest substring without repeating characters.",
       screenContext: "",
-      rollingSummary: "",
-      userProfileContext: "",
-      glossaryText: "",
+
+
+
       taskRuntime: { revision: 0 },
     },
     { answerProfile: "coding" }
@@ -91,9 +91,9 @@ test("keeps a no-anchor project judgment available as bounded analysis", () => {
       transcript:
         "them: How do you decide whether a customer request is noise or product value?",
       screenContext: "",
-      rollingSummary: "",
-      userProfileContext: "",
-      glossaryText: "",
+
+
+
       taskRuntime: { revision: 0 },
       factAnchorDecision: {
         state: "no-anchor",
@@ -132,9 +132,9 @@ test("blocks numeric QPS when General SD evidence has inventory and ratio only",
       transcript:
         "them: Assume 100 million URLs and a 10:1 read/write ratio.",
       screenContext: "",
-      rollingSummary: "",
-      userProfileContext: "",
-      glossaryText: "",
+
+
+
       taskRuntime: { revision: 0 },
       currentQuestionProjection: {
         answerFocusText: "Refine the architecture.",
@@ -242,9 +242,9 @@ test("does not turn unsupported autobiographical premises into hypothetical impl
     transcript:
       "them: Explain how you implemented retries and a DLQ in this project.",
     screenContext: "",
-    rollingSummary: "",
-    userProfileContext: "",
-    glossaryText: "",
+
+
+
     taskRuntime: { revision: 0 },
   });
 

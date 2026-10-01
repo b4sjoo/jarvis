@@ -36,7 +36,6 @@ test("Narrow keeps the exact current LQU and excludes inherited generated contex
   });
   const base = baseContext(task);
   base.memoryContext = "PRIVATE_MEMORY_PAYLOAD";
-  base.rollingSummary = "GENERATED_ROLLING_SUMMARY";
 
   const result = composeCurrentOnlyAdvisorPromptContext({
     baseContext: base,
@@ -59,7 +58,6 @@ test("Narrow keeps the exact current LQU and excludes inherited generated contex
     "GENERATED_WHITEBOARD_BODY",
     "GENERATED_SCREEN_ANSWER",
     "PRIVATE_MEMORY_PAYLOAD",
-    "GENERATED_ROLLING_SUMMARY",
   ]) {
     assert.doesNotMatch(serialized, new RegExp(forbidden));
   }
@@ -513,9 +511,9 @@ function baseContext(
     transcript: "Them: OLD_TRANSCRIPT",
     screenContext: "OLD_SCREEN_CONTEXT",
     activeMeetingTask: task,
-    rollingSummary: "",
-    userProfileContext: "OLD_USER_PROFILE",
-    glossaryText: "OLD_GLOSSARY",
+
+
+
     taskRuntime: { revision: 0 },
     confirmedMeFacts: [{ id: "fact-old", text: "OLD_CONFIRMED_FACT" }],
   };
@@ -532,9 +530,9 @@ function meetingContext(
     screenObservations: [],
     taskRuntime: { revision: 0 },
     activeMeetingTask: task,
-    rollingSummary: "",
-    userProfileContext: "",
-    glossary: [],
+
+
+
   };
 }
 

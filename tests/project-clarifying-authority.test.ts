@@ -39,7 +39,7 @@ test("PC1 Prompt uses the trusted menu and no synthetic alternatives when identi
   assert.match(policy, /Clarifying options: -/);
   assert.match(policy, /trusted project menu/);
   assert.match(policy, /Eligible choices: none/);
-  const context = {transcript: question, screenContext: "", rollingSummary: "", userProfileContext: "", glossaryText: "",
+  const context = {transcript: question, screenContext: "",
     taskRuntime: {revision: 0, parent: undefined}, projectBindingDecision: missing};
   const voice = buildAdvisorUserMessage(context);
   const screen = loadScreenTaskPromptBuilder()({observation: {id: "s", capturedAt: 1, summary: question},

@@ -22,7 +22,6 @@ import {
   buildResponseActionInstructions,
   formatResponseActionContextScope,
 } from "./response-action-contract.js";
-import { formatBoundedParentReadContextForPrompt } from "./response-only-task-scope.js";
 import {
   formatCapacityEstimationGuardrailForPrompt,
   resolveCapacityEstimationGuardrail,
@@ -155,11 +154,6 @@ export function buildAdvisorUserMessage(
     "<active_meeting_task>",
     formatActiveMeetingTaskForPrompt(context.activeMeetingTask),
     "</active_meeting_task>",
-    "<response_only_parent_read_context>",
-    formatBoundedParentReadContextForPrompt(
-      context.responseOnlyParentReadContext
-    ),
-    "</response_only_parent_read_context>",
     "<source_specific_task_context>",
     formatSourceSpecificTaskContext(context),
     "</source_specific_task_context>",
@@ -189,15 +183,6 @@ export function buildAdvisorUserMessage(
     "<opening_route>",
     formatOpeningRouteForPrompt(context.openingRoute),
     "</opening_route>",
-    "<rolling_summary>",
-    context.rollingSummary || "No summary yet.",
-    "</rolling_summary>",
-    "<user_context>",
-    context.userProfileContext || "No extra user context.",
-    "</user_context>",
-    "<glossary>",
-    context.glossaryText || "No glossary.",
-    "</glossary>",
     "<response_action_context_scope>",
     formatResponseActionContextScope(context.responseActionContextScope),
     "</response_action_context_scope>",

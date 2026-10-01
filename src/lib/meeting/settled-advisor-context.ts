@@ -308,18 +308,12 @@ export function compileSettledAdvisorPromptContext(input: {
         ? input.baseContext.screenContext
         : "",
       activeMeetingTask: scopedTask,
-      rollingSummary:
-        scope === "active-parent-read" || scope === "active-child-read"
-          ? input.baseContext.rollingSummary
-          : "",
+
       confirmedMeFacts:
         scope === "active-parent-read" || scope === "active-child-read"
           ? input.baseContext.confirmedMeFacts
           : undefined,
-      responseOnlyParentReadContext:
-        scope === "current-only"
-          ? undefined
-          : input.baseContext.responseOnlyParentReadContext,
+
       advisorEvidencePacket,
     }, {
       ...sourceIdentity, recordIndex, records: input.effectiveRecords ?? [],

@@ -238,9 +238,9 @@ function contextSelection(
     promptContext: {
       transcript: "",
       screenContext: "",
-      rollingSummary: "",
-      userProfileContext: "",
-      glossaryText: "",
+
+
+
       taskRuntime: { revision: 0 },
     },
     logicalQuestionUnitId: "lqu",

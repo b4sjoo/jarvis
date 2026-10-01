@@ -17,14 +17,14 @@ export function applyEffectiveCurrentQuestionContext(input: {
       : "",
     advisorPromptSourceTurnIds: [...projection.rawSourceTurnIds],
     screenContext: "",
-    responseOnlyParentReadContext: undefined,
+
     taskRuntime: {
       revision: input.context.taskRuntime.revision,
       lastMutation: input.context.taskRuntime.lastMutation,
     },
     activeMeetingTask: undefined,
-    rollingSummary: "",
-    userProfileContext: "",
+
+
     memoryContext: undefined,
     interviewPlaybook: undefined,
     playbookPhaseDecision: undefined,

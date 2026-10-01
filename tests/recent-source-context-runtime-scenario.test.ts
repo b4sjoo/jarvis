@@ -435,9 +435,9 @@ test("explicit Enhance can read source evidence older than the automatic window"
     screenObservations: [],
     taskRuntime: { revision: 1, parent },
     activeMeetingTask: active,
-    rollingSummary: "",
-    userProfileContext: "",
-    glossary: [],
+
+
+
   };
   const result = composeExpandedAdvisorPromptContext({
     baseContext: promptContext(active, [parentTurn, currentTurn]),
@@ -505,9 +505,9 @@ function promptContext(
     screenContext: "",
     taskRuntime: { revision: activeMeetingTask.runtimeRevision },
     activeMeetingTask,
-    rollingSummary: "",
-    userProfileContext: "",
-    glossaryText: "",
+
+
+
     latestTurn: current,
     currentQuestionProjection: {
       answerFocusText: current.text,

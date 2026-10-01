@@ -323,10 +323,7 @@ export interface ScreenCaptureCandidate {
   skippedReason?: string;
 }
 
-export interface GlossaryEntry {
-  term: string;
-  definition: string;
-}
+
 
 export type ScreenQuestionType =
   | CanonicalQuestionType
@@ -1199,16 +1196,7 @@ export interface MeetingSetupWarning {
   message: string;
 }
 
-export interface AdvisorBoundedParentReadContext {
-  parentId: string;
-  parentRevision: number;
-  questionType: ScreenQuestionType;
-  objective: string;
-  sourceTurnIds: string[];
-  acceptedConstraints: string[];
-  sharedScenarioEntities: string[];
-  excludedContextKinds: string[];
-}
+
 
 export interface AdvisorCurrentQuestionProjection {
   answerFocusText: string;

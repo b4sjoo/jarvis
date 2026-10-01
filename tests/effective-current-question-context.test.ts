@@ -67,9 +67,9 @@ function context(): AdvisorPromptContext {
         updatedAt: 1,
       },
     },
-    rollingSummary: "generated summary",
-    userProfileContext: "profile",
-    glossaryText: "",
+
+
+
     memoryContext: "stale memory",
   };
 }

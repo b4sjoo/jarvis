@@ -11,7 +11,6 @@ import type { AIResponseExecutionIdentityInput } from "../functions/ai-response-
 import { TYPE_PROVIDER } from "@/types";
 import {
   ScreenCaptureTarget,
-  AdvisorBoundedParentReadContext,
   AdvisorEvidencePacket,
   InterviewSessionContext,
   InterviewSessionBrief,
@@ -48,7 +47,6 @@ import {
   inferProgrammingLanguageFromCodeFence,
   normalizeProgrammingLanguageName,
 } from "./programming-language";
-import { formatBoundedParentReadContextForPrompt } from "./response-only-task-scope";
 
 import {
   formatCapacityEstimationGuardrailForPrompt,
@@ -105,7 +103,7 @@ export interface SolveScreenAnchoredTaskOptions {
   interviewPlaybook?: SelectedInterviewPlaybook;
   playbookPhaseDecision?: PlaybookPhaseDecision;
   activeMeetingTask?: ActiveMeetingTask;
-  responseOnlyParentReadContext?: AdvisorBoundedParentReadContext;
+
   factAnchorDecision?: FactAnchorDecision;
   projectBindingDecision?: ProjectBindingDecision;
   whiteboardFormatPreference?: WhiteboardFormatPreference;
@@ -266,7 +264,7 @@ export async function solveScreenAnchoredTask({
   interviewPlaybook,
   playbookPhaseDecision,
   activeMeetingTask,
-  responseOnlyParentReadContext,
+
   factAnchorDecision,
   projectBindingDecision,
   whiteboardFormatPreference,
@@ -304,7 +302,7 @@ export async function solveScreenAnchoredTask({
     interviewPlaybook,
     playbookPhaseDecision,
     activeMeetingTask,
-    responseOnlyParentReadContext,
+
     factAnchorDecision,
     projectBindingDecision,
     whiteboardFormatPreference,
@@ -471,7 +469,7 @@ function buildScreenTaskUserMessage({
   interviewPlaybook,
   playbookPhaseDecision,
   activeMeetingTask,
-  responseOnlyParentReadContext,
+
   factAnchorDecision,
   projectBindingDecision,
   whiteboardFormatPreference,
@@ -489,7 +487,7 @@ function buildScreenTaskUserMessage({
   interviewPlaybook?: SelectedInterviewPlaybook;
   playbookPhaseDecision?: PlaybookPhaseDecision;
   activeMeetingTask?: ActiveMeetingTask;
-  responseOnlyParentReadContext?: AdvisorBoundedParentReadContext;
+
   factAnchorDecision?: FactAnchorDecision;
   projectBindingDecision?: ProjectBindingDecision;
   whiteboardFormatPreference?: WhiteboardFormatPreference;
@@ -534,11 +532,6 @@ function buildScreenTaskUserMessage({
     "<interview_session_context>",
     formatInterviewSessionContextForPrompt(interviewSessionContext),
     "</interview_session_context>",
-    "<response_only_parent_read_context>",
-    formatBoundedParentReadContextForPrompt(
-      responseOnlyParentReadContext
-    ),
-    "</response_only_parent_read_context>",
     "<screen_preflight>",
     formatScreenPreflightForPrompt(screenPreflight),
     "</screen_preflight>",

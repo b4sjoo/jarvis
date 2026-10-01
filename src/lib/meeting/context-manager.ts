@@ -12,7 +12,6 @@ import { createMeetingId } from "./meeting-id.js";
 import {
   ActiveInterviewParent,
   ActiveScreenTask,
-  GlossaryEntry,
   InterviewSessionBrief,
   InterviewSessionContext,
   InterviewTargetCompany,
@@ -42,8 +41,8 @@ const DEFAULT_MAX_SCREEN_OBSERVATIONS = 5;
 export interface MeetingContextManagerOptions {
   transcriptWindowMs?: number;
   maxScreenObservations?: number;
-  userProfileContext?: string;
-  glossary?: GlossaryEntry[];
+
+
   interviewSessionBrief?: InterviewSessionBrief;
 }
 
@@ -109,9 +108,9 @@ export class MeetingContextManager {
       interviewSessionContext: createInterviewSessionContextFromBrief(
         options.interviewSessionBrief
       ),
-      rollingSummary: "",
-      userProfileContext: options.userProfileContext ?? "",
-      glossary: options.glossary ?? [],
+
+
+
     };
   }
 
@@ -131,7 +130,7 @@ export class MeetingContextManager {
       ),
       taskRuntime,
       activeMeetingTask,
-      glossary: [...this.state.glossary],
+
     };
   }
 
@@ -155,9 +154,9 @@ export class MeetingContextManager {
       interviewSessionContext:
         cloneInterviewSessionContext(options.interviewSessionContext) ??
         createInterviewSessionContextFromBrief(interviewSessionBrief),
-      rollingSummary: "",
-      userProfileContext: options.userProfileContext ?? "",
-      glossary: options.glossary ?? [],
+
+
+
     };
   }
 
@@ -690,26 +689,11 @@ export class MeetingContextManager {
     return this.clearExpiredActiveMeetingTask(now);
   }
 
-  updateRollingSummary(rollingSummary: string) {
-    this.state = {
-      ...this.state,
-      rollingSummary,
-    };
-  }
 
-  updateUserProfileContext(userProfileContext: string) {
-    this.state = {
-      ...this.state,
-      userProfileContext,
-    };
-  }
 
-  updateGlossary(glossary: GlossaryEntry[]) {
-    this.state = {
-      ...this.state,
-      glossary,
-    };
-  }
+
+
+
 
   setLastAdvisorRequestId(lastAdvisorRequestId: string) {
     this.state = {
@@ -745,9 +729,9 @@ export class MeetingContextManager {
       ),
       taskRuntime,
       activeMeetingTask,
-      rollingSummary: this.state.rollingSummary,
-      userProfileContext: this.state.userProfileContext,
-      glossaryText: this.formatGlossary(),
+
+
+
       interviewPlaybook: activeMeetingTask?.parent.playbook,
       confirmedMeFacts: collectConfirmedMeFacts(this.state.transcriptTurns),
       latestTurn,
@@ -855,11 +839,7 @@ export class MeetingContextManager {
     return [activeTaskContext, observationContext].filter(Boolean).join("\n\n");
   }
 
-  private formatGlossary() {
-    return this.state.glossary
-      .map((entry) => `${entry.term}: ${entry.definition}`)
-      .join("\n");
-  }
+
 }
 
 function createManualCorrectionAdmission(parent: ActiveInterviewParent): ManualCorrectionAdmission {

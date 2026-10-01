@@ -51,9 +51,9 @@ test("phase navigation keeps procedural authority while bounding broad history",
         revisions: 4,
       },
     },
-    rollingSummary: repeatedHistory,
-    userProfileContext: repeatedHistory,
-    glossaryText: repeatedHistory,
+
+
+
     memoryContext: `HIGH_VALUE_MEMORY\n${"MEMORY ".repeat(2_000)}`,
   };
   const previousSuggestion = [
@@ -77,8 +77,8 @@ test("phase navigation keeps procedural authority while bounding broad history",
     "design_framing"
   );
   assert.equal(result.promptContext.transcript, "Them: Design a URL shortener.");
-  assert.equal(result.promptContext.rollingSummary, "");
-  assert.equal(result.promptContext.userProfileContext, "");
+  assert.equal("rollingSummary" in result.promptContext, false);
+  assert.equal("userProfileContext" in result.promptContext, false);
   assert.doesNotMatch(result.promptContext.transcript, /OLD_HISTORY/);
   assert.match(result.promptContext.memoryContext ?? "", /HIGH_VALUE_MEMORY/);
   assert.ok((result.promptContext.memoryContext?.length ?? 0) <= 6_000);
@@ -95,9 +95,9 @@ test("previous phase navigation does not manufacture a previous suggestion", () 
     transcript: "Them: Explain the architecture.",
     screenContext: "",
     taskRuntime: { revision: 1 },
-    rollingSummary: "",
-    userProfileContext: "",
-    glossaryText: "",
+
+
+
   };
 
   const result = composePhaseNavigationPromptContext({

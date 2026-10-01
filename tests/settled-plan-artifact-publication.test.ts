@@ -308,9 +308,9 @@ test("publishes a phase-owned response action from its exact Screen source", () 
       taskRuntime: { revision: 3 },
       activeMeetingTask: task,
       interviewPlaybook: playbook,
-      rollingSummary: "",
-      userProfileContext: "",
-      glossaryText: "",
+
+
+
     },
     {
       mode: "response-action",

@@ -12,9 +12,9 @@ function promptContext(): AdvisorPromptContext {
   return {
     transcript: "Them: What is the in-degree?",
     screenContext: "",
-    rollingSummary: "",
-    userProfileContext: "",
-    glossaryText: "",
+
+
+
     taskRuntime: { revision: 0 },
   };
 }

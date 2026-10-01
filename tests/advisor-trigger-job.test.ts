@@ -17,9 +17,9 @@ function buildPromptContext(): AdvisorPromptContext {
   return {
     transcript: "Them: Design a cache",
     screenContext: "",
-    rollingSummary: "",
-    userProfileContext: "",
-    glossaryText: "",
+
+
+
     taskRuntime: { revision: 0 },
     latestTurn: {
       id: "turn-a",

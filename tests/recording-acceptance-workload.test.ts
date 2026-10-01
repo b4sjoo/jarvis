@@ -296,8 +296,8 @@ test("RC3: retained failed recorder does not alter settled Job/Plan to actual pe
         const job = createAdvisorTriggerJob({
           source: "regenerate", mode: "regenerate", sessionId: "session-a", runtimeEpoch: 1,
           snapshotTurnCount: 1, taskMutationAuthority: "output-only-current-branch", scheduledAt: 2000,
-          promptContext: { transcript: "Explain the queue invariant", screenContext: "", rollingSummary: "",
-            userProfileContext: "", glossaryText: "", activeMeetingTask: task, taskRuntime: context.getTaskRuntimeState() },
+          promptContext: { transcript: "Explain the queue invariant", screenContext: "",
+              activeMeetingTask: task, taskRuntime: context.getTaskRuntimeState() },
         });
         const plan = buildSettledAdvisorExecutionPlan({
           settlement: {

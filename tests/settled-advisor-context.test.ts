@@ -401,9 +401,9 @@ function context(): AdvisorPromptContext {
     screenContext: "old screen context",
     taskRuntime: { revision: 4 },
     activeMeetingTask,
-    rollingSummary: "broad session summary",
-    userProfileContext: "profile",
-    glossaryText: "RAG: retrieval augmented generation",
+
+
+
     latestTurn: turns().at(-1),
     currentQuestionProjection: {
       answerFocusText: "How would you index it?",

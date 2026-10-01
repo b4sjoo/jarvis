@@ -6669,8 +6669,8 @@ export function useMeetingAssistant() {
         interviewSessionBrief: prepared
           ? prepared.interviewSessionBrief
           : previousContext.interviewSessionBrief,
-        userProfileContext: previousContext.userProfileContext,
-        glossary: previousContext.glossary,
+
+
       });
       const contextState = contextManagerRef.current.getState();
       const nextStatus: MeetingAssistantStatus =
@@ -14519,7 +14519,7 @@ export function useMeetingAssistant() {
             lastMutation: promptContext.taskRuntime.lastMutation,
           },
           activeMeetingTask: undefined,
-          rollingSummary: "",
+
           interviewPlaybook: undefined,
           playbookPhaseDecision: undefined,
           projectBindingDecision: undefined,
@@ -29024,8 +29024,7 @@ export function useMeetingAssistant() {
               screenCurrentOnly
                 ? undefined
                 : readEffectiveSemanticTask(screenExecutionContextState.activeMeetingTask, screenRelationLogicalQuestionUnit),
-            responseOnlyParentReadContext:
-              undefined,
+
             factAnchorDecision: screenFactAnchorDecision,
             projectBindingDecision: screenProjectBindingDecision,
             whiteboardFormatPreference:

@@ -4,6 +4,25 @@
   "updatedAt": "2026-09-30",
   "entries": [
     {
+      "id": "empty-meeting-context-and-response-only-scope",
+      "symbolOrSurface": "Unpopulated Meeting summary/profile/glossary plumbing and obsolete response-only scope factories",
+      "verdict": "migrate-then-delete",
+      "ownerTaskId": 168,
+      "replacement": "Existing scoped effective-source context and Advisor Evidence Packet; Preparation summary and Speech Bias remain independent",
+      "persistedDataImpact": "recording",
+      "historicalReader": "Historical raw metadata readers remain; no recording or human truth is rewritten.",
+      "proofCommands": ["npm test", "npm run build", "npm run verify:architecture"],
+      "deletionGate": "The old scope file and imports are absent; full Prompt diffs remove only empty sections, and authorized context and Speech Bias outputs remain covered.",
+      "rollbackBoundary": "Empty-context retirement is independent of mechanical helper deletion and Correction transaction convergence.",
+      "status": "deleted",
+      "forbiddenPatterns": [
+        "export function createResponseOnlyTaskScope(",
+        "export function applyResponseOnlyTaskScopeToPromptContext(",
+        "export function resolveResponseOnlyContextReadScope(",
+        "export function formatBoundedParentReadContextForPrompt("
+      ]
+    },
+    {
       "id": "uncalled-advisor-and-legacy-authority-helpers",
       "symbolOrSurface": "Unreachable Advisor fallback delay, unused Screen summarizer and five test-only authority helpers",
       "verdict": "migrate-then-delete",

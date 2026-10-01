@@ -18,8 +18,8 @@ for (const type of ["project-deep-dive", "behavioral", "coding"] as const) {
       const phase = decidePlaybookPhaseProgression({ questionType: type, currentQuestion: question,
         currentPhase: playbook.phase });
       const prior = JSON.stringify({ playbook, phase });
-      const voice = buildAdvisorUserMessage({ transcript: `Them: ${question}`, screenContext: "", rollingSummary: "",
-        userProfileContext: "", glossaryText: "", taskRuntime: { revision: 0 }, interviewPlaybook: playbook,
+      const voice = buildAdvisorUserMessage({ transcript: `Them: ${question}`, screenContext: "",
+          taskRuntime: { revision: 0 }, interviewPlaybook: playbook,
         playbookPhaseDecision: phase }, { responseConfig: { language, length: "normal" } });
       const visual = screen({ observation: { id: "screen", capturedAt: 1, summary: question },
         recentTranscript: question, screenPreflight: { question, questionType: type }, interviewPlaybook: playbook,

@@ -141,7 +141,7 @@ function screenFixture() {
   const task = buildActiveMeetingTask({ parent, runtimeRevision: 1 })!;
   // The attachment is only a UI projection, not a replacement source.
   const context = {
-    sessionId: "session", startedAt: 0, transcriptTurns: [], screenObservations: [{ id: "screen-origin", capturedAt: 100 }], rollingSummary: "", userProfileContext: "", glossary: [],
+    sessionId: "session", startedAt: 0, transcriptTurns: [], screenObservations: [{ id: "screen-origin", capturedAt: 100 }],
     taskRuntime: runtime, activeMeetingTask: { ...task, screen: { question: unit.normalizedText, activeScreenTaskId: "canonical-screen", observationId: "screen-origin" } },
   } as unknown as MeetingContextState;
   const effective = buildEffectiveAdvisorSettlementView({ settlement, activeMeetingTask: task, taskRuntimeRevision: 1, fallback: { questionType: "coding", relation: "new-parent" } }).effectiveSettlement!;
@@ -475,7 +475,7 @@ function withRegenerateExecution(h: ReturnType<typeof actionHarness>) {
       : h.context.transcriptTurns.map(t => `${t.speaker}: ${t.text}`).join("\n"),
     latestTurn: h.context.transcriptTurns.at(-1),
     screenContext: h.f.unit.normalizedText, taskRuntime: h.context.taskRuntime,
-    activeMeetingTask: h.context.activeMeetingTask, rollingSummary: "", userProfileContext: "", glossaryText: "",
+    activeMeetingTask: h.context.activeMeetingTask,
   });
   env.buildEffectiveAdvisorBasePromptContext = createEffectiveAdvisorBaseBuilder(
     env.contextManagerRef.current, h.f.ledger, env.runtimeEpochRef, undefined, h.continuityRef
@@ -966,7 +966,7 @@ function currentOnlyAnswerFixture(sourceKind: "voice" | "screen") {
       source: "full-screen", changed: true,
     }] : [],
     taskRuntime: { revision: 0 },
-    rollingSummary: "", userProfileContext: "", glossary: [],
+
   };
   return { unit, stable, context, settlement };
 }

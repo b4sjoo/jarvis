@@ -28,10 +28,6 @@ import { compileSettledAdvisorPromptContext } from "../src/lib/meeting/settled-a
 import { buildAdvisorUserMessage } from "../src/lib/meeting/advisor-prompt.js";
 import { composePhaseNavigationPromptContext } from "../src/lib/meeting/phase-navigation-prompt-context.js";
 import { decideAdvisorScreenScope } from "../src/lib/meeting/screen-task-scope.js";
-import {
-  createResponseOnlyTaskScope,
-  formatBoundedParentReadContextForPrompt,
-} from "../src/lib/meeting/response-only-task-scope.js";
 import { selectInterviewPlaybookForCommittedType } from "../src/lib/meeting/interview-playbook.js";
 import { projectEffectiveTaskSourceView } from "../src/lib/meeting/effective-task-source-view.js";
 import { setTestTaskRuntime } from "./helpers/meeting-task-runtime.js";
@@ -184,19 +180,17 @@ test("EC4/EC6 reads preserve canonical topic, source IDs, revisions, deadlines a
   assert.match(f.original.sources[0].text, /RAC/);
 });
 
-test("EC4 response-only bounded parent objective uses projected origin without mutation authority", () => {
+test("EC4 evidence packet continuity uses projected origin without mutating the parent", () => {
   const f = fixture();
   const before = f.manager.getState();
   const { semantic } = advisor(f);
   const current = f.unit(f.followup);
-  const scope = createResponseOnlyTaskScope({ logicalQuestionUnitId: current.id, revision: current.revision,
-    sourceQuestion: current.normalizedText, sourceTurnIds: current.sourceTurnIds, inferredType: "field-knowledge",
-    relationDisposition: "pending", preservedParent: semantic.activeMeetingTask, contextReadScope: "active-parent-read" });
-  const text = formatBoundedParentReadContextForPrompt(scope.parentReadContext);
+  const packet = buildAdvisorEvidencePacket({ activeMeetingTask: semantic.activeMeetingTask,
+    currentQuestion: { source: "voice-lqu", text: current.normalizedText, sourceTurnIds: current.sourceTurnIds } });
+  const text = packet.continuity?.capsule ?? "";
   assert.match(text, /RAG retrieval/);
   assert.doesNotMatch(text, /RAC|KAC|failure handling/);
-  assert.equal(scope.taskMutation, "none");
-  assert.equal(scope.artifactMutation, "none");
+  assert.equal(packet.continuity?.parentTaskId, semantic.activeMeetingTask?.parent.id);
   assert.deepEqual(f.manager.getState(), before);
 });
 

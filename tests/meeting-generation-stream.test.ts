@@ -19,7 +19,7 @@ const provider = { id: "synthetic", streaming: true, responseContentPath: "choic
 const selectedProvider = { provider: "synthetic", variables: {} };
 const response = (content = "Answer: Result.") => new Response('data: '+JSON.stringify({ choices: [{delta: {content}, finish_reason: 'stop'}] })+'\n\ndata: [DONE]\n\n');
 const voice = (id: string) => ({ requestId: id, provider, selectedProvider, requestOptions: { retryPolicy: { maxAttempts: 1 } },
-  promptContext: { transcript: id, screenContext: "", rollingSummary: "", userProfileContext: "", glossaryText: "", taskRuntime: { revision: 0 } } });
+  promptContext: { transcript: id, screenContext: "",    taskRuntime: { revision: 0 } } });
 const screen = (signal?: AbortSignal) => ({ provider, selectedProvider, signal, recentTranscript: "SCREEN-ID",
   observation: { id: "screen", capturedAt: 1, imageBase64: "AA==", summary: "SCREEN-ID" },
   requestOptions: { retryPolicy: { maxAttempts: 1 } } });
