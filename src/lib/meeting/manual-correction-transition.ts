@@ -1,7 +1,7 @@
 import { buildActiveMeetingTask } from "./active-meeting-task.js";
 import type { MeetingTaskRuntimeTransitionKind } from "./meeting-task-runtime-transition.js";
 import { settleManualCorrectionIntent } from "./manual-correction-settlement.js";
-import { applyManualQuestionTypeCorrectionToParent, buildManualCorrectionParentTransition, type ManualCorrectionScopeDecision, type ManualQuestionTypeCorrectionDecision } from "./manual-question-type-correction.js";
+import { applyManualQuestionTypeCorrectionToParent, type ManualCorrectionScopeDecision, type ManualQuestionTypeCorrectionDecision } from "./manual-question-type-correction.js";
 import type { ManualCorrectionCapabilityContext, ManualCorrectionIntent } from "./manual-correction-intent.js";
 import { createSourceOwnedTransitionCandidate } from "./source-owned-transition-transaction.js";
 import { prepareSourceOwnedRuntimeTransition } from "./source-owned-transition-runtime.js";
@@ -43,18 +43,23 @@ export function prepareManualCorrectionIntentTransition(input: {
   };
   let parent: ActiveInterviewParent;
   let transition: MeetingTaskRuntimeTransitionKind;
-  let command: TaskLifecycleCommand;
+  let command: Exclude<TaskLifecycleCommand, { kind: "preserve" }>;
   if (kind === "independent") {
     if (!input.newParentId || input.newParentId === before?.id || input.newParentId === input.context.recentParent?.parent.id) {
       return { authorized: false as const, reason: "new-parent-id-reused" };
     }
     if (before) {
-      parent = buildManualCorrectionParentTransition({
-        parent: before, decision, scopeDecision, correctedPlaybook: input.correctedPlaybook,
-        latestQuestionText: question.normalizedText, transcriptTurns: [], newParentId: input.newParentId,
-        lineage: { questionInstanceId: `lqu:${question.logicalQuestionUnitId}`, questionOriginTraceId: input.operationId, triggerTurnId: question.sourceTurnIds[0] },
-        source: question.sourceKind === "screen" ? "screen" : "voice", now,
-      }).parent;
+      const phase = input.correctedPlaybook?.phase ?? "follow_up";
+      parent = {
+        id: input.newParentId, source: question.sourceKind === "screen" ? "screen" : "voice",
+        // The admitted independent capability already requires a parent-eligible Type.
+        stableKind: input.correctedType as ActiveInterviewParent["stableKind"],
+        topic: question.normalizedText.trim() || "Current interview question",
+        playbook: input.correctedPlaybook, playbookPhase: phase, phaseProgress: { [phase]: true },
+        supportedFactAnchors: [], createdAt: now, updatedAt: now, revisions: 1,
+        originQuestionId: `lqu:${question.logicalQuestionUnitId}`,
+        startTurnId: question.sourceTurnIds[0], promptTranscriptStartTurnId: question.sourceTurnIds[0],
+      };
     } else {
       const candidate = createSourceOwnedTransitionCandidate({
         sessionId: question.sessionId, runtimeEpoch: question.runtimeEpoch,

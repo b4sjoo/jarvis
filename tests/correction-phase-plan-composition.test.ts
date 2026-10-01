@@ -15,6 +15,7 @@ import { prepareManualCorrectionIntentTransition } from "../src/lib/meeting/manu
 import { buildEffectiveAdvisorSettlementView, buildSettledAdvisorExecutionPlan } from "../src/lib/meeting/settled-advisor-execution-plan.js";
 import type { CanonicalQuestionType } from "../src/lib/meeting/task-taxonomy.js";
 import type { ActiveInterviewParent, SelectedInterviewPlaybook } from "../src/lib/meeting/types.js";
+import { productionPlannedCommit } from "./helpers/planned-task-runtime-commit.js";
 
 const sessionId = "correction-phase-plan";
 const runtimeEpoch = 1;
@@ -35,10 +36,9 @@ function correctionPlaybookProjection() {
     if (ts.isVariableStatement(node) && node.declarationList.declarations.some(
       declaration => ts.isIdentifier(declaration.name) && declaration.name.text === "correctedBranch"
     )) branch = node;
-    if (ts.isBinaryExpression(node) && ts.isIdentifier(node.left) && node.left.text === "correctionExecutionPlan" &&
-      ts.isCallExpression(node.right) && ts.isIdentifier(node.right.expression) && node.right.expression.text === "buildSettledAdvisorExecutionPlan" &&
-      node.right.arguments[0] && ts.isObjectLiteralExpression(node.right.arguments[0])) {
-      planArguments = node.right.arguments[0];
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === "correctionPlanInput" &&
+      node.initializer && ts.isObjectLiteralExpression(node.initializer) && node.initializer.getText(source).includes("correctionIntentTransition.command")) {
+      planArguments = node.initializer;
     }
     ts.forEachChild(node, visit);
   }
@@ -148,18 +148,39 @@ function correction(f: ReturnType<typeof fixture>, unit: LogicalQuestionUnit, co
     correctedType, intent: capability.intent, correctedPlaybook: initial, newParentId: "unused", now: 10 });
   assert.equal(proposal.authorized, true);
   const { correctedPlaybook, planPhaseInputs } = projectCorrectedPlaybook(proposal, initial);
-  const plan = buildSettledAdvisorExecutionPlan({
+  const planInput = {
     settlement: proposal.settlement, executionRuntimeEpoch: runtimeEpoch,
-    activeMeetingTask: proposal.activeMeetingTask,
-    expectedActiveMeetingTask: buildActiveMeetingTask({ parent: runtime.parent, runtimeRevision: runtime.revision }),
     preBoundaryQuestionType: runtime.parent?.stableKind,
     providerSnapshot: providers,
     memoryUseCase: correctedType === "coding" ? "coding_interview" : "project_deep_dive",
-    askFrame: "direct-answer", topicDomain: "backend", sourceQuestion: unit.normalizedText,
+    askFrame: "direct-answer" as const, topicDomain: "backend" as const, sourceQuestion: unit.normalizedText,
     parentSourceQuestion: proposal.parent.topic, promptCurrentQuestionSourceHash: proposal.settlement.sourceHash,
     ...planPhaseInputs,
+  };
+  const sourceOwnerCorrection = f.ledger.prepareOwnerCorrection({
+    operationId: `correct:${unit.id}:${kind}`, sessionId, runtimeEpoch,
+    logicalQuestionUnitId: unit.id, logicalQuestionRevision: unit.revision, sourceHash: source.sourceHash,
+    expectedOwner: source.owner,
+    nextOwner: proposal.receipt.relation === "child-probe"
+      ? { kind: "active-child", parentId: proposal.parent.id, childId: proposal.parent.child!.id }
+      : { kind: "parent-mainline", parentId: proposal.parent.id },
+    relation: proposal.receipt.relation, restoredParentId: kind === "merge-recent-parent" ? proposal.parent.id : undefined,
+    availableObservationIds: [], now: 10,
   });
-  return { initial, proposal, correctedPlaybook, plan };
+  assert.ok(sourceOwnerCorrection);
+  const preparedCalls: unknown[] = [];
+  const prepare = f.manager.prepareTaskRuntimeTransition.bind(f.manager);
+  f.manager.prepareTaskRuntimeTransition = input => { preparedCalls.push(input); return prepare(input); };
+  const committed = productionPlannedCommit()({
+    manager: f.manager, planInput, currentContext: f.manager.getState(), currentLogicalQuestionUnit: unit,
+    operationId: `correct:${unit.id}:${kind}`, parentAfter: proposal.parent, screenAfter: null,
+    sourceOwnerCorrection, recentParentToRestore: kind === "merge-recent-parent" ? proposal.parent.id : undefined,
+  });
+  f.manager.prepareTaskRuntimeTransition = prepare;
+  assert.equal(committed.authorized, true, committed.reason);
+  assert.equal(preparedCalls.length, 1);
+  assert.strictEqual(committed.runtimeResult, committed.prepared.result);
+  return { initial, proposal, correctedPlaybook, plan: committed.plan as ReturnType<typeof buildSettledAdvisorExecutionPlan>, committed };
 }
 
 test("Correction new Coding child keeps prepared implementation phase and requests Code in the production Plan", () => {
@@ -182,8 +203,6 @@ for (const previousType of ["coding", "field-knowledge"] as const) {
     const q = question("child-question");
     admit(f, q, "followup-parent");
     const attached = correction(f, q, previousType, "new-child");
-    assert.equal(f.manager.commitTaskRuntimeTransition({ id: "attach-child", transition: attached.proposal.transition,
-      parent: attached.proposal.parent, reason: "fixture" }).mutationApplied, true);
     admit(f, q, "child-probe");
     const { initial, proposal, correctedPlaybook, plan } = correction(f, q, "coding", "continue-child");
     assert.equal(initial.phase, "baseline_reasoning");

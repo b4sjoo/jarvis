@@ -15,7 +15,7 @@ import { createManualRuntimeActionEvent } from "../src/lib/meeting/manual-runtim
 import { buildCompactTraceSummary } from "../src/lib/meeting/session-recording.js";
 import { buildSessionProcedureV1 } from "../scripts/lib/session-procedure.js";
 import { buildEffectiveAdvisorSettlementView, buildSettledAdvisorExecutionPlan, formatSettledAdvisorExecutionPlanForTrace } from "../src/lib/meeting/settled-advisor-execution-plan.js";
-import { createTaskLifecycleTransaction, formatTaskLifecycleReductionForTrace, reduceTaskLifecycleTransaction } from "../src/lib/meeting/task-lifecycle-reducer.js";
+import { createTestPlannedTransition, readTestLifecycleTrace, commitTestPlannedTransition } from "./helpers/planned-task-runtime-commit.js";
 import { evaluateTaskSettlementTupleCompatibilityV2, resolveCommittedManualCorrectionEvidence } from "../src/lib/meeting/task-settlement-tuple.js";
 import type { LogicalQuestionUnit } from "../src/lib/meeting/logical-question-unit.js";
 import type { CanonicalQuestionType } from "../src/lib/meeting/task-taxonomy.js";
@@ -136,7 +136,7 @@ function committed(kind: ManualCorrectionIntent["kind"], sameType = false) {
     preBoundaryQuestionType: runtime.parent?.stableKind, taskBoundaryCommitted: false, childOwnsResponse: capability.relation === "child-probe",
     providerSnapshot: providers, memoryUseCase: "aiml_system_design_interview", askFrame: "hypothetical-design", topicDomain: "ai-ml-infra",
     sourceQuestion: q.normalizedText, explicitTaskMutationCommand: proposal.command });
-  const reduction = reduceTaskLifecycleTransaction({ transaction: createTaskLifecycleTransaction({ plan, manualCorrectionRevision: 1,
+  const reduction = commitTestPlannedTransition({ transaction: createTestPlannedTransition({ plan, manualCorrectionRevision: 1,
     proposedActiveInterviewTask: proposal.parent, proposedActiveScreenTask: null }),
     currentSessionId: sessionId, currentRuntimeEpoch: 1, currentLogicalQuestionUnitId: q.id, currentLogicalQuestionRevision: 1,
     currentManualCorrectionRevision: 1, currentTaskRuntimeRevision: runtime.revision, currentActiveInterviewTask: runtime.parent });
@@ -152,7 +152,7 @@ function committed(kind: ManualCorrectionIntent["kind"], sameType = false) {
   assert.equal(installed.authorized, true);
   const trace: MeetingTrace = { id: `trace:${kind}`, kind: "voice", status: "success", startedAt: 1, endedAt: 5, steps: [], inputs: [], outputs: [], metadata: {
     ...formatCurrentQuestionSettlementForTrace(proposal.settlement), ...formatSettledAdvisorExecutionPlanForTrace(plan),
-    ...formatTaskLifecycleReductionForTrace(reduction), correctionAtomicCommitAuthorized: installed.authorized,
+    ...readTestLifecycleTrace(reduction), correctionAtomicCommitAuthorized: installed.authorized,
     manualCorrectionIntentReceipt: proposal.receipt, manualCorrectionIntent: capability.intent,
     manualCorrectionCommittedPlanId: plan.id, manualCorrectionCommittedCommand: proposal.command.kind,
     correctedQuestionType: correctedType, activeMeetingParentPhase: "project_summary",

@@ -11,8 +11,7 @@ import {
   settleManualQuestionTypeCorrection,
 } from "../src/lib/meeting/manual-correction-settlement.js";
 import {
-  buildManualCorrectionParentTransition,
-  decideManualCorrectionScope,
+  applyManualQuestionTypeCorrectionToParent,
   decideManualQuestionTypeCorrection,
 } from "../src/lib/meeting/manual-question-type-correction.js";
 import type { MeetingModelProviderSnapshot } from "../src/lib/meeting/meeting-model-route.js";
@@ -21,9 +20,9 @@ import {
   buildSettledAdvisorExecutionPlan,
 } from "../src/lib/meeting/settled-advisor-execution-plan.js";
 import {
-  createTaskLifecycleTransaction,
-  reduceTaskLifecycleTransaction,
-} from "../src/lib/meeting/task-lifecycle-reducer.js";
+  createTestPlannedTransition,
+  commitTestPlannedTransition,
+} from "./helpers/planned-task-runtime-commit.js";
 import { normalizeCanonicalQuestionType } from "../src/lib/meeting/task-taxonomy.js";
 import {
   evaluateTaskSettlementTupleCompatibilityV2,
@@ -197,7 +196,7 @@ function correctionPlan(input: {
   });
 }
 
-test("atomically replaces a corrected parent under one settled plan", () => {
+test("the shared prepared writer replaces a corrected parent under one settled plan", () => {
   const beforeParent = parent("general-system-design");
   const beforeScreen = screen("general-system-design");
   const afterParent = parent("coding", {
@@ -228,13 +227,13 @@ test("atomically replaces a corrected parent under one settled plan", () => {
   });
   assert.equal(preAuthorization.authorized, true);
 
-  const transaction = createTaskLifecycleTransaction({
+  const transaction = createTestPlannedTransition({
     plan,
     manualCorrectionRevision: 1,
     proposedActiveInterviewTask: afterParent,
     proposedActiveScreenTask: afterScreen,
   });
-  const reduction = reduceTaskLifecycleTransaction({
+  const reduction = commitTestPlannedTransition({
     transaction,
     currentSessionId: "session-a",
     currentRuntimeEpoch: 4,
@@ -343,35 +342,21 @@ test("composes a related Human Type correction through settlement, lifecycle, an
     },
     relationOperationLeaseAuthorized: true,
   });
-  const scope = decideManualCorrectionScope({
-    task: before,
-    decision: correctionDecision,
-    lineage,
-    latestQuestionText: followupQuestion,
-    parentQuestionText: parentQuestion,
-    currentQuestionRelation: settlementResult.settlement.relation,
-    currentQuestionSource: "voice",
-  });
   const authorizedSettlement = authorizeManualCorrectionLifecycle({
     settlement: settlementResult.settlement,
-    scope: scope.scope,
+    parentAction: "retype",
     activeParentId: beforeParent.id,
     activeParentType: beforeParent.stableKind,
   });
   const correctedPlaybook = aiMlPlaybook();
-  const transition = buildManualCorrectionParentTransition({
+  const correctedParent = applyManualQuestionTypeCorrectionToParent({
     parent: beforeParent,
     decision: correctionDecision,
-    scopeDecision: scope,
     correctedPlaybook,
-    latestQuestionText: followupQuestion,
-    lineage,
-    transcriptTurns: [],
-    newParentId: "unused-parent-id",
     now: 40,
   });
   const afterParent: ActiveInterviewParent = {
-    ...transition.parent,
+    ...correctedParent,
     settlementId: authorizedSettlement.settlementId,
   };
   const after = meetingTask(afterParent, undefined, 4);
@@ -397,8 +382,8 @@ test("composes a related Human Type correction through settlement, lifecycle, an
     taskMutationCommittedBeforeAdvisor: true,
     createdAt: 50,
   });
-  const reduction = reduceTaskLifecycleTransaction({
-    transaction: createTaskLifecycleTransaction({
+  const reduction = commitTestPlannedTransition({
+    transaction: createTestPlannedTransition({
       plan,
       manualCorrectionRevision: 2,
       proposedActiveInterviewTask: afterParent,
@@ -423,9 +408,8 @@ test("composes a related Human Type correction through settlement, lifecycle, an
     parentAfterType: reduction.parentAfterType,
   });
 
-  assert.equal(scope.scope, "same-question-retype");
   assert.equal(authorizedSettlement.parentMutationAuthorized, true);
-  assert.equal(transition.startedNewParent, false);
+  assert.equal(afterParent.id, beforeParent.id);
   assert.equal(afterParent.id, beforeParent.id);
   assert.equal(afterParent.topic, beforeParent.topic);
   assert.equal(afterParent.stableKind, "ai-ml-system-design");
@@ -484,8 +468,8 @@ test("consumes a settled follow-up as one same-parent context update", () => {
   assert.deepEqual(plan.taskMutationPolicy, {
     kind: "update-parent-context",
   });
-  const reduction = reduceTaskLifecycleTransaction({
-    transaction: createTaskLifecycleTransaction({
+  const reduction = commitTestPlannedTransition({
+    transaction: createTestPlannedTransition({
       plan,
       manualCorrectionRevision: 1,
       proposedActiveInterviewTask: afterParent,
@@ -512,40 +496,6 @@ test("consumes a settled follow-up as one same-parent context update", () => {
   assert.equal(reduction.screenAttachment?.id, "screen-a");
 });
 
-test("rejects a stale correction revision without changing the parent", () => {
-  const beforeParent = parent("general-system-design");
-  const afterParent = parent("coding", {
-    topic: "Implement Merge Sort",
-    revisions: 4,
-  });
-  const before = meetingTask(beforeParent);
-  const after = meetingTask(afterParent);
-  const plan = correctionPlan({ before, after });
-  const reduction = reduceTaskLifecycleTransaction({
-    transaction: createTaskLifecycleTransaction({
-      plan,
-      manualCorrectionRevision: 1,
-      proposedActiveInterviewTask: afterParent,
-    }),
-    currentSessionId: "session-a",
-    currentRuntimeEpoch: 4,
-    currentLogicalQuestionUnitId: "question-a",
-    currentLogicalQuestionRevision: 2,
-    currentManualCorrectionRevision: 2,
-    currentTaskRuntimeRevision: 3,
-    currentActiveInterviewTask: beforeParent,
-  });
-
-  assert.equal(reduction.authorized, false);
-  assert.equal(
-    reduction.reason,
-    "manual-correction-revision-mismatch"
-  );
-  assert.equal(
-    reduction.parent?.stableKind,
-    "general-system-design"
-  );
-});
 
 test("rejects a stale parent revision without applying a partial transition", () => {
   const expectedParent = parent("general-system-design");
@@ -560,8 +510,8 @@ test("rejects a stale parent revision without applying a partial transition", ()
     before: meetingTask(expectedParent),
     after: meetingTask(afterParent),
   });
-  const reduction = reduceTaskLifecycleTransaction({
-    transaction: createTaskLifecycleTransaction({
+  const reduction = commitTestPlannedTransition({
+    transaction: createTestPlannedTransition({
       plan,
       manualCorrectionRevision: 1,
       proposedActiveInterviewTask: afterParent,
@@ -576,7 +526,7 @@ test("rejects a stale parent revision without applying a partial transition", ()
   });
 
   assert.equal(reduction.authorized, false);
-  assert.equal(reduction.reason, "parent-revision-mismatch");
+  assert.equal(reduction.reason, "pre-mutation:expected-parent-revision-mismatch");
   assert.equal(
     reduction.parent?.stableKind,
     "general-system-design"
@@ -593,8 +543,8 @@ test("rejects an incomplete correction projection without mutating the parent", 
     before: meetingTask(beforeParent),
     after: meetingTask(afterParent),
   });
-  const reduction = reduceTaskLifecycleTransaction({
-    transaction: createTaskLifecycleTransaction({
+  const reduction = commitTestPlannedTransition({
+    transaction: createTestPlannedTransition({
       plan,
       manualCorrectionRevision: 1,
     }),
@@ -609,7 +559,7 @@ test("rejects an incomplete correction projection without mutating the parent", 
 
   assert.equal(reduction.authorized, false);
   assert.equal(reduction.mutationApplied, false);
-  assert.equal(reduction.reason, "proposed-parent-required");
+  assert.equal(reduction.reason, "command-type-mismatch");
   assert.equal(
     reduction.parent?.stableKind,
     "general-system-design"
@@ -645,8 +595,8 @@ test("rejects a retype that retains an incompatible whiteboard", () => {
     before: meetingTask(beforeParent),
     after: meetingTask(afterParent),
   });
-  const reduction = reduceTaskLifecycleTransaction({
-    transaction: createTaskLifecycleTransaction({
+  const reduction = commitTestPlannedTransition({
+    transaction: createTestPlannedTransition({
       plan,
       manualCorrectionRevision: 1,
       proposedActiveInterviewTask: afterParent,

@@ -683,7 +683,7 @@ import {
   ProvisionalCurrentQuestion,
   createSourceOwnedTransitionCandidate,
   resolveLatestScreenObservationId,
-  createTaskLifecycleTransaction,
+  projectActiveMeetingTask,
   createRuntimeCommitToken,
   decideAdvisorPhaseMutation,
   decideAdvisorTaskMutation,
@@ -703,12 +703,11 @@ import {
   formatEffectiveAdvisorSettlementViewForTrace,
   formatSettledAdvisorExecutionPlanForTrace,
   formatTaskBoundaryCandidateForTrace,
-  formatTaskLifecycleReductionForTrace,
+  formatTaskRuntimeTransitionForTrace,
   rebaseRuntimeCommitToken,
   rebaseRuntimeCommitTokenAfterOwnedParentMutation,
   rebaseRuntimeCommitTokenAfterOwnedParentReplacement,
   resolveCurrentQuestionSettlementDisposition,
-  reduceTaskLifecycleTransaction,
   settleCurrentQuestion,
   validateCurrentQuestionSettlementIdentity,
   expireTaskBoundaryCandidate,
@@ -817,9 +816,8 @@ import {
   projectCriticalMomentTraceEvidence,
   type CriticalMomentOutcomeEvaluationPatch,
   decideManualQuestionTypeCorrection,
-  decideManualCorrectionScope,
   decideManualCorrectionTerminalState,
-  buildManualCorrectionParentTransition,
+  applyManualQuestionTypeCorrectionToParent,
   classifyManualCorrectionTarget,
   markManualCorrectionTargetResolved,
   resolveManualCorrectionTarget,
@@ -1159,121 +1157,74 @@ function commitSourceOwnedTransitionWithManager(input: {
   });
 }
 
-function commitCorrectionLifecycleWithManager(input: {
-  deadlineDelta?: MeetingTaskDeadlineDelta;
+function commitPlannedTaskRuntimeTransition(input: {
   manager: MeetingContextManager;
-  plan: SettledAdvisorExecutionPlan;
-  settlement: CurrentQuestionSettlementDecision;
+  planInput: Omit<Parameters<typeof buildSettledAdvisorExecutionPlan>[0], "activeMeetingTask" | "expectedActiveMeetingTask"> & {
+    explicitTaskMutationCommand: Exclude<TaskLifecycleCommand, { kind: "preserve" }>;
+  };
   currentContext: MeetingContextState;
   currentLogicalQuestionUnit: LogicalQuestionUnit;
-  manualCorrectionRevision: number;
   currentRuntimeEpoch?: number;
   recentParentToRestore?: string;
   sourceOwnerCorrection?: ReturnType<EffectiveQuestionSourceLedger["prepareOwnerCorrection"]>;
-  parentBefore?: ActiveInterviewParent;
-  screenBefore?: ActiveScreenTask;
   parentAfter: ActiveInterviewParent;
   screenAfter?: ActiveScreenTask | null;
+  deadlineDelta?: MeetingTaskDeadlineDelta;
   operationId: string;
 }) {
-  const preMutationAuthorization = authorizeSettledAdvisorExecutionPlan({
-    plan: input.plan,
-    currentSettlement: input.settlement,
-    currentSessionId: input.currentContext.sessionId,
+  const before = input.currentContext.taskRuntime;
+  const runtimeTransition = input.planInput.explicitTaskMutationCommand.kind;
+  const prepared = input.manager.prepareTaskRuntimeTransition({
+    id: input.operationId, transition: runtimeTransition,
+    command: input.planInput.explicitTaskMutationCommand,
+    reason: "correction-lifecycle-command-committed",
+    expectedRevision: before.revision,
+    parent: input.parentAfter, screenAttachment: input.screenAfter,
+    deadlineDelta: input.deadlineDelta,
+    recentParentToRestore: input.recentParentToRestore,
+    sourceOwnerCorrection: input.sourceOwnerCorrection,
+  });
+  const projectedTask = projectActiveMeetingTask({ state: prepared.result.state });
+  const plan = buildSettledAdvisorExecutionPlan({
+    ...input.planInput,
+    activeMeetingTask: projectedTask,
+    expectedActiveMeetingTask: input.currentContext.activeMeetingTask ?? null,
+  });
+  const authorizationInput = {
+    plan, currentSettlement: input.planInput.settlement,
+    currentSessionId: prepared.expectedSessionId,
     currentRuntimeEpoch: input.currentRuntimeEpoch ?? input.currentLogicalQuestionUnit.runtimeEpoch,
     currentLogicalQuestionUnitId: input.currentLogicalQuestionUnit.id,
     currentLogicalQuestionRevision: input.currentLogicalQuestionUnit.revision,
-    currentSourceHash: input.settlement.sourceHash,
-    currentActiveMeetingTask: input.currentContext.activeMeetingTask,
+    currentSourceHash: input.planInput.settlement.sourceHash,
+  };
+  const preMutationAuthorization = authorizeSettledAdvisorExecutionPlan({
+    ...authorizationInput, currentActiveMeetingTask: projectActiveMeetingTask({ state: prepared.previousState }),
     stage: "pre-task-mutation",
   });
-  const transaction = createTaskLifecycleTransaction({
-    plan: input.plan,
-    manualCorrectionRevision: input.manualCorrectionRevision,
-    proposedActiveInterviewTask: input.parentAfter,
-    proposedActiveScreenTask: input.screenAfter,
+  const postMutationAuthorization = authorizeSettledAdvisorExecutionPlan({
+    ...authorizationInput, currentActiveMeetingTask: projectedTask,
   });
-  const reduction = reduceTaskLifecycleTransaction({
-    transaction,
-    currentSessionId: input.currentContext.sessionId,
-    currentRuntimeEpoch: input.currentRuntimeEpoch ?? input.currentLogicalQuestionUnit.runtimeEpoch,
-    currentLogicalQuestionUnitId: input.currentLogicalQuestionUnit.id,
-    currentLogicalQuestionRevision: input.currentLogicalQuestionUnit.revision,
-    currentManualCorrectionRevision: input.manualCorrectionRevision,
-    currentTaskRuntimeRevision: input.currentContext.taskRuntime.revision,
-    currentActiveInterviewTask: input.parentBefore,
-    currentActiveScreenTask: input.screenBefore,
-  });
-  const postMutationAuthorization = reduction.activeMeetingTask
-    ? authorizeSettledAdvisorExecutionPlan({
-        plan: input.plan,
-        currentSettlement: input.settlement,
-        currentSessionId: input.currentContext.sessionId,
-        currentRuntimeEpoch: input.currentRuntimeEpoch ?? input.currentLogicalQuestionUnit.runtimeEpoch,
-        currentLogicalQuestionUnitId: input.currentLogicalQuestionUnit.id,
-        currentLogicalQuestionRevision:
-          input.currentLogicalQuestionUnit.revision,
-        currentSourceHash: input.settlement.sourceHash,
-        currentActiveMeetingTask: reduction.activeMeetingTask,
-      })
+  const ready = prepared.result.authorized && prepared.result.mutationApplied &&
+    preMutationAuthorization.authorized && postMutationAuthorization.authorized;
+  const runtimeResult = ready
+    ? input.manager.commitPreparedTaskRuntimeTransition(prepared)
     : undefined;
-  const prepared = Boolean(
-    preMutationAuthorization.authorized &&
-      reduction.authorized &&
-      reduction.mutationApplied &&
-      postMutationAuthorization?.authorized
-  );
-  const preparedReason = !preMutationAuthorization.authorized
-    ? `pre-mutation:${preMutationAuthorization.reason}`
-    : !reduction.authorized || !reduction.mutationApplied
-      ? `reducer:${reduction.reason}`
-      : !postMutationAuthorization
-        ? "post-mutation:authorization-missing"
-        : !postMutationAuthorization.authorized
-          ? `post-mutation:${postMutationAuthorization.reason}`
-          : "authorized";
-  const runtimeTransition = prepared
-    ? classifyCommittedTaskRuntimeTransition({
-        beforeParent: input.parentBefore,
-        afterParent: reduction.parent ?? undefined,
-        beforeScreen: input.screenBefore,
-        afterScreen: reduction.screenAttachment ?? undefined,
-      })
-    : undefined;
-  const runtimeResult = runtimeTransition
-    ? submitTaskRuntimeTransition(input.manager, {
-        operationId: input.operationId,
-        transition: runtimeTransition,
-        reason: "correction-lifecycle-command-committed",
-        authorizedArtifacts: input.plan.artifactPolicy.allowWhiteboard ? ["whiteboard"] : [],
-        deadlineDelta: input.deadlineDelta,
-        expectedRevision: input.currentContext.taskRuntime.revision,
-        recentParentToRestore: input.recentParentToRestore,
-        sourceOwnerCorrection: input.sourceOwnerCorrection,
-        screenAttachment: reduction.screenAttachment ?? null,
-        parent: reduction.parent ?? null,
-      })
-    : undefined;
-  const authorized = Boolean(
-    prepared &&
-      runtimeTransition &&
-      runtimeResult?.authorized &&
-      runtimeResult.mutationApplied
-  );
+  const authorized = Boolean(runtimeResult?.authorized && runtimeResult.mutationApplied);
+  const reason = !preMutationAuthorization.authorized ? `pre-mutation:${preMutationAuthorization.reason}`
+    : !prepared.result.authorized || !prepared.result.mutationApplied ? prepared.result.reason
+    : !postMutationAuthorization.authorized ? `post-mutation:${postMutationAuthorization.reason}`
+    : !authorized ? runtimeResult?.reason ?? "canonical-runtime-transition-rejected" : "authorized";
   return {
     authorized,
-    reason: !prepared
-      ? preparedReason
-      : !runtimeTransition
-        ? "canonical-runtime-transition-missing"
-        : !runtimeResult?.authorized || !runtimeResult.mutationApplied
-          ? runtimeResult?.reason ?? "canonical-runtime-transition-rejected"
-          : "authorized",
-    preMutationAuthorization,
-    reduction,
-    postMutationAuthorization,
-    runtimeTransition,
-    runtimeResult,
+    reason,
+    plan, prepared, preMutationAuthorization, postMutationAuthorization, runtimeTransition, runtimeResult,
+    lifecycleMetadata: formatTaskRuntimeTransitionForTrace({
+      operationId: input.operationId, executionPlanId: plan.id,
+      before: prepared.previousState,
+      result: runtimeResult ?? { ...prepared.result, authorized: false, mutationApplied: false },
+      rejectionReason: authorized ? undefined : reason,
+    }),
   };
 }
 
@@ -31518,8 +31469,7 @@ export function useMeetingAssistant() {
           : "unknown";
         const askFrame = getManualOverrideAskFrame(correctedType);
         const startsNewParentBoundary =
-          correctionScopeDecision.scope === "linked-parent-extension" ||
-          correctionScopeDecision.scope === "independent-new-parent";
+          invocation.correctionIntent.kind === "independent";
         const topicDomain = getManualOverrideTopicDomain(
           correctedType,
           startsNewParentBoundary
@@ -31614,11 +31564,9 @@ export function useMeetingAssistant() {
           finalizeCorrection({ authorizationFailureReason: "correction-task-projection-missing" });
           return;
         }
-        correctionExecutionPlan = buildSettledAdvisorExecutionPlan({
+        const correctionPlanInput: Parameters<typeof commitPlannedTaskRuntimeTransition>[0]["planInput"] = {
           executionRuntimeEpoch: runtimeEpochRef.current,
           settlement: correctionCurrentQuestionSettlement,
-          activeMeetingTask: projectedTask,
-          expectedActiveMeetingTask: activeTask,
           preBoundaryQuestionType: activeTask?.parent.questionType,
           taskBoundaryCommitted: correctionIntentTransition.command.kind === "create-parent" ||
             correctionIntentTransition.command.kind === "replace-parent",
@@ -31640,7 +31588,7 @@ export function useMeetingAssistant() {
           explicitTaskMutationCommand: correctionIntentTransition.command,
           taskMutationCommittedBeforeAdvisor: true,
           artifactRequest: { manualCorrection: true },
-        });
+        };
         const effectiveSourceAfterCorrection = createEffectiveQuestionSourceRecord({
           logicalQuestionUnit: correctionLogicalQuestionUnit,
           settlement: buildEffectiveAdvisorSettlementView({
@@ -31674,7 +31622,7 @@ export function useMeetingAssistant() {
           finalizeCorrection({ authorizationFailureReason: "correction-source-owner-changed" });
           return;
         }
-        const lifecycleCommit = commitCorrectionLifecycleWithManager({
+        const lifecycleCommit = commitPlannedTaskRuntimeTransition({
           manager: contextManagerRef.current,
           currentRuntimeEpoch: runtimeEpochRef.current,
           recentParentToRestore: restoresPreviousParent ? parentAfter.id : undefined,
@@ -31683,14 +31631,13 @@ export function useMeetingAssistant() {
             parent: { ownerId: parentAfter.id, deadline: getActiveScreenTaskExpiresAt(state.settings) },
             screen: screenAfter ? { ownerId: screenAfter.id, deadline: getActiveScreenTaskExpiresAt(state.settings) } : undefined,
           },
-          plan: correctionExecutionPlan, settlement: correctionCurrentQuestionSettlement,
+          planInput: correctionPlanInput,
           currentContext: contextState, currentLogicalQuestionUnit: correctionLogicalQuestionUnit,
-          manualCorrectionRevision: correctionManualRevision,
-          parentBefore, screenBefore: contextState.taskRuntime.screenAttachment,
           parentAfter, screenAfter: screenAfter ?? null, operationId: correctionTrace.id,
         });
+        correctionExecutionPlan = lifecycleCommit.plan;
         const lifecycleMetadata = {
-          ...formatTaskLifecycleReductionForTrace(lifecycleCommit.reduction),
+          ...lifecycleCommit.lifecycleMetadata,
           ...formatSettledAdvisorExecutionPlanForTrace(correctionExecutionPlan,
             lifecycleCommit.postMutationAuthorization ?? lifecycleCommit.preMutationAuthorization),
           manualCorrectionIntent: correctionIntentTransition.receipt.intent,
@@ -35159,20 +35106,6 @@ export function useMeetingAssistant() {
                 selectedPlaybook,
                 mappedPhase
               );
-            const scopeDecision = decideManualCorrectionScope({
-              task: latestTask,
-              decision: typeCorrectionDecision,
-              lineage: correctedLineage,
-              latestQuestionText: correctedSemanticEvidenceText,
-              parentQuestionText: readEffectiveSemanticTask(latestTask, application.logicalQuestionUnit)?.parent.topic,
-              classifierConfidence: 1,
-              currentQuestionMatchesParentOrigin:
-                correctionTargetOwnsParentOrigin({
-                  logicalQuestionUnit:
-                    application.logicalQuestionUnit,
-                  parent: latestContext.taskRuntime.parent,
-                }),
-            });
             const lifecycleParentBefore =
               latestContext.taskRuntime.parent ??
               buildCorrectionParentFromActiveMeetingTask(
@@ -35182,24 +35115,14 @@ export function useMeetingAssistant() {
                 ) ?? correctedType
               )!;
             const correctedParentDeadline = getActiveScreenTaskExpiresAt(state.settings);
-            const parentTransition =
-              buildManualCorrectionParentTransition({
+            const resettledParent = {
+              ...applyManualQuestionTypeCorrectionToParent({
                 parent: lifecycleParentBefore,
                 decision: typeCorrectionDecision,
-                scopeDecision,
                 correctedPlaybook,
-                latestQuestionText: correctedSemanticEvidenceText,
-                lineage: correctedLineage,
-                transcriptTurns:
-                  latestContext.transcriptTurns,
-                newParentId: createMeetingId(
-                  "interview_parent"
-                ),
-                source: latestTask.screen ? "screen" : "voice",
                 now: Date.now(),
-              });
-            const resettledParent = {
-              ...parentTransition.parent,
+              }),
+              originQuestionId: lifecycleParentBefore.originQuestionId ?? correctedLineage.questionInstanceId,
               topic: correctedSemanticEvidenceText,
               canonicalQuestionSourceTurnIds: [
                 ...application.logicalQuestionUnit
@@ -35271,12 +35194,9 @@ export function useMeetingAssistant() {
               });
             }
             if (projectedActiveMeetingTask && settledCorrection) {
-              const proposedExecutionPlan =
-                buildSettledAdvisorExecutionPlan({
+              const correctionPlanInput: Parameters<typeof commitPlannedTaskRuntimeTransition>[0]["planInput"] = {
                   executionRuntimeEpoch: correctionExecutionEpoch,
                   settlement: settledCorrection,
-                  activeMeetingTask: projectedActiveMeetingTask,
-                  expectedActiveMeetingTask: latestTask,
                   preBoundaryQuestionType:
                     latestParent.questionType,
                   taskBoundaryCommitted: true,
@@ -35315,38 +35235,30 @@ export function useMeetingAssistant() {
                   artifactRequest: {
                     manualCorrection: true,
                   },
-                });
+                };
               const lifecycleCommit =
-                commitCorrectionLifecycleWithManager({
+                commitPlannedTaskRuntimeTransition({
                   manager: contextManagerRef.current,
                   deadlineDelta: {
                     parent: { ownerId: resettledParent.id, deadline: correctedParentDeadline },
                     screen: resettledScreenTask ? { ownerId: resettledScreenTask.id, deadline: correctedScreenDeadline } : undefined,
                   },
-                  plan: proposedExecutionPlan,
-                  settlement: settledCorrection,
+                  planInput: correctionPlanInput,
                   currentContext: latestContext,
                   currentLogicalQuestionUnit:
                     application.logicalQuestionUnit,
-                  manualCorrectionRevision:
-                    manualCorrectionRevisionRef.current,
-                  parentBefore: lifecycleParentBefore,
-                  screenBefore:
-                    latestContext.taskRuntime.screenAttachment,
                   parentAfter: resettledParent,
                   screenAfter: resettledScreenTask ?? null,
                   operationId: repairTrace.id,
                 });
-              if (lifecycleCommit.authorized && parentTransition.clearedContextFields.includes("generated-answers")) {
+              const proposedExecutionPlan = lifecycleCommit.plan;
+              if (lifecycleCommit.authorized) {
                 recentAdvisorContinuityRef.current = clearBoundedGeneratedSummaries(recentAdvisorContinuityRef.current);
               }
-              const lifecycleReduction = lifecycleCommit.reduction;
               const postMutationPlanAuthorization =
                 lifecycleCommit.postMutationAuthorization;
               const lifecycleMetadata: Record<string, unknown> = {
-                ...formatTaskLifecycleReductionForTrace(
-                  lifecycleReduction
-                ),
+                ...lifecycleCommit.lifecycleMetadata,
                 ...formatSettledAdvisorExecutionPlanForTrace(
                   proposedExecutionPlan,
                     postMutationPlanAuthorization ??
@@ -35447,9 +35359,9 @@ export function useMeetingAssistant() {
                   correctionOwnedPhaseAfter:
                     resettledParent.playbookPhase,
                   correctionOwnedPreservedContextFields:
-                    parentTransition.preservedContextFields,
+                    ["parent-id", "question-origin"],
                   correctionOwnedClearedContextFields:
-                    parentTransition.clearedContextFields,
+                    ["generated-answers", "unsupported-fact-anchors", "incompatible-project-binding"],
                 };
                 traceStoreRef.current.updateMetadata(
                   repairTrace.id,

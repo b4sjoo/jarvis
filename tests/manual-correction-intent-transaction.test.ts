@@ -12,7 +12,7 @@ import { prepareManualCorrectionIntentTransition } from "../src/lib/meeting/manu
 import { settleManualQuestionTypeCorrection } from "../src/lib/meeting/manual-correction-settlement.js";
 import { decideManualCorrectionTerminalState } from "../src/lib/meeting/manual-question-type-correction.js";
 import { buildEffectiveAdvisorSettlementView, buildSettledAdvisorExecutionPlan } from "../src/lib/meeting/settled-advisor-execution-plan.js";
-import { createTaskLifecycleTransaction, reduceTaskLifecycleTransaction } from "../src/lib/meeting/task-lifecycle-reducer.js";
+import { createTestPlannedTransition, commitTestPlannedTransition } from "./helpers/planned-task-runtime-commit.js";
 import type { CanonicalQuestionType } from "../src/lib/meeting/task-taxonomy.js";
 import type { ActiveInterviewParent, ScreenObservation } from "../src/lib/meeting/types.js";
 
@@ -108,7 +108,7 @@ function prepare(manager: MeetingContextManager, ledger: EffectiveQuestionSource
     childOwnsResponse: proposal.receipt.relation === "child-probe", providerSnapshot: providers,
     sourceQuestion: unit.normalizedText, explicitTaskMutationCommand: proposal.command,
     memoryUseCase: "aiml_system_design_interview", askFrame: "hypothetical-design", topicDomain: "ai-ml-infra" });
-  const reduction = reduceTaskLifecycleTransaction({ transaction: createTaskLifecycleTransaction({ plan,
+  const reduction = commitTestPlannedTransition({ transaction: createTestPlannedTransition({ plan,
     manualCorrectionRevision: 1, proposedActiveInterviewTask: proposal.parent, proposedActiveScreenTask: null }),
     currentSessionId: sessionId, currentRuntimeEpoch: epoch, currentLogicalQuestionUnitId: unit.id,
     currentLogicalQuestionRevision: unit.revision, currentManualCorrectionRevision: 1,

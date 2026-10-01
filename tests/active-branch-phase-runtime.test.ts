@@ -31,9 +31,9 @@ import {
 } from "../src/lib/meeting/source-owned-transition-runtime.js";
 import { commitStableAnswerRevision } from "../src/lib/meeting/stable-answer.js";
 import {
-  createTaskLifecycleTransaction,
-  reduceTaskLifecycleTransaction,
-} from "../src/lib/meeting/task-lifecycle-reducer.js";
+  createTestPlannedTransition,
+  commitTestPlannedTransition,
+} from "./helpers/planned-task-runtime-commit.js";
 import type {
   ActiveInterviewParent,
   InterviewPlaybookId,
@@ -454,12 +454,12 @@ test("reduces and commits a child-owned phase mutation without changing parent p
       automaticPhaseIdentityTransitionCommitted: true,
     },
   });
-  const transaction = createTaskLifecycleTransaction({
+  const transaction = createTestPlannedTransition({
     plan,
     manualCorrectionRevision: 0,
     proposedActiveInterviewTask: afterParent,
   });
-  const reduction = reduceTaskLifecycleTransaction({
+  const reduction = commitTestPlannedTransition({
     transaction,
     currentSessionId: beforeRuntime.sessionId,
     currentRuntimeEpoch: currentSettlement.runtimeEpoch,

@@ -54,7 +54,7 @@ const PARENT_PHASE_FIELDS: readonly (keyof ActiveInterviewParent)[] = [
   "phaseProgress", "latestScreenObservationId", "child",
 ];
 
-// Shared by the store writer and Plan lifecycle reducer. Caller payloads may
+// Caller payloads may
 // contain complete snapshots, but only these command-owned fields can change.
 export function validateTaskTransitionFieldChanges(input: {
   transition: MeetingTaskRuntimeTransitionKind;
@@ -254,6 +254,33 @@ export function projectActiveMeetingTask(input: {
     latestObservation: input.latestObservation,
     runtimeRevision: input.state.revision,
   });
+}
+
+export function formatTaskRuntimeTransitionForTrace(input: {
+  operationId: string;
+  executionPlanId: string;
+  before: MeetingTaskRuntimeState;
+  result: MeetingTaskRuntimeMutationResult;
+  rejectionReason?: string;
+}): Record<string, unknown> {
+  const before = input.before.parent;
+  const after = input.result.mutationApplied ? input.result.state.parent : before;
+  return {
+    taskLifecycleTransactionId: `task_lifecycle_${input.executionPlanId}`,
+    taskLifecycleExecutionPlanId: input.executionPlanId,
+    taskLifecycleOperationId: input.operationId,
+    taskLifecycleAuthorized: input.result.authorized,
+    taskLifecycleMutationApplied: input.result.mutationApplied,
+    taskLifecycleReductionReason: input.rejectionReason ?? input.result.reason,
+    taskLifecycleParentBeforeId: before?.id,
+    taskLifecycleParentBeforeRevision: before?.revisions,
+    taskLifecycleParentBeforeType: before?.stableKind,
+    taskLifecycleParentAfterId: after?.id,
+    taskLifecycleParentAfterRevision: after?.revisions,
+    taskLifecycleParentAfterType: after?.stableKind,
+    taskLifecycleArtifactOwnerBeforeId: before?.whiteboardArtifact?.parentTaskId ?? before?.id,
+    taskLifecycleArtifactOwnerAfterId: after?.whiteboardArtifact?.parentTaskId ?? after?.id,
+  };
 }
 
 export function cloneMeetingTaskRuntimeState(

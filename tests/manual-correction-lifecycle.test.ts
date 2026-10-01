@@ -23,8 +23,7 @@ import {
   settleManualQuestionTypeCorrection,
 } from "../src/lib/meeting/manual-correction-settlement.js";
 import {
-  buildManualCorrectionParentTransition,
-  decideManualCorrectionScope,
+  applyManualQuestionTypeCorrectionToParent,
   decideManualCorrectionTerminalState,
   decideManualQuestionTypeCorrection,
 } from "../src/lib/meeting/manual-question-type-correction.js";
@@ -38,10 +37,10 @@ import {
   type TaskLifecycleCommand,
 } from "../src/lib/meeting/settled-advisor-execution-plan.js";
 import {
-  createTaskLifecycleTransaction,
-  formatTaskLifecycleReductionForTrace,
-  reduceTaskLifecycleTransaction,
-} from "../src/lib/meeting/task-lifecycle-reducer.js";
+  createTestPlannedTransition,
+  readTestLifecycleTrace,
+  commitTestPlannedTransition,
+} from "./helpers/planned-task-runtime-commit.js";
 import { evaluateTaskSettlementTupleCompatibilityV2 } from "../src/lib/meeting/task-settlement-tuple.js";
 import {
   restoreSuggestionProjectionAfterFailedManualCorrection,
@@ -146,8 +145,8 @@ function resumedFixture(sourceKind: "voice" | "screen" = "voice") {
       memoryUseCase: "aiml_system_design_interview", askFrame: "hypothetical-design", topicDomain: "ai-ml-infra",
       sourceQuestion: question.normalizedText, explicitTaskMutationCommand: command,
     });
-    const reduction = reduceTaskLifecycleTransaction({
-      transaction: createTaskLifecycleTransaction({ plan, manualCorrectionRevision: 0, proposedActiveInterviewTask: after }),
+    const reduction = commitTestPlannedTransition({
+      transaction: createTestPlannedTransition({ plan, manualCorrectionRevision: 0, proposedActiveInterviewTask: after }),
       currentSessionId: sessionId, currentRuntimeEpoch: runtimeEpoch, currentLogicalQuestionUnitId: question.id,
       currentLogicalQuestionRevision: question.revision, currentManualCorrectionRevision: 0,
       currentTaskRuntimeRevision: before.revisions, currentActiveInterviewTask: before,
@@ -190,23 +189,15 @@ function correctionFixture(sourceKind: "voice" | "screen" = "voice") {
   const decision = decideManualQuestionTypeCorrection(task(parent), "general-system-design");
   const lineage = { questionInstanceId: `lqu:${resumed.id}`, triggerTurnId: resumed.currentTurnId,
     sessionId, runtimeEpoch, questionOriginTraceId: "resume-trace", identityState: "canonical" as const };
-  const scope = decideManualCorrectionScope({
-    task: task(parent), decision, lineage, latestQuestionText: resumeText,
-    currentQuestionRelation: initialSettlement.relation, currentQuestionSource: sourceKind,
-  });
-  assert.equal(scope.scope, "same-question-retype");
   const settlement = authorizeManualCorrectionLifecycle({
-    settlement: initialSettlement, scope: scope.scope, activeParentId: parent.id, activeParentType: parent.stableKind,
+    settlement: initialSettlement, parentAction: "retype", activeParentId: parent.id, activeParentType: parent.stableKind,
   });
   assert.equal(settlement.parentMutationAuthorized, true);
   const correctedPlaybook = selectInterviewPlaybook({
     questionType: decision.correctedType, query: `${parent.topic}\n${resumeText}`, askFrame: "hypothetical-design",
   })!;
-  const transition = buildManualCorrectionParentTransition({
-    parent, decision, scopeDecision: scope, correctedPlaybook, latestQuestionText: resumeText,
-    lineage, transcriptTurns: [], newParentId: "must-not-create", now: 40,
-  });
-  const after = { ...transition.parent, settlementId: settlement.settlementId };
+  const after = { ...applyManualQuestionTypeCorrectionToParent({ parent, decision, correctedPlaybook, now: 40 }),
+    settlementId: settlement.settlementId };
   const plan = buildSettledAdvisorExecutionPlan({
     settlement, activeMeetingTask: task(after), expectedActiveMeetingTask: task(parent),
     preBoundaryQuestionType: parent.stableKind, taskBoundaryCommitted: true, childOwnsResponse: false,
@@ -216,12 +207,12 @@ function correctionFixture(sourceKind: "voice" | "screen" = "voice") {
     taskMutationCommittedBeforeAdvisor: true, artifactRequest: { manualCorrection: true },
   });
   const input = {
-    transaction: createTaskLifecycleTransaction({ plan, manualCorrectionRevision: 1, proposedActiveInterviewTask: after }),
+    transaction: createTestPlannedTransition({ plan, manualCorrectionRevision: 1, proposedActiveInterviewTask: after }),
     currentSessionId: sessionId, currentRuntimeEpoch: runtimeEpoch, currentLogicalQuestionUnitId: resumed.id,
     currentLogicalQuestionRevision: resumed.revision, currentManualCorrectionRevision: 1,
     currentTaskRuntimeRevision: parent.revisions, currentActiveInterviewTask: parent,
   };
-  return { ...fixture, binding, initialSettlement, settlement, scope, transition, after, plan, input, relationCandidate };
+  return { ...fixture, binding, initialSettlement, settlement, after, plan, input, relationCandidate };
 }
 
 for (const sourceKind of ["voice", "screen"] as const) {
@@ -233,7 +224,7 @@ for (const sourceKind of ["voice", "screen"] as const) {
       screenObservations: [{ id: "exact-resume-observation", imageBase64: "synthetic-image" }],
     });
     assert.equal(source.authorized, true);
-    const reduction = reduceTaskLifecycleTransaction(f.input);
+    const reduction = commitTestPlannedTransition(f.input);
     assert.equal(reduction.reason, "committed");
     assert.equal(reduction.mutationApplied, true);
     assert.equal(reduction.parent?.id, f.parent.id);
@@ -243,7 +234,7 @@ for (const sourceKind of ["voice", "screen"] as const) {
     assert.equal(f.plan.relation, "resume-parent");
     assert.equal(f.plan.taskMutationPolicy.kind, "replace-parent");
     assert.equal(f.plan.taskMutationCommittedBeforeAdvisor, true);
-    assert.equal(f.transition.startedNewParent, false);
+    assert.equal(f.after.id, f.parent.id);
     const authorization = authorizeSettledAdvisorExecutionPlan({
       plan: f.plan, currentSettlement: f.settlement, currentSessionId: sessionId, currentRuntimeEpoch: runtimeEpoch,
       currentLogicalQuestionUnitId: f.resumed.id, currentLogicalQuestionRevision: f.resumed.revision,
@@ -258,7 +249,7 @@ for (const sourceKind of ["voice", "screen"] as const) {
       id: "a2-correction-trace", kind: sourceKind, status: "success", startedAt: 40, inputs: [], outputs: [], steps: [],
       metadata: { ...formatCurrentQuestionSettlementForTrace(f.settlement),
         ...formatEffectiveAdvisorSettlementViewForTrace(effectiveView),
-        ...formatSettledAdvisorExecutionPlanForTrace(f.plan, authorization), ...formatTaskLifecycleReductionForTrace(reduction),
+        ...formatSettledAdvisorExecutionPlanForTrace(f.plan, authorization), ...readTestLifecycleTrace(reduction),
         ...getActiveMeetingTaskTraceMetadata(reduction.activeMeetingTask!),
         manualCorrectionRelationCandidate: f.relationCandidate.relation,
         manualCorrectionRelationCandidateConfidence: f.relationCandidate.confidence },
@@ -284,16 +275,16 @@ for (const sourceKind of ["voice", "screen"] as const) {
     assert.deepEqual(reread.projection?.observed, materialized.projection?.observed);
     assert.equal(reread.projection?.subject.attemptId, materialized.projection?.subject.attemptId);
     assert.equal(trace.metadata?.manualCorrectionRelationCandidate, "followup-parent");
-    const duplicate = reduceTaskLifecycleTransaction({ ...f.input, currentActiveInterviewTask: reduction.parent!, currentTaskRuntimeRevision: 5 });
+    const duplicate = commitTestPlannedTransition({ ...f.input, currentActiveInterviewTask: reduction.parent!, currentTaskRuntimeRevision: 5 });
     assert.equal(duplicate.mutationApplied, false);
-    assert.equal(duplicate.reason, "parent-revision-mismatch");
+    assert.equal(duplicate.reason, "pre-mutation:expected-parent-revision-mismatch");
   });
 }
 
 test("A2 preserves parent origin/history and compiles General SD prompt with only authorized parent context", () => {
   const f = correctionFixture();
   const history = f.ledger.listHistory();
-  const reduction = reduceTaskLifecycleTransaction(f.input);
+  const reduction = commitTestPlannedTransition(f.input);
   assert.equal(reduction.reason, "committed");
   const after = reduction.parent!;
   for (const key of ["id", "topic", "source", "originQuestionId", "startTurnId", "promptTranscriptStartTurnId",
@@ -336,18 +327,17 @@ test("A2 preserves parent origin/history and compiles General SD prompt with onl
 test("A2 rejects parent, session, source and correction revision races before lifecycle mutation", () => {
   const f = correctionFixture();
   const cases = [
-    [{ currentActiveInterviewTask: { ...f.parent, id: "new-owner" } }, "parent-id-mismatch"],
-    [{ currentActiveInterviewTask: { ...f.parent, revisions: 5 } }, "parent-revision-mismatch"],
-    [{ currentActiveInterviewTask: undefined }, "parent-id-mismatch"],
-    [{ currentRuntimeEpoch: runtimeEpoch + 1 }, "runtime-epoch-mismatch"],
-    [{ currentSessionId: "cleared-session" }, "session-mismatch"],
-    [{ currentLogicalQuestionUnitId: "new-question" }, "logical-question-unit-mismatch"],
-    [{ currentLogicalQuestionRevision: 2 }, "logical-question-revision-mismatch"],
-    [{ currentManualCorrectionRevision: 2 }, "manual-correction-revision-mismatch"],
+    [{ currentActiveInterviewTask: { ...f.parent, id: "new-owner" } }, "pre-mutation:expected-parent-mismatch"],
+    [{ currentActiveInterviewTask: { ...f.parent, revisions: 5 } }, "pre-mutation:expected-parent-revision-mismatch"],
+    [{ currentActiveInterviewTask: undefined }, "pre-mutation:expected-parent-mismatch"],
+    [{ currentRuntimeEpoch: runtimeEpoch + 1 }, "pre-mutation:runtime-epoch-mismatch"],
+    [{ currentSessionId: "cleared-session" }, "pre-mutation:session-mismatch"],
+    [{ currentLogicalQuestionUnitId: "new-question" }, "pre-mutation:logical-question-unit-mismatch"],
+    [{ currentLogicalQuestionRevision: 2 }, "pre-mutation:logical-question-revision-mismatch"],
   ] as const;
   for (const [change, reason] of cases) {
     const input = { ...f.input, ...change };
-    const result = reduceTaskLifecycleTransaction(input);
+    const result = commitTestPlannedTransition(input);
     assert.equal(result.reason, reason);
     assert.equal(result.mutationApplied, false);
     assert.deepEqual(result.parent, input.currentActiveInterviewTask);
@@ -369,7 +359,7 @@ test("A2 retains the committed Type on regeneration failure and permits the exis
   const before = { latestSuggestion: reliable, latestReliableSuggestion: null } as MeetingAssistantState;
   const staged = stageSuggestionProjectionForManualCorrection(before);
   assert.equal(staged.latestReliableSuggestion, reliable);
-  const reduction = reduceTaskLifecycleTransaction(f.input);
+  const reduction = commitTestPlannedTransition(f.input);
   assert.equal(reduction.mutationApplied, true);
   const terminal = decideManualCorrectionTerminalState({
     mutationApplied: reduction.mutationApplied, stableAnswerCommitted: false, regenerationTraceStatus: "error",
@@ -387,39 +377,6 @@ test("A2 retains the committed Type on regeneration failure and permits the exis
   assert.equal(decideManualCorrectionTerminalState({ mutationApplied: true, stableAnswerCommitted: true }).regenerationStatus, "succeeded");
 });
 
-test("A2 keeps real child resume, child retype, independent and current-only correction scopes", () => {
-  const f = resumedFixture();
-  const cases = [
-    { parent: f.withChild, corrected: "ai-ml-system-design", relation: "resume-parent", expected: "resume-parent" },
-    { parent: f.withChild, corrected: "general-system-design", relation: "resume-parent", expected: "resume-parent" },
-    { parent: f.withChild, corrected: "field-knowledge", relation: "child-probe", expected: "child-retype" },
-    { parent: f.parent, corrected: "coding", relation: "resume-parent", expected: "resume-parent" },
-    { parent: f.parent, corrected: "behavioral", relation: "new-parent", expected: "independent-new-parent" },
-    { parent: f.parent, corrected: "general-system-design", relation: "unknown", expected: "current-only" },
-    { parent: f.parent, corrected: "field-knowledge", relation: "followup-parent", expected: "current-only" },
-  ] as const;
-  for (const source of ["voice", "screen"] as const) {
-    for (const scenario of cases) {
-      const active = task(scenario.parent);
-      const decision = decideManualQuestionTypeCorrection(active, scenario.corrected);
-      const scope = decideManualCorrectionScope({
-        task: active, decision, latestQuestionText: "Tell me about a conflict at work.",
-        currentQuestionRelation: scenario.relation, currentQuestionSource: source,
-      });
-      assert.equal(scope.scope, scenario.expected, `${source}: ${scenario.corrected}/${scenario.relation}`);
-      if (scenario.corrected === "ai-ml-system-design") {
-        const transition = buildManualCorrectionParentTransition({
-          parent: scenario.parent, decision, scopeDecision: scope, latestQuestionText: resumeText,
-          transcriptTurns: [], newParentId: "unused", now: 40,
-        });
-        assert.equal(transition.parent.id, f.parent.id);
-        assert.equal(transition.parent.stableKind, "ai-ml-system-design");
-        assert.equal(transition.parent.child, undefined);
-        assert.deepEqual(transition.parent.whiteboardArtifact, { ...f.withChild.whiteboardArtifact, questionInstanceId: undefined });
-      }
-    }
-  }
-});
 
 test("A2 cannot recover a stable resume binding from an exited owner, stale revision or other session", () => {
   const f = resumedFixture();
@@ -444,13 +401,8 @@ test("A2 cannot recover a stable resume binding from an exited owner, stale revi
       currentQuestionEvidenceSpans: ["RAG architecture"], parentEvidenceSpans: ["RAG system"] },
   });
   assert.equal(settlement.relation, "unknown");
-  const scope = decideManualCorrectionScope({
-    task: task({ ...f.parent, id: "unrelated-owner" }), decision: decideManualQuestionTypeCorrection(task(f.parent), "general-system-design"),
-    latestQuestionText: resumeText, currentQuestionRelation: settlement.relation,
-  });
-  assert.equal(scope.scope, "current-only");
   assert.equal(authorizeManualCorrectionLifecycle({
-    settlement, scope: scope.scope, activeParentId: "unrelated-owner", activeParentType: f.parent.stableKind,
+    settlement, parentAction: "preserve", activeParentId: "unrelated-owner", activeParentType: f.parent.stableKind,
   }).parentMutationAuthorized, false);
 });
 

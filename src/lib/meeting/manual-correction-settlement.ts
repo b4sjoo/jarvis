@@ -13,8 +13,7 @@ import {
   normalizeCanonicalQuestionType,
   type CanonicalQuestionType,
 } from "./task-taxonomy.js";
-import type { ManualCorrectionScope } from "./types.js";
-import { authorizeManualCorrectionIntent, type ManualCorrectionCapabilityContext, type ManualCorrectionIntent } from "./manual-correction-intent.js";
+import { authorizeManualCorrectionIntent, type ManualCorrectionCapability, type ManualCorrectionCapabilityContext, type ManualCorrectionIntent } from "./manual-correction-intent.js";
 
 export function settleManualCorrectionIntent(input: {
   operationId: string;
@@ -60,7 +59,7 @@ export function settleManualCorrectionIntent(input: {
     authorized: true as const,
     capability,
     settlement: capability.intent.kind === "retype-parent"
-      ? authorizeManualCorrectionLifecycle({ settlement, scope: capability.scope,
+      ? authorizeManualCorrectionLifecycle({ settlement, parentAction: capability.action,
           activeParentId: runtime.parent?.id, activeParentType: runtime.parent?.stableKind })
       : settlement,
   };
@@ -86,7 +85,7 @@ export interface ManualCorrectionRelationAdmissionDecision {
 
 export function authorizeManualCorrectionLifecycle(input: {
   settlement: CurrentQuestionSettlementDecision;
-  scope: ManualCorrectionScope;
+  parentAction: ManualCorrectionCapability["action"];
   activeParentId?: string;
   activeParentType?: unknown;
 }): CurrentQuestionSettlementDecision {
@@ -101,7 +100,7 @@ export function authorizeManualCorrectionLifecycle(input: {
     input.settlement.relation === "followup-parent" ||
     input.settlement.relation === "resume-parent";
   if (
-    input.scope !== "same-question-retype" ||
+    input.parentAction !== "retype" ||
     !relationSupportsCorrectionRetype ||
     !input.activeParentId ||
     input.settlement.activeParentId !== input.activeParentId ||

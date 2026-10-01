@@ -159,7 +159,8 @@ export type SettledAdvisorExecutionPlanRejectionReason =
   | "expected-parent-mismatch"
   | "expected-parent-revision-mismatch"
   | "post-mutation-parent-mismatch"
-  | "post-mutation-parent-revision-mismatch";
+  | "post-mutation-parent-revision-mismatch"
+  | "post-mutation-parent-type-mismatch";
 
 export type SettledAdvisorExecutionPlanAuthorizationStage =
   | "pre-task-mutation"
@@ -620,7 +621,8 @@ export function buildSettledAdvisorExecutionPlan(input: {
   subtaskIntent?: InterviewSubtaskIntent;
   explicitTaskMutationCommand?: TaskLifecycleCommand;
   taskMutationCommittedBeforeAdvisor?: boolean;
-  expectedActiveMeetingTask?: ActiveMeetingTask;
+  // null captures an explicitly empty pre-mutation topology; omitted means infer it.
+  expectedActiveMeetingTask?: ActiveMeetingTask | null;
   responseAuthorityId?: string;
   promptCurrentQuestionSourceHash?: string;
   requiresVision?: boolean;
@@ -860,11 +862,11 @@ export function buildSettledAdvisorExecutionPlan(input: {
           }),
         });
   const expectedParentId =
-    input.expectedActiveMeetingTask?.parent.id ??
+    input.expectedActiveMeetingTask === null ? undefined : input.expectedActiveMeetingTask?.parent.id ??
     input.activeMeetingTask?.parent.id ??
     input.settlement.activeParentId;
   const expectedParentRevision =
-    input.expectedActiveMeetingTask?.parent.revisions ??
+    input.expectedActiveMeetingTask === null ? undefined : input.expectedActiveMeetingTask?.parent.revisions ??
     input.activeMeetingTask?.parent.revisions ??
     input.settlement.activeParentRevision;
   const postMutationParentId = taskSnapshot?.parent.id;
@@ -1162,6 +1164,10 @@ export function authorizeSettledAdvisorExecutionPlan(input: {
       rejectionReasons.push(
         "post-mutation-parent-revision-mismatch"
       );
+    }
+    if (normalizeCanonicalQuestionType(input.plan.taskSnapshot?.parent.questionType) !==
+      normalizeCanonicalQuestionType(input.currentActiveMeetingTask?.parent.questionType)) {
+      rejectionReasons.push("post-mutation-parent-type-mismatch");
     }
   } else {
     if (

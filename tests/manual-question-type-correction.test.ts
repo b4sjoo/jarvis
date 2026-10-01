@@ -6,11 +6,10 @@ import test from "node:test";
 import { createProvisionalCurrentQuestion } from "../src/lib/meeting/current-question-settlement.js";
 import {
   applyManualQuestionTypeCorrectionToParent,
-  buildManualCorrectionParentTransition,
+  buildBoundedParentContextHandoff,
   classifyManualCorrectionTarget,
   decideManualCorrectionTerminalState,
   decideManualQuestionTypeCorrection,
-  decideManualCorrectionScope,
   decideProvisionalQuestionTypeCorrection,
   hasManualQuestionTypeCorrectionPresentationTarget,
   markManualCorrectionTargetResolved,
@@ -90,7 +89,7 @@ test("reauthorizes correction-owned parent retypes without changing relation", (
   }).settlement;
   const projected = authorizeManualCorrectionLifecycle({
     settlement: { ...settled, parentMutationAuthorized: false },
-    scope: "same-question-retype",
+    parentAction: "retype",
     activeParentId: "parent-design",
     activeParentType: "general-system-design",
   });
@@ -120,7 +119,7 @@ test("reauthorizes correction-owned parent retypes without changing relation", (
   }).settlement;
   const relatedProjected = authorizeManualCorrectionLifecycle({
     settlement: relatedFollowup,
-    scope: "same-question-retype",
+    parentAction: "retype",
     activeParentId: "parent-design",
     activeParentType: "general-system-design",
   });
@@ -140,7 +139,7 @@ test("reauthorizes correction-owned parent retypes without changing relation", (
   assert.equal(
     authorizeManualCorrectionLifecycle({
       settlement: { ...settled, parentMutationAuthorized: false },
-      scope: "independent-new-parent",
+      parentAction: "create",
       activeParentId: "parent-design",
       activeParentType: "general-system-design",
     }).parentMutationAuthorized,
@@ -148,15 +147,28 @@ test("reauthorizes correction-owned parent retypes without changing relation", (
   );
 });
 
+test("the still-live bounded handoff retains sourced scale and excludes subsystem QPS", () => {
+  const parent = makeInterviewParent({ stableKind: "general-system-design" });
+  const handoff = buildBoundedParentContextHandoff({ parent, sourceQuestionId: "q2",
+    parentSourceQuestion: "Design a food delivery app", latestQuestionText: "Add recommendations to this app",
+    transcriptTurns: [
+      { id: "global", speaker: "them", text: "The food delivery app serves 10 million users.", source: "system-audio", isFinal: true, startedAt: 1, endedAt: 2 },
+      { id: "subsystem", speaker: "them", text: "The payment service needs 10000 QPS.", source: "system-audio", isFinal: true, startedAt: 3, endedAt: 4 },
+    ] });
+  assert.deepEqual(handoff.sharedScenarioContext.applicableScaleAssumptions?.map(item => item.sourceTurnId), ["global"]);
+  assert.ok(handoff.excludedContextKinds.includes("subsystem-qps"));
+  assert.ok(handoff.excludedContextKinds.includes("generated-answers"));
+});
+
 test("shares one correction lifecycle commit boundary across correction paths", () => {
   const source = readFileSync("src/hooks/useMeetingAssistant.ts", "utf8");
   assert.equal(
-    source.match(/commitCorrectionLifecycleWithManager\(/g)?.length,
+    source.match(/commitPlannedTaskRuntimeTransition\(/g)?.length,
     3
   );
   assert.match(
     source,
-    /prepareManualCorrectionIntentTransition\([\s\S]*commitCorrectionLifecycleWithManager\(/
+    /prepareManualCorrectionIntentTransition\([\s\S]*commitPlannedTaskRuntimeTransition\(/
   );
   assert.match(
     source,
@@ -164,7 +176,7 @@ test("shares one correction lifecycle commit boundary across correction paths", 
   );
   assert.match(
     source,
-    /correctionOwnedResettlement\?\.parentMutationAuthorized[\s\S]*commitCorrectionLifecycleWithManager\(/
+    /correctionOwnedResettlement\?\.parentMutationAuthorized[\s\S]*commitPlannedTaskRuntimeTransition\(/
   );
 });
 
@@ -178,7 +190,7 @@ test("hands a no-parent Screen correction to Advisor from its committed source",
     "const correctionSourceAdmission ="
   );
   const lifecycleCommitIndex = correction.indexOf(
-    "const lifecycleCommit = commitCorrectionLifecycleWithManager"
+    "const lifecycleCommit = commitPlannedTaskRuntimeTransition"
   );
 
   assert.ok(sourceAdmissionIndex >= 0);
@@ -694,28 +706,6 @@ test("hides correction controls when no current source-owned question exists", (
   );
 });
 
-test("keeps an unsettled Field Knowledge correction current-only", () => {
-  const task = makeActiveTask({ questionType: "coding" });
-  const decision = decideManualQuestionTypeCorrection(
-    task,
-    "field-knowledge"
-  );
-  const scope = decideManualCorrectionScope({
-    task,
-    decision,
-    lineage: makeLineage("turn-field"),
-    latestQuestionText: "What does LRU stand for?",
-    currentQuestionRelation: "unknown",
-  });
-
-  assert.equal(decision.noOp, false);
-  assert.equal(decision.target, "parent");
-  assert.equal(scope.scope, "current-only");
-  assert.equal(
-    scope.reason,
-    "unknown-question-relation-unsettled"
-  );
-});
 
 test("keeps current question lineage authoritative even when a parent is active", () => {
   const lineage = {
@@ -877,155 +867,9 @@ test("PC4 canonical correction target retains its source birth epoch after Pause
   }
 });
 
-test("keeps a same-origin system-design correction on the existing parent", () => {
-  const task = makeActiveTask({ questionType: "general-system-design" });
-  task.parent.startTurnId = "turn_origin";
-  const decision = decideManualQuestionTypeCorrection(
-    task,
-    "ai-ml-system-design"
-  );
-  const scope = decideManualCorrectionScope({
-    task,
-    decision,
-    lineage: makeLineage("turn_origin"),
-    latestQuestionText: "Design a RAG system for trip planning.",
-    parentQuestionText: "Design a RAG system for trip planning.",
-    classifierConfidence: 0.9,
-  });
 
-  assert.equal(scope.scope, "same-question-retype");
-  assert.equal(scope.currentQuestionIsParentOrigin, true);
-});
 
-test("keeps a same-origin screen correction on the existing parent", () => {
-  const task = makeActiveTask({ questionType: "general-system-design" });
-  task.parent.startObservationId = "obs_origin";
-  const decision = decideManualQuestionTypeCorrection(
-    task,
-    "ai-ml-system-design"
-  );
-  const scope = decideManualCorrectionScope({
-    task,
-    decision,
-    lineage: {
-      ...makeLineage(""),
-      triggerTurnId: undefined,
-    },
-    latestQuestionText: "Design a RAG system for trip planning.",
-    parentQuestionText: "Design a RAG system for trip planning.",
-    classifierConfidence: 0.9,
-    currentQuestionMatchesParentOrigin: true,
-  });
 
-  assert.equal(scope.scope, "same-question-retype");
-  assert.equal(scope.currentQuestionIsParentOrigin, true);
-});
-
-test("keeps standalone correction current-only without relation authority", () => {
-  const task = makeActiveTask({ questionType: "general-system-design" });
-  task.parent.topic = "Design a ride-sharing app with location tracking";
-  task.parent.startTurnId = "turn_ride_share";
-  const decision = decideManualQuestionTypeCorrection(
-    task,
-    "ai-ml-system-design"
-  );
-  const scope = decideManualCorrectionScope({
-    task,
-    decision,
-    lineage: makeLineage("turn_travel_agent"),
-    latestQuestionText:
-      "Design a self-evolving travel recommendation agent.",
-    classifierConfidence: 0.9,
-  });
-
-  assert.equal(scope.scope, "current-only");
-  assert.equal(scope.reason, "type-correction-parent-mutation-not-authorized");
-  assert.ok(scope.standaloneTaskScore >= 3);
-  assert.ok(scope.continuityScore <= 0);
-  assert.ok(
-    scope.continuityEvidence.includes("no-shared-product-entity-or-data")
-  );
-});
-
-test("retypes a related parent when the corrected type cannot be its child", () => {
-  const task = makeActiveTask({ questionType: "general-system-design" });
-  task.parent.topic = "How would you design the indexing and serving path?";
-  task.parent.startTurnId = "turn_indexing";
-  const decision = decideManualQuestionTypeCorrection(
-    task,
-    "ai-ml-system-design"
-  );
-  const scope = decideManualCorrectionScope({
-    task,
-    decision,
-    lineage: makeLineage("turn_analytics"),
-    latestQuestionText:
-      "A future team may use a separate analytics store.",
-    parentQuestionText: task.parent.topic,
-    currentQuestionRelation: "followup-parent",
-    currentQuestionSource: "voice",
-  });
-
-  assert.equal(scope.currentQuestionIsParentOrigin, false);
-  assert.equal(scope.scope, "same-question-retype");
-  assert.equal(
-    scope.reason,
-    "related-corrected-type-reclassifies-active-parent"
-  );
-
-  const parent = makeInterviewParent({
-    id: "parent_indexing",
-    stableKind: "general-system-design",
-    topic: task.parent.topic,
-    startTurnId: "turn_indexing",
-    whiteboardArtifact: makeWhiteboard("general_sd"),
-  });
-  const transition = buildManualCorrectionParentTransition({
-    parent,
-    decision,
-    scopeDecision: scope,
-    correctedPlaybook: makePlaybook(
-      "ai-ml-system-design",
-      "requirement_clarification"
-    ),
-    latestQuestionText:
-      "A future team may use a separate analytics store.",
-    lineage: makeLineage("turn_analytics"),
-    transcriptTurns: [
-      makeTurn("turn_indexing", task.parent.topic),
-      makeTurn(
-        "turn_analytics",
-        "A future team may use a separate analytics store."
-      ),
-    ],
-    newParentId: "unused-parent",
-  });
-
-  assert.equal(transition.startedNewParent, false);
-  assert.equal(transition.parent.id, "parent_indexing");
-  assert.equal(transition.parent.stableKind, "ai-ml-system-design");
-  assert.equal(transition.parent.topic, task.parent.topic);
-  assert.equal(transition.parent.whiteboardArtifact, undefined);
-});
-
-for (const source of ["voice", "screen"] as const) {
-  test(`retypes an already resumed parent mainline for ${source}`, () => {
-    const task = makeActiveTask({ questionType: "ai-ml-system-design" });
-    const decision = decideManualQuestionTypeCorrection(task, "general-system-design");
-    const scope = decideManualCorrectionScope({
-      task,
-      decision,
-      lineage: makeLineage("turn_resume"),
-      latestQuestionText: "Back to the RAG architecture and serving path.",
-      currentQuestionRelation: "resume-parent",
-      currentQuestionSource: source,
-    });
-    assert.equal(scope.currentQuestionIsParentOrigin, false);
-    assert.equal(scope.currentQuestionIsChild, false);
-    assert.equal(scope.scope, "same-question-retype");
-    assert.equal(scope.reason, "related-corrected-type-reclassifies-active-parent");
-  });
-}
 
 test("authorizes a same-parent retype without rewriting historical resume topology", () => {
   const currentQuestion = createProvisionalCurrentQuestion({
@@ -1043,7 +887,7 @@ test("authorizes a same-parent retype without rewriting historical resume topolo
   });
   const authorized = authorizeManualCorrectionLifecycle({
     settlement,
-    scope: "same-question-retype",
+    parentAction: "retype",
     activeParentId: "parent-rag",
     activeParentType: "ai-ml-system-design",
   });
@@ -1053,366 +897,25 @@ test("authorizes a same-parent retype without rewriting historical resume topolo
   assert.equal(authorized.sourceHash, settlement.sourceHash);
   assert.equal(authorized.manualCorrectionRevision, 1);
   assert.equal(authorized.activeParentRevision, 4);
-  for (const scope of ["current-only", "resume-parent", "child-retype"] as const) {
+  for (const parentAction of ["preserve", "resume", "attach-child"] as const) {
     assert.equal(authorizeManualCorrectionLifecycle({
-      settlement, scope, activeParentId: "parent-rag", activeParentType: "ai-ml-system-design",
+      settlement, parentAction, activeParentId: "parent-rag", activeParentType: "ai-ml-system-design",
     }), settlement);
   }
   assert.equal(authorizeManualCorrectionLifecycle({
-    settlement, scope: "same-question-retype", activeParentId: "different-parent", activeParentType: "ai-ml-system-design",
+    settlement, parentAction: "retype", activeParentId: "different-parent", activeParentType: "ai-ml-system-design",
   }), settlement);
 });
 
-test("uses an authorized new-parent settlement instead of retyping a stale parent", () => {
-  const task = makeActiveTask({ questionType: "coding" });
-  task.parent.topic = "Implement a multiset data structure";
-  const decision = decideManualQuestionTypeCorrection(task, "behavioral");
-  const scope = decideManualCorrectionScope({
-    task,
-    decision,
-    lineage: makeLineage("screen:obs_behavioral"),
-    latestQuestionText:
-      "Tell me about a time you persuaded a skeptical stakeholder.",
-    classifierConfidence: 0.99,
-    currentQuestionRelation: "new-parent",
-    currentQuestionSource: "screen",
-  });
 
-  assert.equal(scope.scope, "independent-new-parent");
-  assert.equal(scope.reason, "authorized-new-parent-re-roots-current-question");
-});
 
-test("keeps a revision-stable parent origin as same-question retype", () => {
-  const task = makeActiveTask({ questionType: "general-system-design" });
-  task.parent.sourceQuestionUnitId = "lqu-parent";
-  task.parent.sourceQuestionRevision = 1;
-  const decision = decideManualQuestionTypeCorrection(
-    task,
-    "ai-ml-system-design"
-  );
-  const scope = decideManualCorrectionScope({
-    task,
-    decision,
-    lineage: makeLineage(task.parent.startTurnId ?? "turn-parent"),
-    latestQuestionText: "Design a URL shortener.",
-    currentQuestionMatchesParentOrigin: true,
-    currentQuestionRelation: "new-parent",
-    currentQuestionSource: "voice",
-  });
 
-  assert.equal(scope.scope, "same-question-retype");
-  assert.equal(scope.reason, "current-question-is-active-parent-origin");
-});
 
-test("keeps a relation-unsettled screen correction current-only", () => {
-  const task = makeActiveTask({ questionType: "coding" });
-  const decision = decideManualQuestionTypeCorrection(task, "behavioral");
-  const scope = decideManualCorrectionScope({
-    task,
-    decision,
-    lineage: makeLineage("screen:obs_behavioral"),
-    latestQuestionText:
-      "Tell me about a time you persuaded a skeptical stakeholder.",
-    classifierConfidence: 0.99,
-    currentQuestionRelation: "unknown",
-    currentQuestionSource: "screen",
-  });
 
-  assert.equal(scope.scope, "current-only");
-  assert.equal(scope.reason, "screen-question-relation-unsettled");
-});
 
-test("promotes a provisional question even when its relation is unsettled", () => {
-  const decision = decideProvisionalQuestionTypeCorrection("behavioral");
-  const scope = decideManualCorrectionScope({
-    decision,
-    lineage: makeLineage("screen:obs_behavioral"),
-    latestQuestionText:
-      "Tell me about a time you persuaded a skeptical stakeholder.",
-    classifierConfidence: 0.99,
-    currentQuestionRelation: "unknown",
-    currentQuestionSource: "screen",
-  });
 
-  assert.equal(scope.scope, "independent-new-parent");
-  assert.equal(
-    scope.reason,
-    "manual-correction-promotes-question-without-active-parent"
-  );
-});
 
-test("does not let a current-only correction mutate the active parent", () => {
-  const parent = makeInterviewParent({
-    id: "parent_coding",
-    stableKind: "coding",
-    topic: "Implement a multiset data structure",
-  });
-  const task = makeActiveTask({ questionType: "coding" });
-  const decision = decideManualQuestionTypeCorrection(task, "behavioral");
-  const scopeDecision = decideManualCorrectionScope({
-    task,
-    decision,
-    lineage: makeLineage("screen:obs_behavioral"),
-    latestQuestionText:
-      "Tell me about a time you persuaded a skeptical stakeholder.",
-    currentQuestionRelation: "unknown",
-    currentQuestionSource: "screen",
-  });
-  const transition = buildManualCorrectionParentTransition({
-    parent,
-    decision,
-    scopeDecision,
-    latestQuestionText:
-      "Tell me about a time you persuaded a skeptical stakeholder.",
-    transcriptTurns: [],
-    newParentId: "parent_behavioral",
-  });
 
-  assert.equal(transition.parent, parent);
-  assert.equal(transition.startedNewParent, false);
-  assert.equal(transition.previousParentId, "parent_coding");
-  assert.equal(transition.nextParentId, "parent_coding");
-  assert.deepEqual(transition.clearedContextFields, []);
-  assert.deepEqual(transition.preservedContextFields, [
-    "active-parent-read-only",
-    "current-question-type-authority",
-  ]);
-  assertPureParentPayload(transition.parent);
-});
-
-test("creates a linked parent for a recommendation extension of the same app", () => {
-  const task = makeActiveTask({ questionType: "general-system-design" });
-  task.parent.topic = "Design a food delivery app";
-  task.parent.startTurnId = "turn_food_delivery";
-  const decision = decideManualQuestionTypeCorrection(
-    task,
-    "ai-ml-system-design"
-  );
-  const scope = decideManualCorrectionScope({
-    task,
-    decision,
-    lineage: makeLineage("turn_food_recommendation"),
-    latestQuestionText:
-      "For this app, design a self-evolving food recommendation agent.",
-    classifierConfidence: 0.9,
-    currentQuestionRelation: "new-parent",
-  });
-
-  assert.equal(scope.scope, "linked-parent-extension");
-  assert.ok(scope.continuityScore >= 4);
-  assert.ok(scope.continuityEvidence.includes("explicit-same-system-marker"));
-});
-
-test("re-roots an independent correction without old answers, QPS, or artifacts", () => {
-  const parent = makeInterviewParent({
-    id: "parent_ride_share",
-    stableKind: "general-system-design",
-    topic: "Design a ride-sharing app",
-    startTurnId: "turn_ride_share",
-    whiteboardArtifact: makeWhiteboard("general_sd"),
-    phaseProgress: { deep_dive: true },
-  });
-  const task = makeActiveTask({ questionType: "general-system-design" });
-  task.parent.id = parent.id;
-  task.parent.topic = parent.topic;
-  task.parent.startTurnId = parent.startTurnId;
-  const decision = decideManualQuestionTypeCorrection(
-    task,
-    "ai-ml-system-design"
-  );
-  const lineage = makeLineage("turn_travel_agent");
-  const scopeDecision = decideManualCorrectionScope({
-    task,
-    decision,
-    lineage,
-    latestQuestionText:
-      "Design a self-evolving travel recommendation agent.",
-    classifierConfidence: 0.9,
-    currentQuestionRelation: "new-parent",
-  });
-
-  const transition = buildManualCorrectionParentTransition({
-    parent,
-    decision,
-    scopeDecision,
-    correctedPlaybook: makePlaybook(
-      "ai-ml-system-design",
-      "requirement_clarification"
-    ),
-    latestQuestionText:
-      "Design a self-evolving travel recommendation agent.",
-    lineage,
-    transcriptTurns: [
-      makeTurn("turn_ride_share", "Design a ride-sharing app"),
-      makeTurn("turn_scale", "Assume 10 million DAU"),
-      makeTurn("turn_qps", "Estimate GPS QPS"),
-      makeTurn("turn_payment", "How do we avoid double payment?"),
-      makeTurn(
-        "turn_travel_agent",
-        "Design a self-evolving travel recommendation agent."
-      ),
-    ],
-    newParentId: "parent_travel_agent",
-    now: now + 100,
-  });
-
-  assert.equal(transition.startedNewParent, true);
-  assert.equal(transition.previousParentId, "parent_ride_share");
-  assert.equal(transition.nextParentId, "parent_travel_agent");
-  assert.equal(transition.parent.parentContextHandoff, undefined);
-  assertPureParentPayload(transition.parent);
-  assert.ok(transition.clearedContextFields.includes("generated-answers"));
-  assert.deepEqual(transition.preservedContextFields, []);
-  assert.equal(transition.parent.whiteboardArtifact, undefined);
-  assert.equal(
-    transition.parent.promptTranscriptStartTurnId,
-    "turn_travel_agent"
-  );
-  assert.deepEqual(transition.parent.phaseProgress, {
-    requirement_clarification: true,
-  });
-});
-
-test("creates a bounded linked handoff without subsystem QPS or generated answers", () => {
-  const parent = makeInterviewParent({
-    id: "parent_food_delivery",
-    stableKind: "general-system-design",
-    topic: "Design a food delivery app",
-    startTurnId: "turn_food_delivery",
-    whiteboardArtifact: makeWhiteboard("general_sd"),
-  });
-  const task = makeActiveTask({ questionType: "general-system-design" });
-  task.parent.id = parent.id;
-  task.parent.topic = parent.topic;
-  task.parent.startTurnId = parent.startTurnId;
-  const decision = decideManualQuestionTypeCorrection(
-    task,
-    "ai-ml-system-design"
-  );
-  const lineage = makeLineage("turn_food_recommendation");
-  const latestQuestion =
-    "For this app, design a self-evolving food recommendation agent.";
-  const scopeDecision = decideManualCorrectionScope({
-    task,
-    decision,
-    lineage,
-    latestQuestionText: latestQuestion,
-    classifierConfidence: 0.9,
-    currentQuestionRelation: "new-parent",
-  });
-
-  const transition = buildManualCorrectionParentTransition({
-    parent,
-    decision,
-    scopeDecision,
-    correctedPlaybook: makePlaybook(
-      "ai-ml-system-design",
-      "requirement_clarification"
-    ),
-    latestQuestionText: latestQuestion,
-    lineage,
-    transcriptTurns: [
-      makeTurn("turn_food_delivery", "Design a food delivery app"),
-      makeTurn(
-        "turn_entities",
-        "The users browse restaurants and menus, then create orders."
-      ),
-      makeTurn("turn_scale", "Assume 10 million daily active users."),
-      makeTurn("turn_qps", "Order placement is 5000 QPS."),
-      makeTurn("turn_payment", "Use a payment idempotency key."),
-      makeTurn("turn_food_recommendation", latestQuestion),
-    ],
-    newParentId: "parent_food_recommendation",
-  });
-
-  const handoff = transition.parent.parentContextHandoff;
-  assert.equal(transition.startedNewParent, true);
-  assert.equal(handoff?.sourceParentId, "parent_food_delivery");
-  assert.equal(handoff?.sharedScenarioContext.productIdentity, "food delivery");
-  assert.deepEqual(handoff?.sharedScenarioContext.domainEntities, [
-    "users",
-    "restaurants",
-    "menus",
-    "orders",
-  ]);
-  assert.deepEqual(handoff?.sharedScenarioContext.applicableScaleAssumptions, [
-    {
-      value: "Assume 10 million daily active users.",
-      sourceTurnId: "turn_scale",
-    },
-  ]);
-  assert.doesNotMatch(JSON.stringify(handoff), /5000 QPS|payment|idempotency/i);
-  assertPureParentPayload(transition.parent);
-  assert.ok(transition.clearedContextFields.includes("generated-answers"));
-  assert.deepEqual(transition.preservedContextFields, [
-    "shared-product-identity",
-    "shared-domain-entities",
-    "applicable-source-backed-assumptions",
-  ]);
-  assert.ok(handoff?.excludedContextKinds.includes("generated-answers"));
-  assert.equal(transition.parent.whiteboardArtifact, undefined);
-});
-
-test("keeps elliptical type corrections current-only without relation authority", () => {
-  const task = makeActiveTask({ questionType: "general-system-design" });
-  task.parent.topic = "Design a ride-sharing app";
-  task.parent.startTurnId = "turn_origin";
-  const decision = decideManualQuestionTypeCorrection(
-    task,
-    "ai-ml-system-design"
-  );
-
-  for (const [turnId, text] of [
-    ["turn_scale", "How would you scale it?"],
-    ["turn_language", "In Python."],
-    ["turn_qps", "Estimate QPS."],
-  ]) {
-    const scope = decideManualCorrectionScope({
-      task,
-      decision,
-      lineage: makeLineage(turnId),
-      latestQuestionText: text,
-    });
-    assert.equal(scope.scope, "current-only", text);
-    assert.ok(scope.standaloneTaskScore < 3, text);
-  }
-});
-
-test("preserves child retype and resume-parent scopes", () => {
-  const child = makeChild({
-    questionType: "field-knowledge",
-    basedOnTurnIds: ["turn_child"],
-  });
-  const task = makeActiveTask({
-    questionType: "ai-ml-system-design",
-    child,
-  });
-  const childDecision = decideManualQuestionTypeCorrection(task, "coding");
-  const resumeDecision = decideManualQuestionTypeCorrection(
-    task,
-    "ai-ml-system-design"
-  );
-
-  assert.equal(
-    decideManualCorrectionScope({
-      task,
-      decision: childDecision,
-      lineage: makeLineage("turn_child"),
-      latestQuestionText: child.question,
-    }).scope,
-    "child-retype"
-  );
-  assert.equal(
-    decideManualCorrectionScope({
-      task,
-      decision: resumeDecision,
-      lineage: makeLineage("turn_child"),
-      latestQuestionText: child.question,
-      currentQuestionRelation: "resume-parent",
-    }).scope,
-    "resume-parent"
-  );
-});
 
 test("resumes the existing parent when a child probe is corrected to the parent type", () => {
   const whiteboard = makeWhiteboard("ml_sd");
@@ -1446,63 +949,6 @@ test("resumes the existing parent when a child probe is corrected to the parent 
   assertPureParentPayload(next);
 });
 
-test("child retype and resume keep parent output clear intent unchanged", () => {
-  const child = makeChild({
-    questionType: "field-knowledge",
-    basedOnTurnIds: ["turn_child"],
-  });
-  const parent = makeInterviewParent({
-    stableKind: "ai-ml-system-design",
-    child,
-  });
-  const task = makeActiveTask({ questionType: "ai-ml-system-design", child });
-
-  for (const correctedType of ["coding", "ai-ml-system-design"] as const) {
-    const decision: ManualQuestionTypeCorrectionDecision = {
-      ...decideManualQuestionTypeCorrection(task, correctedType),
-      target: correctedType === "coding" ? "child" : "resume-parent",
-    };
-    const scopeDecision = decideManualCorrectionScope({
-      task,
-      decision,
-      lineage: makeLineage("turn_child"),
-      latestQuestionText: child.question,
-      currentQuestionRelation:
-        correctedType === "coding" ? "child-probe" : "resume-parent",
-    });
-    const transition = buildManualCorrectionParentTransition({
-      parent,
-      decision,
-      scopeDecision,
-      correctedPlaybook: makePlaybook("coding", "implementation_validation"),
-      latestQuestionText: child.question,
-      transcriptTurns: [],
-      newParentId: "unused-parent",
-      now: now + 10,
-    });
-
-    assert.deepEqual(transition.clearedContextFields, []);
-    assert.deepEqual(transition.preservedContextFields, [
-      "parent-id",
-      "question-origin",
-    ]);
-    assert.equal(transition.startedNewParent, false);
-    assert.equal(transition.parent.revisions, parent.revisions + 1);
-    assertPureParentPayload(transition.parent);
-    if (correctedType === "coding") {
-      assert.equal(scopeDecision.scope, "child-retype");
-      assert.equal(transition.parent.child?.id, child.id);
-      assert.equal(transition.parent.child?.questionType, "coding");
-      assert.equal(
-        transition.parent.child?.phaseState?.phase,
-        "implementation_validation"
-      );
-    } else {
-      assert.equal(scopeDecision.scope, "resume-parent");
-      assert.equal(transition.parent.child, undefined);
-    }
-  }
-});
 
 test("retypes a parent in place while resetting incompatible runtime state", () => {
   const parent = makeInterviewParent({
@@ -1583,56 +1029,6 @@ test("returns only parent state across compatible system-design retypes", () => 
   assertPureParentPayload(next);
 });
 
-test("clears a cross-type whiteboard even for the same source-owned question", () => {
-  const parent = makeInterviewParent({
-    stableKind: "general-system-design",
-    startTurnId: "turn_origin",
-    whiteboardArtifact: makeWhiteboard("general_sd"),
-  });
-  const task = makeActiveTask({ questionType: "general-system-design" });
-  task.parent.startTurnId = "turn_origin";
-  const decision = decideManualQuestionTypeCorrection(
-    task,
-    "ai-ml-system-design"
-  );
-  const lineage = makeLineage("turn_origin");
-  const scopeDecision = decideManualCorrectionScope({
-    task,
-    decision,
-    lineage,
-    latestQuestionText: "Design a RAG system for trip planning.",
-  });
-
-  const transition = buildManualCorrectionParentTransition({
-    parent,
-    decision,
-    scopeDecision,
-    correctedPlaybook: makePlaybook(
-      "ai-ml-system-design",
-      "requirement_clarification"
-    ),
-    latestQuestionText: "Design a RAG system for trip planning.",
-    lineage,
-    transcriptTurns: [
-      makeTurn("turn_origin", "Design a RAG system for trip planning."),
-    ],
-    newParentId: "unused_parent_id",
-  });
-
-  assert.equal(transition.startedNewParent, false);
-  assert.equal(transition.parent.id, parent.id);
-  assertPureParentPayload(transition.parent);
-  assert.deepEqual(transition.clearedContextFields, [
-    "generated-answers",
-    "unsupported-fact-anchors",
-    "incompatible-project-binding",
-  ]);
-  assert.deepEqual(transition.preservedContextFields, [
-    "parent-id",
-    "question-origin",
-  ]);
-  assert.equal(transition.parent.whiteboardArtifact, undefined);
-});
 
 function assertPureParentPayload(parent: ActiveInterviewParent) {
   assert.equal("latestUsefulAnswer" in parent, false);

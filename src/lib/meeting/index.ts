@@ -115,7 +115,6 @@ export * from "./suggestion-task";
 export * from "./source-owned-transition-transaction";
 export * from "./task-taxonomy";
 export * from "./task-boundary-transaction";
-export * from "./task-lifecycle-reducer";
 export * from "./taxonomy-adjudication";
 export * from "./trace";
 export * from "./transient-personal-status";

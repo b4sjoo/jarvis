@@ -4,6 +4,26 @@
   "updatedAt": "2026-09-30",
   "entries": [
     {
+      "id": "correction-private-reduction-and-scope-decision",
+      "symbolOrSurface": "Correction-only lifecycle reducer, duplicate transaction projection and obsolete inferred manual scope policy",
+      "verdict": "migrate-then-delete",
+      "ownerTaskId": 174,
+      "replacement": "Manager prepare/commit, common Plan compiler/authorization, explicit human capability and existing origin-owned Term resettlement",
+      "persistedDataImpact": "recording",
+      "historicalReader": "Existing taskLifecycle/correctionOwned trace fields and Human V2 readers remain; no raw records or labels are rewritten.",
+      "proofCommands": ["npm test", "npm run build", "npm run verify:architecture"],
+      "deletionGate": "Necessary command invariants moved first; Type/Term use one prepared result and Plan without private re-reduction; current intent, source and evaluation consumers pass.",
+      "rollbackBoundary": "The shared command-validation safety commit remains independently applicable when orchestration migration is reverted.",
+      "status": "deleted",
+      "forbiddenPatterns": [
+        "function commitCorrectionLifecycleWithManager(",
+        "export function createTaskLifecycleTransaction(",
+        "export function reduceTaskLifecycleTransaction(",
+        "export function decideManualCorrectionScope(",
+        "export function buildManualCorrectionParentTransition("
+      ]
+    },
+    {
       "id": "empty-meeting-context-and-response-only-scope",
       "symbolOrSurface": "Unpopulated Meeting summary/profile/glossary plumbing and obsolete response-only scope factories",
       "verdict": "migrate-then-delete",
