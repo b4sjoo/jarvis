@@ -22,6 +22,8 @@ test("Task170 production React receivers, shared renderer and embedded Focus wit
   const normalAnswerSections = [];
   let selectedLabelsStart, selectedLabelsEnd;
   let phaseNoticeExpression;
+  let normalWhiteboardSection;
+  let normalProjectChoice;
   const visit = (node) => {
     if (ts.isPropertyAssignment(node) && node.name.getText(mainAst) === "phaseOutputNotice" &&
         node.initializer.getText(mainAst).includes("meeting.phaseOutputNotice")) phaseNoticeExpression = node.initializer.getText(mainAst);
@@ -31,12 +33,20 @@ test("Task170 production React receivers, shared renderer and embedded Focus wit
       node.children.some(child => ts.isJsxSelfClosingElement(child) && child.tagName.getText(mainAst) === "PhaseOutputNotice" && child.getText(mainAst).includes("focusSnapshot.phaseOutputNotice"))) {
       normalAnswerSections.push(node.getText(mainAst));
     }
+    if (ts.isJsxElement(node) && node.openingElement.tagName.getText(mainAst) === "section" &&
+      node.children.some(child => ts.isJsxSelfClosingElement(child) && child.tagName.getText(mainAst) === "WhiteboardViewer" && child.getText(mainAst).includes("focusSnapshot.sections.whiteboard"))) {
+      normalWhiteboardSection = node.getText(mainAst);
+    }
+    if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(mainAst) === "ProjectChoiceControl" &&
+        node.getText(mainAst).includes("onSelect={handleProjectChoice}")) normalProjectChoice = node.getText(mainAst);
     ts.forEachChild(node, visit);
   };
   visit(mainAst);
   assert.equal(normalAnswerSections.length, 2, "both production Normal Answer layouts");
   assert.ok(selectedLabelsStart && selectedLabelsEnd > selectedLabelsStart);
   assert.ok(phaseNoticeExpression);
+  assert.ok(normalWhiteboardSection, "actual Normal Whiteboard section");
+  assert.ok(normalProjectChoice, "actual Normal project choice control");
   const selectedLabels = mainSource.slice(selectedLabelsStart, selectedLabelsEnd) + ";";
   const mocks = {
     "@/hooks": "export const useMeetingAssistant = () => {}; export const useShortcuts = () => {}; export const useWindowResize = () => {};",
@@ -55,11 +65,13 @@ test("Task170 production React receivers, shared renderer and embedded Focus wit
     import React from 'react';
     import { createRoot } from 'react-dom/client';
     import { MeetingFocusWindow } from './src/pages/app/components/meeting/focus-window';
-    import { FocusModePanel, NormalAnswerFixture, SelectedDisplayLabelsFixture } from './src/pages/app/components/meeting/index';
+    import { FocusModePanel, NormalAnswerFixture, SelectedDisplayLabelsFixture, NormalWhiteboardFixture, NormalProjectChoiceFixture, ClarifyingActionButtons, CurrentQuestionTypeControl } from './src/pages/app/components/meeting/index';
+    import { getManualCorrectionCapabilities } from './src/lib/meeting/manual-correction-intent';
+    import { buildClarifyingOptionDisplayModel } from './src/lib/meeting/clarifying-options';
+    import { validateWhiteboardRenderCandidate, updateWhiteboardArtifactFromAnswer } from './src/lib/meeting/whiteboard-artifact';
     import { EMPTY_MEETING_FOCUS_SNAPSHOT as empty } from './src/lib/meeting/focus-window';
     import { createMeetingFocusPublisher } from './src/lib/meeting/focus-window-protocol';
     import { createMeetingFocusDisplayModel } from './src/lib/meeting/focus-display';
-    import { getManualCorrectionCapabilities } from './src/lib/meeting/manual-correction-intent';
     import { createPhaseOutputUiFixture } from './tests/helpers/phase-output-ui-fixture';
     import { createFocusOwnerDisplayFixture } from './tests/helpers/focus-owner-display-fixture';
     import { buildMeetingAnswerDisplayModel } from './src/lib/meeting/meeting-answer-display';
@@ -95,12 +107,26 @@ test("Task170 production React receivers, shared renderer and embedded Focus wit
       if(action.type==='request-correction-menu') void publisher.respondCorrectionMenu(action,readCorrectionMenu(action.correctedType,action.displayTarget));
     }
     let publisher = createMeetingFocusPublisher({transport:publisherEndpoint, publisherInstanceId:'A', onAction, onError:error=>errors.push(error.message)});
-    const roots = Object.fromEntries(['answer','controls','embedded','normal-technical','normal-general'].map(id=>[id,createRoot(document.getElementById(id))]));
+    const roots = Object.fromEntries(['answer','controls','embedded','normal-technical','normal-general','normal-options','normal-whiteboard','normal-type','normal-project'].map(id=>[id,createRoot(document.getElementById(id))]));
     roots.answer.render(<MeetingFocusWindow kind='answer'/>); roots.controls.render(<MeetingFocusWindow kind='controls'/>);
     function renderEmbedded(d) {
       const noop = () => {};
+      const typeCorrectionMenu={displayTarget:d.advisePin?.target??{sessionId:''},requestMenu:readCorrectionMenu,
+        onSelect:selection=>actions.push({type:'correct-question-type',correctedType:selection.correctedType,
+          displayTarget:selection.displayTarget,correctionTarget:selection.target,correctionIntent:selection.option.intent})};
+      roots['normal-type'].render(<CurrentQuestionTypeControl effectiveType={d.effectiveQuestionType} menu={typeCorrectionMenu}/>);
       roots['normal-technical'].render(<NormalAnswerFixture focusSnapshot={d} technical={true}/>);
       roots['normal-general'].render(<NormalAnswerFixture focusSnapshot={d} technical={false}/>);
+      roots['normal-whiteboard'].render(<NormalWhiteboardFixture focusSnapshot={d}/>);
+      roots['normal-project'].render(<NormalProjectChoiceFixture focusSnapshot={d}
+        handleProjectChoice={selection=>actions.push({type:'clarifying-answer',answer:'option',option:selection.option,
+          displayTarget:selection.displayTarget,projectChoice:{key:selection.key,reselect:selection.reselect}})}/>);
+      roots['normal-options'].render(<ClarifyingActionButtons isBusy={d.isBusy}
+        selectedAnswerLabel={d.selectedClarifyingAnswerLabel} selectionState={d.clarifyingSelectionState}
+        selectionMessage={d.clarifyingSelectionMessage} isTaskSwitchClarifyingQuestion={false}
+        clarifyingOptions={d.sections.clarifyingOptions} showBooleanFallback={d.showClarifyingBooleanFallback}
+        onClarifyingAnswer={(answer,option)=>actions.push({type:'clarifying-answer',answer,option})}
+        onNewTaskConfirmation={noop} onSameTaskConfirmation={noop} onDismiss={noop}/>);
       roots.embedded.render(<FocusModePanel suggestionSections={d.sections} codingArtifactCached={false} whiteboardArtifactCached={false}
         advisePin={d.advisePin} onToggleAdvisePin={()=>actions.push({type:'toggle-advise-pin',displayTarget:d.advisePin?.target})}
         whiteboardViewKey={d.sections.whiteboardViewKey} hasCorrectableQuestion={d.hasCorrectableQuestion} effectiveQuestionType={d.effectiveQuestionType}
@@ -109,16 +135,35 @@ test("Task170 production React receivers, shared renderer and embedded Focus wit
         speechCorrectionInput='' speechCorrections={[]} status='listening' error={null} audioInputLiveness={null} isBusy={d.isBusy} audioControl={d.audioControl}
         showClarifyingQuestion={d.showClarifyingQuestion} clarifyingQuestion={d.clarifyingQuestion} clarifyingOptions={d.sections.clarifyingOptions}
         showClarifyingBooleanFallback={d.showClarifyingBooleanFallback} isTaskSwitchClarifyingQuestion={d.isTaskSwitchClarifyingQuestion}
-        typeCorrectionMenu={{displayTarget:d.advisePin?.target??{sessionId:''},requestMenu:readCorrectionMenu,
-          onSelect:selection=>actions.push({type:'correct-question-type',source:'focus-mode',correctedType:selection.correctedType,
-            displayTarget:selection.displayTarget,correctionTarget:selection.target,correctionIntent:selection.option.intent})}} onForceAdvise={noop} onSpeechCorrectionInputChange={noop} onSpeechCorrectionSubmit={noop} onSpeechCorrectionDeactivate={noop}
-        onToggleAudio={noop} onClarifyingAnswer={noop} onNewTaskConfirmation={noop} onSameTaskConfirmation={noop} onDismissClarifyingQuestion={noop} onBriefChange={noop} />);
+        selectedClarifyingAnswerLabel={d.selectedClarifyingAnswerLabel} clarifyingSelectionState={d.clarifyingSelectionState}
+        clarifyingSelectionMessage={d.clarifyingSelectionMessage}
+        typeCorrectionMenu={typeCorrectionMenu} onForceAdvise={noop} onSpeechCorrectionInputChange={noop} onSpeechCorrectionSubmit={noop} onSpeechCorrectionDeactivate={noop}
+        projectChoice={d.projectChoice} onProjectChoice={selection=>actions.push({type:'clarifying-answer',answer:'option',
+          option:selection.option,displayTarget:selection.displayTarget,projectChoice:{key:selection.key,reselect:selection.reselect}})}
+        onToggleAudio={noop} onClarifyingAnswer={(answer,option)=>actions.push({type:'clarifying-answer',answer,option})} onNewTaskConfirmation={noop} onSameTaskConfirmation={noop} onDismissClarifyingQuestion={noop} onBriefChange={noop} />);
     }
     window.__focus = {
       sent, actions, invokes, errors,
       release() { delayed = false; releases.splice(0).forEach(resolve=>resolve()); },
       registered() { return releases.length; },
       async publish(patch) { source = {...source,...patch, sections:{...source.sections,...patch.sections}}; const display = createMeetingFocusDisplayModel(source); renderEmbedded(display); await publisher.publish(display); },
+      async publishOptions(input) {
+        const model=buildClarifyingOptionDisplayModel(input);
+        await this.publish({showClarifyingQuestion:true,clarifyingQuestion:input.question,isBusy:false,
+          isTaskSwitchClarifyingQuestion:false,selectedClarifyingAnswerLabel:undefined,
+          clarifyingSelectionState:undefined,clarifyingSelectionMessage:undefined,
+          showClarifyingBooleanFallback:model.showBooleanFallback,sections:{clarifyingOptions:model.options}});
+        return model;
+      },
+      async whiteboardStates({dense,invalid}) {
+        const common={parentTaskId:'smoke-parent',parentQuestionType:'general-system-design',parentTopic:'Synthetic service architecture',phase:'design_framing',updateSource:'model-output'};
+        const valid=await validateWhiteboardRenderCandidate({whiteboard:dense,operationId:'smoke-valid'});
+        const first=updateWhiteboardArtifactFromAnswer({...common,finalContent:'Whiteboard:\\n'+dense,renderValidation:valid,now:1});
+        const rejected=await validateWhiteboardRenderCandidate({whiteboard:invalid,operationId:'smoke-invalid'});
+        const retained=updateWhiteboardArtifactFromAnswer({...common,existing:first,finalContent:'Whiteboard:\\n'+invalid,renderValidation:rejected,now:2});
+        const ascii=updateWhiteboardArtifactFromAnswer({...common,finalContent:'Whiteboard:\\n'+invalid,renderValidation:rejected,now:3});
+        return {valid,rejected,first,retained,ascii};
+      },
       display() { return createMeetingFocusDisplayModel(source); },
       async publishOwner(input) {
         const data = createFocusOwnerDisplayFixture(input);
@@ -149,7 +194,18 @@ test("Task170 production React receivers, shared renderer and embedded Focus wit
       builder.onResolve({ filter: /.*/ }, (args) => Object.hasOwn(mocks, args.path) ? { path: args.path, namespace: "fixture" } : undefined);
       builder.onLoad({ filter: /.*/, namespace: "fixture" }, (args) => ({ contents: mocks[args.path], loader: "tsx", resolveDir: root }));
       builder.onLoad({ filter: /meeting\/index\.tsx$/ }, (args) => ({ contents: readFileSync(args.path, "utf8") + `
-        export { FocusModePanel };
+        export { FocusModePanel, ClarifyingActionButtons, CurrentQuestionTypeControl };
+        export function NormalProjectChoiceFixture({focusSnapshot,handleProjectChoice}) {
+          const projectChoice=focusSnapshot.projectChoice;
+          const activeClarifyingSelection=focusSnapshot.selectedClarifyingAnswerLabel ? {
+            label:focusSnapshot.selectedClarifyingAnswerLabel,status:focusSnapshot.clarifyingSelectionState,
+          } : undefined;
+          return (${normalProjectChoice});
+        }
+        export function NormalWhiteboardFixture({focusSnapshot}) {
+          const whiteboardArtifactDisplay = {isCached:false};
+          return focusSnapshot.sections.whiteboard ? (${normalWhiteboardSection}) : null;
+        }
         export function SelectedDisplayLabelsFixture({meeting,adviseDisplay}) {
           const hasCorrectableQuestion = true;
           const activeTaskKind = meeting.activeMeetingTask?.parent.questionType;
@@ -177,7 +233,7 @@ test("Task170 production React receivers, shared renderer and embedded Focus wit
     const page = await browser.newPage({ viewport: { width: 1100, height: 900 } });
     page.setDefaultTimeout(5000);
     const errors = []; page.on("pageerror", (error) => { errors.push(error.message); t.diagnostic(error.message); });
-    await page.route("**/*", (route) => route.fulfill({ contentType: "text/html", body: '<div id="answer"></div><div id="controls"></div><div id="embedded" style="height:900px;display:flex"></div><div id="normal-technical"></div><div id="normal-general"></div>' }));
+    await page.route("**/*", (route) => route.fulfill({ contentType: "text/html", body: '<div id="answer"></div><div id="controls"></div><div id="embedded" style="height:900px;display:flex"></div><div id="normal-technical"></div><div id="normal-general"></div><div id="normal-options"></div><div id="normal-whiteboard"></div><div id="normal-type"></div><div id="normal-project"></div>' }));
     await page.goto("https://focus.fixture/");
     await page.addStyleTag({ content: css.build(scanner.scan()) + "body{position:static;overflow:auto;height:auto}" });
     await page.addScriptTag({ content: bundle.outputFiles[0].text });
@@ -327,9 +383,59 @@ test("Task170 production React receivers, shared renderer and embedded Focus wit
       await page.locator('#controls').getByPlaceholder('Correction: RAG not rec / Glean').waitFor();
       await page.waitForFunction(()=>window.__focus.ack('controls')?.publisherInstanceId==='B');
     });
+    await t.test("Normal/embedded/native Focus share same-type legal menus, cancellation and displayed target invalidation", async () => {
+      const target={sessionId:'menu-session',logicalQuestionUnitId:'lqu-A',logicalQuestionRevision:1};
+      await page.evaluate(target=>window.__focus.publish({hasCorrectableQuestion:true,effectiveQuestionType:'coding',
+        advisePin:{locked:true,backgroundUpdated:true,target}}),target);
+      let labels;
+      for(const surface of ['normal-type','embedded','controls']) {
+        const before=await page.evaluate(()=>window.__focus.actions.filter(a=>a.type==='correct-question-type').length);
+        await page.locator('#'+surface).getByRole('button',{name:'Coding',exact:true}).click();
+        const menu=page.getByRole('group',{name:'Correction actions'});
+        await menu.waitFor();
+        const currentLabels=await menu.getByRole('button').allTextContents();
+        assert(currentLabels.length>1);
+        if(labels) assert.deepEqual(currentLabels,labels); else labels=currentLabels;
+        assert.equal(await page.evaluate(()=>window.__focus.actions.filter(a=>a.type==='correct-question-type').length),before);
+        await page.getByRole('button',{name:'Cancel type correction',exact:true}).click();
+        await page.getByRole('button',{name:'Cancel type correction',exact:true}).waitFor({state:'hidden'});
+        assert.equal(await page.evaluate(()=>window.__focus.actions.filter(a=>a.type==='correct-question-type').length),before);
+      }
+      await page.locator('#controls').getByRole('button',{name:'Coding',exact:true}).click();
+      await page.getByRole('group',{name:'Correction actions'}).waitFor();
+      const originalRequest=await page.evaluate(()=>window.__focus.actions.at(-1));
+      assert.deepEqual(originalRequest.displayTarget,target);
+      await page.evaluate(()=>window.__focus.publish({latestTurnText:'Background B arrives'}));
+      await page.getByRole('group',{name:'Correction actions'}).getByRole('button').first().click();
+      const action=await page.evaluate(()=>window.__focus.actions.at(-1));
+      assert.deepEqual(action.displayTarget,target);
+      assert.equal(action.correctionTarget.logicalQuestionUnitId,'lqu-A');
+      await page.getByRole('group',{name:'Correction actions'}).waitFor({state:'hidden'});
+      await page.locator('#controls').getByRole('button',{name:'Coding',exact:true}).click();
+      await page.getByRole('group',{name:'Correction actions'}).waitFor();
+      await page.evaluate(()=>window.__focus.publish({advisePin:{locked:false,backgroundUpdated:false,
+        target:{sessionId:'menu-session',logicalQuestionUnitId:'lqu-B',logicalQuestionRevision:1}}}));
+      await page.getByRole('alert').filter({hasText:'The displayed question changed.'}).waitFor();
+      assert.equal(await page.getByRole('group',{name:'Correction actions'}).count(),0);
+      await page.getByRole('button',{name:'Cancel type correction',exact:true}).click();
+      await page.getByRole('button',{name:'Cancel type correction',exact:true}).waitFor({state:'hidden'});
+      await page.evaluate(target=>window.__focus.publish({advisePin:{locked:true,backgroundUpdated:true,target}}),target);
+      for(const width of [1100,420]) {
+        await page.setViewportSize({width,height:900});
+        await page.locator('#controls').getByRole('button',{name:'Coding',exact:true}).click();
+        const menu=page.getByRole('group',{name:'Correction actions'});
+        await menu.waitFor();
+        const bounds=await menu.evaluate(el=>({left:el.getBoundingClientRect().left,right:el.getBoundingClientRect().right,
+          overflow:el.scrollWidth>el.clientWidth+1}));
+        assert(bounds.left>=0 && bounds.right<=width && !bounds.overflow);
+        await page.getByRole('dialog').screenshot({path:path.join(artifactDirectory,'type-menu-'+width+'.png')});
+        await page.getByRole('button',{name:'Cancel type correction',exact:true}).click();
+        await page.getByRole('button',{name:'Cancel type correction',exact:true}).waitFor({state:'hidden'});
+      }
+      await page.setViewportSize({width:1100,height:900});
+    });
     await t.test("Term cancel and two-step type correction preserve identity; version errors preserve applied state", async () => {
-      await page.evaluate(()=>window.__focus.publish({advisePin:{locked:false,backgroundUpdated:false,target:{sessionId:'menu-session',logicalQuestionUnitId:'lqu-A',logicalQuestionRevision:1}},speechCorrections:[{id:'term-170',input:'RAG not rec',from:'rec',to:'RAG',appliedCount:1,activeQuestion:{disposition:'current-question-overlay',regenerationStatus:'running'}}]}));
-      await page.waitForFunction(()=>window.__focus.ack('controls')?.displayTarget?.sessionId==='menu-session');
+      await page.evaluate(()=>window.__focus.publish({speechCorrections:[{id:'term-170',input:'RAG not rec',from:'rec',to:'RAG',appliedCount:1,activeQuestion:{disposition:'current-question-overlay',regenerationStatus:'running'}}]}));
       await page.locator('#controls').getByRole('button',{name:'Stop correction rec',exact:true}).click();
       assert.deepEqual(await page.evaluate(()=>window.__focus.actions.at(-1)),{type:'deactivate-correction',correctionId:'term-170'});
       await page.locator('#controls').getByRole('button',{name:'Field',exact:true}).click();
@@ -428,6 +534,159 @@ test("Task170 production React receivers, shared renderer and embedded Focus wit
         assert.equal(await page.locator('#answer section, #embedded section').evaluateAll(elements=>elements.every(el=>el.getBoundingClientRect().right<=innerWidth)),true);
         assert.equal(await page.locator('#answer [data-streamdown="table-wrapper"] > div:last-child').evaluate(el=>{el.scrollLeft=100;return el.scrollLeft>0;}),true);
         await page.locator('#answer').screenshot({path:path.join(artifactDirectory,'task170-answer-'+width+'.png')});
+      }
+    });
+    await t.test("S63 actual option producers and Normal/Focus controls preserve option kind and single dispatch", async () => {
+      await page.setViewportSize({width:1100,height:900});
+      for (const input of [
+        {question:'Do you want me to continue?'},
+        {question:'Read path or write path?',options:[{id:'read',label:'Read path',value:'Read path'},
+          {id:'write',label:'Write path',value:'Write path'}]},
+      ]) {
+        const model=await page.evaluate(input=>window.__focus.publishOptions(input),input);
+        const label=model.showBooleanFallback?'Yes':'Read path';
+        for(const surface of ['normal-options','answer','embedded']) {
+          const container=page.locator('#'+surface);
+          const button=container.getByRole('button',{name:label,exact:true});
+          await button.waitFor();
+          if(!model.showBooleanFallback) assert.equal(await container.getByRole('button',{name:'Yes',exact:true}).count(),0);
+          const before=await page.evaluate(()=>window.__focus.actions.length);
+          await button.click();
+          await page.waitForFunction(count=>window.__focus.actions.length===count+1,before);
+          const action=await page.evaluate(()=>window.__focus.actions.at(-1));
+          assert.equal(action.answer,model.showBooleanFallback?'yes':'option');
+          if(!model.showBooleanFallback) assert.deepEqual(action.option,{label:'Read path',value:'Read path'});
+        }
+      }
+      for(const state of ['pending','succeeded','failed','cancelled']) {
+        await page.evaluate(state=>window.__focus.publish({selectedClarifyingAnswerLabel:'Read path',
+          clarifyingSelectionState:state,clarifyingSelectionMessage:'Selection '+state}),state);
+        for(const surface of ['normal-options','answer','embedded']) {
+          const container=page.locator('#'+surface);
+          await container.getByText('Selection '+state,{exact:true}).waitFor();
+          assert.equal(await container.getByRole('button',{name:'Read path',exact:true}).isDisabled(),state==='pending');
+        }
+      }
+      await page.locator('#normal-options').screenshot({path:path.join(artifactDirectory,'s63-normal-options.png')});
+      await page.locator('#answer').screenshot({path:path.join(artifactDirectory,'s63-focus-options.png')});
+    });
+    await t.test("project choice display/intent in Normal and both Focus surfaces does not require model clarifying text", async () => {
+      const target={sessionId:'project-session',logicalQuestionUnitId:'selected-project-question',logicalQuestionRevision:1};
+      const projectChoice={key:'parent-project:0',displayTarget:target,canSelect:true,canReselect:false,
+        options:[{id:'a',label:'Project A',value:'project-a'},{id:'b',label:'Project B',value:'project-b'}]};
+      await page.evaluate(projectChoice=>window.__focus.publish({projectChoice,showClarifyingQuestion:false,clarifyingQuestion:'',
+        selectedClarifyingAnswerLabel:undefined,clarifyingSelectionState:undefined,clarifyingSelectionMessage:undefined,
+        sections:{clarifyingQuestion:'',clarifyingOptions:[]}}),projectChoice);
+      for(const surface of ['normal-project','embedded','answer']) {
+        const container=page.locator('#'+surface);
+        await container.getByText('Choose project',{exact:true}).waitFor();
+        assert.equal(await container.getByRole('button',{name:'Yes',exact:true}).count(),0);
+        await container.getByRole('button',{name:'Project B',exact:true}).click();
+        assert.deepEqual(await page.evaluate(()=>window.__focus.actions.at(-1)),{
+          type:'clarifying-answer',answer:'option',option:projectChoice.options[1],displayTarget:target,
+          projectChoice:{key:projectChoice.key,reselect:false}});
+      }
+      const bound={...projectChoice,key:'parent-project:1',canSelect:false,canReselect:true,currentProject:{id:'project-a',name:'Project A'}};
+      await page.evaluate(projectChoice=>window.__focus.publish({projectChoice}),bound);
+      for(const surface of ['normal-project','embedded','answer']) {
+        const container=page.locator('#'+surface);
+        await container.getByText('Project: Project A',{exact:true}).waitFor();
+        const before=await page.evaluate(()=>window.__focus.actions.length);
+        await container.getByRole('button',{name:'Change project',exact:true}).click();
+        await page.getByRole('button',{name:'Cancel project change',exact:true}).click();
+        await page.getByRole('button',{name:'Cancel project change',exact:true}).waitFor({state:'hidden'});
+        assert.equal(await page.evaluate(()=>window.__focus.actions.length),before);
+        await container.getByRole('button',{name:'Change project',exact:true}).click();
+        await page.getByRole('group',{name:'Project choices'}).getByRole('button',{name:'Project B',exact:true}).click();
+        await page.getByRole('button',{name:'Cancel project change',exact:true}).waitFor({state:'hidden'});
+        assert.deepEqual(await page.evaluate(()=>window.__focus.actions.at(-1)),{
+          type:'clarifying-answer',answer:'option',option:projectChoice.options[1],displayTarget:target,
+          projectChoice:{key:bound.key,reselect:true}});
+      }
+      await page.evaluate(projectChoice=>window.__focus.publish({projectChoice}),{...bound,canReselect:false});
+      for(const surface of ['normal-project','embedded','answer']) {
+        await page.locator('#'+surface).getByRole('button',{name:'Change project',exact:true}).waitFor({state:'hidden'});
+        assert.equal(await page.locator('#'+surface).getByRole('button',{name:'Change project',exact:true}).count(),0);
+      }
+      const retryPresentation={...bound,key:'parent-project:committed-retry',canReselect:false,
+        displayTarget:{...target,logicalQuestionRevision:2}};
+      const beforeRetry=await page.evaluate(()=>window.__focus.actions.length);
+      await page.evaluate(projectChoice=>window.__focus.publish({projectChoice,
+        selectedClarifyingAnswerLabel:'Project A',clarifyingSelectionState:'failed',
+        clarifyingSelectionMessage:'Project committed; answer generation failed.'}),retryPresentation);
+      for(const surface of ['normal-project','embedded','answer']) {
+        await page.locator('#'+surface).getByRole('button',{name:'Retry project answer',exact:true}).waitFor();
+      }
+      assert.equal(await page.evaluate(()=>window.__focus.actions.length),beforeRetry,'no automatic retry on failure');
+      for(const surface of ['normal-project','embedded','answer']) {
+        const retry=page.locator('#'+surface).getByRole('button',{name:'Retry project answer',exact:true});
+        assert.equal(await retry.getAttribute('title'),'Retry project answer');
+        await retry.click();
+        assert.deepEqual(await page.evaluate(()=>window.__focus.actions.at(-1)),{
+          type:'clarifying-answer',answer:'option',option:projectChoice.options[0],displayTarget:retryPresentation.displayTarget,
+          projectChoice:{key:retryPresentation.key,reselect:false}});
+      }
+      await page.evaluate(()=>window.__focus.publish({clarifyingSelectionState:'pending'}));
+      for(const surface of ['normal-project','embedded','answer']) {
+        await page.locator('#'+surface).getByRole('button',{name:'Retry project answer',exact:true}).waitFor({state:'hidden'});
+      }
+      await page.evaluate(()=>window.__focus.publish({projectChoice:undefined}));
+      for(const surface of ['normal-project','embedded','answer']) {
+        await page.locator('#'+surface+' [data-project-choice]').waitFor({state:'hidden'});
+      }
+    });
+    await t.test("S149 real artifact validation feeds nine actual renderer cells with zoom and wheel checks", async () => {
+      const dense=['```mermaid','flowchart LR',...Array.from({length:12},(_,i)=>'N'+i+'[Service '+i+'] --> N'+(i+1)),'```'].join('\n');
+      const invalid=['```mermaid','flowchart TD','subgraph Open Constraints & Unclear Scale','Client --> API','```'].join('\n');
+      const {valid,rejected,first,retained,ascii}=await page.evaluate(input=>window.__focus.whiteboardStates(input),{dense,invalid});
+      assert.equal(valid.valid,true);
+      assert.equal(rejected.valid,false);
+      assert.equal(retained.revision,first.revision);
+      assert.equal(retained.content,first.content);
+      assert.equal(ascii.renderState.status,'ascii-fallback');
+      for(const [state,artifact] of [['valid',first],['retained',retained],['ascii',ascii]]) {
+        await page.evaluate(artifact=>window.__focus.publish({showClarifyingQuestion:false,phaseOutputNotice:undefined,
+          factGuardrailNotice:undefined,sections:{primaryAnswer:'Synthetic renderer acceptance.',approach:'',code:'',complexity:'',
+            whiteboard:artifact.content,whiteboardViewKey:artifact.id+':'+artifact.revision}}),artifact);
+        for(const surface of ['normal-whiteboard','embedded','answer']) {
+          const container=page.locator('#'+surface);
+          if(state==='ascii') {
+            await container.getByText('Architecture sketch (ASCII fallback)',{exact:false}).first().waitFor();
+            assert.equal(await container.getByRole('application',{name:'Interactive whiteboard diagram'}).count(),0);
+          } else {
+            const viewer=container.getByRole('application',{name:'Interactive whiteboard diagram'});
+            await viewer.locator('svg').waitFor({timeout:15000});
+            // Wait for this dense artifact, not the SVG retained from the previous fixture.
+            await page.waitForFunction(surface=>{
+              const svg=document.querySelector('#'+surface+' [role="application"] svg');
+              const box=svg?.getBoundingClientRect();
+              return box && box.width>0 && box.height>0 && svg.querySelectorAll('.node').length>=12;
+            },surface,{timeout:15000});
+            const size=await viewer.locator('svg').evaluate(el=>({w:el.getBoundingClientRect().width,h:el.getBoundingClientRect().height,nodes:el.querySelectorAll('.node').length}));
+            assert(size.w>0&&size.h>0&&size.nodes>=12);
+            const toolbar=container.getByRole('toolbar',{name:'Whiteboard view controls'});
+            const before=await toolbar.textContent();
+            await viewer.dispatchEvent('wheel',{deltaY:100,bubbles:true});
+            assert.equal(await toolbar.textContent(),before,'wheel must not zoom');
+            await toolbar.getByRole('button',{name:'Zoom in',exact:true}).click();
+            assert.notEqual(await toolbar.textContent(),before);
+            await toolbar.getByRole('button',{name:'Reset whiteboard view',exact:true}).click();
+            assert.equal(await toolbar.textContent(),before);
+            await toolbar.getByRole('button',{name:'Expand whiteboard',exact:true}).click();
+            const expanded=page.locator('body > .fixed').filter({has:page.getByRole('application',{name:'Interactive whiteboard diagram'})});
+            await expanded.getByRole('button',{name:'Close expanded whiteboard',exact:true}).waitFor();
+            for(let step=0;step<8;step++) await expanded.getByRole('button',{name:'Zoom in',exact:true}).click();
+            const labelHeight=await expanded.locator('svg .nodeLabel').first().evaluate(el=>el.getBoundingClientRect().height);
+            assert(labelHeight>=12,'dense diagram labels remain inspectable after explicit zoom');
+            const diagram=expanded.getByRole('application',{name:'Interactive whiteboard diagram'});
+            await diagram.press('ArrowRight');
+            await expanded.screenshot({path:path.join(artifactDirectory,'s149-'+state+'-'+surface+'-expanded.png')});
+            await expanded.getByRole('button',{name:'Close expanded whiteboard',exact:true}).click();
+            await container.getByRole('button',{name:'Reset whiteboard view',exact:true}).click();
+          }
+          assert.doesNotMatch(await container.textContent(),/Syntax error in text|Parse error on line/);
+          await container.screenshot({path:path.join(artifactDirectory,'s149-'+state+'-'+surface+'.png')});
+        }
       }
     });
     assert.deepEqual(errors,[]);
