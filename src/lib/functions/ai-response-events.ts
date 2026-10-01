@@ -78,6 +78,23 @@ export interface AIResponseTokenUsage {
   reasoningTokens?: number;
 }
 
+export interface AIResponseProgressBudget {
+  firstContentTimeoutMs: number;
+  contentIdleTimeoutMs: number;
+  totalElapsedWarningMs: number;
+}
+
+export interface AIResponseBudgetObservation {
+  requestId: string;
+  attemptId: string;
+  kind: "first-content" | "content-idle" | "total-elapsed";
+  limitMs: number;
+  startedAt: number;
+  deadlineAt: number;
+  observedAt: number;
+  lastContentAt?: number;
+}
+
 export interface AIResponseTerminalOutcome {
   requestId: string;
   attemptId: string;
@@ -108,6 +125,8 @@ export interface AIResponseTerminalOutcome {
   nativeFinishReason?: string;
   tokenUsage?: AIResponseTokenUsage;
   text?: string;
+  budgetTimeout?: AIResponseBudgetObservation;
+  totalElapsedWarningAt?: number;
 }
 
 export type AIResponseEvent =

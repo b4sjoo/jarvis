@@ -1,4 +1,4 @@
-import type { AIResponseTerminalOutcome } from "../functions/ai-response-events.js";
+import type { AIResponseTerminalOutcome, AIResponseProgressBudget, AIResponseBudgetObservation } from "../functions/ai-response-events.js";
 
 export const MODEL_GENERATION_TELEMETRY_SCHEMA_VERSION = 1;
 export const MEETING_ADVISOR_PROMPT_CONTRACT_VERSION =
@@ -13,6 +13,7 @@ export interface ModelGenerationIdentityInput {
   requestOptions?: {
     timeoutMs?: number;
     maxOutputTokens?: number;
+    progressBudget?: AIResponseProgressBudget;
   };
   responseConfig?: {
     length?: string;
@@ -47,6 +48,11 @@ export function buildModelGenerationIdentityForTrace(
       input.requestOptions?.maxOutputTokens ?? null,
       input.responseConfig?.length ?? null,
       input.responseConfig?.language ?? null,
+      ...(input.requestOptions?.progressBudget ? [
+        input.requestOptions.progressBudget.firstContentTimeoutMs,
+        input.requestOptions.progressBudget.contentIdleTimeoutMs,
+        input.requestOptions.progressBudget.totalElapsedWarningMs,
+      ] : []),
       input.promptContractId,
       input.promptContractVersion,
     ])
@@ -71,6 +77,11 @@ export function buildModelGenerationIdentityForTrace(
     modelGenerationTimingSemantics:
       "first-content-not-network-first-byte",
     modelGenerationNetworkFirstByteObservable: false,
+    ...(input.requestOptions?.progressBudget ? {
+      modelGenerationFirstContentTimeoutMs: input.requestOptions.progressBudget.firstContentTimeoutMs,
+      modelGenerationContentIdleTimeoutMs: input.requestOptions.progressBudget.contentIdleTimeoutMs,
+      modelGenerationTotalElapsedWarningMs: input.requestOptions.progressBudget.totalElapsedWarningMs,
+    } : {}),
   };
 }
 
@@ -120,6 +131,24 @@ export function formatModelGenerationTerminalForTrace(
       outcome.observedContentHash,
     modelGenerationCompletionSignal:
       outcome.completionSignal ?? completionSignalFromStatus(outcome.status),
+    ...(outcome.budgetTimeout ? formatModelGenerationBudgetObservationForTrace(outcome.budgetTimeout) : {}),
+    ...(outcome.totalElapsedWarningAt !== undefined ? { modelGenerationTotalElapsedWarningAt: outcome.totalElapsedWarningAt } : {}),
+  };
+}
+
+export function formatModelGenerationBudgetObservationForTrace(
+  observation: AIResponseBudgetObservation
+): Record<string, unknown> {
+  return {
+    modelGenerationBudgetRequestId: observation.requestId,
+    modelGenerationBudgetAttemptId: observation.attemptId,
+    modelGenerationBudgetKind: observation.kind,
+    modelGenerationBudgetLimitMs: observation.limitMs,
+    modelGenerationBudgetStartedAt: observation.startedAt,
+    modelGenerationBudgetDeadlineAt: observation.deadlineAt,
+    modelGenerationBudgetObservedAt: observation.observedAt,
+    modelGenerationBudgetLastContentAt: observation.lastContentAt,
+    ...(observation.kind === "total-elapsed" ? { modelGenerationTotalElapsedWarningAt: observation.observedAt } : {}),
   };
 }
 

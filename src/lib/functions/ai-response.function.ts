@@ -23,6 +23,9 @@ import {
   type AIResponseExecutionIdentityInput,
   type AIResponseRetryPolicy,
   type AIResponseTerminalOutcome,
+  type AIResponseTerminalInput,
+  type AIResponseProgressBudget,
+  type AIResponseBudgetObservation,
 } from "./ai-response-events.js";
 import { decodeServerSentEventStream } from "./server-sent-event-stream.js";
 
@@ -39,6 +42,8 @@ export type {
 
 export interface AIResponseRequestOptions {
   timeoutMs?: number;
+  progressBudget?: AIResponseProgressBudget;
+  onBudgetObservation?: (observation: AIResponseBudgetObservation) => void;
   maxOutputTokens?: number;
   retryPolicy?: AIResponseRetryPolicy;
   isExecutionCurrent?: (identity: AIResponseAttemptIdentity) => boolean;
@@ -134,11 +139,19 @@ async function* fetchAIResponseAttemptEvents(
   let cleanupRequestSignal = () => {};
   const providerId =
     params.provider?.id ?? params.selectedProvider?.provider ?? "unknown";
+  const startedAt = Date.now();
   const eventBuilder = new AIResponseEventBuilder(
     providerId,
-    attemptIdentity
+    attemptIdentity,
+    startedAt
   );
-  const terminal = eventBuilder.terminal.bind(eventBuilder);
+  let requestSignal: ReturnType<typeof createRequestSignal> | undefined;
+  const terminal = (input: AIResponseTerminalInput) => {
+    const aborted = params.requestOptions?.progressBudget && requestSignal?.signal?.aborted;
+    const outcome = aborted ? requestSignal!.abortOutcome() : input;
+    cleanupRequestSignal();
+    return eventBuilder.terminal({ ...outcome, ...requestSignal?.budgetOutcome() });
+  };
 
   try {
     const {
@@ -152,16 +165,12 @@ async function* fetchAIResponseAttemptEvents(
       applyResponseSettings = true,
       requestOptions,
     } = params;
-    const requestSignal = createRequestSignal(signal, requestOptions?.timeoutMs);
+    requestSignal = createRequestSignal(signal, requestOptions, startedAt, attemptIdentity);
     cleanupRequestSignal = requestSignal.cleanup;
 
     // Check if already aborted
     if (requestSignal.signal?.aborted) {
-      yield terminal({
-        status: "aborted",
-        retryable: false,
-        completionSignal: "request-abort",
-      });
+      yield terminal(requestSignal.abortOutcome());
       return;
     }
 
@@ -274,20 +283,7 @@ async function* fetchAIResponseAttemptEvents(
         requestSignal.signal?.aborted ||
         (fetchError instanceof Error && fetchError.name === "AbortError")
       ) {
-        if (requestSignal.timedOut()) {
-          yield terminal({
-            status: "timed-out",
-            retryable: true,
-            completionSignal: "request-timeout",
-            safeErrorSummary: `AI request timed out after ${requestOptions?.timeoutMs}ms.`,
-          });
-        } else {
-          yield terminal({
-            status: "aborted",
-            retryable: false,
-            completionSignal: "request-abort",
-          });
-        }
+        yield terminal(requestSignal.abortOutcome());
         return;
       }
       yield terminal({
@@ -299,6 +295,11 @@ async function* fetchAIResponseAttemptEvents(
           fetchError instanceof Error ? fetchError.message : "Unknown error"
         }`,
       });
+      return;
+    }
+
+    if (requestOptions?.progressBudget && requestSignal.signal?.aborted) {
+      yield terminal(requestSignal.abortOutcome());
       return;
     }
 
@@ -345,7 +346,12 @@ async function* fetchAIResponseAttemptEvents(
       );
       const content =
         typeof candidateContent === "string" ? candidateContent : "";
+      if (requestOptions?.progressBudget && requestSignal.signal?.aborted) {
+        yield terminal(requestSignal.abortOutcome());
+        return;
+      }
       if (content) {
+        requestSignal.contentReceived();
         yield eventBuilder.content(content);
         yield terminal({
           status: "success",
@@ -383,6 +389,9 @@ async function* fetchAIResponseAttemptEvents(
         body: response.body,
         signal: requestSignal.signal,
       })) {
+        if (requestOptions?.progressBudget && requestSignal.signal?.aborted) {
+          throw new DOMException("AI response stream aborted", "AbortError");
+        }
         if (streamEvent.type === "complete") {
           streamCompletionSignal = streamEvent.signal;
           continue;
@@ -394,7 +403,10 @@ async function* fetchAIResponseAttemptEvents(
             parsed,
             provider?.responseContentPath || ""
           );
-          if (delta) yield eventBuilder.content(delta);
+          if (delta) {
+            requestSignal.contentReceived();
+            yield eventBuilder.content(delta);
+          }
         } catch {
           // Ignore malformed provider data events without weakening terminal handling.
         }
@@ -404,20 +416,7 @@ async function* fetchAIResponseAttemptEvents(
         requestSignal.signal?.aborted ||
         (readError instanceof Error && readError.name === "AbortError")
       ) {
-        if (requestSignal.timedOut()) {
-          yield terminal({
-            status: "timed-out",
-            retryable: true,
-            completionSignal: "request-timeout",
-            safeErrorSummary: `AI request timed out after ${requestOptions?.timeoutMs}ms.`,
-          });
-        } else {
-          yield terminal({
-            status: "aborted",
-            retryable: false,
-            completionSignal: "request-abort",
-          });
-        }
+        yield terminal(requestSignal.abortOutcome());
         return;
       }
       yield terminal({
@@ -551,39 +550,105 @@ function getFirstImageMediaType(images: Array<string | ImageInput>) {
 
 function createRequestSignal(
   externalSignal: AbortSignal | undefined,
-  timeoutMs: number | undefined
+  options: AIResponseRequestOptions | undefined,
+  startedAt: number,
+  identity: AIResponseAttemptIdentity
 ) {
-  if (!timeoutMs || timeoutMs <= 0) {
-    return {
-      signal: externalSignal,
-      cleanup: () => {},
-      timedOut: () => false,
-    };
-  }
-
-  const controller = new AbortController();
+  const timeoutMs = options?.timeoutMs;
+  const budget = options?.progressBudget;
+  const controller = (timeoutMs && timeoutMs > 0) || budget ? new AbortController() : undefined;
+  const signal = controller?.signal ?? externalSignal;
+  let closed = false;
   let timedOut = false;
-  const abortFromExternalSignal = () => controller.abort();
-  const timeoutId = globalThis.setTimeout(() => {
+  let lastContentAt: number | undefined;
+  let budgetTimeout: AIResponseBudgetObservation | undefined;
+  let totalElapsedWarningAt: number | undefined;
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  let progressId: ReturnType<typeof setTimeout> | undefined;
+  let warningId: ReturnType<typeof setTimeout> | undefined;
+
+  const cleanup = () => {
+    if (closed) return;
+    closed = true;
+    globalThis.clearTimeout(timeoutId);
+    globalThis.clearTimeout(progressId);
+    globalThis.clearTimeout(warningId);
+    externalSignal?.removeEventListener("abort", abortFromExternalSignal);
+  };
+  const abortFromExternalSignal = () => { cleanup(); controller?.abort(); };
+  const observe = (kind: AIResponseBudgetObservation["kind"], limitMs: number, deadlineAt: number) => ({
+    requestId: identity.requestId, attemptId: identity.attemptId,
+    kind, limitMs, startedAt, deadlineAt, observedAt: Date.now(), lastContentAt,
+  });
+  const notify = (observation: AIResponseBudgetObservation) => {
+    try { options?.onBudgetObservation?.(observation); }
+    catch { console.warn("AI response budget observation callback failed"); }
+  };
+  const expireProgress = () => {
+    if (closed || signal?.aborted || !budget) return;
+    const kind = lastContentAt === undefined ? "first-content" : "content-idle";
+    const limitMs = lastContentAt === undefined ? budget.firstContentTimeoutMs : budget.contentIdleTimeoutMs;
+    const deadlineAt = (lastContentAt ?? startedAt) + limitMs;
+    const remaining = deadlineAt - Date.now();
+    if (remaining > 0) {
+      progressId = globalThis.setTimeout(expireProgress, remaining);
+      return;
+    }
     timedOut = true;
-    controller.abort();
-  }, timeoutMs);
+    budgetTimeout = observe(kind, limitMs, deadlineAt);
+    cleanup();
+    controller?.abort();
+    notify(budgetTimeout);
+  };
 
   if (externalSignal?.aborted) {
-    controller.abort();
-  } else {
+    abortFromExternalSignal();
+  } else if (controller) {
     externalSignal?.addEventListener("abort", abortFromExternalSignal, {
       once: true,
     });
   }
+  if (!closed && controller) {
+    if (timeoutMs && timeoutMs > 0) timeoutId = globalThis.setTimeout(() => {
+      if (closed || signal?.aborted) return;
+      timedOut = true;
+      cleanup();
+      controller.abort();
+    }, timeoutMs);
+    if (budget) {
+      progressId = globalThis.setTimeout(expireProgress, Math.max(0, startedAt + budget.firstContentTimeoutMs - Date.now()));
+      warningId = globalThis.setTimeout(() => {
+        if (closed || signal?.aborted) return;
+        const observation = observe("total-elapsed", budget.totalElapsedWarningMs, startedAt + budget.totalElapsedWarningMs);
+        totalElapsedWarningAt = observation.observedAt;
+        notify(observation);
+      }, Math.max(0, startedAt + budget.totalElapsedWarningMs - Date.now()));
+    }
+  }
 
   return {
-    signal: controller.signal,
-    cleanup: () => {
-      globalThis.clearTimeout(timeoutId);
-      externalSignal?.removeEventListener("abort", abortFromExternalSignal);
+    signal,
+    cleanup,
+    contentReceived: () => {
+      if (!budget || closed || signal?.aborted) return;
+      const first = lastContentAt === undefined;
+      lastContentAt = Date.now();
+      // Later chunks only advance the deadline; the existing timer checks it.
+      if (first) {
+        globalThis.clearTimeout(progressId);
+        progressId = globalThis.setTimeout(expireProgress, budget.contentIdleTimeoutMs);
+      }
     },
-    timedOut: () => timedOut,
+    budgetOutcome: () => ({
+      ...(budgetTimeout ? { budgetTimeout } : {}),
+      ...(totalElapsedWarningAt !== undefined ? { totalElapsedWarningAt } : {}),
+    }),
+    abortOutcome: (): AIResponseTerminalInput => timedOut ? {
+      status: "timed-out", retryable: true, completionSignal: "request-timeout",
+      safeErrorSummary: budgetTimeout
+        ? `AI request timed out after ${budgetTimeout.limitMs}ms without ${budgetTimeout.kind === "first-content" ? "first content" : "content progress"}.`
+        : `AI request timed out after ${timeoutMs}ms.`,
+    } : { status: "aborted", retryable: false, completionSignal: "request-abort" },
   };
 }
 

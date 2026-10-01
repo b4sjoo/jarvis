@@ -1096,6 +1096,18 @@ export interface SessionCompactTraceSummary {
   modelRouteReason?: string;
   modelGeneration?: {
     telemetryVersion?: number;
+    firstContentTimeoutMs?: number;
+    contentIdleTimeoutMs?: number;
+    totalElapsedWarningMs?: number;
+    budgetRequestId?: string;
+    budgetAttemptId?: string;
+    budgetKind?: string;
+    budgetLimitMs?: number;
+    budgetStartedAt?: number;
+    budgetDeadlineAt?: number;
+    budgetObservedAt?: number;
+    budgetLastContentAt?: number;
+    totalElapsedWarningAt?: number;
     requestOrigin?: string;
     providerId?: string;
     modelId?: string;
@@ -5878,6 +5890,18 @@ export function buildCompactTraceSummary({
     modelRoute: readFirstString(metadataSources, "modelRoute"),
     modelRouteReason: readFirstString(metadataSources, "modelRouteReason"),
     modelGeneration: {
+      firstContentTimeoutMs: readFirstNumberFromMetadata(metadataSources, "modelGenerationFirstContentTimeoutMs"),
+      contentIdleTimeoutMs: readFirstNumberFromMetadata(metadataSources, "modelGenerationContentIdleTimeoutMs"),
+      totalElapsedWarningMs: readFirstNumberFromMetadata(metadataSources, "modelGenerationTotalElapsedWarningMs"),
+      budgetRequestId: readFirstString(metadataSources, "modelGenerationBudgetRequestId"),
+      budgetAttemptId: readFirstString(metadataSources, "modelGenerationBudgetAttemptId"),
+      budgetKind: readFirstString(metadataSources, "modelGenerationBudgetKind"),
+      budgetLimitMs: readFirstNumberFromMetadata(metadataSources, "modelGenerationBudgetLimitMs"),
+      budgetStartedAt: readFirstNumberFromMetadata(metadataSources, "modelGenerationBudgetStartedAt"),
+      budgetDeadlineAt: readFirstNumberFromMetadata(metadataSources, "modelGenerationBudgetDeadlineAt"),
+      budgetObservedAt: readFirstNumberFromMetadata(metadataSources, "modelGenerationBudgetObservedAt"),
+      budgetLastContentAt: readFirstNumberFromMetadata(metadataSources, "modelGenerationBudgetLastContentAt"),
+      totalElapsedWarningAt: readFirstNumberFromMetadata(metadataSources, "modelGenerationTotalElapsedWarningAt"),
       telemetryVersion: readFirstNumberFromMetadata(
         metadataSources,
         "modelGenerationTelemetryVersion"

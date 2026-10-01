@@ -59,7 +59,7 @@ function transportHarness(raw: string, mode: "sse" | "wait" | "http-error" = "ss
     "./server-sent-event-stream.js": { decodeServerSentEventStream },
   }, {
     setTimeout: (callback: () => void, ms: number) => { timers.push({ callback, ms, cleared: false }); return timers.length - 1; },
-    clearTimeout: (id: number) => { timers[id].cleared = true; },
+    clearTimeout: (id: number | undefined) => { if (id !== undefined && timers[id]) timers[id].cleared = true; },
     fetch: async (url: string, options: any) => {
       assert.equal(url, "https://provider.invalid/chat");
       calls.push({ body: JSON.parse(options.body), signal: options.signal });

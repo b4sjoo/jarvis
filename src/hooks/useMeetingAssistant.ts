@@ -512,6 +512,7 @@ import {
   buildMemoryEvaluationTraceMetadata,
   formatMeetingAnswerTraceMetadata,
   formatModelGenerationTerminalForTrace,
+  formatModelGenerationBudgetObservationForTrace,
   formatModelGenerationTimingForTrace,
   formatAnswerGenerationLeaseForTrace,
   formatStableAnswerCommitForTrace,
@@ -936,6 +937,11 @@ const SCREEN_PREFLIGHT_TIMEOUT_MS = 10_000;
 const SCREEN_ANALYSIS_TIMEOUT_MS = 45_000;
 const CODING_MODEL_REQUEST_TIMEOUT_MS = 120_000;
 const CODING_MODEL_MAX_OUTPUT_TOKENS = 16_384;
+const MAIN_ADVISOR_PROGRESS_BUDGET = Object.freeze({
+  firstContentTimeoutMs: 15_000,
+  contentIdleTimeoutMs: 15_000,
+  totalElapsedWarningMs: 30_000,
+});
 const DEFAULT_ACTIVE_SCREEN_TASK_TIMEOUT_MINUTES = 30;
 const MIN_ACTIVE_SCREEN_TASK_TIMEOUT_MINUTES = 5;
 const MAX_ACTIVE_SCREEN_TASK_TIMEOUT_MINUTES = 240;
@@ -2631,9 +2637,16 @@ interface CommitHumanGroundTruthInputV2 {
 }
 
 function getMeetingModelRequestOptions(
-  route: ReturnType<typeof resolveMeetingModelRouteFromSnapshot>
+  route: ReturnType<typeof resolveMeetingModelRouteFromSnapshot>,
+  requestOrigin: "advisor" | "screen",
+  onBudgetObservation?: MeetingModelRequestOptions["onBudgetObservation"]
 ): MeetingModelRequestOptions | undefined {
-  if (route.route !== "coding-override") return undefined;
+  if (route.route !== "coding-override") {
+    return requestOrigin === "advisor" ? {
+      progressBudget: MAIN_ADVISOR_PROGRESS_BUDGET,
+      onBudgetObservation,
+    } : undefined;
+  }
 
   return {
     timeoutMs: CODING_MODEL_REQUEST_TIMEOUT_MS,
@@ -13511,7 +13524,14 @@ export function useMeetingAssistant() {
     const advisorModelRouteMetadata =
       formatMeetingModelRouteForTrace(advisorModelRoute);
     const advisorModelRequestOptions =
-      getMeetingModelRequestOptions(advisorModelRoute);
+      getMeetingModelRequestOptions(advisorModelRoute, "advisor", (observation) => {
+        if (!traceId) return;
+        const metadata = formatModelGenerationBudgetObservationForTrace(observation);
+        traceStoreRef.current.updateMetadata(traceId, metadata);
+        const stepId = traceStoreRef.current.startStep(traceId, "Advisor waiting budget", metadata);
+        traceStoreRef.current.finishStep(traceId, stepId,
+          observation.kind === "total-elapsed" ? "success" : "error", metadata);
+      });
     const advisorSourceReadContext = contextManagerRef.current.getState();
     const advisorSourceReadTask = settledExecutionPlan
       ?.taskMutationCommittedBeforeAdvisor
@@ -28730,7 +28750,7 @@ export function useMeetingAssistant() {
         const screenModelRouteMetadata =
           formatMeetingModelRouteForTrace(screenModelRoute);
         const screenModelRequestOptions =
-          getMeetingModelRequestOptions(screenModelRoute);
+          getMeetingModelRequestOptions(screenModelRoute, "screen");
         const screenModelGenerationIdentity =
           buildModelGenerationIdentityForTrace({
             requestOrigin: "screen",

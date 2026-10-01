@@ -10,7 +10,7 @@ import type {
 
 import type { PreparationNarrativeNodeKind } from "../preparation/statement-types.js";
 import type { PreparationRuntimeBrief, PreparationStrategy } from "../preparation/snapshot-types.js";
-import type { AIResponseTerminalOutcome } from "../functions/ai-response-events.js";
+import type { AIResponseTerminalOutcome, AIResponseProgressBudget, AIResponseBudgetObservation } from "../functions/ai-response-events.js";
 
 export type TranscriptSpeaker = "them" | "me" | "unknown";
 
@@ -1380,6 +1380,8 @@ export interface MeetingProviderConfig {
 export interface MeetingModelRequestOptions {
   timeoutMs?: number;
   maxOutputTokens?: number;
+  progressBudget?: AIResponseProgressBudget;
+  onBudgetObservation?: (observation: AIResponseBudgetObservation) => void;
 }
 
 export interface MeetingModelTraceCallbacks {
