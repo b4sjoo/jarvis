@@ -6,7 +6,6 @@ import type {
   InterviewerEvidenceMode,
   InterviewerIntentAction,
   InterviewerIntentRelation,
-  InterviewerSpeechAct,
 } from "./interviewer-intent.js";
 import {
   isParentCanonicalQuestionType,
@@ -257,47 +256,9 @@ export function selectCommittedSettlementForLogicalQuestionUnit(input: {
   return settlement;
 }
 
-export type CurrentQuestionTerminalNoAnswerDisposition =
-  | "terminal-no-answer"
-  | "operation-not-authorized"
-  | "proposal-stale-or-invalid"
-  | "substantive-source-protected"
-  | "semantic-contract-mismatch"
-  | "confidence-below-threshold";
 
-export type CurrentQuestionTerminalNoAnswerOperationKind =
-  | "filler-ignore"
-  | "informational-no-primary-ask";
 
-export interface CurrentQuestionTerminalNoAnswerDecision {
-  logicalQuestionUnitId: string;
-  revision: number;
-  sessionId: string;
-  runtimeEpoch: number;
-  sourceHash: string;
-  sourceTurnIds: string[];
-  operationId?: string;
-  operationKind?: CurrentQuestionTerminalNoAnswerOperationKind;
-  disposition: CurrentQuestionTerminalNoAnswerDisposition;
-  terminalNoAnswerAuthorized: boolean;
-  displayDisposition?: "hidden-eligible" | "visible";
-  contextDisposition?: "discard" | "append-bounded-context";
-  speechAct?: InterviewerSpeechAct;
-  action?: InterviewerIntentAction;
-  confidence: number;
-  settledAt: number;
-  reasons: string[];
-}
 
-export interface CurrentQuestionTerminalNoAnswerCandidate {
-  proposal: CurrentQuestionSettlementProposal;
-  speechAct: InterviewerSpeechAct;
-  normalizedQuestion: string;
-  primaryAskSpanCount: number;
-  budgetSlot: "ambient" | "substantive";
-  sourceOwnedSubstantive: boolean;
-  operationId?: string;
-}
 
 export type CurrentQuestionSettlementDisposition =
   | "domain-resolved-provisional"
@@ -808,170 +769,6 @@ export function settlementAuthorizesTaskTransition(
   );
 }
 
-export function settleCurrentQuestionTerminalNoAnswer(input: {
-  currentQuestion: ProvisionalCurrentQuestion;
-  candidate?: CurrentQuestionTerminalNoAnswerCandidate;
-  operationAuthorized: boolean;
-  operationAuthorizationReason?: string;
-  activeParentId?: string;
-  activeParentRevision?: number;
-  manualCorrectionRevision: number;
-  minConfidence?: number;
-  informationalMinConfidence?: number;
-  now?: number;
-}): CurrentQuestionTerminalNoAnswerDecision {
-  const confidence = clampConfidence(
-    input.candidate?.proposal.confidence
-  );
-  const base = {
-    logicalQuestionUnitId:
-      input.currentQuestion.logicalQuestionUnitId,
-    revision: input.currentQuestion.revision,
-    sessionId: input.currentQuestion.sessionId,
-    runtimeEpoch: input.currentQuestion.runtimeEpoch,
-    sourceHash: input.currentQuestion.sourceHash,
-    sourceTurnIds: [...input.currentQuestion.sourceTurnIds],
-    operationId: input.candidate?.operationId,
-    operationKind: inferTerminalNoAnswerOperationKind(input.candidate),
-    speechAct: input.candidate?.speechAct,
-    action: input.candidate?.proposal.action,
-    confidence,
-    settledAt: input.now ?? Date.now(),
-  };
-  const reject = (
-    disposition: Exclude<
-      CurrentQuestionTerminalNoAnswerDisposition,
-      "terminal-no-answer"
-    >,
-    reasons: string[]
-  ): CurrentQuestionTerminalNoAnswerDecision => ({
-    ...base,
-    disposition,
-    terminalNoAnswerAuthorized: false,
-    reasons,
-  });
-
-  if (!input.operationAuthorized) {
-    return reject("operation-not-authorized", [
-      input.operationAuthorizationReason ??
-        "operation-lease-not-authorized",
-    ]);
-  }
-  if (!input.candidate) {
-    return reject("semantic-contract-mismatch", [
-      "terminal-no-answer-candidate-missing",
-    ]);
-  }
-
-  const validation = validateSettlementProposal({
-    proposal: input.candidate.proposal,
-    expectedSource: "runtime-adjudication",
-    currentQuestion: input.currentQuestion,
-    activeParentId: input.activeParentId,
-    activeParentRevision: input.activeParentRevision,
-    manualCorrectionRevision: input.manualCorrectionRevision,
-    policy: {
-      runtimeMutationAuthorized: false,
-      questionComplete: false,
-      commitParent: false,
-    },
-  });
-  if (!validation.proposal) {
-    return reject("proposal-stale-or-invalid", [
-      ...(validation.rejection?.reasons ?? [
-        "terminal-no-answer-proposal-invalid",
-      ]),
-    ]);
-  }
-  if (
-    input.candidate.budgetSlot !== "ambient" ||
-    input.candidate.sourceOwnedSubstantive
-  ) {
-    return reject("substantive-source-protected", [
-      `budget-slot:${input.candidate.budgetSlot}`,
-      input.candidate.sourceOwnedSubstantive
-        ? "source-owned-substantive"
-        : "source-owned-substantive:false",
-    ]);
-  }
-
-  const proposal = validation.proposal;
-  const fillerContractMatches =
-    proposal.action === "ignore" &&
-    proposal.actionEvidenceAuthorized === true &&
-    (input.candidate.speechAct === "acknowledgement" ||
-      input.candidate.speechAct === "logistics") &&
-    (normalizeCanonicalQuestionType(proposal.questionType) ??
-      "unknown") === "unknown" &&
-    (proposal.relation ?? "none") === "none" &&
-    (proposal.evidenceMode ?? "unknown") === "unknown" &&
-    input.candidate.normalizedQuestion.trim().length === 0 &&
-    input.candidate.primaryAskSpanCount === 0;
-  const informationalContractMatches =
-    proposal.action === "append-context" &&
-    proposal.actionEvidenceAuthorized === true &&
-    input.candidate.speechAct === "informational" &&
-    (normalizeCanonicalQuestionType(proposal.questionType) ??
-      "unknown") === "unknown" &&
-    (proposal.relation ?? "none") === "none" &&
-    (proposal.evidenceMode ?? "unknown") === "unknown" &&
-    input.candidate.normalizedQuestion.trim().length === 0 &&
-    input.candidate.primaryAskSpanCount === 0;
-  if (!fillerContractMatches && !informationalContractMatches) {
-    return reject("semantic-contract-mismatch", [
-      `speech-act:${input.candidate.speechAct}`,
-      `question-type:${
-        normalizeCanonicalQuestionType(proposal.questionType) ??
-        "unknown"
-      }`,
-      `relation:${proposal.relation ?? "none"}`,
-      `evidence-mode:${proposal.evidenceMode ?? "unknown"}`,
-      `action:${proposal.action ?? "missing"}`,
-      `normalized-question-chars:${input.candidate.normalizedQuestion.trim().length}`,
-      `primary-ask-spans:${input.candidate.primaryAskSpanCount}`,
-    ]);
-  }
-
-  const operationKind: CurrentQuestionTerminalNoAnswerOperationKind =
-    informationalContractMatches
-      ? "informational-no-primary-ask"
-      : "filler-ignore";
-  const minConfidence = clampConfidence(
-    operationKind === "informational-no-primary-ask"
-      ? input.informationalMinConfidence ?? 0.95
-      : input.minConfidence ?? 0.98
-  );
-  if (confidence < minConfidence) {
-    return reject("confidence-below-threshold", [
-      `confidence:${confidence}`,
-      `minimum:${minConfidence}`,
-    ]);
-  }
-
-  return {
-    ...base,
-    operationKind,
-    disposition: "terminal-no-answer",
-    terminalNoAnswerAuthorized: true,
-    displayDisposition:
-      operationKind === "informational-no-primary-ask"
-        ? "visible"
-        : "hidden-eligible",
-    contextDisposition:
-      operationKind === "informational-no-primary-ask"
-        ? "append-bounded-context"
-        : "discard",
-    reasons: [
-      "operation-lease-authorized",
-      "ambient-budget-slot",
-      "source-owned-substantive:false",
-      `operation-kind:${operationKind}`,
-      `speech-act:${input.candidate.speechAct}`,
-      `action:${proposal.action}`,
-      `confidence:${confidence}`,
-    ],
-  };
-}
 
 export function formatProvisionalCurrentQuestionForTrace(
   question: ProvisionalCurrentQuestion | undefined
@@ -1064,63 +861,7 @@ export function formatCurrentQuestionSettlementForTrace(
   };
 }
 
-export function formatCurrentQuestionTerminalNoAnswerForTrace(
-  decision: CurrentQuestionTerminalNoAnswerDecision | undefined
-): Record<string, unknown> {
-  if (!decision) return {};
-  return {
-    currentQuestionTerminalNoAnswerDisposition:
-      decision.disposition,
-    currentQuestionTerminalNoAnswerAuthorized:
-      decision.terminalNoAnswerAuthorized,
-    currentQuestionTerminalNoAnswerUnitId:
-      decision.logicalQuestionUnitId,
-    currentQuestionTerminalNoAnswerRevision: decision.revision,
-    currentQuestionTerminalNoAnswerSessionId: decision.sessionId,
-    currentQuestionTerminalNoAnswerRuntimeEpoch:
-      decision.runtimeEpoch,
-    currentQuestionTerminalNoAnswerSourceHash:
-      decision.sourceHash,
-    currentQuestionTerminalNoAnswerSourceTurnIds:
-      decision.sourceTurnIds,
-    currentQuestionTerminalNoAnswerOperationId:
-      decision.operationId,
-    currentQuestionTerminalNoAnswerOperationKind:
-      decision.operationKind,
-    currentQuestionTerminalNoAnswerDisplayDisposition:
-      decision.displayDisposition,
-    currentQuestionTerminalNoAnswerContextDisposition:
-      decision.contextDisposition,
-    currentQuestionTerminalNoAnswerSpeechAct:
-      decision.speechAct,
-    currentQuestionTerminalNoAnswerAction: decision.action,
-    currentQuestionTerminalNoAnswerConfidence:
-      decision.confidence,
-    currentQuestionTerminalNoAnswerSettledAt:
-      decision.settledAt,
-    currentQuestionTerminalNoAnswerReasons: decision.reasons,
-  };
-}
 
-function inferTerminalNoAnswerOperationKind(
-  candidate: CurrentQuestionTerminalNoAnswerCandidate | undefined
-): CurrentQuestionTerminalNoAnswerOperationKind | undefined {
-  if (
-    candidate?.speechAct === "informational" &&
-    candidate.proposal.action === "append-context"
-  ) {
-    return "informational-no-primary-ask";
-  }
-  if (
-    candidate &&
-    (candidate.speechAct === "acknowledgement" ||
-      candidate.speechAct === "logistics") &&
-    candidate.proposal.action === "ignore"
-  ) {
-    return "filler-ignore";
-  }
-  return undefined;
-}
 
 function resolveCurrentQuestionAuthority(
   source: CurrentQuestionAuthoritySource

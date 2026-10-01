@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  authorizeAwaitingVisualEvidenceRecovery,
   authorizeVisualRecoveryCommit,
   createAwaitingVisualEvidenceRecoveryFact,
   decideVisualRecoveryPostCommitRebase,
@@ -18,7 +17,7 @@ const resolution = {
   evidence: ["question-references-code-lines"],
 };
 
-test("authorizes only the exact next visual-evidence transaction", () => {
+test("selects the current recovery owner and rejects a replaced owner", () => {
   const fact = createAwaitingVisualEvidenceRecoveryFact({
     resolution,
     sessionId: "session-1",
@@ -37,36 +36,26 @@ test("authorizes only the exact next visual-evidence transaction", () => {
   });
   assert.ok(fact);
 
-  const authorized = authorizeAwaitingVisualEvidenceRecovery({
-    fact,
+  const authorized = selectVisualRecoveryOpportunity({
+    facts: [fact],
     sessionId: "session-1",
     runtimeEpoch: 4,
-    logicalQuestionUnitId: "question-lines",
-    logicalQuestionRevision: 2,
-    visibleAnswerRevision: 7,
-    parentTaskId: "parent-coding",
-    parentRevision: 3,
+    topology: { parentId: "parent-coding", currentLogicalQuestionUnitId: "question-lines" },
     manualCorrectionRevision: 0,
     now: 500,
   });
-  const stale = authorizeAwaitingVisualEvidenceRecovery({
-    fact,
+  const stale = selectVisualRecoveryOpportunity({
+    facts: [fact],
     sessionId: "session-1",
     runtimeEpoch: 4,
-    logicalQuestionUnitId: "question-lines",
-    logicalQuestionRevision: 3,
-    visibleAnswerRevision: 7,
-    parentTaskId: "parent-coding",
-    parentRevision: 3,
+    topology: { parentId: "different-parent", currentLogicalQuestionUnitId: "different-question" },
     manualCorrectionRevision: 0,
     now: 500,
   });
 
-  assert.deepEqual(authorized, { authorized: true, reason: "authorized" });
-  assert.deepEqual(stale, {
-    authorized: false,
-    reason: "logical-question-revision-mismatch",
-  });
+  assert.equal(authorized.fact, fact);
+  assert.equal(stale.fact, undefined);
+  assert.deepEqual(stale.expiredFactIds, [fact.id]);
 });
 
 test("rejects expired or manually corrected recovery", () => {
@@ -88,30 +77,26 @@ test("rejects expired or manually corrected recovery", () => {
   assert.ok(fact);
 
   const base = {
-    fact,
+    facts: [fact],
     sessionId: "session-1",
     runtimeEpoch: 4,
-    logicalQuestionUnitId: "question-lines",
-    logicalQuestionRevision: 2,
-    visibleAnswerRevision: 7,
-    parentTaskId: "parent-coding",
-    parentRevision: 3,
+    topology: { parentId: "parent-coding", currentLogicalQuestionUnitId: "question-lines" },
   };
   assert.equal(
-    authorizeAwaitingVisualEvidenceRecovery({
+    selectVisualRecoveryOpportunity({
       ...base,
       manualCorrectionRevision: 1,
       now: 1_101,
-    }).reason,
-    "expired"
+    }).fact,
+    undefined
   );
   assert.equal(
-    authorizeAwaitingVisualEvidenceRecovery({
+    selectVisualRecoveryOpportunity({
       ...base,
       manualCorrectionRevision: 2,
       now: 500,
-    }).reason,
-    "manual-correction-revision-mismatch"
+    }).fact,
+    undefined
   );
 });
 
@@ -134,17 +119,15 @@ test("allows a pre-answer recovery fact before a parent exists", () => {
   assert.equal(fact.parentTaskId, undefined);
   assert.equal(fact.sourceSettlementId, "voice-settlement");
   assert.equal(
-    authorizeAwaitingVisualEvidenceRecovery({
-      fact,
+    selectVisualRecoveryOpportunity({
+      facts: [fact],
       sessionId: "session-1",
       runtimeEpoch: 4,
-      logicalQuestionUnitId: "question-lines",
-      logicalQuestionRevision: 1,
-      visibleAnswerRevision: 2,
+      topology: { currentLogicalQuestionUnitId: "question-lines" },
       manualCorrectionRevision: 0,
       now: 200,
-    }).authorized,
-    true
+    }).fact,
+    fact
   );
 });
 

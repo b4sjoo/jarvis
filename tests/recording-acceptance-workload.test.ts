@@ -1,3 +1,4 @@
+import { authorizeRuntimeCommit } from "../src/lib/meeting/runtime-commit-authorization.js";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -12,7 +13,7 @@ import ts from "typescript";
 import { SessionRecordingManager, type SessionRecordingInvoke } from "../src/lib/meeting/session-recording.js";
 import type { MeetingAssistantSettings } from "../src/lib/meeting/types.js";
 import { MeetingContextManager } from "../src/lib/meeting/context-manager.js";
-import { createAdvisorTriggerJob, decideAdvisorJobCommit } from "../src/lib/meeting/advisor-trigger-job.js";
+import { createAdvisorTriggerJob } from "../src/lib/meeting/advisor-trigger-job.js";
 import { buildSettledAdvisorExecutionPlan } from "../src/lib/meeting/settled-advisor-execution-plan.js";
 
 const recorderPath = "src/lib/meeting/session-recording.ts";
@@ -316,8 +317,7 @@ test("RC3: retained failed recorder does not alter settled Job/Plan to actual pe
           memoryUseCase: "coding_interview", askFrame: "direct-answer", topicDomain: "backend",
           artifactRequest: { hardAnswerOnly: true }, createdAt: 2000,
         });
-        const authorized = decideAdvisorJobCommit({ job, activeJobId: job.id,
-          currentRuntime: { sessionId: "session-a", runtimeEpoch: 1, parentId: task.parent.id, parentRevision: task.parent.revisions } });
+        const authorized = authorizeRuntimeCommit({ token: (job).runtimeCommitToken, currentOperationId: job.id, current: { sessionId: "session-a", runtimeEpoch: 1, parentId: task.parent.id, parentRevision: task.parent.revisions } });
         assert.equal(authorized.authorized, true);
         assert.deepEqual(plan.requestedArtifacts, ["answer"]);
         const generationLease = { ...harnessModule.lease(), taskRevision: task.parent.revisions,
@@ -351,7 +351,8 @@ test("RC3: retained failed recorder does not alter settled Job/Plan to actual pe
         }
         assert.ok(observerCalls >= 2, "actual callbacks must reach the recorder observation boundary");
         const actual = plain({ plan, job: { prompt: job.promptContextSnapshot, authority: job.taskMutationAuthority,
-          responseAuthority: job.responseAuthoritySource, mode: job.mode }, authorized, disposition,
+          responseAuthority: job.responseAuthoritySource, mode: job.mode },
+          authorized: { authorized: authorized.authorized, reason: authorized.reason }, disposition,
           stable: h.refs.stableAnswerRevisionRef.current, ui: h.uiState, uiUpdates: h.uiUpdates,
           ledger, observerCalls, context: context.getState() });
         if (expected === undefined) expected = actual;

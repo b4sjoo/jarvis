@@ -933,7 +933,6 @@ import {
   measureTaggedPromptSectionChars,
 } from "@/lib/meeting/phase-navigation-prompt-context";
 
-const ADVISOR_DEBOUNCE_MS = 750;
 const STT_TIMEOUT_MS = 30_000;
 const SCREEN_PREFLIGHT_TIMEOUT_MS = 10_000;
 const SCREEN_ANALYSIS_TIMEOUT_MS = 45_000;
@@ -16791,7 +16790,6 @@ export function useMeetingAssistant() {
     logicalQuestionUnit?: LogicalQuestionUnit,
     taskMutationAuthority: AdvisorTaskMutationAuthority = "input-evidence",
     currentQuestionSettlementOverride?: CurrentQuestionSettlementDecision,
-    debounceMs = ADVISOR_DEBOUNCE_MS,
     runtimeTypeAdjudicationOutputAuthority?: RuntimeTypeAdjudicationOutputAuthority,
     advisorJobSource: AdvisorJobSource = "live-turn"
   ) => {
@@ -16834,8 +16832,6 @@ export function useMeetingAssistant() {
     }
     const dispatch = () => {
       if (!activateAdvisorJob(advisorJob)) return;
-      const elapsedMs = Math.max(0, Date.now() - advisorJob.scheduledAt);
-      const remainingDebounceMs = Math.max(0, debounceMs - elapsedMs);
       advisorDebounceTimerRef.current = window.setTimeout(() => {
         advisorDebounceTimerRef.current = null;
         void runAdvisor({
@@ -16848,7 +16844,7 @@ export function useMeetingAssistant() {
           currentQuestionSettlementOverride,
           runtimeTypeAdjudicationOutputAuthority,
         });
-      }, remainingDebounceMs);
+      }, 0);
     };
     if (admission.action === "hold-supersession-pending") {
       const protectedJob = activeAdvisorJobRef.current;
@@ -17076,23 +17072,16 @@ export function useMeetingAssistant() {
       originalDecision: AdvisorTurnIntentDecision;
       executionMode:
         | "authoritative"
-        | "speculative-authoritative"
-        | "shadow-observation";
+        | "speculative-authoritative";
       onOutputAuthorized: (input: {
         intentDecision: AdvisorTurnIntentDecision;
         logicalQuestionUnit: LogicalQuestionUnit;
       }) => void;
     }) => {
       const contextState = contextManagerRef.current.getState();
-      const authoritative = executionMode !== "shadow-observation";
       const speculative =
         executionMode === "speculative-authoritative";
       const deferredAuthoritative = executionMode === "authoritative";
-      const finishTraceIfAuthoritative = () => {
-        if (deferredAuthoritative) {
-          traceStoreRef.current.finishTrace(traceId, "success");
-        }
-      };
       const scheduledTaskId = contextState.activeMeetingTask?.id;
       const readResponseOpportunitySources = (
         unit: LogicalQuestionUnit
@@ -17169,9 +17158,7 @@ export function useMeetingAssistant() {
         request,
         manualCorrectionRevision: manualCorrectionRevisionRef.current,
       });
-      const generationGate = authoritative
-        ? responseOpportunityGenerationGateRef.current.create(lease)
-        : undefined;
+      const generationGate = responseOpportunityGenerationGateRef.current.create(lease);
       const settleGenerationGateUnresolved = (reason: string) => {
         if (!generationGate) return;
         const settled =
@@ -17229,14 +17216,10 @@ export function useMeetingAssistant() {
       };
       const releaseLocalFallback = (reason: string) => {
         settleGenerationGateUnresolved(reason);
-        if (authoritative) {
-          releaseOutput(
-            originalDecision,
-            `response-null-hypothesis:${reason}`
-          );
-          return;
-        }
-        finishTraceIfAuthoritative();
+        releaseOutput(
+          originalDecision,
+          `response-null-hypothesis:${reason}`
+        );
       };
       const baseMetadata: Record<string, unknown> = {
         ...formatRuntimeInferenceOperationForTrace(
@@ -17558,7 +17541,6 @@ export function useMeetingAssistant() {
                 })
               : latestLogicalQuestionUnit;
           if (
-            authoritative &&
             authorization.authorized &&
             targetedLogicalQuestionUnit.responseOpportunityTarget &&
             latestForceAdviseTargetRef.current?.logicalQuestionUnit.id ===
@@ -17634,7 +17616,7 @@ export function useMeetingAssistant() {
             settlement.disposition === "operation-mismatch";
           const nullHypothesisApplied =
             authorization.authorized &&
-            authoritative && !nonSemanticFailure &&
+            !nonSemanticFailure &&
             (settlement.disposition === "completed" || settlement.disposition === "budget-exhausted") &&
             releaseUnresolved;
           const generationGateDisposition = !authorization.authorized
@@ -17666,7 +17648,7 @@ export function useMeetingAssistant() {
           const effectiveAppliedDecision =
             validAppliedDecision ?? fallbackAppliedDecision;
           const decisionApplied = Boolean(
-            authoritative && effectiveAppliedDecision
+            effectiveAppliedDecision
           );
           const rawOutput = result?.rawOutput ?? "";
           const recordingActive =
@@ -17728,8 +17710,8 @@ export function useMeetingAssistant() {
             responseOpportunityDecisionApplied: decisionApplied,
             responseOpportunityNullHypothesisApplied: nullHypothesisApplied,
             responseOpportunityReleased:
-              authoritative && (releaseDecision?.released ?? false),
-            responseOpportunityShadowObserved: !authoritative,
+              releaseDecision?.released ?? false,
+            responseOpportunityShadowObserved: false,
             responseOpportunityReleaseReason:
               releaseDecision?.reason ??
               (authorization.authorized
@@ -17827,11 +17809,6 @@ export function useMeetingAssistant() {
               metadata,
               settlement.error
             );
-          }
-
-          if (!authoritative) {
-            refreshRecordedCompletedTrace(traceId);
-            return;
           }
 
           if (!authorization.authorized) {
@@ -21613,7 +21590,6 @@ export function useMeetingAssistant() {
               ? "runtime-type-adjudication-output-only"
               : "input-evidence",
           settlementReleased ? settlement : undefined,
-          0,
           runtimeTypeAdjudicationOutputAuthority,
           input.advisorJobSource
         );
@@ -22629,42 +22605,15 @@ export function useMeetingAssistant() {
               const mode = latestContext.activeMeetingTask?.screen
                 ? "screen-anchored"
                 : "live";
-              if (
-                scheduleAdvisorAfterQuestionTypeWindow({
-                  handle: runtimeAdjudication,
-                  mode,
-                  traceId,
-                  turnIntentDecision: intentDecision,
-                  triggerTurnId: turn.id,
-                  questionLineage: advisorQuestionLineage,
-                  logicalQuestionUnit: releasedLogicalQuestionUnit,
-                })
-              ) {
-                return;
-              }
-              const debounceStepId = traceStoreRef.current.startStep(
-                traceId,
-                "Advisor debounce scheduled",
-                {
-                  debounceMs: ADVISOR_DEBOUNCE_MS,
-                  reason: intentDecision.reason,
-                  runtimeIntentReleasedAction: "answer",
-                }
-              );
-              traceStoreRef.current.finishStep(
-                traceId,
-                debounceStepId,
-                "success"
-              );
-              scheduleAdvisor(
+              scheduleAdvisorAfterQuestionTypeWindow({
+                handle: runtimeAdjudication,
                 mode,
                 traceId,
-                intentDecision,
-                turn.id,
-                advisorQuestionLineage,
-                releasedLogicalQuestionUnit,
-                "input-evidence"
-              );
+                turnIntentDecision: intentDecision,
+                triggerTurnId: turn.id,
+                questionLineage: advisorQuestionLineage,
+                logicalQuestionUnit: releasedLogicalQuestionUnit,
+              });
             },
           });
           return;
@@ -22675,7 +22624,7 @@ export function useMeetingAssistant() {
 
     }, [appendTranscriptTurnForTrace, buildLogicalQuestionForTurn, holdPendingConfirmation,
       publishCanonicalLogicalQuestionTarget, publishResponseRecoveryTarget, promoteMeTurnForFusion,
-      scheduleAdvisor, scheduleAdvisorAfterQuestionTypeWindow, scheduleResponseOpportunityInference,
+      scheduleAdvisorAfterQuestionTypeWindow, scheduleResponseOpportunityInference,
       scheduleQuestionRuntime]);
   processPostBufferThemTurnRef.current = processPostBufferThemTurn;
 

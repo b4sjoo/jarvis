@@ -87,8 +87,7 @@ export type ResponseOpportunityLocalDisposition =
 
 export type ResponseOpportunityExecutionMode =
   | "authoritative"
-  | "speculative-authoritative"
-  | "shadow-observation";
+  | "speculative-authoritative";
 
 export interface ResponseOpportunityLocalDecision {
   disposition: ResponseOpportunityLocalDisposition;

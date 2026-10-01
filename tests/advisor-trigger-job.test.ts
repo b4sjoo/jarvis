@@ -1,3 +1,4 @@
+import { authorizeRuntimeCommit } from "../src/lib/meeting/runtime-commit-authorization.js";
 import type { AdvisorPromptContext } from "../src/lib/meeting/meeting-context-contracts.js";
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -6,11 +7,9 @@ import {
   authorizeAdvisorTaskMutation,
   createAdvisorTriggerJob,
   decideAdvisorPhaseMutation,
-  decideAdvisorJobCommit,
   decideAdvisorTaskMutation,
   formatAdvisorTriggerJobForTrace,
-  resolveAdvisorLogicalQuestionAuthorizationTarget,
-} from "../src/lib/meeting/advisor-trigger-job.js";
+  resolveAdvisorLogicalQuestionAuthorizationTarget } from "../src/lib/meeting/advisor-trigger-job.js";
 import { decideAdvisorTurnIntent } from "../src/lib/meeting/advisor-turn-intent.js";
 
 
@@ -84,22 +83,15 @@ test("rejects a replaced job and a job from an old meeting session", () => {
     taskMutationAuthority: "input-evidence",
   });
 
-  assert.deepEqual(
-    decideAdvisorJobCommit({
-      job,
-      activeJobId: "newer-job",
-      currentRuntime: { runtimeEpoch: 1, sessionId: "session-a" },
-    }),
-    { authorized: false, reason: "pipeline-owner-mismatch" }
-  );
-  assert.deepEqual(
-    decideAdvisorJobCommit({
-      job,
-      activeJobId: job.id,
-      currentRuntime: { runtimeEpoch: 1, sessionId: "session-b" },
-    }),
-    { authorized: false, reason: "session-mismatch" }
-  );
+  for (const [sessionId, currentOperationId, reason] of [
+    ["session-a", "newer-job", "pipeline-owner-mismatch"],
+    ["session-b", job.id, "session-mismatch"],
+  ]) {
+    const result = authorizeRuntimeCommit({ token: job.runtimeCommitToken, currentOperationId,
+      current: { runtimeEpoch: 1, sessionId } });
+    assert.equal(result.authorized, false);
+    assert.equal(result.reason, reason);
+  }
 });
 
 test("emits the job identity needed to reconstruct ownership", () => {
@@ -337,16 +329,12 @@ test("keeps canonical runtime ownership when prompt context is current-only", ()
 
   assert.equal(job.expectedParentId, "parent-preserved");
   assert.equal(
-    decideAdvisorJobCommit({
-      job,
-      activeJobId: job.id,
-      currentRuntime: {
+    authorizeRuntimeCommit({ token: (job).runtimeCommitToken, currentOperationId: job.id, current: {
         runtimeEpoch: 1,
         sessionId: "session-a",
         parentId: "parent-preserved",
         parentRevision: 4,
-      },
-    }).reason,
+      } }).reason,
     "authorized"
   );
 });

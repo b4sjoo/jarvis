@@ -4,10 +4,8 @@ import {
   authorizeAdvisorOutputCommit,
   authorizeAdvisorTaskMutation,
   createAdvisorTriggerJob,
-  decideAdvisorJobCommit,
   decideAdvisorPhaseMutation,
-  decideAdvisorTaskMutation,
-} from "../src/lib/meeting/advisor-trigger-job.js";
+  decideAdvisorTaskMutation } from "../src/lib/meeting/advisor-trigger-job.js";
 import {
   createAdjacentQuestionScope,
   resolveAdjacentConstraintInheritance,
@@ -142,11 +140,7 @@ test("keeps a trigger-owned question stable when a later informational turn arri
         id: "advisor-trigger-owned",
         kind: "advisor",
         commit: ({ value, contextManager, harness: currentHarness }) => {
-          const decision = decideAdvisorJobCommit({
-            job,
-            activeJobId: currentHarness.getActiveAdvisorJobId(),
-            currentRuntime: currentRuntimeSnapshot(currentHarness),
-          });
+          const decision = authorizeRuntimeCommit({ token: (job).runtimeCommitToken, currentOperationId: currentHarness.getActiveAdvisorJobId(), current: currentRuntimeSnapshot(currentHarness) });
           if (!decision.authorized) {
             return rejected(decision.reason);
           }
@@ -264,11 +258,7 @@ test("preserves provisional question lineage when an adjacent constraint replace
   harness.activateAdvisorJob(secondJob.id);
 
   assert.equal(
-    decideAdvisorJobCommit({
-      job: firstJob,
-      activeJobId: harness.getActiveAdvisorJobId(),
-      currentRuntime: currentRuntimeSnapshot(harness),
-    }).authorized,
+    authorizeRuntimeCommit({ token: (firstJob).runtimeCommitToken, currentOperationId: harness.getActiveAdvisorJobId(), current: currentRuntimeSnapshot(harness) }).authorized,
     false
   );
   assert.equal(
@@ -843,11 +833,7 @@ function createAdvisorCompletion(
     id,
     kind: "advisor",
     commit: ({ value, contextManager, harness: currentHarness }) => {
-      const decision = decideAdvisorJobCommit({
-        job,
-        activeJobId: currentHarness.getActiveAdvisorJobId(),
-        currentRuntime: currentRuntimeSnapshot(currentHarness),
-      });
+      const decision = authorizeRuntimeCommit({ token: (job).runtimeCommitToken, currentOperationId: currentHarness.getActiveAdvisorJobId(), current: currentRuntimeSnapshot(currentHarness) });
       if (!decision.authorized) {
         return rejected(decision.reason);
       }

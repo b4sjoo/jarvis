@@ -546,13 +546,6 @@ function buildVoiceSeededInstructions(contextMode: string) {
 }
 
 function buildModeInstructions(mode: AdvisorRequestMode) {
-  if (mode === "screen-only") {
-    return [
-      "This request was triggered by screen capture only.",
-      "Do not infer meeting dialogue from the screenshot.",
-    ];
-  }
-
   if (mode === "screen-anchored") {
     return [
       "This request follows an active screen task.",

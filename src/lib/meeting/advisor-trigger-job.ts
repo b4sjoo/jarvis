@@ -18,9 +18,7 @@ import type {
 import { formatLogicalQuestionUnitForTrace, type LogicalQuestionUnit } from "./logical-question-unit.js";
 
 import {
-  authorizeRuntimeCommit,
   createRuntimeCommitToken,
-  type RuntimeCommitAuthorizationReason,
   type RuntimeCommitSnapshot,
   type RuntimeCommitToken,
 } from "./runtime-commit-authorization.js";
@@ -100,10 +98,6 @@ export interface CreateAdvisorTriggerJobInput {
   scheduledAt?: number;
 }
 
-export interface AdvisorJobCommitDecision {
-  authorized: boolean;
-  reason: RuntimeCommitAuthorizationReason;
-}
 
 export interface AdvisorLogicalQuestionAuthorizationTarget {
   source:
@@ -299,18 +293,6 @@ export function createAdvisorTriggerJob(
   };
 }
 
-export function decideAdvisorJobCommit(input: {
-  job: AdvisorTriggerJob;
-  activeJobId?: string;
-  currentRuntime: RuntimeCommitSnapshot;
-}): AdvisorJobCommitDecision {
-  const decision = authorizeRuntimeCommit({
-    token: input.job.runtimeCommitToken,
-    current: input.currentRuntime,
-    currentOperationId: input.activeJobId,
-  });
-  return { authorized: decision.authorized, reason: decision.reason };
-}
 
 export function decideAdvisorTaskMutation(input: {
   authority: AdvisorTaskMutationAuthority;

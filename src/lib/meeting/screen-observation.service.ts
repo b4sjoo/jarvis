@@ -72,15 +72,6 @@ export interface CaptureScreenObservationOptions {
   target?: ScreenCaptureTargetType;
 }
 
-export interface SummarizeScreenObservationOptions {
-  observation: ScreenObservation;
-  provider: TYPE_PROVIDER | undefined;
-  selectedProvider: SelectedProviderState;
-  autoPrompt?: string;
-  signal?: AbortSignal;
-  executionIdentity?: AIResponseExecutionIdentityInput;
-  trace?: MeetingModelTraceCallbacks;
-}
 
 export interface PreflightScreenObservationOptions {
   observation: ScreenObservation;
@@ -147,19 +138,6 @@ interface CaptureScreenContextResponse {
   target: ScreenCaptureTarget;
 }
 
-const SCREEN_CONTEXT_SYSTEM_PROMPT = [
-  "You are reading visible screen content that may be used during a software engineering meeting.",
-  "Extract only context that helps a non-native English speaker respond in the meeting.",
-  "Focus on visible questions, requirements, errors, code, docs, tickets, diagrams, and technical terms.",
-  "Do not invent colleagues, speakers, meeting dialogue, or questions that are not visible.",
-  "Be concise and do not invent details that are not visible.",
-].join(" ");
-
-const SCREEN_CONTEXT_USER_MESSAGE = [
-  "Summarize the visible screen in 1-3 short bullets.",
-  "Keep file names, page titles, error messages, function names, and requirements when visible.",
-  "If there is no useful meeting context, return a single dash.",
-].join(" ");
 
 const SCREEN_PREFLIGHT_SYSTEM_PROMPT = [
   "You are a fast metadata extractor for Jarvis.",
@@ -196,75 +174,6 @@ export async function captureScreenObservation({
   };
 }
 
-export async function summarizeScreenObservation({
-  observation,
-  provider,
-  selectedProvider,
-  autoPrompt,
-  signal,
-  executionIdentity,
-  trace,
-}: SummarizeScreenObservationOptions) {
-  if (!observation.imageBase64) return "";
-
-  if (!provider) {
-    throw new Error("Choose an AI provider to analyze screen context.");
-  }
-
-  if (!provider.curl.includes("{{IMAGE}}")) {
-    throw new Error(
-      "Selected AI provider does not support image input for screen context."
-    );
-  }
-
-  const userMessage = buildScreenContextUserMessage(autoPrompt);
-
-  trace?.onRequest?.({
-    systemPrompt: SCREEN_CONTEXT_SYSTEM_PROMPT,
-    userMessage,
-    imageCount: observation.imageBase64 ? 1 : 0,
-    imageMediaType: observation.imageMediaType || "image/png",
-    providerId: provider.id,
-    mode: "screen-task",
-  });
-
-  const imageInput = {
-    base64: observation.imageBase64,
-    mediaType: observation.imageMediaType || "image/png",
-  };
-
-  const result = await collectMeetingAIResponseCandidate({
-    events: fetchAIResponseEvents({
-      provider,
-      selectedProvider,
-      systemPrompt: SCREEN_CONTEXT_SYSTEM_PROMPT,
-      userMessage,
-      imagesBase64: [imageInput],
-      signal,
-      applyResponseSettings: false,
-      executionIdentity: {
-        ...executionIdentity,
-        requestId:
-          executionIdentity?.requestId ??
-          `screen-summary:${observation.id}`,
-        executionPlanId:
-          executionIdentity?.executionPlanId ?? observation.id,
-        logicalQuestionUnitId:
-          executionIdentity?.logicalQuestionUnitId ?? observation.id,
-        logicalQuestionRevision:
-          executionIdentity?.logicalQuestionRevision ?? 0,
-      },
-    }),
-    onFirstContent: () => trace?.onFirstToken?.(),
-    onTerminal: (outcome) => trace?.onTerminal?.(outcome),
-  });
-  const trimmed = requireMeetingAIResponseCandidate(result).content.trim();
-
-  const output = trimmed === "-" ? "" : trimmed;
-  trace?.onComplete?.(output);
-
-  return output;
-}
 
 export async function preflightScreenObservation({
   observation,
@@ -464,20 +373,6 @@ export async function solveScreenAnchoredTask({
   return output;
 }
 
-function buildScreenContextUserMessage(autoPrompt: string | undefined) {
-  const trimmedPrompt = autoPrompt?.trim();
-  if (!trimmedPrompt) return SCREEN_CONTEXT_USER_MESSAGE;
-
-  return [
-    "<configured_screenshot_auto_prompt>",
-    trimmedPrompt,
-    "</configured_screenshot_auto_prompt>",
-    "Follow the configured screenshot auto prompt as the primary task.",
-    "Keep the result compact enough to use during a live software engineering meeting.",
-    "Describe only the visible screen. Do not say a colleague asked or means something unless that is visible in the screenshot.",
-    "If there is no useful visible context, return a single dash.",
-  ].join("\n");
-}
 
 function buildScreenPreflightUserMessage({
   observation,

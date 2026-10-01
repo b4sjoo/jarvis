@@ -15,17 +15,6 @@ export interface SessionEvaluationProvenanceHistoryEntry
   action: "mark-scripted" | "mark-organic";
 }
 
-export function resolveSessionScriptedValidation(input: {
-  scriptedValidation?: unknown;
-  effectiveScriptedValidation?: unknown;
-  legacyEvaluationProvenance?: unknown;
-}) {
-  if (typeof input.effectiveScriptedValidation === "boolean") {
-    return input.effectiveScriptedValidation;
-  }
-  if (input.scriptedValidation === true) return true;
-  return input.legacyEvaluationProvenance === "scripted-validation";
-}
 
 export function toHumanEvaluationCollectionProvenance(
   scriptedValidation: boolean

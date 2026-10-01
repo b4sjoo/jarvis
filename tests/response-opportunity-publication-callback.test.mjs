@@ -174,7 +174,6 @@ function createHarness() {
   };
   Object.assign(environment, {
     VOICE_ORDERED_RELATION_FOREGROUND_BUDGET_MS: 4_000,
-    ADVISOR_DEBOUNCE_MS: 200,
     contextManagerRef: { current: { getState: () => state, clearExpiredActiveMeetingTask: () => false,
       addTranscriptTurn: (turn) => state.transcriptTurns.push(turn),
     } },
@@ -829,7 +828,7 @@ test("RO-F3: disposed active provider completion cannot publish after the meetin
   assert.equal(h.metadata.get("trace-A").logicalQuestionPublicationStage, "release-cancelled");
 });
 
-for (const mode of ["speculative-authoritative", "authoritative", "shadow-observation"]) {
+for (const mode of ["speculative-authoritative", "authoritative"]) {
   for (const outcome of ["output-request", "no-output-request", "unclear", "timeout", "parse-failure", "error", "budget-exhausted"]) {
     test(`RO-F4: current provisional ${mode} preserves ${outcome} behavior through ordered handoff`, async () => {
       const h = createHarness();
@@ -854,7 +853,7 @@ for (const mode of ["speculative-authoritative", "authoritative", "shadow-observ
             : undefined;
       h.settle(operation, result, outcome === "budget-exhausted" ? "budget-exhausted" : outcome === "error" ? "error" : "completed");
       await h.clock.flush();
-      const publishes = mode !== "shadow-observation" && outcome !== "no-output-request" && outcome !== "error";
+      const publishes = outcome !== "no-output-request" && outcome !== "error";
       assert.equal(h.advisorCalls.length, publishes ? 1 : 0);
       assert.equal(h.environment.logicalQuestionUnitRef.current.id, publishes ? candidate.unit.id : before.unit.id);
       assert.equal(h.metadata.get(candidate.traceId).responseOpportunityLeaseAuthorized, true);
@@ -867,15 +866,14 @@ for (const mode of ["speculative-authoritative", "authoritative", "shadow-observ
         assert.equal(h.advisorCalls[0][5], h.environment.logicalQuestionUnitRef.current);
         assert.equal(h.advisorCalls[0][7].action, "answer");
       }
-      if (mode === "shadow-observation") assert.deepEqual(h.products(), before);
-      if (mode !== "shadow-observation" && outcome === "no-output-request") {
+      if (outcome === "no-output-request") {
         const target = h.environment.latestForceAdviseTargetRef.current;
         assert.equal(target.logicalQuestionUnit.responseOpportunityTarget.decision, "no-output-request");
         assert.equal(target.presentation.text, operation.job.request.decisionSpans[0].text);
         assert.equal(h.products().manualTarget, before.manualTarget);
         assert.equal(h.products().history, before.history);
       }
-      if (mode !== "shadow-observation") assert.equal(h.environment.responseOpportunityGenerationGateRef.current.read(operation.job.operationId).disposition, outcome === "no-output-request" ? "output-suppressed" : outcome === "error" ? "unresolved" : "output-authorized");
+      assert.equal(h.environment.responseOpportunityGenerationGateRef.current.read(operation.job.operationId).disposition, outcome === "no-output-request" ? "output-suppressed" : outcome === "error" ? "unresolved" : "output-authorized");
       h.runtime.cancelAll();
     });
   }

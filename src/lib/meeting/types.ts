@@ -1051,7 +1051,6 @@ export type AdvisorSuggestionKind =
 export type AdvisorRequestMode =
   | "live"
   | "regenerate"
-  | "screen-only"
   | "screen-anchored"
   | "clarifying-answer"
   | "response-action";

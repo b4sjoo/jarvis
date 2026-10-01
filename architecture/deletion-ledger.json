@@ -1,8 +1,29 @@
 {
   "$schema": "./deletion-ledger.schema.json",
   "version": 1,
-  "updatedAt": "2026-09-26",
+  "updatedAt": "2026-09-30",
   "entries": [
+    {
+      "id": "uncalled-advisor-and-legacy-authority-helpers",
+      "symbolOrSurface": "Unreachable Advisor fallback delay, unused Screen summarizer and five test-only authority helpers",
+      "verdict": "migrate-then-delete",
+      "ownerTaskId": 168,
+      "replacement": "Ordered RO handoff, existing runtime commit authorization and live visual recovery consumers",
+      "persistedDataImpact": "none",
+      "proofCommands": ["npm test", "npm run build", "npm run verify:architecture"],
+      "deletionGate": "No production or test consumer depends on retired helpers; actual RO, first-parent, recovery and asynchronous dispatch behavior remains covered.",
+      "rollbackBoundary": "Mechanical retirement only; empty Prompt sections and Correction transaction migration are independent.",
+      "status": "deleted",
+      "forbiddenPatterns": [
+        "ADVISOR_DEBOUNCE_MS",
+        "export async function summarizeScreenObservation(",
+        "export function authorizeAwaitingVisualEvidenceRecovery(",
+        "export function decideAdvisorJobCommit(",
+        "export function decideRuntimeTypeAdjudicationFirstParentAdmission(",
+        "export function resolveSessionScriptedValidation(",
+        "export function settleCurrentQuestionTerminalNoAnswer("
+      ]
+    },
     {
       "id": "temporary-native-stall-acceptance-hooks",
       "symbolOrSurface": "Fixed Provider build substitution, non-development Replay exception and native stall stage/block injectors",

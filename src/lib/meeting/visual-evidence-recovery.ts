@@ -81,21 +81,6 @@ export interface BoundVisualRecoveryApplicationDecision {
   branchRelation: BoundVisualRecoveryRelationDecision;
 }
 
-export interface AwaitingVisualEvidenceRecoveryAuthorization {
-  authorized: boolean;
-  reason:
-    | "authorized"
-    | "no-recovery-fact"
-    | "expired"
-    | "session-mismatch"
-    | "runtime-epoch-mismatch"
-    | "logical-question-mismatch"
-    | "logical-question-revision-mismatch"
-    | "visible-answer-revision-mismatch"
-    | "parent-mismatch"
-    | "parent-revision-mismatch"
-    | "manual-correction-revision-mismatch";
-}
 
 export type VisualRecoveryCommitAuthorization =
   | { authorized: true; reason: "authorized" }
@@ -474,61 +459,6 @@ export function projectBoundVisualRecoveryApplication(input: {
   };
 }
 
-export function authorizeAwaitingVisualEvidenceRecovery(input: {
-  fact?: AwaitingVisualEvidenceRecoveryFact;
-  sessionId: string;
-  runtimeEpoch: number;
-  logicalQuestionUnitId?: string | null;
-  logicalQuestionRevision?: number | null;
-  visibleAnswerRevision?: number | null;
-  parentTaskId?: string | null;
-  parentRevision?: number | null;
-  manualCorrectionRevision: number;
-  now?: number;
-}): AwaitingVisualEvidenceRecoveryAuthorization {
-  const fact = input.fact;
-  if (!fact) return { authorized: false, reason: "no-recovery-fact" };
-  if ((input.now ?? Date.now()) > fact.expiresAt) {
-    return { authorized: false, reason: "expired" };
-  }
-  if (input.sessionId !== fact.sessionId) {
-    return { authorized: false, reason: "session-mismatch" };
-  }
-  if (input.runtimeEpoch !== fact.runtimeEpoch) {
-    return { authorized: false, reason: "runtime-epoch-mismatch" };
-  }
-  if (input.logicalQuestionUnitId !== fact.logicalQuestionUnitId) {
-    return { authorized: false, reason: "logical-question-mismatch" };
-  }
-  if (input.logicalQuestionRevision !== fact.logicalQuestionRevision) {
-    return {
-      authorized: false,
-      reason: "logical-question-revision-mismatch",
-    };
-  }
-  if (input.visibleAnswerRevision !== fact.visibleAnswerRevision) {
-    return {
-      authorized: false,
-      reason: "visible-answer-revision-mismatch",
-    };
-  }
-  if (fact.parentTaskId && input.parentTaskId !== fact.parentTaskId) {
-    return { authorized: false, reason: "parent-mismatch" };
-  }
-  if (
-    fact.parentRevision !== undefined &&
-    input.parentRevision !== fact.parentRevision
-  ) {
-    return { authorized: false, reason: "parent-revision-mismatch" };
-  }
-  if (input.manualCorrectionRevision !== fact.manualCorrectionRevision) {
-    return {
-      authorized: false,
-      reason: "manual-correction-revision-mismatch",
-    };
-  }
-  return { authorized: true, reason: "authorized" };
-}
 
 export function formatAwaitingVisualEvidenceRecoveryForTrace(
   fact: AwaitingVisualEvidenceRecoveryFact | undefined,

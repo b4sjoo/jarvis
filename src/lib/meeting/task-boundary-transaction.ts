@@ -16,9 +16,6 @@ import {
   getLogicalQuestionSemanticEvidenceText,
   type LogicalQuestionUnit,
 } from "./logical-question-unit.js";
-import type { ResponseOpportunityGenerationGateSnapshot } from "./response-opportunity-generation-gate.js";
-import { resolveResponseOpportunityEffectiveCommand } from "./response-opportunity-generation-gate.js";
-import { buildResponseOpportunityRequest } from "./response-opportunity-contract.js";
 import { applyPlaybookPhaseDecisionToProgress } from "./playbook-phase.js";
 import {
   isParentCanonicalQuestionType,
@@ -51,27 +48,6 @@ export type TaskBoundaryAuthoritySource =
   | "accepted-llm-type-first-parent"
   | "semantic-unknown-rescue";
 
-export interface RuntimeTypeAdjudicationFirstParentAdmissionDecision {
-  authorized: boolean;
-  reason:
-    | "authorized-committed-output-request"
-    | "active-parent-present"
-    | "type-adjudication-output-not-authorized"
-    | "settlement-not-type-only-adjudication"
-    | "question-type-not-parent-eligible"
-    | "logical-question-mismatch"
-    | "response-opportunity-missing"
-    | "response-opportunity-not-authorized"
-    | "response-opportunity-identity-mismatch"
-    | "bounded-substantive-ask-missing";
-  proposedRelation: "new-parent" | "unknown";
-  command?: {
-    kind: "create-parent";
-    type: CanonicalQuestionType;
-    topic: string;
-  };
-  responseOpportunityOperationId?: string;
-}
 
 export type TaskBoundaryMutationDisposition =
   | "commit-before-advisor"
@@ -242,109 +218,6 @@ export function createTaskBoundaryCandidate(
   };
 }
 
-export function decideRuntimeTypeAdjudicationFirstParentAdmission(input: {
-  logicalQuestionUnit?: LogicalQuestionUnit;
-  settlement?: CurrentQuestionSettlementDecision;
-  hasActiveParent: boolean;
-  outputAuthorityAuthorized: boolean;
-  responseOpportunityGate?: ResponseOpportunityGenerationGateSnapshot;
-}): RuntimeTypeAdjudicationFirstParentAdmissionDecision {
-  if (input.hasActiveParent) {
-    return firstParentDecision(false, "active-parent-present");
-  }
-  if (!input.outputAuthorityAuthorized) {
-    return firstParentDecision(
-      false,
-      "type-adjudication-output-not-authorized"
-    );
-  }
-
-  const settlement = input.settlement;
-  if (
-    !settlement ||
-    settlement.typeAuthoritySource !== "runtime-adjudication" ||
-    !settlement.typeMutationAuthorized ||
-    settlement.relationMutationAuthorized ||
-    settlement.relation !== "unknown"
-  ) {
-    return firstParentDecision(
-      false,
-      "settlement-not-type-only-adjudication"
-    );
-  }
-  if (!isParentCanonicalQuestionType(settlement.questionType)) {
-    return firstParentDecision(
-      false,
-      "question-type-not-parent-eligible"
-    );
-  }
-
-  const unit = input.logicalQuestionUnit;
-  if (
-    !unit ||
-    unit.id !== settlement.logicalQuestionUnitId ||
-    unit.revision !== settlement.revision ||
-    unit.sessionId !== settlement.sessionId ||
-    unit.runtimeEpoch !== settlement.runtimeEpoch
-  ) {
-    return firstParentDecision(false, "logical-question-mismatch");
-  }
-  const responseOpportunity = input.responseOpportunityGate;
-  if (!responseOpportunity) {
-    return firstParentDecision(false, "response-opportunity-missing");
-  }
-  if (
-    responseOpportunity.sessionId !== unit.sessionId ||
-    responseOpportunity.runtimeEpoch !== unit.runtimeEpoch ||
-    responseOpportunity.logicalQuestionUnitId !== unit.id ||
-    responseOpportunity.logicalQuestionUnitRevision !== unit.revision
-  ) {
-    return firstParentDecision(
-      false,
-      "response-opportunity-identity-mismatch",
-      responseOpportunity.operationId
-    );
-  }
-  const responseOpportunityRequest = buildResponseOpportunityRequest({
-    logicalQuestionUnit: unit,
-  });
-  if (
-    resolveResponseOpportunityEffectiveCommand(responseOpportunity) !==
-    "output-authorized"
-  ) {
-    return firstParentDecision(
-      false,
-      "response-opportunity-not-authorized",
-      responseOpportunity.operationId
-    );
-  }
-  const topic = getLogicalQuestionSemanticEvidenceText(unit).trim();
-  const boundedSubstantiveAsk = Boolean(
-      topic &&
-      !unit.truncated &&
-      responseOpportunityRequest.decisionSpans.length > 0 &&
-      (unit.primaryAskProjection?.primaryAskSpans.length ?? 0) <= 2
-  );
-  if (!boundedSubstantiveAsk) {
-    return firstParentDecision(
-      false,
-      "bounded-substantive-ask-missing",
-      responseOpportunity.operationId
-    );
-  }
-
-  return {
-    authorized: true,
-    reason: "authorized-committed-output-request",
-    proposedRelation: "new-parent",
-    command: {
-      kind: "create-parent",
-      type: settlement.questionType,
-      topic,
-    },
-    responseOpportunityOperationId: responseOpportunity.operationId,
-  };
-}
 
 export function commitTaskBoundaryCandidate(
   candidate: TaskBoundaryCandidate,
@@ -532,17 +405,4 @@ function mutationAuthorityFromSettlement(
 function clampConfidence(value: number | undefined) {
   if (typeof value !== "number" || !Number.isFinite(value)) return 0;
   return Math.max(0, Math.min(1, value));
-}
-
-function firstParentDecision(
-  authorized: boolean,
-  reason: RuntimeTypeAdjudicationFirstParentAdmissionDecision["reason"],
-  responseOpportunityOperationId?: string
-): RuntimeTypeAdjudicationFirstParentAdmissionDecision {
-  return {
-    authorized,
-    reason,
-    proposedRelation: authorized ? "new-parent" : "unknown",
-    responseOpportunityOperationId,
-  };
 }

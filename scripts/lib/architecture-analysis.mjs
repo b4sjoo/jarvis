@@ -284,15 +284,17 @@ export function createArchitectureContractBaseline(existingContract, sourceCommi
 }
 
 const TASK_MUTATION_METHODS = new Set([
+  // Current mutation APIs.
   "clearTaskRuntime",
   "commitTaskRuntimeTransition",
   "commitPreparedTaskRuntimeTransition",
-  "clearActiveInterviewTask",
-  "clearActiveMeetingTask",
-  "clearActiveScreenTask",
   "installPreparedTaskDeadlineUpdate",
   "rollbackPreparedTaskDeadlineUpdate",
   "rollbackPreparedTaskRuntimeTransition",
+  // Retired APIs remain discoverable under the same module/callsite policy.
+  "clearActiveInterviewTask",
+  "clearActiveMeetingTask",
+  "clearActiveScreenTask",
   "setActiveInterviewTask",
   "setActiveMeetingTaskState",
   "setActiveScreenTask",

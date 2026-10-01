@@ -88,12 +88,13 @@ test("joins every reviewed response opportunity before canonical publication and
   );
   assert.match(
     residualBranch,
-    /releasedLogicalQuestionUnit,\s*"input-evidence"/
+    /logicalQuestionUnit: releasedLogicalQuestionUnit/
   );
   assert.doesNotMatch(
     residualBranch,
     /releasedLogicalQuestionUnit,\s*"runtime-intent-answer"/
   );
+  assert.doesNotMatch(residualBranch, /ADVISOR_DEBOUNCE_MS|\bscheduleAdvisor\(/);
 
   const responseOpportunity = sourceSlice(
     "  const scheduleResponseOpportunityInference = useCallback(",

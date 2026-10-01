@@ -450,12 +450,16 @@ test("baseline CLI rejects missing and damaged existing contracts even with forc
   }
 });
 
-test("prepared and deadline API calls are discovered from source and constrained", () => {
+test("all six current and six retired writer signatures are discovered from source and constrained", () => {
   const methods = [
+    "clearTaskRuntime",
+    "commitTaskRuntimeTransition",
     "commitPreparedTaskRuntimeTransition",
     "rollbackPreparedTaskRuntimeTransition",
     "installPreparedTaskDeadlineUpdate",
     "rollbackPreparedTaskDeadlineUpdate",
+    "clearActiveInterviewTask", "clearActiveMeetingTask", "clearActiveScreenTask",
+    "setActiveInterviewTask", "setActiveMeetingTaskState", "setActiveScreenTask",
   ];
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "jarvis-task-mutation-"));
   try {
@@ -475,9 +479,12 @@ test("prepared and deadline API calls are discovered from source and constrained
     assert.deepEqual(unauthorizedCalls.map((call) => call.method), methods);
     const unauthorizedAnalysis = structuredClone(controlledAnalysis);
     unauthorizedAnalysis.taskMutationCalls.push(...unauthorizedCalls);
-    assert.deepEqual(evaluate({ analysis: unauthorizedAnalysis, contract }).errors, [
+    const unauthorizedErrors = evaluate({ analysis: unauthorizedAnalysis, contract }).errors;
+    assert.deepEqual(unauthorizedErrors.filter(error => error.startsWith("task-writer:")), [
       "task-writer: unauthorized module src/lib/example/new-caller.ts",
     ]);
+    assert.equal(unauthorizedErrors.filter(error => error.startsWith("deleted-surface:")).length, 6,
+      "the existing deletion ledger independently rejects the retired APIs");
 
     fs.rmSync(unauthorizedFile);
     fs.mkdirSync(path.join(root, "src/hooks"), { recursive: true });
@@ -487,7 +494,7 @@ test("prepared and deadline API calls are discovered from source and constrained
     const overBudget = structuredClone(controlledAnalysis);
     overBudget.taskMutationCalls.push(...extraCalls);
     const hookCalls = overBudget.taskMutationCalls.filter(call => call.file === "src/hooks/useMeetingAssistant.ts").length;
-    assert.deepEqual(evaluate({ analysis: overBudget, contract }).errors, [
+    assert.deepEqual(evaluate({ analysis: overBudget, contract }).errors.filter(error => error.startsWith("task-writer:")), [
       `task-writer: src/hooks/useMeetingAssistant.ts has ${hookCalls} callsites; baseline allows 10`,
     ]);
   } finally {
