@@ -71,11 +71,16 @@ import type {
   RuntimeRegressionStepEventV1,
 } from "./runtime-regression.js";
 import type { ManualRuntimeActionEventV1 } from "./manual-runtime-action.js";
+import type {
+  RuntimeCommitAuthorizationReason,
+  RuntimeCommitPipeline,
+} from "./runtime-commit-authorization.js";
+import type { GenerationCommitDisposition } from "./meeting-presentation-contracts.js";
 import { readManualCorrectionIntent, resolveCommittedManualCorrectionEvidence, type CommittedManualCorrectionEvidence } from "./task-settlement-tuple.js";
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
 const SESSION_RECORDING_INTEGRITY_SCHEMA_VERSION = 1;
-const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 44;
+const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 45;
 const SESSION_TRACE_INDEX_SCHEMA_VERSION = 1;
 const MAX_RECORDED_WRITE_FAILURES = 20;
 
@@ -335,6 +340,35 @@ export interface SessionCompactTraceSummary {
   version: number;
   manualCorrectionEvidence?: CommittedManualCorrectionEvidence;
   correctionAtomicCommitAuthorized?: boolean;
+  /**
+   * OV152 last retained guard results (schema 45+). Read-only projections of
+   * what the original producers left on the exported Trace's root metadata.
+   * Values are the producers' own; runtime never reads these groups. A missing
+   * group means the evidence was not provided, never success or failure.
+   *
+   * Where the producer has a named contract, the field refers to it. The
+   * `string` arm stays open because the value is read back from recorded
+   * metadata and is kept as written, without validation or mapping. Screen
+   * dispositions and the commit reasons have no named producer type.
+   */
+  runtimeCommit?: {
+    operationId?: string;
+    pipeline?: RuntimeCommitPipeline | (string & {});
+    stage?: string;
+    authorized: boolean;
+    reason?: RuntimeCommitAuthorizationReason | (string & {});
+  };
+  screenOperation?: {
+    operationId?: string;
+    disposition: string;
+    commitReason?: string;
+    supersededByOperationId?: string;
+  };
+  generationCommit?: {
+    ledgerEntryId?: string;
+    disposition: GenerationCommitDisposition | (string & {});
+    reason?: string;
+  };
   sessionId: string;
   traceId: string;
   traceKind: MeetingTrace["kind"];
@@ -4581,6 +4615,9 @@ export function buildCompactTraceSummary({
     traceKind: trace.kind,
     manualCorrectionEvidence: resolveCommittedManualCorrectionEvidence(trace.metadata ?? {}),
     correctionAtomicCommitAuthorized: readBoolean(trace.metadata?.correctionAtomicCommitAuthorized),
+    runtimeCommit: buildRuntimeCommitEvidence(trace.metadata),
+    screenOperation: buildScreenOperationEvidence(trace.metadata),
+    generationCommit: buildGenerationCommitEvidence(trace.metadata),
     status: trace.status,
     trigger,
     startedAt: trace.startedAt,
@@ -6243,6 +6280,63 @@ export function buildCompactTraceSummary({
       summaryPath,
     },
     recordedAt: Date.now(),
+  };
+}
+
+// OV152: each builder reads one group from the exported Trace's root metadata
+// only. Step metadata is never consulted, so an older step value cannot
+// complete a group the root no longer carries, and no group fills another.
+// A group exists only when its own result key is present; `false` is a result.
+function buildRuntimeCommitEvidence(
+  root: Record<string, unknown> | undefined
+): SessionCompactTraceSummary["runtimeCommit"] {
+  const authorized = readBoolean(root?.runtimeCommitAuthorized);
+  if (authorized === undefined) return undefined;
+
+  return {
+    operationId: readString(root?.runtimeOperationId),
+    pipeline: readString(root?.runtimePipeline),
+    stage: readString(root?.runtimeAuthorizationStage),
+    authorized,
+    reason: readString(root?.runtimeCommitAuthorizationReason),
+  };
+}
+
+function buildScreenOperationEvidence(
+  root: Record<string, unknown> | undefined
+): SessionCompactTraceSummary["screenOperation"] {
+  const disposition = readString(root?.screenOperationDisposition);
+  if (!disposition) return undefined;
+
+  // The final commit writes committed/rejected together with its reason, and
+  // the supersede write carries only the superseding operation. Any other
+  // disposition (stale-rejected) keeps neither: a reason or reference left on
+  // the root by an earlier disposition does not describe this one.
+  return {
+    operationId: readString(root?.screenOperationId),
+    disposition,
+    commitReason:
+      disposition === "committed" || disposition === "rejected"
+        ? readString(root?.screenOperationCommitReason)
+        : undefined,
+    supersededByOperationId:
+      disposition === "superseded"
+        ? readString(root?.supersededByScreenOperationId)
+        : undefined,
+  };
+}
+
+function buildGenerationCommitEvidence(
+  root: Record<string, unknown> | undefined
+): SessionCompactTraceSummary["generationCommit"] {
+  // started/pending are real unfinished observations and stay as written.
+  const disposition = readString(root?.generationResultCommitDisposition);
+  if (!disposition) return undefined;
+
+  return {
+    ledgerEntryId: readString(root?.generationResultLedgerEntryId),
+    disposition,
+    reason: readString(root?.generationResultCommitReason),
   };
 }
 

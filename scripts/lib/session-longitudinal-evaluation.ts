@@ -50,6 +50,27 @@ export interface LongitudinalTranscriptTurn {
 
 export interface LongitudinalTraceSummary {
   relationDecisionProvenance?: import("../../src/lib/meeting/relation-decision-provenance.js").RelationDecisionProvenanceObservation;
+  /** Compact summary schema version of this row, when the row carries one. */
+  version?: number;
+  /** OV152 groups, read back as written; old rows simply do not have them. */
+  runtimeCommit?: {
+    operationId?: string;
+    pipeline?: string;
+    stage?: string;
+    authorized?: boolean;
+    reason?: string;
+  };
+  screenOperation?: {
+    operationId?: string;
+    disposition?: string;
+    commitReason?: string;
+    supersededByOperationId?: string;
+  };
+  generationCommit?: {
+    ledgerEntryId?: string;
+    disposition?: string;
+    reason?: string;
+  };
   traceId: string;
   traceKind?: string;
   status?: string;
@@ -312,6 +333,69 @@ export interface RateMetric {
   rate: number | null;
 }
 
+export const LAST_RETAINED_RUNTIME_EVIDENCE_DERIVATION_VERSION =
+  "last-retained-runtime-evidence-v1";
+/** First compact summary schema whose writer projects the three groups. */
+export const LAST_RETAINED_RUNTIME_EVIDENCE_FIRST_SUMMARY_SCHEMA = 45;
+
+export type LastRetainedEvidenceFamily =
+  | "runtimeCommit"
+  | "screenOperation"
+  | "generationCommit";
+
+export interface LastRetainedEvidenceFamilyReport {
+  selectedTraceCount: number;
+  availableCount: number;
+  notProvidedCount: number;
+  availability: RateMetric;
+  /** Original result value -> its share of the observed results. */
+  results: Record<string, RateMetric>;
+  /** Original result value -> original reason value -> count. */
+  reasons: Record<string, Record<string, number>>;
+  /**
+   * Observed results whose contract carries a reason: every Runtime Token and
+   * Generation result, and a Screen result only when committed or rejected.
+   */
+  reasonExpectedCount: number;
+  /** Of those, the results that arrived without their reason. */
+  reasonNotProvidedCount: number;
+  reasonNotProvidedByResult: Record<string, number>;
+  /** Observed results without their own identity, out of availableCount. */
+  identityNotProvidedCount: number;
+  byTraceKind: Record<
+    string,
+    { selected: number; available: number; results: Record<string, number> }
+  >;
+  /** Runtime Token only: original stage -> original result -> count. */
+  byStage?: Record<string, Record<string, number>>;
+  /** Screen only: superseded results without the superseding operation. */
+  supersededWithoutReferenceCount?: number;
+  /**
+   * Screen only: results that carry no reason by contract, by original
+   * disposition. They are not missing evidence and are not counted as such.
+   */
+  reasonNotCarriedByResult?: Record<string, number>;
+}
+
+export interface LastRetainedRuntimeEvidenceReport {
+  derivationVersion: typeof LAST_RETAINED_RUNTIME_EVIDENCE_DERIVATION_VERSION;
+  firstSummarySchemaVersion: number;
+  countingUnit: "last-retained-result-per-trace-per-family";
+  selection: "production-traces-one-row-per-session-trace";
+  selectedTraceCount: number;
+  duplicateRowsCollapsed: number;
+  incompleteEvidenceTraceCount: number;
+  families: Record<LastRetainedEvidenceFamily, LastRetainedEvidenceFamilyReport>;
+  coverageBySummaryVersion: Array<{
+    summaryVersion: number | "unknown";
+    groupsConsumed: boolean;
+    selectedTraceCount: number;
+    availability: Record<LastRetainedEvidenceFamily, RateMetric>;
+    ignoredGroupCount: number;
+  }>;
+  limits: string[];
+}
+
 type TypeStage =
   | "keyword"
   | "semantic"
@@ -326,6 +410,8 @@ export interface SessionLongitudinalEvaluationReport {
     unconfirmedOrderedCount: number;
     rows: Array<{ sessionId: string; traceId: string; provenance?: LongitudinalTraceSummary["relationDecisionProvenance"] }>;
   };
+  /** Offline diagnostic only. No product rate or human truth reads it. */
+  lastRetainedRuntimeEvidence: LastRetainedRuntimeEvidenceReport;
   humanDenominatorDerivationVersion: "task152-longitudinal-human-v1";
   humanEvidence: LongitudinalHumanEvidence[];
   humanProjectionDiagnostics: Array<{
@@ -991,6 +1077,8 @@ export function buildSessionLongitudinalEvaluationReport(
         traceId: trace.traceId, provenance: trace.relationDecisionProvenance,
       })),
     },
+    lastRetainedRuntimeEvidence:
+      buildLastRetainedRuntimeEvidenceReport(production),
     humanEvidence,
     humanProjectionDiagnostics,
     answerQuality: {
@@ -2013,6 +2101,10 @@ export function renderSessionLongitudinalEvaluationMarkdown(
     `Child resume success: ${formatRate(report.projectTrajectoryFunnel.childResumeSuccessRate)}`,
     `Phase restarts / wrong-project fact support / unsupported first-person claims: ${report.projectTrajectoryFunnel.phaseRestartCount} / ${report.projectTrajectoryFunnel.wrongProjectFactSupportCount} / ${report.projectTrajectoryFunnel.unsupportedFirstPersonClaimCount}`,
     "",
+    ...renderLastRetainedRuntimeEvidenceMarkdown(
+      report.lastRetainedRuntimeEvidence
+    ),
+    "",
     "## Evidence Gaps",
     "",
     `- Unlabeled production traces: ${report.evidenceGaps.unlabeledProductionTraces}`,
@@ -2400,6 +2492,319 @@ function countProjectPhaseRestarts(rows: JoinedTrace[]) {
     highestByParent.set(parentId, Math.max(highest ?? rank, rank));
   }
   return restarts;
+}
+
+const LAST_RETAINED_EVIDENCE_FAMILIES: LastRetainedEvidenceFamily[] = [
+  "runtimeCommit",
+  "screenOperation",
+  "generationCommit",
+];
+const EVIDENCE_NOT_PROVIDED = "(not provided)";
+const LAST_RETAINED_RUNTIME_EVIDENCE_LIMITS = [
+  "Counting unit: the last result each retained Trace still carries per field family. Earlier calls on the same Trace were overwritten and are not counted.",
+  "A Trace without a group provided no evidence. It is not a success, a failure or zero rejections.",
+  "Shares are over observed results only. They are not the rejection rate of all validation calls and do not show whether a check was needed.",
+  "A rejection reason is the one check the original producer reported. Checks it did not reach after that short circuit were not evaluated and are not recorded.",
+  "A stage bucket shows where the last retained call ran, not which other stages ran. A result without a stage is listed under `(not provided)` and is not assigned to any stage.",
+  "Summaries below the first schema version, or without a readable integer version, are reported as not provided. The `unknown` row also holds a Trace that has a raw export but no compact summary row. History is not rebuilt from raw traces.",
+  "The three families are independent: an authorized Runtime Token does not mean the Screen operation or the generation committed.",
+  "A Screen result other than committed or rejected has no reason by contract and is not counted as a missing reason; superseded names the superseding operation instead.",
+  "Rows are each Trace's current summary as the recording's reader returns it. The append-only journal `metrics/trace-summaries.jsonl` keeps a Trace's first recorded row, can show an earlier result and is not read here.",
+  "Diagnostic only: no product success rate or human truth reads this section.",
+];
+
+interface LastRetainedObservation {
+  result: string;
+  reason?: string;
+  identity?: string;
+  stage?: string;
+  supersededBy?: string;
+}
+
+function readLastRetainedObservation(
+  trace: LongitudinalTraceSummary,
+  family: LastRetainedEvidenceFamily
+): LastRetainedObservation | undefined {
+  // Read from disk: anything without its own result key is not provided.
+  const fields = (trace[family] ?? {}) as Record<string, unknown>;
+  if (family === "runtimeCommit") {
+    // `false` is a result: test the type, never the truthiness.
+    if (typeof fields.authorized !== "boolean") return undefined;
+    return {
+      result: String(fields.authorized),
+      reason: readEvidenceText(fields.reason),
+      identity: readEvidenceText(fields.operationId),
+      stage: readEvidenceText(fields.stage),
+    };
+  }
+  const result = readEvidenceText(fields.disposition);
+  if (!result) return undefined;
+  return family === "screenOperation"
+    ? {
+        result,
+        reason: readEvidenceText(fields.commitReason),
+        identity: readEvidenceText(fields.operationId),
+        supersededBy: readEvidenceText(fields.supersededByOperationId),
+      }
+    : {
+        result,
+        reason: readEvidenceText(fields.reason),
+        identity: readEvidenceText(fields.ledgerEntryId),
+      };
+}
+
+function readEvidenceText(value: unknown) {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function groupBy<T>(items: T[], key: (item: T) => string) {
+  const groups = new Map<string, T[]>();
+  for (const item of items) {
+    const group = groups.get(key(item)) ?? [];
+    groups.set(key(item), group);
+    group.push(item);
+  }
+  return Object.fromEntries(groups);
+}
+
+function mapValues<T, U>(record: Record<string, T>, map: (value: T) => U) {
+  return Object.fromEntries(
+    Object.entries(record).map(([key, value]) => [key, map(value)])
+  );
+}
+
+function countBy<T>(items: T[], key: (item: T) => string) {
+  return mapValues(groupBy(items, key), (group) => group.length);
+}
+
+function summarizeLastRetainedFamily(
+  family: LastRetainedEvidenceFamily,
+  rows: Array<{ traceKind: string; observation?: LastRetainedObservation }>
+): LastRetainedEvidenceFamilyReport {
+  const observedIn = (group: typeof rows) =>
+    group.flatMap((row) => (row.observation ? [row.observation] : []));
+  const resultOf = (observation: LastRetainedObservation) => observation.result;
+  const observed = observedIn(rows);
+  // A Screen result carries a reason only when committed or rejected. Any
+  // other disposition has none by contract, which is not a missing reason.
+  const carriesReason = (observation: LastRetainedObservation) =>
+    family !== "screenOperation" ||
+    observation.result === "committed" ||
+    observation.result === "rejected";
+  const reasonExpected = observed.filter(carriesReason);
+  // A missing reason or identity is listed; the result itself still counts.
+  const withoutReason = reasonExpected.filter(
+    (observation) => !observation.reason
+  );
+  return {
+    selectedTraceCount: rows.length,
+    availableCount: observed.length,
+    notProvidedCount: rows.length - observed.length,
+    availability: rate(observed.length, rows.length),
+    results: mapValues(countBy(observed, resultOf), (count) =>
+      rate(count, observed.length)
+    ),
+    reasons: mapValues(
+      groupBy(
+        observed.filter((observation) => observation.reason),
+        resultOf
+      ),
+      (group) => countBy(group, (observation) => observation.reason!)
+    ),
+    reasonExpectedCount: reasonExpected.length,
+    reasonNotProvidedCount: withoutReason.length,
+    reasonNotProvidedByResult: countBy(withoutReason, resultOf),
+    identityNotProvidedCount: observed.filter(
+      (observation) => !observation.identity
+    ).length,
+    byTraceKind: mapValues(
+      groupBy(rows, (row) => row.traceKind),
+      (group) => ({
+        selected: group.length,
+        available: observedIn(group).length,
+        results: countBy(observedIn(group), resultOf),
+      })
+    ),
+    ...(family === "runtimeCommit"
+      ? {
+          // A missing stage gets its own bucket; no stage is inferred.
+          byStage: mapValues(
+            groupBy(
+              observed,
+              (observation) => observation.stage ?? EVIDENCE_NOT_PROVIDED
+            ),
+            (group) => countBy(group, resultOf)
+          ),
+        }
+      : {}),
+    ...(family === "screenOperation"
+      ? {
+          supersededWithoutReferenceCount: observed.filter(
+            (observation) =>
+              observation.result === "superseded" && !observation.supersededBy
+          ).length,
+          reasonNotCarriedByResult: countBy(
+            observed.filter((observation) => !carriesReason(observation)),
+            resultOf
+          ),
+        }
+      : {}),
+  };
+}
+
+function buildLastRetainedRuntimeEvidenceReport(
+  production: JoinedTrace[]
+): LastRetainedRuntimeEvidenceReport {
+  // One row per Trace of a session: a re-written row replaces the earlier one
+  // instead of adding a sample.
+  const retained = new Map<
+    LongitudinalSessionInput,
+    Map<string, LongitudinalTraceSummary>
+  >();
+  for (const { session, trace } of production) {
+    const rows =
+      retained.get(session) ?? new Map<string, LongitudinalTraceSummary>();
+    retained.set(session, rows);
+    rows.set(trace.traceId, trace);
+  }
+  const selected = [...retained].flatMap(([session, rows]) =>
+    [...rows.values()].map((trace) => {
+      const summaryVersion: number | "unknown" =
+        typeof trace.version === "number" && Number.isInteger(trace.version)
+          ? trace.version
+          : "unknown";
+      return {
+        session,
+        trace,
+        summaryVersion,
+        // Older and unknown schemas never promised these groups.
+        groupsConsumed:
+          summaryVersion !== "unknown" &&
+          summaryVersion >= LAST_RETAINED_RUNTIME_EVIDENCE_FIRST_SUMMARY_SCHEMA,
+      };
+    })
+  );
+  const observe = (
+    row: (typeof selected)[number],
+    family: LastRetainedEvidenceFamily
+  ) =>
+    row.groupsConsumed
+      ? readLastRetainedObservation(row.trace, family)
+      : undefined;
+  const perFamily = <T>(value: (family: LastRetainedEvidenceFamily) => T) =>
+    Object.fromEntries(
+      LAST_RETAINED_EVIDENCE_FAMILIES.map((family) => [family, value(family)])
+    ) as Record<LastRetainedEvidenceFamily, T>;
+
+  return {
+    derivationVersion: LAST_RETAINED_RUNTIME_EVIDENCE_DERIVATION_VERSION,
+    firstSummarySchemaVersion:
+      LAST_RETAINED_RUNTIME_EVIDENCE_FIRST_SUMMARY_SCHEMA,
+    countingUnit: "last-retained-result-per-trace-per-family",
+    selection: "production-traces-one-row-per-session-trace",
+    selectedTraceCount: selected.length,
+    duplicateRowsCollapsed: production.length - selected.length,
+    incompleteEvidenceTraceCount: selected.filter(
+      ({ session }) => session.evidenceScope?.releaseEligible === false
+    ).length,
+    families: perFamily((family) =>
+      summarizeLastRetainedFamily(
+        family,
+        selected.map((row) => ({
+          traceKind:
+            readEvidenceText(row.trace.traceKind) ?? EVIDENCE_NOT_PROVIDED,
+          observation: observe(row, family),
+        }))
+      )
+    ),
+    // Each schema version is its own row. Integer keys enumerate in ascending
+    // order ahead of "unknown".
+    coverageBySummaryVersion: Object.values(
+      groupBy(selected, (row) => String(row.summaryVersion))
+    ).map((rows) => ({
+      summaryVersion: rows[0].summaryVersion,
+      groupsConsumed: rows[0].groupsConsumed,
+      selectedTraceCount: rows.length,
+      availability: perFamily((family) =>
+        rate(rows.filter((row) => observe(row, family)).length, rows.length)
+      ),
+      ignoredGroupCount: rows[0].groupsConsumed
+        ? 0
+        : sum(
+            LAST_RETAINED_EVIDENCE_FAMILIES.map(
+              (family) =>
+                rows.filter((row) =>
+                  readLastRetainedObservation(row.trace, family)
+                ).length
+            )
+          ),
+    })),
+    limits: [...LAST_RETAINED_RUNTIME_EVIDENCE_LIMITS],
+  };
+}
+
+function renderLastRetainedRuntimeEvidenceMarkdown(
+  evidence: LastRetainedRuntimeEvidenceReport
+) {
+  const familyLabels: Record<LastRetainedEvidenceFamily, string> = {
+    runtimeCommit: "Runtime Token (authorized)",
+    screenOperation: "Screen operation (disposition)",
+    generationCommit: "Generation commit (disposition)",
+  };
+  const formatNestedCounts = (groups: Record<string, Record<string, number>>) =>
+    Object.entries(groups)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, counts]) => `${key} [${formatCountMap(counts)}]`)
+      .join("; ") || "none";
+  const formatShares = (shares: Record<string, RateMetric>) => {
+    const entries = Object.entries(shares).sort(([left], [right]) =>
+      left.localeCompare(right)
+    );
+    return entries.length
+      ? entries.map(([key, share]) => `${key}=${formatRate(share)}`).join(", ")
+      : "none";
+  };
+  return [
+    "## Last Retained Runtime Evidence (diagnostic)",
+    "",
+    `Derivation: ${evidence.derivationVersion}; groups exist from compact summary schema ${evidence.firstSummarySchemaVersion}`,
+    `Selected traces: ${evidence.selectedTraceCount} (${evidence.selection}; re-written rows collapsed: ${evidence.duplicateRowsCollapsed})`,
+    `Selected traces from incomplete or unsealed recordings: ${evidence.incompleteEvidenceTraceCount}`,
+    "",
+    "| Family | Available | Not provided | Reason not provided (of results that carry one) | Identity not provided (of available) |",
+    "| --- | ---: | ---: | ---: | ---: |",
+    ...LAST_RETAINED_EVIDENCE_FAMILIES.map((family) => {
+      const row = evidence.families[family];
+      // Counts with their own denominators: a zero stays "0 of 0".
+      return `| ${familyLabels[family]} | ${formatRate(row.availability)} | ${row.notProvidedCount} | ${row.reasonNotProvidedCount} of ${row.reasonExpectedCount} | ${row.identityNotProvidedCount} of ${row.availableCount} |`;
+    }),
+    "",
+    ...LAST_RETAINED_EVIDENCE_FAMILIES.flatMap((family) => {
+      const row = evidence.families[family];
+      return [
+        `${familyLabels[family]} results among observed: ${formatShares(row.results)}`,
+        `${familyLabels[family]} reasons: ${formatNestedCounts(row.reasons)}; without reason: ${formatCountMap(row.reasonNotProvidedByResult)}`,
+        `${familyLabels[family]} available by trace kind: ${
+          Object.entries(row.byTraceKind)
+            .sort(([left], [right]) => left.localeCompare(right))
+            .map(([kind, counts]) => `${kind} ${counts.available}/${counts.selected}`)
+            .join(", ") || "none"
+        }`,
+      ];
+    }),
+    `Runtime Token results by stage: ${formatNestedCounts(evidence.families.runtimeCommit.byStage ?? {})}`,
+    `Superseded Screen operations without the superseding operation: ${evidence.families.screenOperation.supersededWithoutReferenceCount ?? 0}`,
+    `Screen results that carry no reason by contract: ${formatCountMap(evidence.families.screenOperation.reasonNotCarriedByResult ?? {})}`,
+    "",
+    "| Summary schema | Groups consumed | Traces | Runtime Token | Screen operation | Generation commit | Groups ignored |",
+    "| --- | --- | ---: | ---: | ---: | ---: | ---: |",
+    ...evidence.coverageBySummaryVersion.map(
+      (row) =>
+        `| ${row.summaryVersion} | ${row.groupsConsumed ? "yes" : "no"} | ${row.selectedTraceCount} | ${formatRate(row.availability.runtimeCommit)} | ${formatRate(row.availability.screenOperation)} | ${formatRate(row.availability.generationCommit)} | ${row.ignoredGroupCount} |`
+    ),
+    "",
+    ...evidence.limits.map((limit) => `- ${limit}`),
+  ];
 }
 
 function rate(numerator: number, denominator: number): RateMetric {
