@@ -8,7 +8,6 @@ import {
   createOrderedRelationCanonicalDeadline,
   createOrderedSettlementDeadline,
   createOrderedSettlementReleaseGate,
-  readOrderedRelationAffinityRemainingMs,
   readOrderedSettlementRemainingMs,
   resolveOrderedRelationOperationTerminal,
 } from "../src/lib/meeting/ordered-settlement-coordinator.js";
@@ -94,8 +93,6 @@ test("PA4 Voice and Screen give Affinity and necessary Canonical their own4s sta
     affinityCutoffAt: 5_000,
     canonicalBudgetMs: 4_000,
   });
-  assert.equal(readOrderedRelationAffinityRemainingMs(voicePhase, 2_500), 2_500);
-  assert.equal(readOrderedRelationAffinityRemainingMs(voicePhase, 5_100), 0);
   assert.deepEqual(createOrderedRelationCanonicalDeadline(voiceDeadline, 2_000), { startedAt: 2_000, deadlineAt: 6_000, budgetMs: 4_000 });
   assert.deepEqual(createOrderedRelationCanonicalDeadline(voiceDeadline, 5_000), { startedAt: 5_000, deadlineAt: 9_000, budgetMs: 4_000 });
   assert.deepEqual(createOrderedRelationCanonicalDeadline(voiceDeadline, 5_200), { startedAt: 5_200, deadlineAt: 9_200, budgetMs: 4_000 });

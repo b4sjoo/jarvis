@@ -2,7 +2,7 @@ import type { ActiveMeetingTask } from './meeting-task-contracts.js';
 import type { CanonicalQuestionType } from './task-taxonomy.js';
 import type { CurrentQuestionSettlementProposal, ProvisionalCurrentQuestion } from './current-question-settlement.js';
 import { createOrderedSettlementDeadline, createOrderedRelationPhaseBudget, createOrderedRelationCanonicalDeadline,
-  readOrderedSettlementRemainingMs, readOrderedRelationAffinityRemainingMs, resolveOrderedRelationOperationTerminal,
+  readOrderedSettlementRemainingMs, resolveOrderedRelationOperationTerminal,
   type OrderedSettlementDeadline } from './ordered-settlement-coordinator.js';
 import { ORDERED_RELATION_STAGE_BUDGET_MS, filterTaskRelationAffinityOutcomeAtCutoff,
   decideOrderedTaskRelationResolution, formatOrderedTaskRelationResolutionForTrace,
@@ -12,11 +12,9 @@ export interface TaskRelationAdjudicationScheduleHandle {
   releaseWindowRequested: boolean;
   affinityDeadlineAt?: number;
   operationId?: string;
+  // Stage terminal: settled once by the stage owner, at the stage deadline at the latest.
   affinityOutcome?: Promise<TaskRelationSplitAffinityOutcome>;
   readAffinityOutcome?: () => TaskRelationSplitAffinityOutcome;
-  freezeAffinityOutcome?: (
-    cutoffAt: number
-  ) => TaskRelationSplitAffinityOutcome;
   revalidateAffinityOutcome?: (
     outcome: TaskRelationSplitAffinityOutcome
   ) => TaskRelationSplitAffinityOutcome;
@@ -52,7 +50,6 @@ export interface TaskRelationSplitCanonicalResult {
 
 export interface OrderedRelationOperationDependencies {
   now(): number;
-  withTimeout<T>(promise: Promise<T>, timeoutMs: number, errorMessage: string): Promise<T>;
   recordMetadata(traceId: string, metadata: Record<string, unknown>): void;
 }
 
@@ -83,57 +80,31 @@ export async function resolveOrderedTaskRelationWithinWindow(input: {
   if (input.handle.affinityDeadlineAt !== undefined) {
     phaseBudget.affinityCutoffAt = Math.min(phaseBudget.affinityCutoffAt, input.handle.affinityDeadlineAt);
   }
-  let affinityOutcome = input.handle.readAffinityOutcome?.();
-  let affinitySnapshotFrozen = false;
   let canonicalOutcome: TaskRelationSplitCanonicalResult | undefined;
   let canonicalDeadline: OrderedSettlementDeadline | undefined;
-  let waitDisposition = "affinity-unavailable";
+  let waitDisposition = input.handle.affinityOutcome
+    ? "affinity-settled"
+    : "affinity-unavailable";
   const readRemainingBudget = () =>
     readOrderedSettlementRemainingMs(canonicalDeadline ?? deadline, dependencies.now());
-  const readAffinityRemainingBudget = () =>
-    readOrderedRelationAffinityRemainingMs(phaseBudget, dependencies.now());
-  const freezeAffinityOutcome = () => {
-    if (!affinitySnapshotFrozen) {
-      const observed =
-        input.handle.freezeAffinityOutcome?.(
-          phaseBudget.affinityCutoffAt
-        ) ??
-        filterTaskRelationAffinityOutcomeAtCutoff(
-          input.handle.readAffinityOutcome?.() ?? {
-            child: { unavailableReason: "affinity-unavailable" },
-            parent: { unavailableReason: "affinity-unavailable" },
-          },
-          phaseBudget.affinityCutoffAt
-        );
-      affinityOutcome = observed;
-      affinitySnapshotFrozen = true;
-    }
-    return input.handle.revalidateAffinityOutcome?.(
-      affinityOutcome ?? {
+  // Each stage has one deadline arbiter: its owner settles the stage terminal
+  // once. This consumer waits for that terminal and uses its value. It does not
+  // time the stage itself, and a still-pending published snapshot is not the end
+  // of the stage. A handle without a terminal is read synchronously.
+  const settledAffinity = input.handle.affinityOutcome
+    ? await input.handle.affinityOutcome
+    : input.handle.readAffinityOutcome?.() ?? {
         child: { unavailableReason: "affinity-unavailable" },
         parent: { unavailableReason: "affinity-unavailable" },
-      }
-    ) ?? affinityOutcome;
-  };
-  if (input.handle.affinityOutcome && readAffinityRemainingBudget() > 0) {
-    try {
-      await dependencies.withTimeout(
-        input.handle.affinityOutcome,
-        Math.max(1, readAffinityRemainingBudget()),
-        "Ordered relation affinity window expired."
-      );
-      waitDisposition = "affinity-settled";
-    } catch (error) {
-      if (
-        !(error instanceof Error) ||
-        error.message !== "Ordered relation affinity window expired."
-      ) {
-        throw error;
-      }
-      waitDisposition = "affinity-cutoff-expired";
-    }
-  }
-  affinityOutcome = freezeAffinityOutcome();
+      };
+  // A selected candidate keeps its own completion time, so work that finished
+  // by the cutoff is used; identity and lease are checked again at consumption.
+  const timelyAffinity = filterTaskRelationAffinityOutcomeAtCutoff(
+    settledAffinity,
+    phaseBudget.affinityCutoffAt
+  );
+  let affinityOutcome =
+    input.handle.revalidateAffinityOutcome?.(timelyAffinity) ?? timelyAffinity;
   let decision = decideOrderedTaskRelationResolution({
     sourceKind: input.sourceKind,
     currentQuestionType: input.currentQuestionType,
@@ -166,37 +137,15 @@ export async function resolveOrderedTaskRelationWithinWindow(input: {
           deadlineAt: canonicalDeadline?.deadlineAt,
         })
       : undefined;
-  if (decision.status === "unresolved") {
-    waitDisposition =
-      !canonicalPromise
-        ? "canonical-skipped-no-budget"
-        : waitDisposition === "affinity-unavailable"
-        ? "canonical-started-without-affinity"
-        : "canonical-started-after-affinity";
+  if (decision.status === "unresolved" && !canonicalPromise) {
+    waitDisposition = "canonical-skipped-no-budget";
   }
-  if (
-    decision.status === "unresolved" &&
-    canonicalPromise &&
-    readRemainingBudget() > 0
-  ) {
-    try {
-      canonicalOutcome = await dependencies.withTimeout(
-        canonicalPromise,
-        Math.max(1, readRemainingBudget()),
-        "Ordered relation canonical window expired."
-      );
-      waitDisposition = canonicalOutcome.adjudication
-        ? "canonical-settled"
-        : "canonical-unresolved";
-    } catch (error) {
-      if (
-        !(error instanceof Error) ||
-        error.message !== "Ordered relation canonical window expired."
-      ) {
-        throw error;
-      }
-      waitDisposition = "canonical-deadline-expired";
-    }
+  if (canonicalPromise) {
+    // Canonical's own selector ends this stage at the deadline passed above.
+    canonicalOutcome = await canonicalPromise;
+    waitDisposition = canonicalOutcome.adjudication
+      ? "canonical-settled"
+      : "canonical-unresolved";
     decision = decideOrderedTaskRelationResolution({
       sourceKind: input.sourceKind,
       currentQuestionType: input.currentQuestionType,
@@ -217,12 +166,8 @@ export async function resolveOrderedTaskRelationWithinWindow(input: {
     });
   }
   if (decision.status === "unresolved") {
-    affinityOutcome = input.handle.revalidateAffinityOutcome?.(
-      affinityOutcome ?? {
-        child: { unavailableReason: "affinity-unavailable" },
-        parent: { unavailableReason: "affinity-unavailable" },
-      }
-    ) ?? affinityOutcome;
+    affinityOutcome =
+      input.handle.revalidateAffinityOutcome?.(affinityOutcome) ?? affinityOutcome;
     decision = decideOrderedTaskRelationResolution({
       sourceKind: input.sourceKind,
       currentQuestionType: input.currentQuestionType,
@@ -243,9 +188,7 @@ export async function resolveOrderedTaskRelationWithinWindow(input: {
       finalizeWithNullHypothesis: true,
     });
   }
-  const foregroundClosed =
-    waitDisposition === "canonical-deadline-expired" ||
-    readRemainingBudget() === 0;
+  const foregroundClosed = readRemainingBudget() === 0;
   if (foregroundClosed) {
     input.handle.cancelForegroundWork?.();
   }

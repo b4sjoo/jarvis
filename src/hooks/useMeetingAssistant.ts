@@ -272,6 +272,7 @@ import {
   projectOrderedTaskRelationAdjudication,
   projectTaskRelationOperationCurrentIdentity,
   revalidateTaskRelationAffinityOutcome,
+  CORRECTION_ORDERED_RELATION_FOREGROUND_BUDGET_MS,
   SCREEN_ORDERED_RELATION_FOREGROUND_BUDGET_MS,
   ORDERED_RELATION_STAGE_BUDGET_MS,
   VOICE_ORDERED_RELATION_FOREGROUND_BUDGET_MS,
@@ -2409,9 +2410,6 @@ interface TaskRelationSplitScheduleHandle {
   affinityDeadlineAt: number;
   affinityOutcome: Promise<TaskRelationSplitAffinityOutcome>;
   readAffinityOutcome: () => TaskRelationSplitAffinityOutcome;
-  freezeAffinityOutcome: (
-    cutoffAt: number
-  ) => TaskRelationSplitAffinityOutcome;
   revalidateAffinityOutcome: (
     outcome: TaskRelationSplitAffinityOutcome
   ) => TaskRelationSplitAffinityOutcome;
@@ -19889,6 +19887,43 @@ export function useMeetingAssistant() {
           }
         },
       }, { request: requestTaskRelationSplitShadow });
+      // The operation runtime invokes these callbacks with no promise chain to
+      // carry a throw. From onStarted or execute it would strand the active job
+      // and every later operation on that runtime; from onSettled it would strand
+      // the stage terminal or escape into whichever caller superseded the
+      // operation. Each throw becomes this operation's own failure instead.
+      const scheduleStageOperation = <Job extends RuntimeInferenceRuntimeJob, Result>(
+        runtime: RuntimeInferenceOperationRuntime<Job, Result>,
+        operation: Parameters<RuntimeInferenceOperationRuntime<Job, Result>["schedule"]>[0],
+        failStage: (error: unknown) => void
+      ) => {
+        let startFailure: { error: unknown } | undefined;
+        runtime.schedule({
+          job: operation.job,
+          execute: (job, signal) => {
+            try {
+              if (startFailure) throw startFailure.error;
+              return operation.execute(job, signal);
+            } catch (error) {
+              return Promise.reject(error);
+            }
+          },
+          onStarted: (job, operationStartedAt, budget) => {
+            try {
+              operation.onStarted?.(job, operationStartedAt, budget);
+            } catch (error) {
+              startFailure = { error };
+            }
+          },
+          onSettled: (settlement) => {
+            try {
+              operation.onSettled(settlement);
+            } catch (error) {
+              failStage(error);
+            }
+          },
+        });
+      };
       const orderedOperationId = [
         "task-relation-ordered",
         contextState.sessionId,
@@ -20016,7 +20051,7 @@ export function useMeetingAssistant() {
         }
         return new Promise<TaskRelationSplitAffinityResult>((resolve, reject) => {
           let stepId: string | undefined;
-          runtime.schedule({
+          scheduleStageOperation(runtime, {
             job: {
               operationId: lease.operationId,
               operationKind,
@@ -20152,7 +20187,7 @@ export function useMeetingAssistant() {
                   ["authentication", "configuration"].includes(result?.providerOutcome?.failureClass ?? ""),
               });
             },
-          });
+          }, reject);
         });
       };
 
@@ -20178,11 +20213,6 @@ export function useMeetingAssistant() {
         child: cloneTaskRelationSplitAffinityResult(childAffinity),
         parent: cloneTaskRelationSplitAffinityResult(parentAffinity),
       });
-      const freezeAffinityOutcome = (cutoffAt: number) =>
-        filterTaskRelationAffinityOutcomeAtCutoff(
-          readAffinityOutcome(),
-          cutoffAt
-        );
       const revalidateAffinityOutcome = (
         outcome: TaskRelationSplitAffinityOutcome
       ) =>
@@ -20213,6 +20243,9 @@ export function useMeetingAssistant() {
         childAffinityOutcome,
         parentAffinityOutcome,
       ]).then(([child, parent]) => ({ child, parent }));
+      // A stage that fails before its consumer attaches is not an unhandled
+      // rejection: the consumer awaits this same Promise and still receives it.
+      void affinityOutcome.catch(() => undefined);
       let resolveCanonicalOutcome:
         | ((outcome: TaskRelationSplitCanonicalResult) => void)
         | undefined;
@@ -20336,7 +20369,7 @@ export function useMeetingAssistant() {
           });
         }
         let stepId: string | undefined;
-        taskRelationCanonicalShadowRuntimeRef.current!.schedule({
+        scheduleStageOperation(taskRelationCanonicalShadowRuntimeRef.current!, {
           job: {
             operationId: lease.operationId,
             operationKind,
@@ -20525,7 +20558,7 @@ export function useMeetingAssistant() {
                 ["authentication", "configuration"].includes(result?.providerOutcome?.failureClass ?? ""),
             });
           },
-        });
+        }, (error) => rejectCanonicalOutcome?.(error));
       })
           .catch((error) => {
             rejectCanonicalOutcome?.(error);
@@ -20574,7 +20607,6 @@ export function useMeetingAssistant() {
         affinityDeadlineAt,
         affinityOutcome,
         readAffinityOutcome,
-        freezeAffinityOutcome,
         revalidateAffinityOutcome,
         authorizeOperation,
         canonicalOutcome,
@@ -20749,7 +20781,6 @@ export function useMeetingAssistant() {
         operationId: splitHandle?.operationId,
         affinityOutcome: splitHandle?.affinityOutcome,
         readAffinityOutcome: splitHandle?.readAffinityOutcome,
-        freezeAffinityOutcome: splitHandle?.freezeAffinityOutcome,
         revalidateAffinityOutcome: splitHandle?.revalidateAffinityOutcome,
         authorizeOperation:
           splitHandle?.authorizeOperation ??
@@ -20787,7 +20818,6 @@ export function useMeetingAssistant() {
   const resolveOrderedTaskRelationWithinWindow = useCallback((input: Parameters<typeof resolveOrderedTaskRelationOperation>[0]) =>
     resolveOrderedTaskRelationOperation(input, {
       now: Date.now,
-      withTimeout,
       recordMetadata: (traceId, metadata) => traceStoreRef.current.updateMetadata(traceId, metadata),
     }), []);
 
@@ -34834,11 +34864,6 @@ export function useMeetingAssistant() {
               correctionRelationHandle?.releaseWindowRequested &&
               correctionRelationHandle
             ) {
-              const elapsedMs = Date.now() - adjudicationStartedAt;
-              const remainingBudgetMs = Math.max(
-                1,
-                CORRECTION_OWNED_ADJUDICATION_BUDGET_MS - elapsedMs
-              );
               try {
                 const relationResolution =
                   await resolveOrderedTaskRelationWithinWindow({
@@ -34851,7 +34876,8 @@ export function useMeetingAssistant() {
                     screenBoundaryPrior:
                       correctionSourceKind === "screen",
                     screenTypeEvidenceAuthorized: true,
-                    waitBudgetMs: remainingBudgetMs,
+                    waitBudgetMs:
+                      CORRECTION_ORDERED_RELATION_FOREGROUND_BUDGET_MS,
                   });
                 if (relationResolution.terminalDisposition !== "resolved") {
                   correctionRelationTerminal = {

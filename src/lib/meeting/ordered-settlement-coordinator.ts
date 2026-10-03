@@ -102,13 +102,6 @@ export function createOrderedRelationCanonicalDeadline(
   });
 }
 
-export function readOrderedRelationAffinityRemainingMs(
-  phaseBudget: Pick<OrderedRelationPhaseBudget, "affinityCutoffAt">,
-  now = Date.now()
-) {
-  return Math.max(0, phaseBudget.affinityCutoffAt - now);
-}
-
 export function createOrderedSettlementReleaseGate(
   deadline: OrderedSettlementDeadline
 ): OrderedSettlementReleaseGate {

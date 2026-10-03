@@ -55,11 +55,17 @@ export function requestTaskRelationProviderCandidates(input: {
   const ended = new Set<RuntimeInferenceProviderTier>();
   let closed = false;
   let timer: unknown;
+  // Observations are evidence only: a failing sink can neither leave the stage
+  // unsettled nor change which candidate is selected. The failure is reported.
   const observe = (tier: RuntimeInferenceProviderTier, event: TaskRelationCandidateObservation["event"], extra: Partial<TaskRelationCandidateObservation> = {}) => {
-    const route = input.routes[tier];
-    input.onObservation?.({ operationId: input.operationId, requestId: `${input.operationId}:${tier}`,
-      providerTier: tier, providerId: route.resolvedProviderId, configFingerprint: route.configFingerprint,
-      deadlineAt: input.deadlineAt, queuedAt, at: clock.now(), event, ...extra });
+    try {
+      const route = input.routes[tier];
+      input.onObservation?.({ operationId: input.operationId, requestId: `${input.operationId}:${tier}`,
+        providerTier: tier, providerId: route.resolvedProviderId, configFingerprint: route.configFingerprint,
+        deadlineAt: input.deadlineAt, queuedAt, at: extra.at ?? clock.now(), event, ...extra });
+    } catch (error) {
+      console.warn("Relation candidate observation callback failed", error);
+    }
   };
   return new Promise((resolve, reject) => {
     const close = () => {
@@ -88,7 +94,9 @@ export function requestTaskRelationProviderCandidates(input: {
     if (input.signal.aborted) { cancel(); return; }
     if (queuedAt >= input.deadlineAt) { finish(); return; }
     input.signal.addEventListener("abort", cancel, { once: true });
-    timer = clock.schedule(() => finish(outcomes.fast?.parsed.ok ? "fast" : undefined), input.deadlineAt - queuedAt);
+    // The deadline is absolute: time already spent before this registration is not regained.
+    timer = clock.schedule(() => finish(outcomes.fast?.parsed.ok ? "fast" : undefined),
+      Math.max(0, input.deadlineAt - clock.now()));
     for (const tier of ["intelligent", "fast"] as const) {
       const route = input.routes[tier];
       if (!route.provider) { fail(new Error(`Relation ${tier} provider configuration unavailable`)); return; }
@@ -108,18 +116,25 @@ export function requestTaskRelationProviderCandidates(input: {
             executionIdentity: { ...input.executionIdentity, requestId: `${input.operationId}:${tier}`, modelId: undefined } });
         },
       }).then(result => {
+        // One clock read per completion callback, taken before the observation
+        // sink runs: within this callback the observation, the deadline check and
+        // the completion stamp use that one value, so this callback's own sink
+        // cost cannot change its candidate's fate. A sink cost that delays a
+        // sibling candidate's callback past the deadline is event-loop delay and
+        // is treated like any other late callback.
+        const at = clock.now();
         ended.add(tier);
-        observe(tier, "completed", { result });
+        observe(tier, "completed", { result, at });
         if (closed) return;
         if (input.signal.aborted) { cancel(); return; }
-        if (clock.now() >= input.deadlineAt) {
+        if (at >= input.deadlineAt) {
           finish(outcomes.fast?.parsed.ok ? "fast" : undefined);
           return;
         }
         const failure = result.providerOutcome?.failureClass;
         if (failure === "unexpected") { fail(new Error(result.providerOutcome?.safeErrorSummary ?? "Internal Relation candidate failure")); return; }
         outcomes[tier] = result;
-        completedAt[tier] = clock.now();
+        completedAt[tier] = at;
         if (failure === "authentication" || failure === "configuration" || result.providerDisposition === "provider-auth-error") {
           finish(tier); return;
         }

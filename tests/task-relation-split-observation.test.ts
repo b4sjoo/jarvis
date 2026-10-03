@@ -22,6 +22,7 @@ import * as admission from "../src/lib/meeting/runtime-inference-provider-admiss
 import * as route from "../src/lib/meeting/meeting-model-route.js";
 import * as taxonomy from "../src/lib/meeting/task-taxonomy.js";
 import { requestTaskRelationProviderCandidates } from "../src/lib/meeting/task-relation-provider-candidates.js";
+import { resolveOrderedTaskRelationWithinWindow } from "../src/lib/meeting/ordered-relation-operation.js";
 import { RuntimeInferenceOperationRuntime } from "../src/lib/meeting/runtime-inference-runtime.js";
 import {
   buildTaskRelationAdjudicationRequest,
@@ -590,6 +591,85 @@ test("D5 sensitivity: omitting the independent observation spread fails the comp
     await h.disk.stop();
     const metadata = latest(await h.disk.decisions(), "taskRelationParentAffinity");
     assert.throws(() => assertObserved(metadata, h.executions[1], true), assert.AssertionError);
+  } finally { await h.close(); }
+});
+
+test("ST183-7 deadline handoff reads back from recorder files: completed -> selected -> authorized -> consumed -> final", async () => {
+  const h = await harness();
+  try {
+    const fast = (execution: any) => String(execution.input.executionIdentity.requestId).endsWith(":fast");
+    let canonicalDeadlineAt = 0;
+    // The real shared consumer over the real stage owner, recorder and request path.
+    const resolution = resolveOrderedTaskRelationWithinWindow({
+      handle: { ...h.handle, releaseWindowRequested: true, startCanonical: (input: any) => {
+        canonicalDeadlineAt = input.deadlineAt;
+        return h.handle.startCanonical(input);
+      } },
+      traceId: "trace", sourceKind: "voice", currentQuestionType: "general-system-design",
+      activeMeetingTask: h.state.activeMeetingTask, waitBudgetMs: 8_000,
+    }, { now: () => h.clock.now,
+      recordMetadata: (id, update) => h.environment.traceStoreRef.current.updateMetadata(id, update) });
+    // Only Fast answers. Intelligent stays silent, so each stage ends at its own deadline.
+    for (const execution of h.physicalExecutions.filter(fast)) execution.completion.resolve("success");
+    await h.clock.flush();
+    assert.equal(h.metadata.taskRelationParentAffinitySelectedProviderTier, undefined, "cached, not yet selected");
+    h.clock.now = 14_000;
+    await h.clock.startPending();
+    await h.clock.startPending();
+    const canonical = h.physicalExecutions.filter((execution) => execution.kind === "task-relation-canonical-shadow");
+    assert.equal(canonical.length, 2);
+    assert.equal(canonicalDeadlineAt - 4_000 >= 14_000 && canonicalDeadlineAt - 4_000 <= h.clock.now, true);
+    canonical.find(fast).completion.resolve("success");
+    await h.clock.flush();
+    h.clock.now = canonicalDeadlineAt;
+    await h.clock.startPending();
+    const result = await resolution;
+    assert.equal(result.decision.stage, "canonical-relation");
+    assert.equal(result.decision.relation, "new-parent");
+    assert.equal(h.physicalExecutions.length, 6, "no extra model request");
+    await h.disk.stop();
+    const decisions = await h.disk.decisions();
+    assert.equal(decisions.length, 3, "one recorded settlement per operation");
+    const report = buildTaskRelationAdjudicationReflectionReport({ decisions, evaluations: [], now: 30_000 });
+    const row = (family: string) => {
+      const found = report.rows.filter((item) => item.operationFamily === family);
+      assert.equal(found.length, 1, family);
+      return found[0];
+    };
+    for (const [family, key, candidate] of [["child", "taskRelationChildAffinity", "unrelated"],
+      ["parent", "taskRelationParentAffinity", "independent"]] as const) {
+      const recorded = latest(decisions, key);
+      const physical = h.physicalExecutions.find((execution) =>
+        execution.input.executionIdentity.requestId === recorded[`${key}SelectedRequestId`]);
+      // completed -> selected: the Fast candidate finished early and was selected at the stage deadline.
+      assert.equal(recorded[`${key}SelectedProviderTier`], "fast");
+      assert.equal(recorded[`${key}CompletedAt`], physical.result.completedAt);
+      assert.ok((recorded[`${key}CompletedAt`] as number) < 14_000);
+      assert.equal(recorded[`${key}StageDeadlineAt`], 14_000);
+      // This harness's clock ticks once per provider event, including the sibling's cancellation.
+      assert.ok((recorded[`${key}SelectedAt`] as number) >= 14_000 && (recorded[`${key}SelectedAt`] as number) <= 14_004);
+      // selected -> authorized, as the offline reader sees it.
+      assert.equal(row(family).operationId, recorded[`${key}OperationId`]);
+      assert.equal(row(family).leaseAuthorized, true);
+      assert.equal(row(family).rawCandidate, candidate);
+      assert.equal(row(family).completedAt, physical.result.completedAt);
+    }
+    // authorized -> consumed: Canonical's predecessors are exactly those two recorded operations.
+    const recordedCanonical = latest(decisions, "taskRelationSplitCanonical");
+    assert.deepEqual(row("canonical").predecessorOperationIds, [row("child").operationId, row("parent").operationId]);
+    assert.equal(row("canonical").predecessorsAuthorized, true);
+    assert.equal(row("canonical").leaseAuthorized, true);
+    assert.equal(row("canonical").rawCandidate, "new-parent");
+    assert.equal(recordedCanonical.taskRelationSplitParentPredecessorOutputHash, recordedCanonical.taskRelationParentAffinityOutputHash);
+    assert.equal(recordedCanonical.taskRelationSplitChildPredecessorOutputHash, recordedCanonical.taskRelationChildAffinityOutputHash);
+    assert.equal(recordedCanonical.taskRelationSplitCanonicalSelectedProviderTier, "fast");
+    assert.equal(recordedCanonical.taskRelationSplitCanonicalSelectedAt, canonicalDeadlineAt);
+    // consumed -> final source.
+    assert.equal(h.metadata.taskRelationOrderedResolutionAffinityParentDisposition, "available");
+    assert.equal(h.metadata.taskRelationOrderedResolutionAffinityChildDisposition, "available");
+    assert.equal(h.metadata.taskRelationOrderedResolutionCanonicalDisposition, "available");
+    assert.equal(h.metadata.taskRelationOrderedResolutionStage, "canonical-relation");
+    assert.equal(h.metadata.taskRelationOrderedResolutionRelation, "new-parent");
   } finally { await h.close(); }
 });
 

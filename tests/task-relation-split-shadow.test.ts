@@ -934,14 +934,29 @@ test("normalizes unresolved-like provider outcomes to the active-owner null hypo
   }
 });
 
+test("ST183-4 ST183-7 source pin: the Ordered consumer awaits each stage terminal and holds no timer, no retired wait disposition and no orphan Affinity helper", () => {
+  const resolver = readFileSync("src/lib/meeting/ordered-relation-operation.ts", "utf8");
+
+  // ST183: the consumer awaits each stage terminal and times neither stage itself.
+  assert.match(resolver, /await input\.handle\.affinityOutcome/);
+  assert.match(resolver, /canonicalOutcome = await canonicalPromise/);
+  assert.doesNotMatch(resolver, /withTimeout|setTimeout|freezeAffinityOutcome/);
+  assert.doesNotMatch(resolver, /affinity-cutoff-expired|canonical-deadline-expired/);
+  // The Canonical terminal is always awaited, so no "started" disposition is ever recorded.
+  assert.doesNotMatch(resolver, /canonical-started-without-affinity|canonical-started-after-affinity/);
+  // No consumer-side remaining-time helper for the Affinity stage is left behind.
+  assert.doesNotMatch(
+    readFileSync("src/lib/meeting/ordered-settlement-coordinator.ts", "utf8"),
+    /readOrderedRelationAffinityRemainingMs/
+  );
+});
+
 test("wires provider faults to finalization while stale source ownership fails closed", () => {
   const resolver = readFileSync("src/lib/meeting/ordered-relation-operation.ts", "utf8");
 
-  assert.match(resolver, /affinity-cutoff-expired/);
-  assert.match(resolver, /freezeAffinityOutcome/);
+  assert.match(resolver, /filterTaskRelationAffinityOutcomeAtCutoff/);
   assert.match(resolver, /revalidateAffinityOutcome/);
   assert.match(resolver, /canonical-unresolved/);
-  assert.match(resolver, /canonical-deadline-expired/);
   assert.match(resolver, /canonical-skipped-no-budget/);
   assert.match(resolver, /createOrderedRelationPhaseBudget/);
   assert.match(resolver, /finalizeWithNullHypothesis:\s*true/);
