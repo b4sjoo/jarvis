@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {browserBundle, openProjectSelectionBrowserHost, playwright, fixtures} from './project-selection-hook-browser.test.mjs';
+import {browserBundle, openProjectSelectionBrowserHost, playwright, browserTestSkip, fixtures} from './project-selection-hook-browser.test.mjs';
 
-test('PC1-PC4 real Hook freezes project option authority for Voice and Screen', {timeout:120000}, async t => {
+test('PC1-PC4 real Hook freezes project option authority for Voice and Screen', {timeout:120000, skip:browserTestSkip}, async t => {
   const bundle=await browserBundle();
   const browser=await playwright.chromium.launch({headless:true,executablePath:process.env.JARVIS_CHROMIUM_EXECUTABLE});
   try {

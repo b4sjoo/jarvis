@@ -1,17 +1,16 @@
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync } from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
 import test from "node:test";
 import { build } from "esbuild";
 import { compile } from "@tailwindcss/node";
 import { Scanner } from "@tailwindcss/oxide";
+import { loadBrowserTestDependency } from "./helpers/browser-test-dependency.mjs";
 
-let playwright;
-try { playwright = createRequire(import.meta.url)(process.env.JARVIS_PLAYWRIGHT_MODULE ?? "playwright"); } catch {}
+const { playwright, skip } = loadBrowserTestDependency();
 
 test("project choice component: explicit initial choice, reselect, bound retry and stale menu", {
-  skip: !playwright && "Set JARVIS_PLAYWRIGHT_MODULE to run controlled browser UI evidence",
+  skip,
 }, async () => {
   const root = process.cwd();
   const bundle = await build({ stdin: { loader: "tsx", resolveDir: root, contents: `

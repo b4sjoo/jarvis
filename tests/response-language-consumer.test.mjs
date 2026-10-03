@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {browserBundle,openProjectSelectionBrowserHost,playwright,fixtures} from './project-selection-hook-browser.test.mjs';
+import {browserBundle,openProjectSelectionBrowserHost,playwright,browserTestSkip,fixtures} from './project-selection-hook-browser.test.mjs';
 
-test('NL5 existing settings affect the next request without rewriting the visible answer',{timeout:90000},async t=>{
+test('NL5 existing settings affect the next request without rewriting the visible answer',{timeout:90000,skip:browserTestSkip},async t=>{
   const bundle=await browserBundle();
   const browser=await playwright.chromium.launch({headless:true,executablePath:process.env.JARVIS_CHROMIUM_EXECUTABLE});
   try {

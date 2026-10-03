@@ -4,7 +4,7 @@ import path from "node:path";
 import test from "node:test";
 import ts from "typescript";
 import {
-  browserBundle, fixtures, openProjectSelectionBrowserHost, playwright,
+  browserBundle, browserTestSkip, fixtures, openProjectSelectionBrowserHost, playwright,
   readRecordedSelectionTrace,
 } from "./project-selection-hook-browser.test.mjs";
 
@@ -228,7 +228,7 @@ async function execute(t,bundle,browser,scenario) {
   } finally {await context.close();}
 }
 
-test('PD5 bounded real final-Me ingress consumer cases',{timeout:90000},async t=>{
+test('PD5 bounded real final-Me ingress consumer cases',{timeout:90000,skip:browserTestSkip},async t=>{
   const enabled=new Set((process.env.PD5_ME_CASES??cases.map(item=>item.id).join(',')).split(','));
   for(const id of enabled)assert.ok(cases.some(item=>item.id===id),`unknown PD5 case ${id}`);
   const bundle=await browserBundle([finalMeIngressPlugin]);

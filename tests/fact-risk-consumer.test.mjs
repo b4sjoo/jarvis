@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {readFileSync,readdirSync} from 'node:fs';
-import {browserBundle,openProjectSelectionBrowserHost,playwright,fixtures} from './project-selection-hook-browser.test.mjs';
+import {browserBundle,openProjectSelectionBrowserHost,playwright,browserTestSkip,fixtures} from './project-selection-hook-browser.test.mjs';
 
-test('RG real publication, visible review, modes and delivery are separate',{timeout:90000},async t=>{
+test('RG real publication, visible review, modes and delivery are separate',{timeout:90000,skip:browserTestSkip},async t=>{
   const bundle=await browserBundle();
   const browser=await playwright.chromium.launch({headless:true,executablePath:process.env.JARVIS_CHROMIUM_EXECUTABLE});
   try {

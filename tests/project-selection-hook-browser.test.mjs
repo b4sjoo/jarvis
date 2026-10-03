@@ -6,10 +6,12 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { build } from "esbuild";
 import ts from "typescript";
+import { loadBrowserTestDependency } from "./helpers/browser-test-dependency.mjs";
 
 const root = process.cwd();
 const require = createRequire(import.meta.url);
-export const playwright = require(process.env.JARVIS_PLAYWRIGHT_MODULE ?? "playwright");
+// Importers gate on the same decision: a skip reason, or false when a real browser run proceeds.
+export const { playwright, skip: browserTestSkip } = loadBrowserTestDependency();
 const mainSource = readFileSync("src/pages/app/components/meeting/index.tsx", "utf8");
 const main = ts.createSourceFile("main.tsx", mainSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const focus = ts.createSourceFile("focus.tsx", readFileSync("src/pages/app/components/meeting/focus-window.tsx", "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -578,7 +580,7 @@ async function runConsumerCase(t,bundle,browser,execution) {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-test('S63 finite real consumer executions',{timeout:120000},async t=>{
+test('S63 finite real consumer executions',{timeout:120000,skip:browserTestSkip},async t=>{
   const enabled=new Set((process.env.S63_EXECUTIONS??fixtures.S63_CONSUMER_EXECUTIONS.map(item=>item.executionId).join(',')).split(','));
   const implemented=new Set(fixtures.S63_CONSUMER_EXECUTIONS.map(item=>item.executionId));
   for(const id of enabled)assert.ok(implemented.has(id),`${id} is not implemented; a success-only route cannot certify retry/duplicate/stale cases`);
