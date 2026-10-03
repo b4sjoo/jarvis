@@ -11,11 +11,22 @@ import { formatSemanticEmbeddingRuntimeTelemetryForTrace } from "../../src/lib/m
 import { calculateWordEquivalent } from "../../src/lib/meeting/transcript-fusion.js";
 import { detectOpeningTaskRoute } from "../../src/lib/meeting/opening-route.js";
 
-export async function runSemanticScheduling(source: string, input: {
+export interface SemanticSchedulingInput {
   eligible?: boolean; embeddingStatus?: string; parent?: boolean; stale?: boolean;
   // Embedding result vectors in request order ([unit] or [unit, relation]). Defaults to zero vectors.
   embeddings?: number[][];
-} = {}) {
+  // 178/168 PC: Runtime Cross-checks admits the embedding observation. Off is the product default.
+  runtimeCrossChecks?: boolean;
+  // Debug and Recording are separate switches; neither admits the observation.
+  debug?: boolean;
+  recording?: boolean;
+  // The shared SemanticTaxonomyRuntime to use instead of the recording stub.
+  runtime?: unknown;
+}
+
+// The Hook's real scheduleQuestionRuntime and observer, bound to substituted
+// formal schedulers, sinks and (unless one is supplied) a stub embedding runtime.
+export function semanticSchedulingHook(source: string, input: SemanticSchedulingInput = {}) {
   const ast = ts.createSourceFile("hook.ts", source, ts.ScriptTarget.Latest, true);
   function declaration(name: string) {
     let found: ts.VariableDeclaration | ts.FunctionDeclaration | undefined;
@@ -39,16 +50,20 @@ export async function runSemanticScheduling(source: string, input: {
   const env: Record<string, any> = { ...taxonomy, ...unit, ...ownership, ...shadow, ...semantic, ...intent,
     formatSemanticEmbeddingRuntimeTelemetryForTrace, calculateWordEquivalent, detectOpeningTaskRoute,
     contextManagerRef: { current: { getState: () => contextState } }, runtimeEpochRef: { current: 1 },
+    debugModeRef: { current: input.debug ?? false },
+    runtimeCrossChecksEnabledRef: { current: input.runtimeCrossChecks ?? false },
     logicalQuestionUnitRef: { current: logicalQuestionUnit },
     semanticEmbeddingRevisionRef: { current: 0 }, semanticTaxonomyEvidenceByTurnRef: { current: new Map() },
     readEffectiveSemanticTask: (task: unknown) => task,
     traceStoreRef: { current: { updateMetadata: (...args: unknown[]) => events.push(["metadata", ...args]),
       startStep: (...args: unknown[]) => { events.push(["start", ...args]); return "step"; },
       finishStep: (...args: unknown[]) => events.push(["finish", ...args]) } },
-    sessionRecordingManagerRef: { current: { recordSemanticTaxonomyDecision: (value: unknown) => events.push(["taxonomy", value]),
-      recordInterviewerIntentSemanticDecision: (value: unknown) => events.push(["intent", value]) } },
+    // An inactive recorder is still present; it just writes nothing.
+    sessionRecordingManagerRef: { current: {
+      recordSemanticTaxonomyDecision: (value: unknown) => { if (input.recording ?? true) events.push(["taxonomy", value]); },
+      recordInterviewerIntentSemanticDecision: (value: unknown) => { if (input.recording ?? true) events.push(["intent", value]); } } },
     recordSemanticEmbeddingRuntimeEvent: (value: unknown) => events.push(["telemetry", value]),
-    semanticTaxonomyRuntimeRef: { current: { pinSession: (...args: unknown[]) => events.push(["pin", ...args]),
+    semanticTaxonomyRuntimeRef: { current: input.runtime ?? { pinSession: (...args: unknown[]) => events.push(["pin", ...args]),
       getSnapshot: () => ({ readiness: "ready", modelVersion: "fixture" }),
       embed: (request: unknown, options: any) => {
         events.push(["embed", request, { ...options, onTelemetry: undefined }]);
@@ -74,9 +89,23 @@ export async function runSemanticScheduling(source: string, input: {
   };
   const old = source.includes("const scheduleSemanticTaxonomyShadow =");
   if (!old) env.prepareSemanticTaxonomyObservation = loadCallback("prepareSemanticTaxonomyObservation");
-  const schedule = loadCallback(old ? "scheduleSemanticTaxonomyShadow" : "scheduleQuestionRuntime");
-  const result = schedule({ turn, traceId: "trace", turnGateAction: input.eligible === false ? "ignore" : "answer-refresh", logicalQuestionUnit });
-  assert.equal(result.questionType, typeHandle); assert.equal(result.taskRelation, relationHandle);
+  const scheduleQuestion = loadCallback(old ? "scheduleSemanticTaxonomyShadow" : "scheduleQuestionRuntime");
+  // `scheduledTurn` gives one schedule its own turn object, as production does:
+  // the Hook's completion handler keeps the turn it was scheduled with.
+  const schedule = (scheduledTurn = turn) => {
+    const result = scheduleQuestion({ turn: scheduledTurn, traceId: "trace", turnGateAction: input.eligible === false ? "ignore" : "answer-refresh", logicalQuestionUnit });
+    assert.equal(result.questionType, typeHandle); assert.equal(result.taskRelation, relationHandle);
+    return result;
+  };
+  return { env, events, turn, logicalQuestionUnit, contextState, loadCallback, schedule,
+    completeEmbedding: () => complete, authorizeRelationSource: () => authorize!() };
+}
+
+export async function runSemanticScheduling(source: string, input: SemanticSchedulingInput = {}) {
+  const { env, events, logicalQuestionUnit, contextState, schedule, completeEmbedding, authorizeRelationSource } =
+    semanticSchedulingHook(source, input);
+  schedule();
+  const complete = completeEmbedding();
   if (complete) {
     if (input.stale) contextState.sessionId = "other";
     complete({ status: input.embeddingStatus ?? "success", embeddings: input.embeddings ?? [Array(384).fill(0), Array(384).fill(0)],
@@ -84,7 +113,7 @@ export async function runSemanticScheduling(source: string, input: {
     await new Promise<void>(resolve => setImmediate(resolve));
   }
   env.logicalQuestionUnitRef.current = { ...logicalQuestionUnit, revision: 2 };
-  const lateAuthorization = authorize!();
+  const lateAuthorization = authorizeRelationSource();
   return JSON.parse(JSON.stringify({ events, lateAuthorization, embeddingRevision: env.semanticEmbeddingRevisionRef.current,
     evidence: [...env.semanticTaxonomyEvidenceByTurnRef.current.entries()] }));
 }

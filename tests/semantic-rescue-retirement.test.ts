@@ -219,7 +219,8 @@ test("168-C1 the same object reaches the Advisor trace metadata, the intent-gate
 });
 
 test("168-C1 real observer, Advisor record and readers give the pre-retirement values without the retired label", async () => {
-  for (const input of [{ embeddingStatus: "success", parent: true }, { eligible: false }]) {
+  // 178/168 PC: the embedding observation is admitted by Runtime Cross-checks.
+  for (const input of [{ embeddingStatus: "success", parent: true, runtimeCrossChecks: true }, { eligible: false, runtimeCrossChecks: true }]) {
     const observed = await runSemanticScheduling(source, input);
     const traceUpdates: Array<Record<string, unknown>> = observed.events
       .filter((event: unknown[]) => event[0] === "metadata")
@@ -311,6 +312,8 @@ test("168-C1 a real would-rescue observation stays a recorded comparison and nev
     const observed = await runSemanticScheduling(source, {
       parent,
       embeddings: parent ? [systemDesign, systemDesign] : [systemDesign],
+      // 178/168 PC: the embedding observation is admitted by Runtime Cross-checks.
+      runtimeCrossChecks: true,
     });
     const stages: string[] = observed.events.map((event: unknown[]) => event[0]);
     // Formal Type and Relation were scheduled before the embedding and their handles are returned as they are.

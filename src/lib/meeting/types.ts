@@ -1487,6 +1487,11 @@ export interface MeetingAssistantSettings {
   personalEvidenceGuardrailMode: PersonalEvidenceGuardrailMode;
   debugMode: boolean;
   nativeStallDiagnosticsEnabled: boolean;
+  // Admits the four extra runtime observation families (extra Split Relation and
+  // its automatic Canonical, Whiteboard syntax-repair observation, the Meeting
+  // Metadata cross-check for a known company, Semantic Type / Interviewer Intent
+  // embedding). Never an input to a formal decision or to an answer.
+  runtimeCrossChecksEnabled: boolean;
   microphoneContextEnabled: boolean;
   response: MeetingResponseConfig;
   codingModel: MeetingCodingModelSettings;

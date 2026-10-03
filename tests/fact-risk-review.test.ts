@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+import vm from "node:vm";
+import ts from "typescript";
 import { buildSync } from "esbuild";
 import { buildFactAnchorDecision } from "../src/lib/meeting/fact-anchor-guardrail.js";
 import { RuntimeInferenceProviderAdmissionCoordinator, type RuntimeInferenceAdmissionClock } from "../src/lib/meeting/runtime-inference-provider-admission.js";
@@ -147,4 +150,105 @@ test("RG8 review route uses ordinary Advisor and never the Coding override or Fa
     taxonomyAdjudicationProvider:{provider:"fast",variables:{MODEL:"fast"}},
   }});
   assert.equal(route.provider?.id,"main");assert.equal(route.selectedProvider.variables.MODEL,"advisor");assert.equal(route.providerTier,"intelligent");
+});
+
+// ---------------------------------------------------------------------------
+// 178/168 PC4: Fact Risk Review keeps its own product contract. The Hook's real
+// display-applied callback is evaluated with the real review runtime, prompt
+// builder and route resolver. Its environment holds no Debug ref, no Recording
+// state and no Runtime Cross-checks ref at all: reading any of them would throw.
+// ---------------------------------------------------------------------------
+
+const hookText = readFileSync("src/hooks/useMeetingAssistant.ts", "utf8");
+const hookAst = ts.createSourceFile("hook.ts", hookText, ts.ScriptTarget.Latest, true);
+function hookNode(name: string): ts.Node {
+  let found: ts.Node | undefined;
+  const visit = (node: ts.Node) => {
+    if (found) return;
+    if (ts.isVariableDeclaration(node) && node.name.getText(hookAst) === name && node.initializer && ts.isCallExpression(node.initializer)) {
+      found = node.initializer.arguments[0];
+    } else if (ts.isFunctionDeclaration(node) && node.name?.getText(hookAst) === name) found = node;
+    else ts.forEachChild(node, visit);
+  };
+  visit(hookAst);
+  assert.ok(found, `production declaration ${name}`);
+  return found;
+}
+const hookCode = (name: string) => ts.transpileModule(`(${hookNode(name).getText(hookAst)})`, {
+  compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText;
+
+async function displayApplied(mode: "enforcement" | "shadow") {
+  const { runtime, events } = setup();
+  const committed = stable();
+  // The displayed Answer names the trace that produced it, as a real one does.
+  const answer: StableAnswerRevision = { ...committed, suggestion: { ...committed.suggestion, sourceTraceId: "trace" } };
+  const requests: any[] = [], inputs: any[] = [], routes: any[] = [], metadata: Record<string, unknown> = {};
+  const snapshot = { providers: [{ id: "main", curl: "https://main.test" }, { id: "fast", curl: "https://fast.test" }],
+    selectedProvider: { provider: "main", variables: { MODEL: "advisor" } },
+    taxonomyAdjudicationProvider: { provider: "fast", variables: { MODEL: "fast" } } };
+  const target = { traceId: "trace", sessionId: "session", logicalQuestionUnitId: "A", logicalQuestionRevision: 1 };
+  const context = vm.createContext({
+    Date, Error,
+    state: { settings: { personalEvidenceGuardrailMode: mode } },
+    window: { cancelAnimationFrame() {}, requestAnimationFrame: () => 1 },
+    pinReleaseFrameRef: { current: null }, shutdownRequestedRef: { current: false }, runtimeEpochRef: { current: 1 },
+    manualAdviseDisplayRef: { current: { locked: false, selectedStable: undefined, acknowledgeApplied() {},
+      awaitingApplication: () => false, capture: () => ({ stable: answer, streaming: false }) } },
+    stableAnswerRevisionRef: { current: answer },
+    contextManagerRef: { current: { getState: () => ({ sessionId: "session" }) } },
+    traceStoreRef: { current: { getTraces: () => [{ id: "trace", metadata }],
+      updateMetadata: (_id: string, update: Record<string, unknown>) => Object.assign(metadata, update),
+      recordInput: (_id: string, label: string, value: string, meta: unknown) => inputs.push({ label, value, meta }),
+      recordOutput() {} } },
+    sessionRecordingManagerRef: { current: { recordCaptureLifecycle() {}, recordModelInput() {}, recordModelOutput() {} } },
+    refreshRecordedCompletedTrace() {},
+    factRiskReviewRuntimeRef: { current: runtime },
+    meetingModelProviderSnapshotRef: { current: snapshot },
+    resolveRuntimeInferenceModelRouteFromSnapshot: (request: any) => {
+      routes.push({ operationKind: request.operationKind, reason: request.reason });
+      return resolveRuntimeInferenceModelRouteFromSnapshot(request);
+    },
+    formatRuntimeInferenceModelRouteForTrace: () => ({}),
+    buildFactRiskReviewPrompts,
+    requestFactRiskReview: async (request: any) => {
+      requests.push(request);
+      return { response: { rawOutput: '{"v":1,"flags":[]}', providerDisposition: "completed-with-content" }, parsed: { ok: true, flags: [] } };
+    },
+  });
+  context.formatTraceModelInput = vm.runInContext(hookCode("formatTraceModelInput"), context);
+  const recordAdviseDisplayApplied = vm.runInContext(hookCode("recordAdviseDisplayApplied"), context);
+  runtime.retain([answer]);
+  recordAdviseDisplayApplied(target, "normal-mode");
+  await flush();
+  // The same Answer shown again is not reviewed again.
+  recordAdviseDisplayApplied(target, "focus-mode");
+  await flush();
+  return { runtime, events, answer, requests, inputs, routes, metadata };
+}
+
+test("PC4 Fact Risk Review is requested once for a displayed stable Answer in both modes, with the same prompt, route and budget, and cannot read the observation switch", async () => {
+  const runs = { enforcement: await displayApplied("enforcement"), shadow: await displayApplied("shadow") };
+  for (const [mode, run] of Object.entries(runs)) {
+    assert.equal(run.requests.length, 1, `${mode}: one request per displayed Answer`);
+    assert.deepEqual(run.routes, [{ operationKind: "fact-risk-review", reason: "visible-answer-fact-review" }]);
+    assert.equal(run.requests[0].provider.id, "main", "Intelligent route: the ordinary Advisor provider");
+    assert.equal(run.requests[0].selectedProvider.variables.MODEL, "advisor");
+    assert.equal(run.requests[0].remainingMs, 10_000, "the whole 10 s budget");
+    assert.equal(run.requests[0].executionIdentity.requestId, `fact-risk:${factRiskReviewAnswerKey(run.answer)}`);
+    assert.equal(run.inputs.length, 1);
+    assert.equal(run.inputs[0].meta.mode, mode);
+    assert.doesNotMatch(run.inputs[0].value, /Original reasoning/, "Approach is not sent");
+    assert.equal(run.runtime.read(run.answer)?.status, "completed");
+    // The mode decides only the display: Enforcement marks the completed review as shown, Shadow keeps it as an observation.
+    assert.equal(run.metadata.factRiskReviewDisplayAnswerKey, mode === "enforcement" ? factRiskReviewAnswerKey(run.answer) : undefined);
+  }
+  const comparable = (run: typeof runs.enforcement) => JSON.parse(JSON.stringify({
+    request: { ...run.requests[0], signal: undefined }, prompt: run.inputs[0].value, routes: run.routes }));
+  assert.deepEqual(comparable(runs.shadow), comparable(runs.enforcement), "both modes send the same request");
+  // The review's own budget definition is the brief's contract and is not part of this slice.
+  const { getRuntimeInferenceOperationDefinition } = await import("../src/lib/meeting/runtime-inference.js");
+  assert.deepEqual(getRuntimeInferenceOperationDefinition("fact-risk-review"), {
+    workloadClass: "runtime", operationKind: "fact-risk-review", providerTier: "intelligent",
+    lane: "background", timeoutMs: 10_000, maxOutputTokens: 2048, quiescenceMs: 0, maxStartsPerBudgetSlot: 1 });
+  assert.doesNotMatch(hookNode("recordAdviseDisplayApplied").getText(hookAst), /runtimeCrossChecks|debugModeRef/);
 });

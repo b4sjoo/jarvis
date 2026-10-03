@@ -95,10 +95,16 @@ async function harness(owner: "meeting" | "system" = "meeting") {
     collect(node);
   }
   const noop = () => undefined;
+  // What application shutdown cancels, in order: [runtime ref, reason].
+  const runtimeCancels: Array<[string, unknown]> = [];
   for (const name of ["responseOpportunityRuntimeRef", "responseOpportunityGenerationGateRef", "meetingMetadataInferenceRuntimeRef",
     "questionTypeAdjudicationRuntimeRef", "taskRelationChildAffinityRuntimeRef", "taskRelationParentAffinityRuntimeRef",
-    "taskRelationCanonicalShadowRuntimeRef", "answerResolutionRuntimeRef", "evidenceRequirementRuntimeRef",
-    "sourceLinkageAdjudicationRuntimeRef", "whiteboardSyntaxRepairRuntimeRef"]) globals[name] = { current: { cancelAll: noop } };
+    "taskRelationCanonicalShadowRuntimeRef", "taskRelationChildAffinityObservationRuntimeRef",
+    "taskRelationParentAffinityObservationRuntimeRef", "taskRelationCanonicalShadowObservationRuntimeRef",
+    "answerResolutionRuntimeRef", "evidenceRequirementRuntimeRef",
+    "sourceLinkageAdjudicationRuntimeRef", "whiteboardSyntaxRepairRuntimeRef"]) {
+    globals[name] = { current: { cancelAll: (reason: unknown) => { runtimeCancels.push([name, reason]); } } };
+  }
   const timers = new Map<number, () => void>();
   let timerId = 0;
   const traces = new MeetingTraceStore();
@@ -206,7 +212,7 @@ async function harness(owner: "meeting" | "system" = "meeting") {
   const coordinator = new ApplicationShutdownCoordinator(globals.shutdownOwner as ApplicationShutdownOwner, transport);
   await connectApplicationShutdownOwner(coordinator, transport, (error) => errors.push(error));
   return {
-    globals, calls, nativeCommands, files, recording, traces, nativeReply, nativeEntered, queue, errors,
+    globals, calls, nativeCommands, files, recording, traces, nativeReply, nativeEntered, queue, errors, runtimeCancels,
     getStatus: () => ({ ...status }),
     setStatusRead: (read: typeof readStatus) => { readStatus = read; },
     replaceCapture: (captureSessionId: string | null, captureGeneration: number | null) => {
@@ -271,6 +277,24 @@ for (const owner of ["meeting", "system"] as const) {
     assert.deepEqual(h.errors, []);
   });
 }
+
+test("PC6 application shutdown disposes the observation Relation runtimes together with the formal ones", async () => {
+  const h = await harness();
+  await h.quit(); await h.nativeEntered.promise;
+  const relation = h.runtimeCancels.filter(([name]) => name.startsWith("taskRelation"));
+  assert.deepEqual(relation, [
+    ["taskRelationChildAffinityRuntimeRef", "disposed"],
+    ["taskRelationParentAffinityRuntimeRef", "disposed"],
+    ["taskRelationCanonicalShadowRuntimeRef", "disposed"],
+    ["taskRelationChildAffinityObservationRuntimeRef", "disposed"],
+    ["taskRelationParentAffinityObservationRuntimeRef", "disposed"],
+    ["taskRelationCanonicalShadowObservationRuntimeRef", "disposed"],
+  ]);
+  h.nativeReply.resolve(); await settle();
+  await h.terminal(); h.queue.resolve(); await settle();
+  assert.equal(h.exits, 1);
+  assert.deepEqual(h.errors, []);
+});
 
 test("Q1 actual ordinary in-flight Stop and Quit share the native Stop and lifecycle claim", async () => {
   const h = await harness();

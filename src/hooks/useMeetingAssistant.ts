@@ -241,7 +241,6 @@ import {
 import {
   coordinateOrderedSettlement,
   createOrderedSettlementDeadline,
-  createOrderedRelationPhaseBudget,
   createOrderedSettlementReleaseGate,
   formatOrderedSettlementCoordinatorForTrace,
   formatOrderedSettlementReleaseForTrace,
@@ -265,7 +264,6 @@ import {
   cloneTaskRelationSplitAffinityResult,
   createTaskRelationOperationIdentity,
   createTaskRelationSplitLease,
-  filterTaskRelationAffinityOutcomeAtCutoff,
   formatFirstBatchRelationReleaseForTrace,
   formatOrderedTaskRelationResolutionForTrace,
   formatTaskRelationSplitObservationForTrace,
@@ -1460,6 +1458,7 @@ const INITIAL_STATE: MeetingAssistantState = {
     personalEvidenceGuardrailMode: "enforcement",
     debugMode: false,
     nativeStallDiagnosticsEnabled: false,
+    runtimeCrossChecksEnabled: false,
     microphoneContextEnabled: true,
     response: DEFAULT_MEETING_RESPONSE_CONFIG,
     codingModel: DEFAULT_MEETING_CODING_MODEL_SETTINGS,
@@ -1529,6 +1528,10 @@ function readMeetingAssistantSettings(): MeetingAssistantSettings {
         typeof parsed.nativeStallDiagnosticsEnabled === "boolean"
           ? parsed.nativeStallDiagnosticsEnabled
           : DEFAULT_MEETING_ASSISTANT_SETTINGS.nativeStallDiagnosticsEnabled,
+      runtimeCrossChecksEnabled:
+        typeof parsed.runtimeCrossChecksEnabled === "boolean"
+          ? parsed.runtimeCrossChecksEnabled
+          : DEFAULT_MEETING_ASSISTANT_SETTINGS.runtimeCrossChecksEnabled,
       microphoneContextEnabled:
         typeof parsed.microphoneContextEnabled === "boolean"
           ? parsed.microphoneContextEnabled
@@ -3115,6 +3118,12 @@ export function useMeetingAssistant() {
   const autoExportProcessedTraceIdsRef = useRef(new Set<string>());
   const sessionRecordedTraceIdsRef = useRef(new Set<string>());
   const debugModeRef = useRef(INITIAL_STATE.settings.debugMode);
+  // Runtime Cross-checks admits the four extra observation families and nothing
+  // else. Its setter assigns this ref synchronously, so no observation starts
+  // after the user turned it off; each observation reads it once at its own start.
+  const runtimeCrossChecksEnabledRef = useRef(
+    state.settings.runtimeCrossChecksEnabled
+  );
   const captureLifecycleCoordinatorRef = useRef<CaptureLifecycleCoordinator | null>(
     null
   );
@@ -3322,6 +3331,46 @@ export function useMeetingAssistant() {
         "task-relation-canonical-shadow"
       );
   }
+  // Observation has its own three instances of the same runtime class. A
+  // single-slot runtime replaces its current operation on every schedule, so
+  // sharing one with formal work would let an observation abort a formal
+  // operation in flight or make its settled Affinity stale.
+  const taskRelationChildAffinityObservationRuntimeRef = useRef<
+    RuntimeInferenceOperationRuntime<
+      TaskRelationSplitShadowJob<TaskRelationAffinityRequest>,
+      TaskRelationSplitShadowRequestResult
+    > | null
+  >(null);
+  if (taskRelationChildAffinityObservationRuntimeRef.current === null) {
+    taskRelationChildAffinityObservationRuntimeRef.current =
+      new RuntimeInferenceOperationRuntime(
+        "task-relation-child-affinity"
+      );
+  }
+  const taskRelationParentAffinityObservationRuntimeRef = useRef<
+    RuntimeInferenceOperationRuntime<
+      TaskRelationSplitShadowJob<TaskRelationAffinityRequest>,
+      TaskRelationSplitShadowRequestResult
+    > | null
+  >(null);
+  if (taskRelationParentAffinityObservationRuntimeRef.current === null) {
+    taskRelationParentAffinityObservationRuntimeRef.current =
+      new RuntimeInferenceOperationRuntime(
+        "task-relation-parent-affinity"
+      );
+  }
+  const taskRelationCanonicalShadowObservationRuntimeRef = useRef<
+    RuntimeInferenceOperationRuntime<
+      TaskRelationSplitShadowJob<TaskRelationCanonicalShadowRequest>,
+      TaskRelationSplitShadowRequestResult
+    > | null
+  >(null);
+  if (taskRelationCanonicalShadowObservationRuntimeRef.current === null) {
+    taskRelationCanonicalShadowObservationRuntimeRef.current =
+      new RuntimeInferenceOperationRuntime(
+        "task-relation-canonical-shadow"
+      );
+  }
   const taskRelationSplitShadowCircuitRef = useRef(
     new RuntimeInferenceSessionCircuitBreaker()
   );
@@ -3455,7 +3504,13 @@ export function useMeetingAssistant() {
     screenHash: latestScreenHashRef.current,
     latestTurnId: contextManagerRef.current.getState().transcriptTurns.at(-1)?.id,
     latestObservationId: contextManagerRef.current.getState().screenObservations.at(-1)?.id,
-    settings: structuredClone(artifactReuseSettingsRef.current),
+    // Runtime Cross-checks only admits observation. It is not an answer input, so
+    // it is projected to one constant here: toggling it neither invalidates a
+    // reusable Artifact nor grants generation. Every other setting stays compared.
+    settings: structuredClone({
+      ...artifactReuseSettingsRef.current,
+      runtimeCrossChecksEnabled: false,
+    }),
   }), []);
   const displayedStreamRef = useRef<{ traceId?: string; generationId: string; leaseId: string;
     logicalQuestionUnitId?: string; logicalQuestionRevision?: number } | null>(null);
@@ -5756,6 +5811,9 @@ export function useMeetingAssistant() {
     taskRelationChildAffinityRuntimeRef.current?.cancelAll("superseded");
     taskRelationParentAffinityRuntimeRef.current?.cancelAll("superseded");
     taskRelationCanonicalShadowRuntimeRef.current?.cancelAll("superseded");
+    taskRelationChildAffinityObservationRuntimeRef.current?.cancelAll("superseded");
+    taskRelationParentAffinityObservationRuntimeRef.current?.cancelAll("superseded");
+    taskRelationCanonicalShadowObservationRuntimeRef.current?.cancelAll("superseded");
     answerResolutionRuntimeRef.current?.cancelAll("superseded");
     evidenceRequirementRuntimeRef.current?.cancelAll("superseded");
     sourceLinkageAdjudicationRuntimeRef.current?.cancelAll("superseded");
@@ -7716,11 +7774,11 @@ export function useMeetingAssistant() {
       if (validation.valid || validation.candidateKind !== "mermaid") {
         return;
       }
-      const evaluationActive = debugModeRef.current;
+      // Start-time value for this repair observation; Debug no longer admits it.
+      const runtimeCrossChecksAtStart = runtimeCrossChecksEnabledRef.current;
       const artifact = parent?.whiteboardArtifact;
       const renderState = artifact?.renderState;
       if (
-        !evaluationActive ||
         !parent ||
         !artifact ||
         !renderState ||
@@ -7728,6 +7786,15 @@ export function useMeetingAssistant() {
         renderState.candidateFingerprint !==
           validation.candidateFingerprint
       ) {
+        return;
+      }
+      if (!runtimeCrossChecksAtStart) {
+        // The candidate was eligible and only the switch kept the repair
+        // observation from starting. An ineligible or stale candidate returned
+        // above and records nothing, so a trace can tell the two apart.
+        traceStoreRef.current.updateMetadata(traceId, {
+          whiteboardRepairObservationSkipReason: "runtime-cross-checks-off",
+        });
         return;
       }
 
@@ -7838,7 +7905,9 @@ export function useMeetingAssistant() {
         ...formatRuntimeInferenceOperationForTrace(
           "whiteboard-syntax-repair"
         ),
-        whiteboardRepairObservationTrigger: "legacy-debug-preview-trigger",
+        whiteboardRepairObservationTrigger: runtimeCrossChecksAtStart
+          ? "runtime-cross-checks"
+          : undefined,
         ...routeMetadata,
         ...formatWhiteboardSyntaxRepairForTrace({
           lease,
@@ -9252,6 +9321,24 @@ export function useMeetingAssistant() {
   const setNativeStallDiagnosticsEnabled = useCallback(
     (nativeStallDiagnosticsEnabled: boolean) => {
       updateSettings((previous) => ({ ...previous, nativeStallDiagnosticsEnabled }));
+    },
+    [updateSettings]
+  );
+
+  const setRuntimeCrossChecksEnabled = useCallback(
+    (runtimeCrossChecksEnabled: boolean) => {
+      const previousRuntimeCrossChecksEnabled =
+        runtimeCrossChecksEnabledRef.current;
+      runtimeCrossChecksEnabledRef.current = runtimeCrossChecksEnabled;
+      if (previousRuntimeCrossChecksEnabled !== runtimeCrossChecksEnabled) {
+        // Written only while a recording is active; the event carries its own time.
+        sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+          stage: "runtime-cross-checks-updated",
+          runtimeCrossChecksEnabled,
+          previousRuntimeCrossChecksEnabled,
+        });
+      }
+      updateSettings((previous) => ({ ...previous, runtimeCrossChecksEnabled }));
     },
     [updateSettings]
   );
@@ -17812,23 +17899,27 @@ export function useMeetingAssistant() {
         });
         return;
       }
-      if (
-        authoritativeCompany &&
-        !debugModeRef.current
-      ) {
-        traceStoreRef.current.updateMetadata(traceId, {
-          meetingMetadataInferenceDisposition:
-            "authoritative-observation-disabled",
-          meetingMetadataInferenceSkipReason:
-            "authoritative-source-requires-debug-preview",
-        });
-        return;
-      }
+      // A stored explicit "off" wins, with or without a target company: it is
+      // checked before the switch and keeps its own recorded reason, so a
+      // feature the user turned off is never reported as a Cross-checks skip.
       if (metadataMode === "off") {
         traceStoreRef.current.updateMetadata(traceId, {
           meetingMetadataInferenceDisposition: "operation-disabled",
           meetingMetadataInferenceSkipReason:
             "runtime-inference-disabled",
+        });
+        return;
+      }
+      // With a target company already present this request is an extra
+      // cross-check, admitted by Runtime Cross-checks as read here, once. With no
+      // company the feature's own mode decides and the switch is not read.
+      const knownCompanyCrossCheckAtStart =
+        Boolean(authoritativeCompany) && runtimeCrossChecksEnabledRef.current;
+      if (authoritativeCompany && !knownCompanyCrossCheckAtStart) {
+        traceStoreRef.current.updateMetadata(traceId, {
+          meetingMetadataInferenceDisposition:
+            "authoritative-observation-disabled",
+          meetingMetadataInferenceSkipReason: "runtime-cross-checks-off",
         });
         return;
       }
@@ -17913,7 +18004,9 @@ export function useMeetingAssistant() {
         ...baseMetadata,
         ...routeMetadata,
         meetingMetadataInferenceDisposition: "scheduled",
-        meetingMetadataInferenceObservationTrigger: authoritativeCompany ? "legacy-debug-preview-trigger" : undefined,
+        meetingMetadataInferenceObservationTrigger: knownCompanyCrossCheckAtStart
+          ? "runtime-cross-checks"
+          : undefined,
         meetingMetadataInferenceOperationId: lease.operationId,
         meetingMetadataInferenceRequestHash: requestHash,
         meetingMetadataInferencePromptVersion: request.promptVersion,
@@ -19751,8 +19844,46 @@ export function useMeetingAssistant() {
       runtimeReleaseRequested?: boolean;
       authorizeSourceOperation: ReadTaskRelationSourceOperationAuthorization;
     }): TaskRelationSplitScheduleHandle | undefined => {
-      const evaluationActive = debugModeRef.current;
-      if (!evaluationActive && !runtimeReleaseRequested) return;
+      // Formal work never depends on the switch. An observation is admitted by
+      // Runtime Cross-checks as read here, once: it keeps this start-time value
+      // even if the switch changes while it is in flight.
+      const observationAdmittedAtStart =
+        !runtimeReleaseRequested && runtimeCrossChecksEnabledRef.current;
+      if (!runtimeReleaseRequested && !observationAdmittedAtStart) return;
+      const observationTrigger = observationAdmittedAtStart
+        ? "runtime-cross-checks"
+        : undefined;
+      // One executor, two sets of the same single-slot runtimes. Every lease
+      // check, revalidation and cancel of this operation reads the set it was
+      // scheduled on, so an observation schedule never touches formal work.
+      const relationRuntimes = runtimeReleaseRequested
+        ? {
+            child: taskRelationChildAffinityRuntimeRef.current!,
+            parent: taskRelationParentAffinityRuntimeRef.current!,
+            canonical: taskRelationCanonicalShadowRuntimeRef.current!,
+          }
+        : {
+            child: taskRelationChildAffinityObservationRuntimeRef.current!,
+            parent: taskRelationParentAffinityObservationRuntimeRef.current!,
+            canonical: taskRelationCanonicalShadowObservationRuntimeRef.current!,
+          };
+      // Supersession is one-directional. A formal stage cancels observation work
+      // of its own kind as superseded, which is what scheduling it on the shared
+      // runtime did before the instances were split. An instance with no current
+      // operation has nothing to supersede and is left alone: cancelling it as
+      // superseded would arm a disposed runtime again.
+      const supersedeObservation = (kind: "child" | "parent" | "canonical") => {
+        if (!runtimeReleaseRequested) return;
+        const observationRuntime = (
+          kind === "child"
+            ? taskRelationChildAffinityObservationRuntimeRef
+            : kind === "parent"
+              ? taskRelationParentAffinityObservationRuntimeRef
+              : taskRelationCanonicalShadowObservationRuntimeRef
+        ).current;
+        if (observationRuntime?.getCurrentOperationId() === undefined) return;
+        observationRuntime.cancelAll("superseded");
+      };
       contextManagerRef.current.clearExpiredActiveMeetingTask();
       // Keep delayed observations with the recorder that owned their input.
       const splitRecordingManager =
@@ -19916,15 +20047,21 @@ export function useMeetingAssistant() {
         });
         const routes = { intelligent: modelRoute, fast: fastRoute };
         if (!modelRoute.provider || !fastRoute.provider) {
-          taskRelationSplitShadowCircuitRef.current.open({
-            operationKind,
-            sessionId: contextState.sessionId,
-            reason: "provider-configuration-error",
-            detail:
-              modelRoute.missingRequiredVariables.length > 0
-                ? `missing:${modelRoute.missingRequiredVariables.join(",")}`
-                : modelRoute.fallbackReason,
-          });
+          // The session circuit is read by formal and observation operations
+          // alike, and an open circuit ends a formal question as a client
+          // error. Only a formal operation opens it; an observation ends with
+          // the same reason and leaves the circuit as it found it.
+          if (runtimeReleaseRequested) {
+            taskRelationSplitShadowCircuitRef.current.open({
+              operationKind,
+              sessionId: contextState.sessionId,
+              reason: "provider-configuration-error",
+              detail:
+                modelRoute.missingRequiredVariables.length > 0
+                  ? `missing:${modelRoute.missingRequiredVariables.join(",")}`
+                  : modelRoute.fallbackReason,
+            });
+          }
           return Promise.resolve({
             unavailableReason: "provider-configuration-error",
             clientError: true,
@@ -19946,10 +20083,7 @@ export function useMeetingAssistant() {
           affinityRequest.affinityKind === "child"
             ? "taskRelationChildAffinity"
             : "taskRelationParentAffinity";
-        const runtime =
-          affinityRequest.affinityKind === "child"
-            ? taskRelationChildAffinityRuntimeRef.current!
-            : taskRelationParentAffinityRuntimeRef.current!;
+        const runtime = relationRuntimes[affinityRequest.affinityKind];
         const baseMetadata = {
           ...formatRuntimeInferenceOperationForTrace(operationKind),
           ...formatRuntimeInferenceModelRouteForTrace(modelRoute),
@@ -19958,7 +20092,7 @@ export function useMeetingAssistant() {
             prompts.semanticPayloadDigest,
           [`${prefix}ModelVisibleChars`]: prompts.modelVisibleChars,
           [`${prefix}MutationBlocked`]: true,
-          [`${prefix}ObservationTrigger`]: runtimeReleaseRequested ? undefined : "legacy-debug-preview-trigger",
+          [`${prefix}ObservationTrigger`]: observationTrigger,
           [`${prefix}ExecutionStage`]: runtimeReleaseRequested
             ? "product"
             : "evaluation",
@@ -19986,6 +20120,7 @@ export function useMeetingAssistant() {
         }
         return new Promise<TaskRelationSplitAffinityResult>((resolve, reject) => {
           let stepId: string | undefined;
+          supersedeObservation(affinityRequest.affinityKind);
           scheduleStageOperation(runtime, {
             job: {
               operationId: lease.operationId,
@@ -20155,9 +20290,7 @@ export function useMeetingAssistant() {
           outcome,
           readCurrentIdentity,
           readCurrentOperationId: (affinityKind) =>
-            affinityKind === "child"
-              ? taskRelationChildAffinityRuntimeRef.current?.getCurrentOperationId()
-              : taskRelationParentAffinityRuntimeRef.current?.getCurrentOperationId(),
+            relationRuntimes[affinityKind].getCurrentOperationId(),
         });
       const authorizeOperation = (): TaskRelationOperationAuthorization => {
         const sourceAuthorization = authorizeSourceOperation();
@@ -20279,7 +20412,7 @@ export function useMeetingAssistant() {
           taskRelationSplitParentPredecessorOutputHash:
             canonicalRequest.parentPredecessorOutputHash,
           taskRelationSplitCanonicalMutationBlocked: true,
-          taskRelationSplitCanonicalObservationTrigger: runtimeReleaseRequested ? undefined : "legacy-debug-preview-trigger",
+          taskRelationSplitCanonicalObservationTrigger: observationTrigger,
           taskRelationSplitCanonicalForeground: foreground,
           taskRelationSplitCanonicalAdmissionLane: foreground
             ? "critical"
@@ -20304,7 +20437,8 @@ export function useMeetingAssistant() {
           });
         }
         let stepId: string | undefined;
-        scheduleStageOperation(taskRelationCanonicalShadowRuntimeRef.current!, {
+        supersedeObservation("canonical");
+        scheduleStageOperation(relationRuntimes.canonical, {
           job: {
             operationId: lease.operationId,
             operationKind,
@@ -20336,7 +20470,7 @@ export function useMeetingAssistant() {
               settlement.job.lease,
               {
                 currentOperationId:
-                  taskRelationCanonicalShadowRuntimeRef.current?.getCurrentOperationId(),
+                  relationRuntimes.canonical.getCurrentOperationId(),
                 operationKind,
                 identity: readCurrentIdentity(
                   settlement.job.lease.identity
@@ -20350,14 +20484,14 @@ export function useMeetingAssistant() {
                 request: settlement.job.request,
                 currentChildOperationId:
                   child.operationId &&
-                  taskRelationChildAffinityRuntimeRef.current?.getCurrentOperationId() ===
+                  relationRuntimes.child.getCurrentOperationId() ===
                     child.operationId
                     ? child.operationId
                     : undefined,
                 currentChildOutputHash: child.outputHash,
                 currentParentOperationId:
                   parent.operationId &&
-                  taskRelationParentAffinityRuntimeRef.current?.getCurrentOperationId() ===
+                  relationRuntimes.parent.getCurrentOperationId() ===
                     parent.operationId
                     ? parent.operationId
                     : undefined,
@@ -20501,12 +20635,49 @@ export function useMeetingAssistant() {
         return canonicalOutcome;
       };
       if (!runtimeReleaseRequested) {
-        void affinityOutcome.then((completeAffinityOutcome) =>
-          startCanonical({
+        void affinityOutcome.then((completeAffinityOutcome) => {
+          // The follow-up Canonical has not started yet, so it is a new
+          // observation request: the live switch is read again. Turned off, it
+          // does not start and this observation ends with a named skip.
+          if (!runtimeCrossChecksEnabledRef.current) {
+            // One terminal per operation: a later start returns this skip.
+            canonicalStarted = true;
+            traceStoreRef.current.updateMetadata(traceId, {
+              taskRelationSplitCanonicalDisposition: "runtime-cross-checks-off",
+              taskRelationSplitShadowWallTimeMs: Date.now() - startedAt,
+            });
+            if (
+              splitRecordingManager?.getState().sessionId ===
+              splitRecordingSessionId
+            ) {
+              splitRecordingManager?.recordTaskRelationAdjudicationDecision({
+                traceId,
+                taskId,
+                metadata:
+                  traceStoreRef.current
+                    .getTraces()
+                    .find((candidate) => candidate.id === traceId)?.metadata ??
+                  {},
+              });
+            }
+            if (
+              !sessionRecordingManagerRef.current?.getState().active ||
+              (sessionRecordingManagerRef.current === splitRecordingManager &&
+                splitRecordingManager?.getState().sessionId ===
+                  splitRecordingSessionId)
+            ) {
+              refreshRecordedCompletedTrace(traceId);
+            }
+            resolveCanonicalOutcome?.({
+              unavailableReason: "runtime-cross-checks-off",
+            });
+            return canonicalOutcome;
+          }
+          return startCanonical({
             foreground: false,
             affinityOutcome: completeAffinityOutcome,
-          })
-        ).catch((error) => {
+          });
+        }).catch((error) => {
           traceStoreRef.current.updateMetadata(traceId, {
             taskRelationSplitCanonicalInternalError:
               error instanceof Error ? error.message : String(error),
@@ -20517,24 +20688,24 @@ export function useMeetingAssistant() {
         foregroundClosed = true;
         if (
           childAffinityOperationId &&
-          taskRelationChildAffinityRuntimeRef.current?.getCurrentOperationId() ===
+          relationRuntimes.child.getCurrentOperationId() ===
             childAffinityOperationId
         ) {
-          taskRelationChildAffinityRuntimeRef.current.cancelAll("superseded");
+          relationRuntimes.child.cancelAll("superseded");
         }
         if (
           parentAffinityOperationId &&
-          taskRelationParentAffinityRuntimeRef.current?.getCurrentOperationId() ===
+          relationRuntimes.parent.getCurrentOperationId() ===
             parentAffinityOperationId
         ) {
-          taskRelationParentAffinityRuntimeRef.current.cancelAll("superseded");
+          relationRuntimes.parent.cancelAll("superseded");
         }
         if (
           canonicalOperationId &&
-          taskRelationCanonicalShadowRuntimeRef.current?.getCurrentOperationId() ===
+          relationRuntimes.canonical.getCurrentOperationId() ===
             canonicalOperationId
         ) {
-          taskRelationCanonicalShadowRuntimeRef.current.cancelAll("superseded");
+          relationRuntimes.canonical.cancelAll("superseded");
         }
       };
       return {
@@ -20710,19 +20881,27 @@ export function useMeetingAssistant() {
         runtimeReleaseRequested: releaseWindowRequested,
         authorizeSourceOperation,
       });
+      // Only an operation scheduled as formal lends its model fields to the
+      // product handle. An observation keeps running inside the executor and
+      // writes Trace and Recording only: the consumers then hold exactly the
+      // handle they hold with the observation off, so its result, deadline and
+      // operation id cannot reach a formal resolver, settlement or Plan.
+      const formalSplitHandle = releaseWindowRequested
+        ? splitHandle
+        : undefined;
       const handle: TaskRelationAdjudicationScheduleHandle = {
         releaseWindowRequested,
-        affinityDeadlineAt: splitHandle?.affinityDeadlineAt,
-        operationId: splitHandle?.operationId,
-        affinityOutcome: splitHandle?.affinityOutcome,
-        readAffinityOutcome: splitHandle?.readAffinityOutcome,
-        revalidateAffinityOutcome: splitHandle?.revalidateAffinityOutcome,
+        affinityDeadlineAt: formalSplitHandle?.affinityDeadlineAt,
+        operationId: formalSplitHandle?.operationId,
+        affinityOutcome: formalSplitHandle?.affinityOutcome,
+        readAffinityOutcome: formalSplitHandle?.readAffinityOutcome,
+        revalidateAffinityOutcome: formalSplitHandle?.revalidateAffinityOutcome,
         authorizeOperation:
-          splitHandle?.authorizeOperation ??
+          formalSplitHandle?.authorizeOperation ??
           authorizeCurrentTaskRelationOperation,
-        canonicalOutcome: splitHandle?.canonicalOutcome,
-        startCanonical: splitHandle?.startCanonical,
-        cancelForegroundWork: splitHandle?.cancelForegroundWork,
+        canonicalOutcome: formalSplitHandle?.canonicalOutcome,
+        startCanonical: formalSplitHandle?.startCanonical,
+        cancelForegroundWork: formalSplitHandle?.cancelForegroundWork,
         currentQuestion,
         deterministicProposal,
         localQuestionType:
@@ -20792,6 +20971,21 @@ export function useMeetingAssistant() {
         { sessionId, runtimeEpoch },
         "accepted-latest-interviewer-turn"
       );
+      // This consumer's embedding is an observation admitted by Runtime
+      // Cross-checks, read here once for this turn. The session pin above, the
+      // lexical decision and the formal Type and Relation handles do not depend
+      // on it, and neither do Answer Sufficiency or the shared runtime.
+      const runtimeCrossChecksAtStart = runtimeCrossChecksEnabledRef.current;
+      // An eligible turn that is intentionally not observed says so: it is not
+      // a failed, a successful or an ineligible embedding.
+      const observationAdmission = !eligibility.eligible
+        ? {}
+        : runtimeCrossChecksAtStart
+          ? { taxonomySemanticObservationTrigger: "runtime-cross-checks" }
+          : {
+              taxonomySemanticObservationSkipReason: "runtime-cross-checks-off",
+              taxonomyHybridReason: "runtime-cross-checks-off",
+            };
       const initialMetadata = {
         ...formatSemanticTaxonomyShadowMetadata({
           turnId: turn.id,
@@ -20801,6 +20995,7 @@ export function useMeetingAssistant() {
           eligibility,
           runtime: runtime.getSnapshot(),
         }),
+        ...observationAdmission,
         ...formatSemanticInterviewerIntentForTrace(undefined, {
           embeddingStatus: "not-requested",
           parentId: activeParentId,
@@ -20814,16 +21009,31 @@ export function useMeetingAssistant() {
         interviewerIntentLlmDisposition: "retired-not-scheduled",
       };
       traceStoreRef.current.updateMetadata(traceId, initialMetadata);
-      semanticTaxonomyEvidenceByTurnRef.current.set(turn.id, {
-        turnId: turn.id,
-        sessionId,
-        runtimeEpoch,
-        lexical,
-        metadata: initialMetadata,
-      });
+      // The carrier keeps the latest 32 turns on every path. A turn that never
+      // embeds (ineligible, or Cross-checks off) would otherwise never prune it.
+      const retainSemanticEvidence = (
+        metadata: SemanticTaxonomyTurnEvidence["metadata"]
+      ) => {
+        const evidenceByTurn = semanticTaxonomyEvidenceByTurnRef.current;
+        evidenceByTurn.set(turn.id, {
+          turnId: turn.id,
+          sessionId,
+          runtimeEpoch,
+          lexical,
+          metadata,
+        });
+        while (evidenceByTurn.size > 32) {
+          const oldestTurnId = evidenceByTurn.keys().next().value;
+          if (!oldestTurnId) break;
+          evidenceByTurn.delete(oldestTurnId);
+        }
+      };
+      retainSemanticEvidence(initialMetadata);
       // Preserve initialization before formal dispatch, embedding after it.
       return () => {
-        if (!eligibility.eligible) {
+        // Off: no embedding request, no revision bump, no score and no hybrid
+        // comparison for this consumer; the skip is recorded like an ineligible turn's.
+        if (!eligibility.eligible || !runtimeCrossChecksAtStart) {
           sessionRecordingManagerRef.current?.recordSemanticTaxonomyDecision({
             traceId,
             taskId: contextState.activeMeetingTask?.id,
@@ -20952,21 +21162,10 @@ export function useMeetingAssistant() {
                   logicalQuestionUnit?.revision,
               }),
               ...formatLogicalQuestionUnitForTrace(logicalQuestionUnit),
+              ...observationAdmission,
             };
             traceStoreRef.current.updateMetadata(traceId, metadata);
-            semanticTaxonomyEvidenceByTurnRef.current.set(turn.id, {
-              turnId: turn.id,
-              sessionId,
-              runtimeEpoch,
-              lexical,
-              metadata,
-            });
-            while (semanticTaxonomyEvidenceByTurnRef.current.size > 32) {
-              const oldestTurnId =
-                semanticTaxonomyEvidenceByTurnRef.current.keys().next().value;
-              if (!oldestTurnId) break;
-              semanticTaxonomyEvidenceByTurnRef.current.delete(oldestTurnId);
-            }
+            retainSemanticEvidence(metadata);
             traceStoreRef.current.finishStep(
               traceId,
               stepId,
@@ -21575,18 +21774,12 @@ export function useMeetingAssistant() {
               reason: "operation-authorization-missing",
               mismatchedKey: "operation",
             };
-          const retainedAffinity = taskRelationHandle?.readAffinityOutcome?.();
-          const qualifiedAffinity = retainedAffinity && operationAuthorization.authorized
-            ? filterTaskRelationAffinityOutcomeAtCutoff(
-                taskRelationHandle?.revalidateAffinityOutcome?.(retainedAffinity) ?? retainedAffinity,
-                createOrderedRelationPhaseBudget(foregroundDeadline).affinityCutoffAt)
-            : undefined;
+          // No release window means no formal Relation operation, so there is
+          // no model result this settlement may read.
           const coordinated = coordinateOrderedSettlement({
             sourceKind: taskRelationHandle?.sourceKind ?? "voice",
             currentQuestionType: effectiveType,
             currentQuestionTypeInherited: resolveOrderedQuestionType(settledTypeOutcome).stage === "preserve-current-type",
-            childAffinity: qualifiedAffinity?.child.adjudication,
-            parentAffinity: qualifiedAffinity?.parent.adjudication,
             activeMeetingTask,
           });
           settledOrderedRelation = coordinated.relation;
@@ -35875,6 +36068,11 @@ export function useMeetingAssistant() {
   }, [state.sessionRecording.lifecycle, state.settings.debugMode]);
 
   useEffect(() => {
+    runtimeCrossChecksEnabledRef.current =
+      state.settings.runtimeCrossChecksEnabled;
+  }, [state.settings.runtimeCrossChecksEnabled]);
+
+  useEffect(() => {
     taxonomyAdjudicationSettingsRef.current =
       state.settings.taxonomyAdjudication;
   }, [state.settings.taxonomyAdjudication]);
@@ -36634,6 +36832,9 @@ export function useMeetingAssistant() {
       taskRelationChildAffinityRuntimeRef.current?.cancelAll("disposed");
       taskRelationParentAffinityRuntimeRef.current?.cancelAll("disposed");
       taskRelationCanonicalShadowRuntimeRef.current?.cancelAll("disposed");
+      taskRelationChildAffinityObservationRuntimeRef.current?.cancelAll("disposed");
+      taskRelationParentAffinityObservationRuntimeRef.current?.cancelAll("disposed");
+      taskRelationCanonicalShadowObservationRuntimeRef.current?.cancelAll("disposed");
       answerResolutionRuntimeRef.current?.cancelAll("disposed");
       evidenceRequirementRuntimeRef.current?.cancelAll("disposed");
       sourceLinkageAdjudicationRuntimeRef.current?.cancelAll("disposed");
@@ -36704,6 +36905,9 @@ export function useMeetingAssistant() {
       taskRelationChildAffinityRuntimeRef.current?.cancelAll("disposed");
       taskRelationParentAffinityRuntimeRef.current?.cancelAll("disposed");
       taskRelationCanonicalShadowRuntimeRef.current?.cancelAll("disposed");
+      taskRelationChildAffinityObservationRuntimeRef.current?.cancelAll("disposed");
+      taskRelationParentAffinityObservationRuntimeRef.current?.cancelAll("disposed");
+      taskRelationCanonicalShadowObservationRuntimeRef.current?.cancelAll("disposed");
       answerResolutionRuntimeRef.current?.cancelAll("disposed");
       evidenceRequirementRuntimeRef.current?.cancelAll("disposed");
       sourceLinkageAdjudicationRuntimeRef.current?.cancelAll("disposed");
@@ -36908,6 +37112,7 @@ export function useMeetingAssistant() {
     setDebugMode,
     setNativeStallDiagnosticsEnabled,
     nativeStallDiagnosticsError,
+    setRuntimeCrossChecksEnabled,
     setMicrophoneContextEnabled,
     toggleMicrophoneContext,
     setSessionRecordingEnabled,

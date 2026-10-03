@@ -19,6 +19,7 @@ import * as split from "../src/lib/meeting/task-relation-split-shadow.js";
 import * as operation from "../src/lib/meeting/runtime-inference.js";
 import * as response from "../src/lib/meeting/runtime-inference-response.js";
 import * as admission from "../src/lib/meeting/runtime-inference-provider-admission.js";
+import { RuntimeInferenceSessionCircuitBreaker } from "../src/lib/meeting/runtime-inference-health.js";
 import * as route from "../src/lib/meeting/meeting-model-route.js";
 import * as taxonomy from "../src/lib/meeting/task-taxonomy.js";
 import { requestTaskRelationProviderCandidates } from "../src/lib/meeting/task-relation-provider-candidates.js";
@@ -212,7 +213,8 @@ function bytes(kind: string, fault: Fault) {
     : JSON.stringify({ v: 1, d: kind === "task-relation-child-affinity" ? "n" : "i", c: 0.99, q: "Implement a queue.", b: null });
 }
 
-async function harness(options: { mode?: Mode; child?: boolean; source?: string; omitObservation?: boolean; runtimeReleaseRequested?: boolean } = {}) {
+async function harness(options: { mode?: Mode; child?: boolean; source?: string; omitObservation?: boolean; runtimeReleaseRequested?: boolean;
+  runtimeCrossChecks?: boolean } = {}) {
   const root = await mkdtemp("/private/tmp/task183-evidence-");
   const disk = new DiskRecorder(root, options.mode ?? "enabled");
   const clock = new Clock();
@@ -253,12 +255,15 @@ async function harness(options: { mode?: Mode; child?: boolean; source?: string;
     requestTaskRelationProviderCandidates,
     Date, Promise, Error, DOMException, console,
     debugModeRef: { current: false },
+    // 178/168 PC: the one switch that admits an observation-only operation.
+    runtimeCrossChecksEnabledRef: { current: options.runtimeCrossChecks ?? false },
     contextManagerRef: { current: { getState: () => state, clearExpiredActiveMeetingTask: () => false } },
     runtimeEpochRef: { current: 1 }, manualCorrectionRevisionRef: { current: 0 },
     meetingModelProviderSnapshotRef: { current: providerSnapshot },
     runtimeInferenceProviderAdmissionRef: { current: sharedAdmission },
     sessionRecordingManagerRef: { current: disk.manager },
-    taskRelationSplitShadowCircuitRef: { current: { read: () => ({ open: false }), open: () => {} } },
+    // The real session circuit breaker, as in the Hook.
+    taskRelationSplitShadowCircuitRef: { current: new RuntimeInferenceSessionCircuitBreaker() },
     readSelectedProviderModelId: (selected: any) => selected.variables.MODEL,
     traceStoreRef: { current: {
       updateMetadata: (id: string, update: Record<string, unknown>) => {
@@ -330,6 +335,10 @@ async function harness(options: { mode?: Mode; child?: boolean; source?: string;
     ["taskRelationChildAffinityRuntimeRef", "task-relation-child-affinity"],
     ["taskRelationParentAffinityRuntimeRef", "task-relation-parent-affinity"],
     ["taskRelationCanonicalShadowRuntimeRef", "task-relation-canonical-shadow"],
+    // 178/168 PC: observation runs on its own three instances of the same runtime class.
+    ["taskRelationChildAffinityObservationRuntimeRef", "task-relation-child-affinity"],
+    ["taskRelationParentAffinityObservationRuntimeRef", "task-relation-parent-affinity"],
+    ["taskRelationCanonicalShadowObservationRuntimeRef", "task-relation-canonical-shadow"],
   ] as const) {
     const runtime = new RuntimeInferenceOperationRuntime<any, any>(kind);
     const schedule = runtime.schedule.bind(runtime);
@@ -734,6 +743,31 @@ test("RC3: a retained close-failed owner cannot activate observation-only infere
       assert.equal(h.executions.length, 0);
       assert.equal(h.handle, undefined);
       assert.equal(h.disk.manager.getState().active, false);
+    } finally { await h.close(); }
+  }
+});
+
+test("PC2 RC3: Runtime Cross-checks, not the recorder's state, admits observation-only inference, and an inactive recorder is not written", async () => {
+  for (const mode of ["disabled", "close-failed"] as const) {
+    const h = await harness({ mode, runtimeReleaseRequested: false, runtimeCrossChecks: true });
+    try {
+      const writesBefore = h.disk.calls.length;
+      assert.ok(h.handle, "observation admitted by Cross-checks");
+      // Child and parent Affinity, each one logical operation with a Fast and an Intelligent candidate.
+      // The observation runs on the evaluation lane: its physical requests yield for the
+      // shared coordinator's 450 ms non-critical grace, exactly as before this change.
+      assert.equal(h.physicalExecutions.length, 0, "no observation request inside the non-critical grace");
+      h.clock.now += 450;
+      await h.clock.startPending();
+      assert.deepEqual(h.executions.map((execution: any) => execution.kind).sort(),
+        ["task-relation-child-affinity", "task-relation-parent-affinity"]);
+      assert.equal(h.physicalExecutions.length, 4);
+      assert.equal(h.metadata.taskRelationParentAffinityObservationTrigger, "runtime-cross-checks");
+      assert.equal(h.metadata.taskRelationParentAffinityAdmissionLane, "evaluation");
+      const affinity = await h.affinities();
+      assert.equal(affinity.parent.adjudication.decision, "independent");
+      assert.equal(h.disk.manager.getState().active, false);
+      assert.equal(h.disk.calls.length, writesBefore, "an inactive recorder receives nothing from the observation");
     } finally { await h.close(); }
   }
 });

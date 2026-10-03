@@ -79,7 +79,9 @@ async function fixture(t: test.TestContext) {
     validateWhiteboardRenderCandidate: async (input: artifact.WhiteboardRenderValidationInput) => {
       validations++; return artifact.validateWhiteboardRenderCandidate(input);
     },
-    debugModeRef: { current: true }, contextManagerRef: { current: manager }, runtimeEpochRef: { current: 1 },
+    // 178/168 PC: Runtime Cross-checks admits the repair observation; Debug only adds output detail.
+    debugModeRef: { current: true }, runtimeCrossChecksEnabledRef: { current: true },
+    contextManagerRef: { current: manager }, runtimeEpochRef: { current: 1 },
     whiteboardSyntaxRepairAttemptKeysRef: { current: new Set<string>() },
     whiteboardSyntaxRepairCircuitRef: { current: new health.RuntimeInferenceSessionCircuitBreaker() },
     whiteboardSyntaxRepairRuntimeRef: { current: runtime }, meetingModelProviderSnapshotRef: { current: {} },
@@ -100,6 +102,7 @@ async function fixture(t: test.TestContext) {
   t.after(() => { runtime.cancelAll("disposed"); delivery.resolve({ rawOutput: "", providerDisposition: "completed-empty" }); });
   const input = { traceId: "trace", source: "voice", candidateWhiteboard: candidate, validation: invalid, parent };
   return { manager, parent, runtime, shared, metadata, recoveries, delivery, started, terminal,
+    crossChecks: globals.runtimeCrossChecksEnabledRef,
     schedule: () => schedule(input),
     changeParent: (value: ActiveInterviewParent) => {
       const sameParent = value.id === parent.id;
@@ -163,3 +166,34 @@ for (const [name, scenario, expected] of cases) {
     assert.equal(h.repairWrites, 0); assert.deepEqual(h.manager.getState().taskRuntime, expectedState);
   });
 }
+
+// 178/168 PC6: the switch is read once, when the repair observation starts. A
+// repair already in flight when it is switched off ends as it would have, and
+// nothing new starts afterwards.
+test("149 PC6 W9 Cross-checks switched off with a repair admitted: its request is still sent after the admission grace, it completes under its start-time trigger without publishing, and a later schedule starts nothing", { timeout: 8000 }, async t => {
+  const h = await fixture(t);
+  const before = structuredClone(h.manager.getState().taskRuntime);
+  h.schedule();
+  // The repair is admitted; its request waits out the coordinator's grace for the background lane.
+  assert.equal(h.requests, 0);
+  h.crossChecks.current = false;
+  // Off: a schedule for the same, still eligible candidate records the named
+  // skip and nothing else. With the switch on it records "already-attempted" (W5).
+  const recordedBefore = h.metadata.length;
+  assert.equal(h.schedule(), undefined);
+  // Compared as plain data: the update was built in the Hook callback's own realm.
+  assert.deepEqual(JSON.parse(JSON.stringify(h.metadata.slice(recordedBefore))),
+    [{ whiteboardRepairObservationSkipReason: "runtime-cross-checks-off" }], "recorded for a schedule made while off");
+  // Switching off cancels nothing that was admitted: the request goes out when the grace ends.
+  await h.started.promise;
+  assert.equal(h.requests, 1);
+  h.delivery.resolve({ rawOutput: validOutput, providerDisposition: "completed-with-content" });
+  const final = await h.terminal.promise;
+  assert.equal(final.whiteboardRepairDisposition, "shadow-valid");
+  assert.equal(final.whiteboardRepairBehaviorMutationBlocked, true);
+  // The trigger recorded at the start is what the trace still holds at the terminal.
+  assert.equal(Object.assign({}, ...h.metadata).whiteboardRepairObservationTrigger, "runtime-cross-checks");
+  assert.equal(h.metadata.some(update => update.whiteboardRepairDisposition === "already-attempted"), false);
+  assert.deepEqual([h.requests, h.finishes, h.recoveries.length, h.validations, h.repairWrites], [1, 1, 1, 1, 0]);
+  assert.deepEqual(h.manager.getState().taskRuntime, before, "the repair observation writes no task or Artifact state");
+});

@@ -224,7 +224,9 @@ function bindRuntimeReset(h) {
   }
   for (const name of ["responseOpportunityRuntimeRef", "responseOpportunityGenerationGateRef", "meetingMetadataInferenceRuntimeRef",
     "questionTypeAdjudicationRuntimeRef", "taskRelationChildAffinityRuntimeRef", "taskRelationParentAffinityRuntimeRef",
-    "taskRelationCanonicalShadowRuntimeRef", "answerResolutionRuntimeRef", "evidenceRequirementRuntimeRef",
+    "taskRelationCanonicalShadowRuntimeRef", "taskRelationChildAffinityObservationRuntimeRef",
+    "taskRelationParentAffinityObservationRuntimeRef", "taskRelationCanonicalShadowObservationRuntimeRef",
+    "answerResolutionRuntimeRef", "evidenceRequirementRuntimeRef",
     "sourceLinkageAdjudicationRuntimeRef", "whiteboardSyntaxRepairRuntimeRef"]) h.env[name] = { current: { cancelAll: noop } };
   h.env.projectSelectionInferenceRuntimeRef = {
     current: new production.RuntimeInferenceOperationRuntime("project-selection-inference"),

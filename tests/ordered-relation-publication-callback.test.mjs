@@ -295,6 +295,7 @@ const runtimeModule = await import(
   )
 );
 const admissionModule = await import(pathToFileURL(path.join(root, ".tmp-tests", "src", "lib", "meeting", "runtime-inference-provider-admission.js")));
+const healthModule = await import(pathToFileURL(path.join(root, ".tmp-tests", "src", "lib", "meeting", "runtime-inference-health.js")));
 const { ScreenOperationCoordinator } = await import(
   pathToFileURL(
     path.join(
@@ -458,6 +459,8 @@ function createHarness() {
   globalThis.setTimeout = clock.setTimeout;
   globalThis.clearTimeout = clock.clearTimeout;
   const metadata = {};
+  // A second question observed alongside the first has its own trace, as in production.
+  const otherTraces = {};
   const events = [];
   const advisorCalls = [];
   const state = {
@@ -484,6 +487,7 @@ function createHarness() {
     },
     runtimeActiveRef: { current: true },
     debugModeRef: { current: false },
+    runtimeCrossChecksEnabledRef: { current: false },
     revokeIncompleteAdvisePin: () => {},
     logicalQuestionUnitRef: { current: logicalQuestionUnit },
     responseOpportunityGenerationGateRef: {
@@ -491,12 +495,17 @@ function createHarness() {
     },
     traceStoreRef: {
       current: {
-        updateMetadata: (_id, update) => {
+        updateMetadata: (id, update) => {
+          if (id !== "trace") {
+            Object.assign((otherTraces[id] ??= {}), update);
+            return;
+          }
           Object.assign(metadata, update);
           events.push({ at: clock.now - 10_000, metadata: { ...update } });
         },
         recordInput: () => {},
-        getTraces: () => [{ id: "trace", metadata }],
+        getTraces: () => [{ id: "trace", metadata },
+          ...Object.entries(otherTraces).map(([id, traceMetadata]) => ({ id, metadata: traceMetadata }))],
         startStep: () => "step",
         finishStep: () => {},
         finishTrace: (...finish) => events.push({ finish }),
@@ -526,6 +535,7 @@ function createHarness() {
   return {
     clock,
     metadata,
+    otherTraces,
     events,
     advisorCalls,
     environment,
@@ -583,8 +593,23 @@ function relationHandle(harness, operationAuthorization) {
   };
 }
 
-// Real admission coordinator and operation runtimes; only the physical provider
-// request is substituted. Each physical candidate is one deferred execution.
+const RELATION_OPERATION_KINDS = ["task-relation-child-affinity", "task-relation-parent-affinity",
+  "task-relation-canonical-shadow"];
+// A circuit that is already open for the harness session, for every Relation stage.
+function openRelationCircuit(harness) {
+  const sessionId = harness.environment.contextManagerRef.current.getState().sessionId;
+  for (const operationKind of RELATION_OPERATION_KINDS) {
+    harness.environment.taskRelationSplitShadowCircuitRef.current.open({ operationKind, sessionId,
+      reason: "provider-configuration-error" });
+  }
+}
+const relationCircuitOpen = (harness) => RELATION_OPERATION_KINDS.map((operationKind) =>
+  harness.environment.taskRelationSplitShadowCircuitRef.current.read(operationKind,
+    harness.environment.contextManagerRef.current.getState().sessionId).open);
+
+// Real admission coordinator, operation runtimes and session circuit breaker;
+// only the physical provider request is substituted. Each physical candidate is
+// one deferred execution.
 function installProductionRelationRuntime(
   harness,
   { circuitOpen = false, missingProviderTier } = {}
@@ -603,13 +628,20 @@ function installProductionRelationRuntime(
   admission.configureProviderGroups({ fastFingerprint: "fast", intelligentFingerprint: "intelligent" });
   harness.environment.runtimeInferenceProviderAdmissionRef = { current: admission };
   harness.environment.readSelectedProviderModelId = () => "test-provider";
+  // The real session circuit breaker: an operation that opens it is seen by
+  // every later read, as in production.
   harness.environment.taskRelationSplitShadowCircuitRef = {
-    current: { read: () => ({ open: circuitOpen }), open: () => {} },
+    current: new healthModule.RuntimeInferenceSessionCircuitBreaker(),
   };
+  if (circuitOpen) openRelationCircuit(harness);
   for (const [key, kind] of [
     ["taskRelationChildAffinityRuntimeRef", "task-relation-child-affinity"],
     ["taskRelationParentAffinityRuntimeRef", "task-relation-parent-affinity"],
     ["taskRelationCanonicalShadowRuntimeRef", "task-relation-canonical-shadow"],
+    // Observation has its own three instances of the same runtime class.
+    ["taskRelationChildAffinityObservationRuntimeRef", "task-relation-child-affinity"],
+    ["taskRelationParentAffinityObservationRuntimeRef", "task-relation-parent-affinity"],
+    ["taskRelationCanonicalShadowObservationRuntimeRef", "task-relation-canonical-shadow"],
   ]) {
     harness.environment[key] = {
       current: new runtimeModule.RuntimeInferenceOperationRuntime(kind),
@@ -668,11 +700,17 @@ function productionRelationHandle(
   return { handle, executions };
 }
 
-for (const debug of [false, true]) for (const recording of [false, true]) for (const product of [false, true]) {
-  test(`D178 Split admission debug=${debug} recording=${recording} product=${product}`, { concurrency: false }, async () => {
+// PC2, Relation family. The original eligibility is fixed (an active parent and a
+// current question); Debug, Recording and Runtime Cross-checks are crossed, for an
+// operation that asked for no release window (observation) and for one that did
+// (formal). Only Cross-checks admits the observation; nothing but the release
+// window admits the formal operation.
+for (const debug of [false, true]) for (const recording of [false, true]) for (const crossChecks of [false, true]) for (const product of [false, true]) {
+  test(`PC2 D178 Split admission debug=${debug} recording=${recording} crossChecks=${crossChecks} product=${product}`, { concurrency: false }, async () => {
     const h = createHarness();
     try {
       h.environment.debugModeRef.current = debug;
+      h.environment.runtimeCrossChecksEnabledRef.current = crossChecks;
       const sink = { getState: () => ({ active: recording, sessionId: "recording-a" }),
         recordModelInput() {}, recordModelOutput() {}, recordCaptureLifecycle() {}, recordTaskRelationSplitDecision() {},
         recordTaskRelationDecision() {}, recordTaskRelationAdjudicationDecision() {}, recordTrace() {} };
@@ -680,25 +718,33 @@ for (const debug of [false, true]) for (const recording of [false, true]) for (c
       h.environment.traceStoreRef.current.recordOutput = () => {};
       const { handle, executions } = productionRelationHandle(h, { runtimeReleaseRequested: product });
       await h.clock.advanceTo(500);
-      if (!debug && !product) {
+      if (!crossChecks && !product) {
+        // Debug and Recording alone start no observation request.
         assert.equal(handle, undefined);
         assert.equal(executions.length, 0);
+        assert.equal(h.metadata.taskRelationParentAffinityOperationId, undefined);
         return;
       }
       assert.equal(executions.length, 2, "one Affinity operation, two physical candidates");
+      assert.deepEqual(executions.map((execution) => execution.selectedProvider.variables.model).sort(), ["fast", "intelligent"]);
       resolveRelationProvider(executions[0], JSON.stringify({ v: 1, d: "r", c: .99, q: "Implement a queue.", b: "Implement a cache." }));
       await h.clock.advanceTo(600);
       if (!product) {
-        assert.equal(executions.length, 4, "Debug observation still automatically starts Canonical");
+        assert.equal(executions.length, 4, "the Cross-checks observation automatically starts Canonical");
         resolveRelationProvider(executions[2], JSON.stringify({ schemaVersion: 3, relation: "followup-parent", confidence: .8,
           currentQuestionEvidenceSpans: ["Implement a queue."], parentEvidenceSpans: ["Implement a cache."] }));
         await h.clock.flush();
-        assert.equal(h.metadata.taskRelationParentAffinityObservationTrigger, "legacy-debug-preview-trigger");
-        assert.equal(h.metadata.taskRelationSplitCanonicalObservationTrigger, "legacy-debug-preview-trigger");
+        assert.equal(h.metadata.taskRelationParentAffinityObservationTrigger, "runtime-cross-checks");
+        assert.equal(h.metadata.taskRelationSplitCanonicalObservationTrigger, "runtime-cross-checks");
+        assert.equal(h.metadata.taskRelationParentAffinityExecutionStage, "evaluation");
         assert.equal(h.metadata.taskRelationParentAffinityAdmissionLane, "evaluation");
+        assert.equal(h.metadata.taskRelationSplitCanonicalAdmissionLane, "evaluation");
         assert.equal(h.advisorCalls.length, 0);
       } else {
+        // The formal operation is the same whatever the three switches say.
+        assert.equal(executions.length, 2, "a formal operation starts no Canonical by itself");
         assert.equal(h.metadata.taskRelationParentAffinityObservationTrigger, undefined);
+        assert.equal(h.metadata.taskRelationParentAffinityExecutionStage, "product");
         assert.equal(h.metadata.taskRelationParentAffinityAdmissionLane, "critical");
       }
       handle.cancelForegroundWork();
@@ -1720,7 +1766,8 @@ const sourceCurrent = () => ({ authorized: true, reason: "source-operation-curre
 
 // Debug and Recording are separate switches, as in production. `recordingSinkCostMs`
 // makes the recorder's synchronous write take time, as a real sink can.
-function st183Harness({ child = false, debug = false, recording = false, recordingSinkCostMs, runtime } = {}) {
+function st183Harness({ child = false, debug = false, recording = false, crossChecks = false, recordingSinkCostMs,
+  runtime } = {}) {
   const h = createHarness();
   const state = h.environment.contextManagerRef.current.getState();
   state.transcriptTurns = [];
@@ -1749,10 +1796,15 @@ function st183Harness({ child = false, debug = false, recording = false, recordi
   // with Debug off" is an observation and not the absence of a spy.
   h.environment.traceStoreRef.current.recordOutput = (_traceId, label) => { h.debugOutputs.push(label); };
   if (debug) h.environment.debugModeRef.current = true;
+  // Runtime Cross-checks is its own switch: it alone admits the observation families.
+  h.environment.runtimeCrossChecksEnabledRef.current = crossChecks;
   if (recording) {
+    // A recorder serializes what it is given when it is given it. The trace
+    // store hands out one live metadata object, so the stub copies it: a row
+    // then shows what was written by that call, not what the trace held later.
     const record = (kind) => (entry) => {
       h.clock.now += recordingSinkCostMs?.(kind, entry) ?? 0;
-      h.recorded.push({ kind, ...entry });
+      h.recorded.push({ kind, ...entry, ...(entry.metadata ? { metadata: { ...entry.metadata } } : {}) });
     };
     h.environment.sessionRecordingManagerRef.current = {
       getState: () => ({ active: true, sessionId: "recording-a" }),
@@ -1767,9 +1819,9 @@ function st183Harness({ child = false, debug = false, recording = false, recordi
 
 // The handle Voice, Screen and Correction really consume: assembled by the Hook.
 function scheduleRelation(h, { sourceKind = "voice", manualCorrectionOwned = false,
-  unit = logicalQuestionUnit, authorizeSourceOperation = sourceCurrent } = {}) {
+  unit = logicalQuestionUnit, authorizeSourceOperation = sourceCurrent, traceId = "trace" } = {}) {
   return h.environment.scheduleTaskRelationAdjudication({
-    turn: { speaker: "them", text: QUESTION }, traceId: "trace", turnGateAction: "answer-refresh",
+    turn: { speaker: "them", text: QUESTION }, traceId, turnGateAction: "answer-refresh",
     logicalQuestionUnit: unit, lexical: { type: "coding" }, sourceKind, manualCorrectionOwned,
     currentQuestion: sourceKind === "voice" ? undefined : imports.createProvisionalCurrentQuestion({
       logicalQuestionUnit: unit, sourceKind, sourceObservationIds: ["screen-observation"] }),
@@ -2645,13 +2697,17 @@ const saturateAdmission = (h) => {
 const relationRuntime = (h, stage) => h.environment[{ parent: "taskRelationParentAffinityRuntimeRef",
   child: "taskRelationChildAffinityRuntimeRef", canonical: "taskRelationCanonicalShadowRuntimeRef" }[stage]].current;
 // Stop is the Hook's own invalidateRuntimeWork, extracted from the source and run
-// against this harness's runtime epoch and its three real Relation runtimes.
+// against this harness's runtime epoch and its real Relation runtimes, the three
+// formal ones and their three observation instances.
 // Every other ref it touches belongs to work the harness does not run; those
 // are inert here.
 const invalidateRuntimeWorkSource = findNamedDeclaration(sourceFile, "invalidateRuntimeWork")
   .initializer.arguments[0].getText(sourceFile);
 const RELATION_RUNTIME_REFS = ["taskRelationChildAffinityRuntimeRef", "taskRelationParentAffinityRuntimeRef",
   "taskRelationCanonicalShadowRuntimeRef"];
+// The observation instances of the same three runtimes (178/168 PC).
+const OBSERVATION_RUNTIME_REFS = ["taskRelationChildAffinityObservationRuntimeRef",
+  "taskRelationParentAffinityObservationRuntimeRef", "taskRelationCanonicalShadowObservationRuntimeRef"];
 const invalidateRuntimeWorkRefs = (() => {
   const refs = new Set();
   const visit = (node) => {
@@ -2666,7 +2722,7 @@ const stop = (h) => {
   const context = vm.createContext({
     ...Object.fromEntries(invalidateRuntimeWorkRefs.map((name) => [name, { current: inert }])),
     runtimeEpochRef: h.environment.runtimeEpochRef,
-    ...Object.fromEntries(RELATION_RUNTIME_REFS.map((name) => [name, h.environment[name]])),
+    ...Object.fromEntries([...RELATION_RUNTIME_REFS, ...OBSERVATION_RUNTIME_REFS].map((name) => [name, h.environment[name]])),
   });
   return vm.runInContext(transpile(`(${invalidateRuntimeWorkSource})`), context)("st183-stop");
 };
@@ -2967,7 +3023,7 @@ async function canonicalTerminal({ runtime, beforeStart, drive, until = 3 * STAG
     const affinityOutcome = await settledValue(h, handle.affinityOutcome, "Affinity stage terminal");
     if (runtime) {
       const { circuitOpen, missingProviderTier } = runtime;
-      h.environment.taskRelationSplitShadowCircuitRef.current.read = () => ({ open: Boolean(circuitOpen) });
+      if (circuitOpen) openRelationCircuit(h);
       const resolveRoute = h.environment.resolveRuntimeInferenceModelRouteFromSnapshot;
       h.environment.resolveRuntimeInferenceModelRouteFromSnapshot = (input) => {
         const route = resolveRoute(input);
@@ -4008,5 +4064,1725 @@ for (const entry of ["voice", "screen"]) {
     expectEqual(Object.keys(observed[0].correlation).length >= 14, true, "correlation fields compared");
     switches.forEach(({ debug, recording }, index) => assert.deepEqual(observed[index], observed[0],
       `handoff and correlation with debug=${debug} recording=${recording} equal those with both off`));
+  });
+}
+
+// ---------------------------------------------------------------------------
+// 178/168 PC: Relation observation isolation (PC3) and its lifecycle (PC6).
+//
+// Runtime Cross-checks admits an extra Split Relation, and its automatic
+// Canonical, for a question that asked for no release window. That work is
+// observation. Only a result produced by an operation scheduled as formal may
+// reach the formal resolver, so nothing the observation produces may change the
+// released settlement, its operation ids, the Plan built from it, the Type wait,
+// or another question's formal operation.
+//
+// Every run below is the real composition: the Hook's own scheduler, executor
+// and Voice consumer, the real Screen and Correction call sites, the selector,
+// admission coordinator, operation runtimes, lease and predecessor validation,
+// the shared Ordered operation and the settlement coordinator. Only the
+// physical provider request, the clock and the I/O sinks are substituted. Each
+// comparison runs the same script twice, with the observation admitted and not.
+// ---------------------------------------------------------------------------
+
+const { buildSettledAdvisorExecutionPlan } = await compiledMeetingModule("settled-advisor-execution-plan");
+const SHORT_QUESTION = "A queue.";
+// The primary ask kept in normalizedText is under three word-equivalents, so no
+// Relation release window is requested. The sources still carry the whole
+// interviewer turn, which is what the Type window is decided from.
+const shortUnit = (overrides = {}) => ({ ...logicalQuestionUnit, normalizedText: SHORT_QUESTION, ...overrides });
+const OBSERVED_UNIT_ID = "lqu-observed";
+const OBSERVED_TRACE = "trace-observed";
+const PARENT_INDEPENDENT = FAST_PARENT_INDEPENDENT;
+const OPPOSITE = { independent: { affinity: PARENT_RELATED, canonical: "followup-parent" },
+  related: { affinity: PARENT_INDEPENDENT, canonical: "new-parent" } };
+const AFFINITY_OUTPUT = { independent: PARENT_INDEPENDENT, related: PARENT_RELATED };
+const ofQuestion = (h, unitId, stage, tier) => h.executions.filter((execution) =>
+  execution.request.identity.logicalQuestionUnitId === unitId &&
+  execution.request.operationKind.includes(stage) && (!tier || tierOf(execution) === tier));
+// The physical requests one question made: route, budget, dispatch time, payload and whether it was aborted.
+const requestsOf = (h, unitId) => h.executions
+  .filter((execution) => execution.request.identity.logicalQuestionUnitId === unitId)
+  .map((execution) => [execution.request.operationKind, tierOf(execution), execution.dispatchedAt - 10_000, execution.timeoutMs,
+    execution.executionIdentity.requestId, execution.request.semanticPayloadDigest, execution.signal.aborted]);
+const PLAN_PROVIDERS = { providers: [{ id: "main", curl: "https://main.test" }],
+  selectedProvider: { provider: "main", variables: {} }, codingProvider: { provider: "main", variables: {} } };
+// Trace fields an admitted observation of the same question writes. They are
+// Trace-only data; every other recorded field belongs to the formal path.
+const OBSERVATION_TRACE_KEY = /^(taskRelation(Parent|Child)Affinity|taskRelationSplit|taskRelationCandidate|runtimeInference)/;
+const formalTrace = (metadata) => Object.fromEntries(Object.entries(metadata)
+  .filter(([key]) => !OBSERVATION_TRACE_KEY.test(key)));
+
+// The Voice consumer for a given question, with a production-shaped Type handle:
+// 2 s Type wait with an active parent, Type keeps the current (Coding) type.
+function startVoiceFor(h, handle, unit, { typeAt = 50, typeOutcome, waitBudgetMs = 2_000 } = {}) {
+  h.environment.logicalQuestionUnitRef.current = unit;
+  h.environment.scheduleAdvisorAfterQuestionTypeWindow({
+    handle: { questionType: { enforcementWindowRequested: true, waitBudgetMs,
+      outcome: typeOutcome ?? settlesAt(h, typeAt, { enforcement: { authorized: false } }) }, taskRelation: handle },
+    logicalQuestionUnit: unit, traceId: "trace", mode: "voice", triggerTurnId: "turn-current",
+  });
+}
+
+// Everything Voice hands to the Advisor, and the Plan the real Plan builder
+// derives from the released settlement: Parent Action, owner, context, phase and
+// requestedArtifacts are read from that Plan, never written by hand.
+function voiceRelease(h) {
+  const settlement = h.advisorCalls[0]?.args[7];
+  const readAt = h.clock.now;
+  if (settlement) h.clock.now = 10_000 + h.advisorCalls[0].at;
+  const plan = settlement && buildSettledAdvisorExecutionPlan({ settlement,
+    activeMeetingTask: h.environment.contextManagerRef.current.getState().activeMeetingTask,
+    taskBoundaryCommitted: false, childOwnsResponse: false, providerSnapshot: PLAN_PROVIDERS,
+    memoryUseCase: "meeting_assistant", askFrame: "unknown", topicDomain: "unknown" });
+  h.clock.now = readAt;
+  return plain({
+    releasedAt: h.advisorCalls.map((call) => call.at),
+    handoff: h.advisorCalls.map((call) => call.args),
+    settlement: settlement && { relation: settlement.relation, questionType: settlement.questionType,
+      operationId: settlement.operationId, provenance: settlement.orderedRelationProvenance },
+    plan: plan && { parentAction: plan.taskMutationPolicy, owner: plan.responseOwner, context: plan.contextReadScope,
+      phase: plan.playbookPhase, requestedArtifacts: plan.requestedArtifacts, whole: plan },
+    traceFinished: h.events.filter((event) => event.finish).map((event) => event.finish.slice(1)),
+    ui: h.events.filter((event) => event.ui),
+    trace: formalTrace(h.metadata),
+  });
+}
+
+// One short Voice question that asks for no Relation window. `observed` is
+// [completes at, raw output] of its observation Affinity (Intelligent candidate),
+// used only when the observation was admitted.
+async function runNoWindowVoice({ debug = false, crossChecks = false, observed, parent = true, source = sourceCurrent,
+  consumerStartsAt = 0, typeAt = 50, typeOutcome, until = 6_000, during } = {}) {
+  const h = st183Harness({ debug, crossChecks });
+  try {
+    if (!parent) h.environment.contextManagerRef.current.getState().activeMeetingTask = undefined;
+    const unit = shortUnit();
+    h.environment.logicalQuestionUnitRef.current = unit;
+    const handle = scheduleRelation(h, { unit, authorizeSourceOperation: source });
+    if (observed) h.clock.setTimeout(() => {
+      for (const execution of candidates(h, "affinity", "intelligent")) completeCandidate(execution, { rawOutput: observed[1] });
+    }, observed[0]);
+    const consume = () => startVoiceFor(h, handle, unit, { typeAt, typeOutcome: typeOutcome?.(h) });
+    if (consumerStartsAt) h.clock.setTimeout(consume, consumerStartsAt);
+    else consume();
+    await during?.(h, handle);
+    await h.clock.advanceTo(until);
+    return { h, handle, unit, release: voiceRelease(h) };
+  } catch (error) {
+    h.restore();
+    throw error;
+  }
+}
+const NO_WINDOW_HANDLE_FIELDS = ["affinityDeadlineAt", "operationId", "affinityOutcome", "readAffinityOutcome",
+  "revalidateAffinityOutcome", "canonicalOutcome", "startCanonical", "cancelForegroundWork"];
+
+// Leaf-level differences between two plain values, each with both sides, so a
+// failing comparison names what moved instead of printing two whole objects.
+function leafDifferences(actual, expected, path = "") {
+  if (actual !== null && expected !== null && typeof actual === "object" && typeof expected === "object" &&
+    Array.isArray(actual) === Array.isArray(expected)) {
+    return [...new Set([...Object.keys(actual), ...Object.keys(expected)])].sort()
+      .flatMap((key) => leafDifferences(actual[key], expected[key], path ? `${path}.${key}` : key));
+  }
+  return Object.is(actual, expected) || JSON.stringify(actual) === JSON.stringify(expected) ? []
+    : [`${path}: got ${JSON.stringify(actual)}, want ${JSON.stringify(expected)}`];
+}
+// Collects every violated expectation of one run, so a red run reports all of them.
+function expectations() {
+  const failures = [];
+  return {
+    failures,
+    equal(actual, expected, what) {
+      try { expectEqual(actual, expected, what); } catch (error) { failures.push(error.message.split("\n")[0]); }
+    },
+    same(actual, expected, what) {
+      failures.push(...leafDifferences(plain(actual), plain(expected)).map((difference) => `${what} ${difference}`));
+    },
+  };
+}
+
+// ---- PC3: the Voice no-window read ----
+
+for (const debug of [false, true]) for (const decision of ["independent", "related"]) for (const arrival of ["before", "after"]) {
+  test(`PC3 voice no-window debug=${debug}: an observation-only ${decision} Affinity arriving ${arrival} the release changes nothing the Advisor receives`, { concurrency: false }, async () => {
+    const baseline = await runNoWindowVoice({ debug });
+    baseline.h.restore();
+    // "before": the observation settles at 20 ms, the Type window releases at 50 ms. "after": at 400 ms.
+    const observedAt = arrival === "before" ? 20 : 400;
+    const run = await runNoWindowVoice({ debug, crossChecks: true, observed: [observedAt, AFFINITY_OUTPUT[decision]] });
+    const { h, handle } = run;
+    try {
+      const expected = expectations();
+      // The observation really ran and really produced the evidence that must not count.
+      expected.equal(baseline.h.executions.length, 0, "requests with the observation not admitted");
+      expected.equal(candidates(h, "affinity").length, 2, "observation Affinity physical requests");
+      expected.equal([h.metadata.taskRelationParentAffinityDecision, h.metadata.taskRelationParentAffinityLeaseAuthorized,
+        h.metadata.taskRelationParentAffinityExecutionStage, h.metadata.taskRelationParentAffinitySelectedAt],
+        [decision, true, "evaluation", 10_000 + observedAt], "observation Affinity recorded");
+      // What the Advisor receives: the null-hypothesis follow-up, released when Type settled.
+      expected.equal(run.release.releasedAt, [50], "released at");
+      expected.equal([run.release.settlement?.relation, h.metadata.orderedSettlementCoordinatorRelationStage],
+        ["followup-parent", NULL_HYPOTHESIS], "released relation and its source");
+      expected.same(run.release, baseline.release, "released");
+      // The handle the formal consumers hold carries nothing of the observation.
+      expected.equal([handle.releaseWindowRequested, NO_WINDOW_HANDLE_FIELDS.filter((field) => handle[field] !== undefined)],
+        [false, []], "observation fields lent to the product handle");
+      assert.deepEqual(expected.failures, [], "observation reached the formal Voice release");
+    } finally { h.restore(); }
+  });
+}
+
+// The controlled counterexample: same Coding parent, no child, the new question's
+// Type stays Coding and Canonical is unavailable. The Affinity model input is the
+// same in all three legs; only how the operation was scheduled differs.
+test("PC3 counterexample: no Affinity gives followup-parent, a formal independent gives new-parent, an observation-only independent still gives followup-parent", { concurrency: false }, async () => {
+  const expected = expectations();
+  // Leg 1: no window, no observation, so no Affinity at all.
+  const none = await runNoWindowVoice();
+  none.h.restore();
+  expected.equal([none.h.executions.length, none.release.settlement?.relation, none.h.metadata.orderedSettlementCoordinatorRelationStage],
+    [0, "followup-parent", NULL_HYPOTHESIS], "leg 1, no Affinity");
+
+  // Leg 2: the operation is scheduled as formal. Its independent Affinity is
+  // adopted, and stays adopted when Canonical never answers.
+  const formal = st183Harness();
+  let formalAffinityRequest;
+  try {
+    const handle = scheduleRelation(formal);
+    startVoiceFor(formal, handle, logicalQuestionUnit);
+    formal.clock.setTimeout(() => completeCandidate(candidate(formal, "affinity", "intelligent"),
+      { rawOutput: PARENT_INDEPENDENT }), 20);
+    await formal.clock.advanceTo(20 + STAGE_MS + 100);
+    formalAffinityRequest = candidate(formal, "affinity", "intelligent").request;
+    const release = voiceRelease(formal);
+    expected.equal([handle.releaseWindowRequested, candidates(formal, "canonical").length,
+      formal.metadata.taskRelationOrderedResolutionCanonicalDisposition], [true, 2, "candidate-deadline-expired"],
+    "leg 2, formal operation with Canonical unavailable");
+    expected.equal([release.settlement?.relation, formal.metadata.taskRelationOrderedResolutionStage,
+      formal.metadata.taskRelationOrderedResolutionReason], ["new-parent", "runtime-matrix", "same-type-independent-new-parent"],
+    "leg 2, formal independent");
+  } finally { formal.restore(); }
+
+  // Leg 3: the same independent, produced only by the observation. Its automatic
+  // Canonical never answers either.
+  const observed = await runNoWindowVoice({ crossChecks: true, observed: [20, PARENT_INDEPENDENT], until: 20 + 2 * STAGE_MS + 100 });
+  const { h } = observed;
+  try {
+    const observedRequest = candidate(h, "affinity", "intelligent").request;
+    expected.equal([observedRequest.semanticPayloadDigest, h.metadata.taskRelationParentAffinityDecision,
+      h.metadata.taskRelationParentAffinityLeaseAuthorized], [formalAffinityRequest.semanticPayloadDigest, "independent", true],
+    "leg 3, the observation saw the same Affinity input and produced the same independent");
+    expected.equal([observed.release.settlement?.relation, h.metadata.orderedSettlementCoordinatorRelationStage],
+      ["followup-parent", NULL_HYPOTHESIS], "leg 3, observation-only independent");
+    expected.same(observed.release, none.release, "leg 3 against leg 1:");
+    assert.deepEqual(expected.failures, [], "counterexample");
+  } finally { h.restore(); }
+});
+
+// ---- PC3: a formal result fixed, an opposite observation scheduled around it ----
+//
+// The first question's Relation is formal: it asked for a release window. A
+// second, short question is scheduled while that operation is open. With
+// Cross-checks on, the second question gets an observation Affinity and an
+// automatic Canonical, and they answer the opposite of the formal result. The
+// formal question must end exactly as it does with Cross-checks off: the same
+// physical requests, none aborted early, the same recorded stage terminals, the
+// same decision and the same release. `formalAffinityAt` and `canonicalAt` fix
+// the formal result and when it becomes available.
+
+const FORMAL_AFFINITY_AT = 300;
+const FORMAL_CANONICAL_AT = 1_300;
+const FORMAL_SCRIPTS = [
+  { name: "independent Affinity, Canonical times out", affinity: "independent",
+    final: ["runtime-matrix", "same-type-independent-new-parent", "new-parent"], canonical: "candidate-deadline-expired" },
+  { name: "independent Affinity, Canonical fails with unusable output", affinity: "independent",
+    canonicalResult: { rawOutput: "not json" },
+    final: ["runtime-matrix", "same-type-independent-new-parent", "new-parent"], canonical: "malformed-json" },
+  { name: "independent Affinity, Canonical answers new-parent", affinity: "independent",
+    canonicalResult: { rawOutput: canonicalOutput("new-parent") },
+    final: ["canonical-relation", "canonical-authorized", "new-parent"], canonical: "available" },
+  { name: "related Affinity", affinity: "related" },
+  // The formal Affinity never answers: its stage ends at the deadline, Canonical
+  // gets no answer either and the null hypothesis decides. The observation
+  // answers independent and new-parent, which would overturn that.
+  { name: "no formal Affinity answer", affinity: undefined, affinityDisposition: "candidate-deadline-expired",
+    final: (entry) => [NULL_HYPOTHESIS, `${entry === "screen" ? "screen" : "voice"}-preserve-active-parent`, "followup-parent"],
+    canonical: "candidate-deadline-expired", requests: 4 },
+];
+// What the observation answers: the opposite of the formal result, and
+// independent / new-parent when the formal Affinity gives no result.
+const oppositeOf = (script) => OPPOSITE[script.affinity ?? "related"];
+// When the observation is scheduled and when its results arrive, against the
+// formal Affinity (300 ms) and the formal Canonical (1300 ms, or its deadline).
+// `formalAt` is when the formal question itself is scheduled (0 unless given);
+// its script runs from that moment.
+const OBSERVATION_TIMINGS = [
+  { name: "arriving before the formal result", scheduleAt: 100, affinityAt: 200, canonicalAt: 250 },
+  { name: "in flight across the formal result", scheduleAt: 100, affinityAt: 500, canonicalAt: 600 },
+  { name: "scheduled and arriving after the formal Affinity", scheduleAt: 700, affinityAt: 800, canonicalAt: 850 },
+  // Observation first: it is in flight when the formal question arrives 100 ms
+  // later, so the formal schedule supersedes its Affinity. Its automatic
+  // Canonical still starts and answers before the formal Affinity does.
+  { name: "scheduled first and in flight when the formal question arrives", formalAt: 100, scheduleAt: 0, affinityAt: 300,
+    canonicalAt: 350, superseded: true },
+];
+const observedUnit = () => shortUnit({ id: OBSERVED_UNIT_ID });
+const formalRuntimeOperations = (h) => RELATION_RUNTIME_REFS.map((name) => h.environment[name].current.getCurrentOperationId());
+
+async function runFormalBesideObservation({ entry, script, timing, crossChecks, debug = false, child = false }) {
+  const h = st183Harness({ crossChecks, debug, child });
+  try {
+    const formalAt = timing.formalAt ?? 0;
+    const own = (stage, tier) => ofQuestion(h, logicalQuestionUnit.id, stage, tier);
+    const observed = (stage, tier) => ofQuestion(h, OBSERVED_UNIT_ID, stage, tier);
+    const neighbour = { formalOperationsBefore: undefined, formalOperationsAfter: undefined, handle: undefined };
+    // The neighbouring short question and its answers, at absolute times.
+    const observeNeighbour = () => {
+      h.clock.setTimeout(() => {
+        neighbour.formalOperationsBefore = formalRuntimeOperations(h);
+        neighbour.handle = scheduleRelation(h, { unit: observedUnit(), traceId: OBSERVED_TRACE,
+          sourceKind: entry === "voice" ? "screen" : "voice" });
+        neighbour.formalOperationsAfter = formalRuntimeOperations(h);
+      }, timing.scheduleAt);
+      h.clock.setTimeout(() => {
+        for (const execution of observed("affinity", "intelligent")) {
+          completeCandidate(execution, { rawOutput: oppositeOf(script).affinity });
+        }
+      }, timing.affinityAt);
+      h.clock.setTimeout(() => {
+        for (const execution of observed("canonical", "intelligent")) {
+          completeCandidate(execution, { rawOutput: canonicalOutput(oppositeOf(script).canonical) });
+        }
+      }, timing.canonicalAt);
+    };
+    if (formalAt) {
+      observeNeighbour();
+      await h.clock.advanceTo(formalAt);
+    }
+    const handle = scheduleEntry(h, entry);
+    const started = {};
+    if (entry === "voice") startVoiceFor(h, handle, logicalQuestionUnit);
+    else if (entry === "screen") started.wait = watch(h, startScreenConsumer(h, handle));
+    else h.clock.setTimeout(() => { started.wait = watch(h, startCorrectionConsumer(h, handle)); }, 200);
+    if (script.affinity) h.clock.setTimeout(() => {
+      for (const execution of own("affinity", "intelligent")) {
+        completeCandidate(execution, { rawOutput: execution.request.affinityKind === "child"
+          ? FAST_CHILD_UNRELATED : AFFINITY_OUTPUT[script.affinity] });
+      }
+    }, FORMAL_AFFINITY_AT);
+    if (script.canonicalResult) h.clock.setTimeout(() => {
+      for (const execution of own("canonical")) if (!execution.signal.aborted) completeCandidate(execution, script.canonicalResult);
+    }, FORMAL_CANONICAL_AT);
+    if (!formalAt) observeNeighbour();
+    await h.clock.advanceTo(formalAt + FORMAL_AFFINITY_AT + 2 * STAGE_MS + 200);
+    const formal = plain({
+      relation: finalRelation(h, entry, started),
+      waitEndedAt: entry === "voice" ? h.advisorCalls.map((call) => call.at) : [started.wait?.state, started.wait?.at],
+      consumer: entry === "voice" ? voiceRelease(h) : started.wait?.value,
+      // The formal question's own trace, whole: every stage terminal and the final resolution.
+      trace: h.metadata,
+      requests: requestsOf(h, logicalQuestionUnit.id),
+      handle: { operationId: handle.operationId, affinityDeadlineAt: handle.affinityDeadlineAt,
+        releaseWindowRequested: handle.releaseWindowRequested },
+    });
+    return { h, handle, started, neighbour, formal };
+  } catch (error) {
+    h.restore();
+    throw error;
+  }
+}
+
+for (const entry of ["voice", "screen", "correction"]) for (const script of FORMAL_SCRIPTS) for (const timing of OBSERVATION_TIMINGS) {
+  test(`PC3 ${entry} formal ${script.name}: an opposite observation ${timing.name} leaves the formal Relation, its requests and its release unchanged`, { concurrency: false }, async () => {
+    const baseline = await runFormalBesideObservation({ entry, script, timing, crossChecks: false });
+    baseline.h.restore();
+    const run = await runFormalBesideObservation({ entry, script, timing, crossChecks: true });
+    const { h, neighbour } = run;
+    try {
+      const expected = expectations();
+      const recorded = (key) => h.metadata[`taskRelationOrderedResolution${key}`];
+      // The observation really ran beside the formal operation, with the opposite answers.
+      const observedTrace = h.otherTraces[OBSERVED_TRACE] ?? {};
+      expected.equal(requestsOf(baseline.h, OBSERVED_UNIT_ID).length, 0, "observation requests with Cross-checks off");
+      expected.equal([ofQuestion(h, OBSERVED_UNIT_ID, "affinity").length, ofQuestion(h, OBSERVED_UNIT_ID, "canonical").length],
+        [2, 2], "observation physical requests");
+      if (timing.superseded) {
+        // In flight when the formal question arrived: its Affinity requests were aborted
+        // and its terminal refused, and its automatic Canonical's answer was refused too.
+        expected.equal([ofQuestion(h, OBSERVED_UNIT_ID, "affinity").map((execution) => execution.signal.aborted),
+          observedTrace.taskRelationParentAffinityDisposition, observedTrace.taskRelationParentAffinityLeaseAuthorized,
+          observedTrace.taskRelationParentAffinityDecision, observedTrace.taskRelationSplitCanonicalRelation],
+        [[true, true], "operation-id-mismatch", false, undefined, undefined],
+        "observation superseded by the formal schedule, on its own trace");
+      } else {
+        expected.equal([observedTrace.taskRelationParentAffinityDecision, observedTrace.taskRelationSplitCanonicalRelation],
+          [script.affinity === "independent" ? "related" : "independent", oppositeOf(script).canonical],
+        "opposite observation recorded on its own trace");
+      }
+      expected.equal(NO_WINDOW_HANDLE_FIELDS.filter((field) => neighbour.handle?.[field] !== undefined), [],
+        "observation fields lent to the neighbour's product handle");
+      // Scheduling it left the formal instances' current operations alone.
+      expected.equal(neighbour.formalOperationsAfter, neighbour.formalOperationsBefore,
+        "formal runtimes' current operations across the observation schedule");
+      // The formal result is the fixed one.
+      expected.equal(recorded("AffinityParentDisposition"), script.affinityDisposition ?? "available", "formal Affinity");
+      if (script.final) expected.equal([recorded("Stage"), recorded("Reason"), recorded("Relation")],
+        typeof script.final === "function" ? script.final(entry) : script.final, "formal Relation source");
+      if (script.canonical) expected.equal(recorded("CanonicalDisposition"), script.canonical, "formal Canonical");
+      expected.equal(run.formal.relation, recorded("Relation"), "released relation");
+      // What is compared is the whole formal question: its physical requests and its own trace.
+      expected.equal([run.formal.requests.length, Object.keys(run.formal.trace).length > 60],
+        [script.requests ?? (script.affinity === "related" ? 2 : 4), true], "formal requests and recorded trace fields compared");
+      expected.same(run.formal, baseline.formal, "formal");
+      assert.deepEqual(expected.failures, [], "observation changed the formal operation");
+    } finally { h.restore(); }
+  });
+}
+
+// ---- PC3: supersession between formal and observation work is one-directional ----
+
+const observationRuntimeOperations = (h) => OBSERVATION_RUNTIME_REFS.map((name) => h.environment[name].current.getCurrentOperationId());
+const scheduleObservedNeighbour = (h, sourceKind = "voice") => scheduleRelation(h, { unit: observedUnit(), traceId: OBSERVED_TRACE,
+  sourceKind });
+const aborted = (executions) => executions.map((execution) => execution.signal.aborted);
+
+test("PC3 supersession: an observation schedule and its automatic Canonical never abort or replace an in-flight formal Affinity or Canonical", { concurrency: false }, async () => {
+  const h = st183Harness({ crossChecks: true });
+  try {
+    const expected = expectations();
+    const own = (stage, tier) => ofQuestion(h, logicalQuestionUnit.id, stage, tier);
+    const observed = (stage, tier) => ofQuestion(h, OBSERVED_UNIT_ID, stage, tier);
+    const handle = scheduleEntry(h, "screen");
+    const wait = watch(h, startScreenConsumer(h, handle));
+    await h.clock.advanceTo(100);
+    const formalAffinity = formalRuntimeOperations(h);
+    expected.equal(aborted(own("affinity")), [false, false], "formal Affinity requests in flight");
+    // The observation is scheduled while the formal Affinity is in flight.
+    scheduleObservedNeighbour(h);
+    await h.clock.advanceTo(200);
+    expected.equal(observed("affinity").length, 2, "observation Affinity requests");
+    expected.equal(aborted(own("affinity")), [false, false], "formal Affinity requests after the observation schedule");
+    expected.equal(formalRuntimeOperations(h), formalAffinity, "formal runtimes' current operations after the observation schedule");
+    expected.equal(observationRuntimeOperations(h)[1], observed("affinity")[0]?.executionIdentity.executionPlanId,
+      "the observation runs on its own Affinity instance");
+    // The formal Affinity is consumed and the formal Canonical starts.
+    completeCandidate(own("affinity", "intelligent")[0], { rawOutput: PARENT_INDEPENDENT });
+    await h.clock.advanceTo(300);
+    expected.equal(own("canonical").length, 2, "formal Canonical requests");
+    const formalCanonical = formalRuntimeOperations(h);
+    // The observation's automatic Canonical starts while the formal Canonical is in flight.
+    completeCandidate(observed("affinity", "intelligent")[0], { rawOutput: PARENT_RELATED });
+    await h.clock.advanceTo(400);
+    expected.equal(observed("canonical").length, 2, "observation Canonical requests");
+    expected.equal(aborted(own("canonical")), [false, false], "formal Canonical requests after the observation Canonical started");
+    expected.equal(formalRuntimeOperations(h), formalCanonical, "formal runtimes' current operations after the observation Canonical");
+    completeCandidate(observed("canonical", "intelligent")[0], { rawOutput: canonicalOutput("followup-parent") });
+    completeCandidate(own("canonical", "intelligent")[0], { rawOutput: canonicalOutput("new-parent") });
+    await h.clock.advanceTo(500);
+    const recorded = (key) => h.metadata[`taskRelationOrderedResolution${key}`];
+    expected.equal([wait.state, wait.value?.decision.relation, recorded("AffinityParentDisposition"), recorded("CanonicalDisposition"),
+      recorded("Stage")], ["resolved", "new-parent", "available", "available", "canonical-relation"], "formal result");
+    expected.equal([h.metadata.taskRelationParentAffinityLeaseAuthorized, h.metadata.taskRelationSplitCanonicalLeaseAuthorized,
+      h.metadata.taskRelationSplitCanonicalPredecessorsAuthorized], [true, true, true], "formal leases and predecessors");
+    assert.deepEqual(expected.failures, [], "observation superseded formal work");
+  } finally { h.restore(); }
+});
+
+test("PC3 supersession: a formal schedule cancels in-flight observation Affinity as superseded, and a formal Canonical cancels an in-flight observation Canonical", { concurrency: false }, async () => {
+  const h = st183Harness({ crossChecks: true });
+  try {
+    const expected = expectations();
+    const own = (stage, tier) => ofQuestion(h, logicalQuestionUnit.id, stage, tier);
+    const observed = (stage, tier) => ofQuestion(h, OBSERVED_UNIT_ID, stage, tier);
+    const observedTrace = () => h.otherTraces[OBSERVED_TRACE] ?? {};
+    // An observation Affinity is in flight when a formal operation is scheduled.
+    scheduleObservedNeighbour(h);
+    await h.clock.advanceTo(100);
+    expected.equal(aborted(observed("affinity")), [false, false], "observation Affinity requests in flight");
+    const handle = scheduleEntry(h, "screen");
+    const wait = watch(h, startScreenConsumer(h, handle));
+    await h.clock.advanceTo(200);
+    expected.equal(aborted(observed("affinity")), [true, true], "observation Affinity requests after the formal schedule");
+    expected.equal([observedTrace().taskRelationParentAffinityDisposition, observedTrace().taskRelationParentAffinityLeaseAuthorized],
+      ["operation-id-mismatch", false], "superseded observation Affinity terminal");
+    expected.equal(aborted(own("affinity")), [false, false], "formal Affinity requests");
+    // The superseded observation still starts its automatic Canonical, as before;
+    // that Canonical is cancelled when the formal Canonical is scheduled.
+    expected.equal(aborted(observed("canonical")), [false, false], "observation Canonical in flight");
+    completeCandidate(own("affinity", "intelligent")[0], { rawOutput: PARENT_INDEPENDENT });
+    await h.clock.advanceTo(300);
+    expected.equal(own("canonical").length, 2, "formal Canonical requests");
+    expected.equal(aborted(observed("canonical")), [true, true], "observation Canonical requests after the formal Canonical started");
+    expected.equal(observedTrace().taskRelationSplitCanonicalLeaseAuthorized, false, "superseded observation Canonical terminal");
+    completeCandidate(own("canonical", "intelligent")[0], { rawOutput: canonicalOutput("new-parent") });
+    await h.clock.advanceTo(400);
+    expected.equal([wait.state, wait.value?.decision.relation, h.metadata.taskRelationOrderedResolutionStage],
+      ["resolved", "new-parent", "canonical-relation"], "formal result");
+    expected.equal(h.clock.timers.size, 0, "no timer left behind");
+    assert.deepEqual(expected.failures, [], "one-directional supersession");
+  } finally { h.restore(); }
+});
+
+// ---- PC3: one question revision scheduled both ways (the one-start-per-slot budget) ----
+//
+// Each Relation runtime allows one start per question revision and slot. A
+// formal and an observation operation of the same revision carry the same
+// budget key and slot, and the same operation and request ids. On one shared
+// runtime whichever started second would end as budget-exhausted. They run on
+// separate instances, each with its own ledger, so the formal operation runs as
+// it does with Cross-checks off. This is a controlled construction of the
+// ledger case; that production schedules one revision both ways is not claimed.
+
+// The admission lane is the only field that tells the two operations' physical
+// requests apart: critical for the formal one, evaluation for the observation.
+function tagRequestLanes(h) {
+  const selector = h.environment.requestTaskRelationProviderCandidates;
+  h.environment.requestTaskRelationProviderCandidates = (input, dependencies) => selector(input, { ...dependencies,
+    request: (args) => {
+      const dispatchedBefore = h.executions.length;
+      const result = dependencies.request(args);
+      for (const execution of h.executions.slice(dispatchedBefore)) execution.lane = input.lane;
+      return result;
+    } });
+}
+const SAME_REVISION_TRACE = "trace-same-revision-observation";
+async function runSameRevisionBothWays({ crossChecks, order }) {
+  const h = st183Harness({ crossChecks });
+  try {
+    tagRequestLanes(h);
+    const lane = (name, stage, tier) => h.executions.filter((execution) => execution.lane === name &&
+      (!stage || execution.request.operationKind.includes(stage)) && (!tier || tierOf(execution) === tier));
+    // The same unit and revision on a turn that is not an answer-refresh asks for
+    // no release window: with Cross-checks on it is an observation.
+    const observe = () => h.environment.scheduleTaskRelationAdjudication({
+      turn: { speaker: "them", text: QUESTION }, traceId: SAME_REVISION_TRACE, turnGateAction: "phase-control",
+      logicalQuestionUnit, lexical: { type: "coding" }, sourceKind: "voice", authorizeSourceOperation: sourceCurrent });
+    const formal = () => {
+      const handle = scheduleEntry(h, "voice");
+      startVoiceFor(h, handle, logicalQuestionUnit);
+      return handle;
+    };
+    let handle;
+    let observationHandle;
+    if (order === "observation first") {
+      observationHandle = observe();
+      await h.clock.advanceTo(100);
+      handle = formal();
+    } else {
+      handle = formal();
+      await h.clock.advanceTo(100);
+      observationHandle = observe();
+    }
+    const formalAt = order === "observation first" ? 100 : 0;
+    // The clock is at 100 ms here; `fromNow` turns an absolute time into a delay.
+    const fromNow = (absolute) => absolute - 100;
+    // The observation answers related at 200 ms and follow-up at 250 ms, before
+    // the formal Affinity answers independent; the formal Canonical never answers.
+    h.clock.setTimeout(() => {
+      for (const execution of lane("evaluation", "affinity", "intelligent")) completeCandidate(execution, { rawOutput: PARENT_RELATED });
+    }, fromNow(200));
+    h.clock.setTimeout(() => {
+      for (const execution of lane("evaluation", "canonical", "intelligent")) {
+        completeCandidate(execution, { rawOutput: canonicalOutput("followup-parent") });
+      }
+    }, fromNow(250));
+    h.clock.setTimeout(() => {
+      for (const execution of lane("critical", "affinity", "intelligent")) completeCandidate(execution, { rawOutput: PARENT_INDEPENDENT });
+    }, fromNow(formalAt + FORMAL_AFFINITY_AT));
+    await h.clock.advanceTo(formalAt + FORMAL_AFFINITY_AT + STAGE_MS + 200);
+    const requests = (name) => lane(name).map((execution) => [execution.request.operationKind, tierOf(execution),
+      execution.dispatchedAt - 10_000, execution.timeoutMs, execution.executionIdentity.requestId,
+      execution.request.semanticPayloadDigest, execution.signal.aborted]);
+    return plain({
+      // The formal question, whole: what Voice released, its own trace, its physical requests and its handle.
+      formal: { release: voiceRelease(h), trace: h.metadata, requests: requests("critical"),
+        handle: { operationId: handle.operationId, affinityDeadlineAt: handle.affinityDeadlineAt,
+          releaseWindowRequested: handle.releaseWindowRequested } },
+      observation: { requests: requests("evaluation"), trace: h.otherTraces[SAME_REVISION_TRACE] ?? {},
+        handleFields: NO_WINDOW_HANDLE_FIELDS.filter((field) => observationHandle?.[field] !== undefined),
+        releaseWindowRequested: observationHandle?.releaseWindowRequested },
+      unlabelledRequests: h.executions.filter((execution) => !execution.lane).length,
+      timersLeft: h.clock.timers.size,
+    });
+  } finally { h.restore(); }
+}
+
+test("PC3 budget slot: the same question unit and revision scheduled as an observation and as a formal operation, in either order, leaves the formal run as it is with Cross-checks off", { concurrency: false }, async () => {
+  const expected = expectations();
+  for (const order of ["observation first", "formal first"]) {
+    const baseline = await runSameRevisionBothWays({ crossChecks: false, order });
+    const run = await runSameRevisionBothWays({ crossChecks: true, order });
+    const trace = run.formal.trace;
+    // Off: the second schedule starts nothing and the formal operation makes its four requests.
+    expected.equal([baseline.formal.requests.length, baseline.observation.requests.length, baseline.unlabelledRequests,
+      baseline.formal.release.settlement?.relation], [4, 0, 0, "new-parent"], `${order}, Cross-checks off`);
+    // On: the observation really started, for the same revision, under the same
+    // budget key, slot and operation id as the formal operation, on its own instance.
+    expected.equal([run.observation.requests.length, run.unlabelledRequests, run.observation.releaseWindowRequested,
+      run.observation.handleFields, run.observation.trace.taskRelationParentAffinityExecutionStage,
+      run.observation.trace.taskRelationParentAffinityOperationId === trace.taskRelationParentAffinityOperationId,
+      run.observation.trace.taskRelationParentAffinityBudgetRemaining],
+    [4, 0, false, [], "evaluation", true, 0], `${order}, the observation of the same revision`);
+    const affinityRequestIds = (requests) => requests.filter((request) => request[0].includes("affinity")).map((request) => request[4]).sort();
+    expected.equal([affinityRequestIds(run.observation.requests).length, affinityRequestIds(run.observation.requests)],
+      [2, affinityRequestIds(run.formal.requests)], `${order}, observation and formal Affinity request ids`);
+    // Scheduled first, the observation is superseded by the formal schedule and its
+    // Canonical answer refused; scheduled second, it runs to the end beside the formal operation.
+    expected.equal([run.observation.trace.taskRelationParentAffinityDisposition, run.observation.trace.taskRelationParentAffinityDecision,
+      run.observation.trace.taskRelationSplitCanonicalRelation],
+    order === "observation first" ? ["operation-id-mismatch", undefined, undefined] : ["shadow-observed", "related", "followup-parent"],
+    `${order}, the observation's own terminals`);
+    // The formal operation started on its own budget: four requests, the independent
+    // Affinity adopted, the same relation.
+    expected.equal([run.formal.requests.length, trace.taskRelationParentAffinityExecutionStage, trace.taskRelationParentAffinityDisposition,
+      trace.taskRelationParentAffinityBudgetRemaining, trace.taskRelationOrderedResolutionAffinityParentDisposition,
+      trace.taskRelationOrderedResolutionCanonicalDisposition],
+    [4, "product", "shadow-observed", 0, "available", "candidate-deadline-expired"], `${order}, formal stages`);
+    expected.equal([trace.taskRelationOrderedResolutionStage, trace.taskRelationOrderedResolutionReason,
+      run.formal.release.settlement?.relation], ["runtime-matrix", "same-type-independent-new-parent", "new-parent"],
+    `${order}, formal Relation`);
+    expected.equal([baseline.timersLeft, run.timersLeft], [0, 0], `${order}, timers left`);
+    expected.same(run.formal, baseline.formal, `${order}, formal`);
+  }
+  assert.deepEqual(expected.failures, [], "an observation of the same revision changed the formal operation");
+});
+
+// ---- PC3: only formal work opens the session circuit breaker ----
+//
+// Formal and observation operations read one session circuit breaker. If an
+// observation could open it, every later formal Affinity of that kind would be
+// refused as a client error for the rest of the session: a formal outcome
+// decided by an observation. An observation that finds no provider ends with
+// that reason and leaves the circuit alone. A circuit opened by formal work
+// still stops later observations, as it did before.
+
+// The Relation routes, with a provider missing for the tiers `isMissing` names.
+const routeUnlessMissing = (h, isMissing) => {
+  h.environment.resolveRuntimeInferenceModelRouteFromSnapshot = ({ providerTier = "intelligent" }) => ({
+    provider: isMissing(providerTier) ? undefined : {}, selectedProvider: { variables: { model: providerTier } },
+    providerTier, configFingerprint: providerTier, missingRequiredVariables: [],
+    fallbackReason: isMissing(providerTier) ? "provider-missing" : undefined });
+};
+// A short question that asks for no window is scheduled while the Fast route has
+// no provider. The provider configuration is then whole again in the same
+// session, and a formal question follows.
+async function runFormalAfterUnroutableObservation({ entry, crossChecks }) {
+  const h = st183Harness({ crossChecks });
+  try {
+    let missingTier = "fast";
+    routeUnlessMissing(h, (tier) => tier === missingTier);
+    scheduleRelation(h, { unit: observedUnit(), traceId: OBSERVED_TRACE });
+    await h.clock.advanceTo(100);
+    const afterObservation = plain({ circuitOpen: relationCircuitOpen(h), requests: h.executions.length,
+      observedCanonical: h.otherTraces[OBSERVED_TRACE]?.taskRelationSplitCanonicalDisposition ?? null });
+    missingTier = undefined;
+    const handle = scheduleEntry(h, entry);
+    const started = {};
+    if (entry === "voice") startVoiceFor(h, handle, logicalQuestionUnit);
+    else if (entry === "screen") started.wait = watch(h, startScreenConsumer(h, handle));
+    else h.clock.setTimeout(() => { started.wait = watch(h, startCorrectionConsumer(h, handle)); }, 200);
+    h.clock.setTimeout(() => {
+      for (const execution of ofQuestion(h, logicalQuestionUnit.id, "affinity", "intelligent")) {
+        completeCandidate(execution, { rawOutput: PARENT_INDEPENDENT });
+      }
+    }, 300);
+    await h.clock.advanceTo(100 + 300 + 2 * STAGE_MS + 200);
+    const formal = plain({
+      relation: finalRelation(h, entry, started),
+      waitEndedAt: entry === "voice" ? h.advisorCalls.map((call) => call.at) : [started.wait?.state, started.wait?.at],
+      consumer: entry === "voice" ? voiceRelease(h) : started.wait?.value,
+      trace: h.metadata,
+      requests: requestsOf(h, logicalQuestionUnit.id),
+      circuitOpen: relationCircuitOpen(h),
+    });
+    return { h, afterObservation, formal };
+  } catch (error) {
+    h.restore();
+    throw error;
+  }
+}
+
+for (const entry of ["voice", "screen", "correction"]) {
+  test(`PC3 ${entry} session circuit: an observation that finds no provider leaves the circuit closed, and a later formal Relation ends as it does with Cross-checks off`, { concurrency: false }, async () => {
+    const baseline = await runFormalAfterUnroutableObservation({ entry, crossChecks: false });
+    baseline.h.restore();
+    const run = await runFormalAfterUnroutableObservation({ entry, crossChecks: true });
+    try {
+      const expected = expectations();
+      // The observation really ran into the missing provider; with the switch off nothing ran.
+      expected.equal(baseline.afterObservation, { circuitOpen: [false, false, false], requests: 0, observedCanonical: null },
+        "after the short question with Cross-checks off");
+      expected.equal(run.afterObservation, { circuitOpen: [false, false, false], requests: 0,
+        observedCanonical: "provider-configuration-error" }, "after the observation that found no provider");
+      // The formal question that follows is not a client error: it runs and is released.
+      expected.equal([run.formal.relation, run.formal.requests.length, run.formal.trace.taskRelationOrderedResolutionStage,
+        run.formal.trace.taskRelationOrderedResolutionAffinityParentDisposition, run.formal.circuitOpen],
+      ["new-parent", 4, "runtime-matrix", "available", [false, false, false]], "formal Relation after the observation");
+      expected.same(run.formal, baseline.formal, "formal");
+      assert.deepEqual(expected.failures, [], "an observation decided a formal Relation through the session circuit");
+    } finally { run.h.restore(); }
+  });
+}
+
+test("PC3 session circuit: a formal operation that finds no provider opens it, and later observations are refused without a request", { concurrency: false }, async () => {
+  const h = st183Harness({ crossChecks: true });
+  try {
+    const expected = expectations();
+    routeUnlessMissing(h, (tier) => tier === "fast");
+    const handle = scheduleEntry(h, "screen");
+    const wait = watch(h, startScreenConsumer(h, handle));
+    await h.clock.advanceTo(100);
+    expected.equal([relationCircuitOpen(h), h.metadata.taskRelationOrderedResolutionAffinityParentDisposition,
+      h.metadata.taskRelationOrderedResolutionClientError, wait.state, h.executions.length],
+    [[false, true, false], "provider-configuration-error", true, "resolved", 0], "formal operation with no provider");
+    // The configuration is whole again; the circuit stays open for the session, as before.
+    routeUnlessMissing(h, () => false);
+    const operation = scheduleObservationOperation(h, { unit: observedUnit(), traceId: OBSERVED_TRACE });
+    const affinity = watch(h, operation.affinityOutcome);
+    await h.clock.advanceTo(200);
+    expected.equal([affinity.state, affinity.value?.parent.unavailableReason, candidates(h, "affinity").length],
+      ["resolved", "provider-circuit-open", 0], "observation Affinity behind the formally opened circuit");
+    await h.clock.advanceTo(200 + STAGE_MS + 100);
+    expected.equal(h.clock.timers.size, 0, "timers left");
+    assert.deepEqual(expected.failures, [], "formal circuit and observation");
+  } finally { h.restore(); }
+});
+
+test("PC3 session circuit: repeated observations with no provider each end with that reason, send nothing and never open the circuit", { concurrency: false }, async () => {
+  const h = st183Harness({ crossChecks: true });
+  try {
+    const expected = expectations();
+    routeUnlessMissing(h, (tier) => tier === "intelligent");
+    for (const [index, id] of ["lqu-observed", "lqu-observed-2"].entries()) {
+      const operation = scheduleObservationOperation(h, { unit: shortUnit({ id }), traceId: `${OBSERVED_TRACE}-${index}` });
+      const affinity = watch(h, operation.affinityOutcome);
+      const canonical = watch(h, operation.canonicalOutcome);
+      await h.clock.advanceTo(100 * (index + 1));
+      expected.equal([affinity.state, affinity.value?.parent.unavailableReason, canonical.state, canonical.value?.unavailableReason],
+        ["resolved", "provider-configuration-error", "resolved", "provider-configuration-error"], `observation ${index + 1} terminals`);
+      expected.equal([relationCircuitOpen(h), h.executions.length], [[false, false, false], 0],
+        `session circuit and requests after observation ${index + 1}`);
+    }
+    expected.equal(h.clock.timers.size, 0, "timers left");
+    assert.deepEqual(expected.failures, [], "observations with no provider");
+  } finally { h.restore(); }
+});
+
+// ---- PC6: the switch's lifecycle, through the Hook's own setter ----
+
+// The Hook's own setter, bound to this harness's ref and recorder. `settings` is
+// what updateSettings would persist.
+function crossChecksSwitch(h) {
+  const setterSource = findNamedDeclaration(sourceFile, "setRuntimeCrossChecksEnabled")
+    .initializer.arguments[0].getText(sourceFile);
+  const settings = { runtimeCrossChecksEnabled: h.environment.runtimeCrossChecksEnabledRef.current };
+  const set = vm.runInContext(transpile(`(${setterSource})`), vm.createContext({
+    runtimeCrossChecksEnabledRef: h.environment.runtimeCrossChecksEnabledRef,
+    sessionRecordingManagerRef: h.environment.sessionRecordingManagerRef,
+    updateSettings: (resolve) => { Object.assign(settings, resolve(settings)); },
+  }));
+  return { set, settings };
+}
+// The executor's own handle of an observation operation. Its stage terminals can
+// be watched here; the product handle never carries them.
+function scheduleObservationOperation(h, { unit = shortUnit(), traceId = "trace" } = {}) {
+  const state = h.environment.contextManagerRef.current.getState();
+  return h.environment.scheduleTaskRelationSplitRuntime({
+    traceId, taskId: state.activeMeetingTask.id, runtimeReleaseRequested: false, authorizeSourceOperation: sourceCurrent,
+    request: relationModule.buildTaskRelationAdjudicationRequest({ logicalQuestionUnit: unit,
+      activeMeetingTask: state.activeMeetingTask,
+      currentQuestion: imports.createProvisionalCurrentQuestion({ logicalQuestionUnit: unit, sourceKind: "voice" }) }),
+  });
+}
+const switchChanges = (h) => h.recorded.filter((row) => row.stage === "runtime-cross-checks-updated")
+  .map((row) => [row.previousRuntimeCrossChecksEnabled, row.runtimeCrossChecksEnabled]);
+// An observation writes Trace and Recording and nothing else.
+function expectReadOnly(expected, h, stateBefore) {
+  expected.equal([h.advisorCalls.length, h.events.filter((event) => event.ui).length,
+    h.events.filter((event) => event.finish).length], [0, 0, 0], "Advisor handoffs, UI updates and trace terminals");
+  expected.same(h.environment.contextManagerRef.current.getState(), stateBefore, "task and context state");
+  expected.equal([...new Set(h.recorded.map((row) => row.kind))].filter((kind) =>
+    !["model-input", "model-output", "lifecycle", "relation-decision"].includes(kind)), [], "recorder writers used");
+}
+
+for (const recording of [false, true]) {
+  test(`PC6 recording=${recording}: Cross-checks switched off before the observation Affinity completes ends that Affinity under its start-time configuration and starts no observation Canonical`, { concurrency: false }, async () => {
+    const h = st183Harness({ crossChecks: true, recording });
+    try {
+      const expected = expectations();
+      const stateBefore = plain(h.environment.contextManagerRef.current.getState());
+      const toggle = crossChecksSwitch(h);
+      const operation = scheduleObservationOperation(h);
+      const affinity = watch(h, operation.affinityOutcome);
+      const canonical = watch(h, operation.canonicalOutcome);
+      await h.clock.advanceTo(100);
+      expected.equal(candidates(h, "affinity").length, 2, "observation Affinity requests in flight");
+      toggle.set(false);
+      expected.equal([h.environment.runtimeCrossChecksEnabledRef.current, toggle.settings.runtimeCrossChecksEnabled],
+        [false, false], "switch after the setter");
+      // Turning it off cancels nothing that already started.
+      expected.equal(aborted(candidates(h, "affinity")), [false, false], "in-flight observation Affinity after switching off");
+      completeCandidate(candidate(h, "affinity", "intelligent"), { rawOutput: PARENT_INDEPENDENT });
+      await h.clock.advanceTo(200);
+      expected.equal([affinity.state, affinity.at, affinity.value?.parent.adjudication?.decision], ["resolved", 100, "independent"],
+        "in-flight Affinity terminal");
+      expected.equal([h.metadata.taskRelationParentAffinityObservationTrigger, h.metadata.taskRelationParentAffinityDisposition,
+        h.metadata.taskRelationParentAffinityLeaseAuthorized], ["runtime-cross-checks", "shadow-observed", true],
+      "the Affinity keeps its start-time trigger");
+      // The follow-up Canonical had not started: it is a new request and the switch is off.
+      expected.equal([canonical.state, canonical.at, canonical.value?.unavailableReason], ["resolved", 100, "runtime-cross-checks-off"],
+        "observation Canonical terminal");
+      expected.equal([h.metadata.taskRelationSplitCanonicalDisposition, h.metadata.taskRelationSplitCanonicalOperationId],
+        ["runtime-cross-checks-off", undefined], "named skip on the Canonical disposition");
+      await h.clock.advanceTo(3 * STAGE_MS);
+      expected.equal([candidates(h, "canonical").length, h.executions.length, h.clock.timers.size], [0, 2, 0],
+        "Canonical requests, all physical requests and timers left");
+      if (recording) {
+        expected.equal(switchChanges(h), [[true, false]], "switch change recorded");
+        expected.equal(h.recorded.filter((row) => row.kind === "relation-decision").at(-1)?.metadata.taskRelationSplitCanonicalDisposition,
+          "runtime-cross-checks-off", "recorded skip");
+      } else {
+        expected.equal(h.recorded.length, 0, "written with Recording off");
+      }
+      expectReadOnly(expected, h, stateBefore);
+      assert.deepEqual(expected.failures, [], "switch-off lifecycle");
+    } finally { h.restore(); }
+  });
+}
+
+test("PC6 rapid toggling: a question scheduled while off is never observed later, the follow-up Canonical reads the live switch, and each change is recorded once", { concurrency: false }, async () => {
+  const h = st183Harness({ recording: true });
+  try {
+    const expected = expectations();
+    const stateBefore = plain(h.environment.contextManagerRef.current.getState());
+    const toggle = crossChecksSwitch(h);
+    // Off: this question gets no observation, and turning the switch on does not go back for it.
+    const offHandle = scheduleRelation(h, { unit: shortUnit() });
+    toggle.set(true);
+    await h.clock.advanceTo(100);
+    expected.equal([h.executions.length, NO_WINDOW_HANDLE_FIELDS.filter((field) => offHandle[field] !== undefined)], [0, []],
+      "requests for the question scheduled while off");
+    // On, then off, on, off, on while the observation Affinity is in flight.
+    const operation = scheduleObservationOperation(h, { unit: observedUnit(), traceId: OBSERVED_TRACE });
+    const canonical = watch(h, operation.canonicalOutcome);
+    await h.clock.advanceTo(200);
+    for (const value of [false, true, false, true]) toggle.set(value);
+    // Setting the value it already has is not a change.
+    toggle.set(true);
+    expected.equal(aborted(candidates(h, "affinity")), [false, false], "in-flight observation Affinity across the toggles");
+    completeCandidate(candidate(h, "affinity", "intelligent"), { rawOutput: PARENT_RELATED });
+    await h.clock.advanceTo(300);
+    // The live value is on when the Affinity stage ends, so the follow-up starts.
+    expected.equal(candidates(h, "canonical").length, 2, "observation Canonical requests");
+    completeCandidate(candidate(h, "canonical", "intelligent"), { rawOutput: canonicalOutput("followup-parent") });
+    await h.clock.advanceTo(400);
+    const trace = h.otherTraces[OBSERVED_TRACE];
+    expected.equal([canonical.state, canonical.value?.adjudication?.relation, trace.taskRelationSplitCanonicalObservationTrigger,
+      trace.taskRelationSplitCanonicalDisposition], ["resolved", "followup-parent", "runtime-cross-checks", "shadow-observed"],
+    "observation Canonical terminal");
+    expected.equal(switchChanges(h), [[false, true], [true, false], [false, true], [true, false], [false, true]],
+      "switch changes recorded in order");
+    expected.equal([h.environment.runtimeCrossChecksEnabledRef.current, toggle.settings.runtimeCrossChecksEnabled, h.clock.timers.size],
+      [true, true, 0], "final switch value and timers left");
+    expectReadOnly(expected, h, stateBefore);
+    assert.deepEqual(expected.failures, [], "rapid toggling");
+  } finally { h.restore(); }
+});
+
+test("PC6 switching Cross-checks off or on cancels no formal request and does not change the formal result", { concurrency: false }, async () => {
+  const h = st183Harness({ crossChecks: true });
+  try {
+    const expected = expectations();
+    const toggle = crossChecksSwitch(h);
+    const handle = scheduleEntry(h, "screen");
+    const wait = watch(h, startScreenConsumer(h, handle));
+    await h.clock.advanceTo(100);
+    toggle.set(false);
+    expected.equal(aborted(candidates(h, "affinity")), [false, false], "formal Affinity requests after switching off");
+    completeCandidate(candidate(h, "affinity", "intelligent"), { rawOutput: PARENT_INDEPENDENT });
+    await h.clock.advanceTo(300);
+    for (const value of [true, false]) toggle.set(value);
+    expected.equal(aborted(candidates(h, "canonical")), [false, false], "formal Canonical requests across the toggles");
+    completeCandidate(candidate(h, "canonical", "intelligent"), { rawOutput: canonicalOutput("new-parent") });
+    await h.clock.advanceTo(400);
+    expected.equal([wait.state, wait.value?.decision.relation, h.metadata.taskRelationOrderedResolutionStage,
+      h.metadata.taskRelationSplitCanonicalDisposition, h.metadata.taskRelationSplitCanonicalObservationTrigger],
+    ["resolved", "new-parent", "canonical-relation", "shadow-observed", undefined], "formal result");
+    expected.equal([h.executions.length, h.clock.timers.size], [4, 0], "physical requests and timers left");
+    assert.deepEqual(expected.failures, [], "formal work under switch changes");
+  } finally { h.restore(); }
+});
+
+// An observation already in flight when its owner changes ends on its own lease
+// and stage deadline: a real terminal for both stages, nothing left running,
+// nothing released.
+// The context manager publishes a new state object on every change, as in production.
+const publishState = (h, change) => {
+  const manager = h.environment.contextManagerRef.current;
+  const next = change(structuredClone(manager.getState()));
+  manager.getState = () => next;
+};
+for (const [name, change, reason] of [
+  ["the session changes", (h) => publishState(h, (state) => ({ ...state, sessionId: "session-b" })), "sessionId-mismatch"],
+  ["the runtime epoch changes", (h) => { h.environment.runtimeEpochRef.current += 1; }, "runtimeEpoch-mismatch"],
+  ["the manual-correction revision changes", (h) => { h.environment.manualCorrectionRevisionRef.current += 1; },
+    "manualCorrectionRevision-mismatch"],
+  ["the parent revision changes", (h) => publishState(h, (state) => {
+    state.activeMeetingTask.parent.revisions += 1;
+    return state;
+  }), "parentRevision-mismatch"],
+  ["Stop invalidates runtime work", (h) => { stop(h); }, "operation-id-mismatch"],
+]) {
+  test(`PC6 an in-flight observation reaches a real terminal when ${name}`, { concurrency: false }, async () => {
+    const h = st183Harness({ crossChecks: true });
+    try {
+      const expected = expectations();
+      const operation = scheduleObservationOperation(h);
+      const affinity = watch(h, operation.affinityOutcome);
+      const canonical = watch(h, operation.canonicalOutcome);
+      await h.clock.advanceTo(100);
+      change(h);
+      const stateAfterChange = plain(h.environment.contextManagerRef.current.getState());
+      // The provider still answers; an aborted request cannot.
+      for (const execution of candidates(h, "affinity", "intelligent")) {
+        if (!execution.signal.aborted) completeCandidate(execution, { rawOutput: PARENT_INDEPENDENT });
+      }
+      await h.clock.advanceTo(200);
+      expected.equal([affinity.state, affinity.value?.parent.adjudication, h.metadata.taskRelationParentAffinityLeaseAuthorized],
+        ["resolved", undefined, false], "Affinity terminal refuses the result");
+      expected.equal([affinity.value?.parent.unavailableReason, h.metadata.taskRelationParentAffinityDisposition], [reason, reason],
+        "Affinity terminal reason");
+      // Its follow-up ends by the Canonical stage deadline at the latest.
+      await h.clock.advanceTo(200 + STAGE_MS + 100);
+      expected.equal([canonical.state, canonical.value?.adjudication, h.metadata.taskRelationSplitCanonicalLeaseAuthorized],
+        ["resolved", undefined, false], "Canonical terminal refuses the result");
+      expected.equal([h.clock.timers.size, h.advisorCalls.length, h.events.filter((event) => event.ui || event.finish).length],
+        [0, 0, 0], "timers left, Advisor handoffs, UI updates and trace terminals");
+      expected.same(h.environment.contextManagerRef.current.getState(), stateAfterChange, "task and context state");
+      assert.deepEqual(expected.failures, [], "in-flight observation terminal");
+    } finally { h.restore(); }
+  });
+}
+
+test("PC6 Stop, application shutdown and unmount cancel the observation instances with the formal ones", { concurrency: false }, async () => {
+  for (const name of OBSERVATION_RUNTIME_REFS) {
+    assert.equal(invalidateRuntimeWorkRefs.includes(name), true, `invalidateRuntimeWork reads ${name}`);
+    // Application shutdown and the unmount cleanup each dispose it.
+    assert.equal(hookSource.split(`${name}.current?.cancelAll("disposed")`).length - 1, 2, `${name} disposed on shutdown and unmount`);
+  }
+  for (const name of RELATION_RUNTIME_REFS) {
+    assert.equal(hookSource.split(`${name}.current?.cancelAll("disposed")`).length - 1, 2, `${name} disposed on shutdown and unmount`);
+  }
+  const h = st183Harness({ crossChecks: true });
+  try {
+    const cancelled = [];
+    for (const name of [...RELATION_RUNTIME_REFS, ...OBSERVATION_RUNTIME_REFS]) {
+      const runtime = h.environment[name].current;
+      const cancelAll = runtime.cancelAll.bind(runtime);
+      runtime.cancelAll = (reason) => { cancelled.push([name, reason]); return cancelAll(reason); };
+    }
+    const operation = scheduleObservationOperation(h);
+    const terminal = watch(h, operation.affinityOutcome);
+    await h.clock.advanceTo(1_000);
+    expectEqual(aborted(candidates(h, "affinity")), [false, false], "observation Affinity requests in flight before Stop");
+    stop(h);
+    expectEqual(cancelled, [...RELATION_RUNTIME_REFS, ...OBSERVATION_RUNTIME_REFS].map((name) => [name, "superseded"]),
+      "Relation runtimes cancelled by Stop");
+    await h.clock.flush();
+    expectEqual([terminal.state, terminal.at, terminal.value?.parent.unavailableReason], ["resolved", 1_000, "operation-id-mismatch"],
+      "observation stage terminal after Stop");
+    expectEqual(aborted(candidates(h, "affinity")), [true, true], "observation Affinity requests after Stop");
+    expectEqual(OBSERVATION_RUNTIME_REFS.slice(0, 2).map((name) => h.environment[name].current.getCurrentOperationId()),
+      [null, null], "current observation Affinity operations after Stop");
+    await h.clock.advanceTo(1_000 + STAGE_MS + 100);
+    expectEqual(h.clock.timers.size, 0, "timers left");
+  } finally { h.restore(); }
+});
+
+// ---- PC6: dispose (application shutdown and unmount) ----
+//
+// The Hook's own dispose statements for the six Relation runtimes, exactly as
+// they stand in the application-shutdown path and in the unmount cleanup, run
+// here against the real runtime instances. A disposed runtime refuses every
+// later schedule; cancelling it as superseded would arm it again.
+const DISPOSE_PATHS = ["application shutdown", "unmount"];
+const relationDisposeStatements = (() => {
+  const byBlock = new Map();
+  const visit = (node) => {
+    if (ts.isExpressionStatement(node) &&
+      /^taskRelation\w+RuntimeRef\.current\?\.cancelAll\("disposed"\)$/.test(node.expression.getText(sourceFile))) {
+      byBlock.set(node.parent, [...(byBlock.get(node.parent) ?? []), node.expression.getText(sourceFile)]);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return [...byBlock.values()];
+})();
+const dispose = (h, path) => vm.runInContext(transpile(relationDisposeStatements[DISPOSE_PATHS.indexOf(path)].join(";\n")),
+  vm.createContext(Object.fromEntries([...RELATION_RUNTIME_REFS, ...OBSERVATION_RUNTIME_REFS].map((name) => [name, h.environment[name]]))));
+
+test("PC6 application shutdown and unmount each dispose the three formal and the three observation Relation runtimes", () => {
+  assert.equal(relationDisposeStatements.length, DISPOSE_PATHS.length, "dispose paths in the Hook");
+  for (const statements of relationDisposeStatements) {
+    assert.deepEqual(statements, [...RELATION_RUNTIME_REFS, ...OBSERVATION_RUNTIME_REFS].map((name) =>
+      `${name}.current?.cancelAll("disposed")`));
+  }
+});
+
+// A formal operation and an observation are both in flight when the runtimes are
+// disposed. The formal operation goes on to its foreground Canonical, which is
+// where it supersedes observation work of the same kind.
+async function runDisposeInFlight({ path, entry, child, crossChecks }) {
+  const h = st183Harness({ crossChecks, child });
+  try {
+    const handle = scheduleEntry(h, entry);
+    const started = {};
+    if (entry === "voice") startVoiceFor(h, handle, logicalQuestionUnit);
+    else started.wait = watch(h, entry === "screen" ? startScreenConsumer(h, handle) : startCorrectionConsumer(h, handle));
+    await h.clock.advanceTo(100);
+    scheduleRelation(h, { unit: observedUnit(), traceId: OBSERVED_TRACE });
+    await h.clock.advanceTo(500);
+    const dispatchedBefore = h.executions.length;
+    dispose(h, path);
+    await h.clock.advanceTo(500 + 3 * STAGE_MS);
+    return { h, started, dispatchedBefore,
+      dispatchedAfter: h.executions.slice(dispatchedBefore).map((execution) =>
+        [execution.request.identity.logicalQuestionUnitId, execution.request.operationKind, tierOf(execution),
+          execution.dispatchedAt - 10_000]),
+      formal: plain({
+        relation: finalRelation(h, entry, started),
+        waitEndedAt: entry === "voice" ? h.advisorCalls.map((call) => call.at) : [started.wait?.state, started.wait?.at],
+        consumer: entry === "voice" ? voiceRelease(h) : started.wait?.value,
+        trace: h.metadata,
+        requests: requestsOf(h, logicalQuestionUnit.id),
+      }) };
+  } catch (error) {
+    h.restore();
+    throw error;
+  }
+}
+
+for (const path of DISPOSE_PATHS) for (const entry of ["voice", "screen", "correction"]) for (const child of [false, true]) {
+  test(`PC6 ${path} with a formal ${entry} operation and an observation in flight, ${child ? "child+parent" : "parent-only"}: no request is dispatched afterwards and no observation instance is armed again`, { concurrency: false }, async () => {
+    const baseline = await runDisposeInFlight({ path, entry, child, crossChecks: false });
+    baseline.h.restore();
+    const run = await runDisposeInFlight({ path, entry, child, crossChecks: true });
+    const { h } = run;
+    try {
+      const expected = expectations();
+      // Both operations really were in flight at the dispose. The observation
+      // adds two requests: with an active child the formal operation already
+      // holds two of the three slots of each provider group.
+      expected.equal([baseline.dispatchedBefore, run.dispatchedBefore], child ? [4, 6] : [2, 4],
+        "physical requests in flight at the dispose, without and with the observation");
+      expected.equal(ofQuestion(h, OBSERVED_UNIT_ID, "affinity").length, 2, "observation Affinity requests in flight");
+      expected.equal(aborted(h.executions.slice(0, run.dispatchedBefore)), Array(run.dispatchedBefore).fill(true),
+        "requests aborted by the dispose");
+      expected.equal(run.dispatchedAfter, [], "physical requests dispatched after the dispose");
+      expected.equal([formalRuntimeOperations(h), observationRuntimeOperations(h)],
+        [[null, null, null], [null, null, null]], "current formal and observation operations after the dispose");
+      // The observation ended on a real terminal for both stages, with nothing started.
+      const observedTrace = h.otherTraces[OBSERVED_TRACE] ?? {};
+      expected.equal([observedTrace.taskRelationParentAffinityDisposition, observedTrace.taskRelationParentAffinityLeaseAuthorized,
+        observedTrace.taskRelationSplitCanonicalDisposition, observedTrace.taskRelationSplitCanonicalLeaseAuthorized],
+      ["operation-id-mismatch", false, "operation-id-mismatch", false], "observation terminals after the dispose");
+      expected.equal(h.clock.timers.size, 0, "timers left");
+      // The formal operation ends exactly as it does with no observation beside it.
+      expected.same(run.formal, baseline.formal, "formal");
+      assert.deepEqual(expected.failures, [], "dispose with an observation in flight");
+    } finally { h.restore(); }
+  });
+}
+
+for (const path of DISPOSE_PATHS) {
+  test(`PC6 after ${path} a formal schedule does not arm the observation instances again: a later observation dispatches nothing`, { concurrency: false }, async () => {
+    const h = st183Harness({ crossChecks: true });
+    try {
+      const expected = expectations();
+      dispose(h, path);
+      scheduleRelation(h, { unit: observedUnit(), traceId: OBSERVED_TRACE });
+      await h.clock.advanceTo(600);
+      expected.equal(h.executions.length, 0, "requests for an observation scheduled after the dispose");
+      // A formal schedule on the disposed runtimes, then a second observation.
+      const handle = scheduleEntry(h, "screen");
+      const wait = watch(h, startScreenConsumer(h, handle));
+      await h.clock.advanceTo(1_200);
+      const second = scheduleObservationOperation(h, { unit: shortUnit({ id: "lqu-observed-2" }), traceId: "trace-observed-2" });
+      const affinity = watch(h, second.affinityOutcome);
+      const canonical = watch(h, second.canonicalOutcome);
+      await h.clock.advanceTo(1_200 + 3 * STAGE_MS);
+      expected.equal([h.executions.length, wait.state], [0, "resolved"], "requests after the dispose and the formal wait");
+      expected.equal([affinity.state, affinity.value?.parent.unavailableReason, canonical.state, canonical.value?.adjudication],
+        ["resolved", "operation-id-mismatch", "resolved", undefined], "second observation terminals");
+      expected.equal([formalRuntimeOperations(h), observationRuntimeOperations(h)],
+        [[null, null, null], [null, null, null]], "current formal and observation operations");
+      expected.equal(h.clock.timers.size, 0, "timers left");
+      assert.deepEqual(expected.failures, [], "observation after dispose");
+    } finally { h.restore(); }
+  });
+}
+
+// ---- PC6 / PC8: the production admission settings ----
+//
+// Every other test in this file builds the coordinator with a zero grace, so a
+// request is dispatched the moment it is admitted. The Hook builds it with the
+// defaults: three slots per provider group and a 450 ms grace before a
+// non-critical lane (evaluation, background) is dispatched. These two tests
+// install that coordinator.
+function installProductionAdmission(h) {
+  const admission = new admissionModule.RuntimeInferenceProviderAdmissionCoordinator();
+  admission.configureProviderGroups({ fastFingerprint: "fast", intelligentFingerprint: "intelligent" });
+  h.environment.runtimeInferenceProviderAdmissionRef = { current: admission };
+  return admission;
+}
+const dispatched = (h) => h.executions.map((execution) => [execution.request.identity.logicalQuestionUnitId,
+  execution.request.operationKind, tierOf(execution), execution.dispatchedAt - 10_000]);
+
+test("PC6 admission grace: an observation admitted before the switch went off still sends its Affinity requests when the grace ends, and no Canonical follows", { concurrency: false }, async () => {
+  const h = st183Harness({ crossChecks: true });
+  try {
+    const expected = expectations();
+    const admission = installProductionAdmission(h);
+    const toggle = crossChecksSwitch(h);
+    const operation = scheduleObservationOperation(h);
+    const affinity = watch(h, operation.affinityOutcome);
+    const canonical = watch(h, operation.canonicalOutcome);
+    await h.clock.advanceTo(100);
+    // The operation has started; its two physical requests wait out the grace.
+    expected.equal([h.executions.length, admission.readSnapshot("fast").queuedCount, admission.readSnapshot("intelligent").queuedCount,
+      h.metadata.taskRelationParentAffinityObservationTrigger, typeof h.metadata.taskRelationParentAffinityStartedAt],
+    [0, 1, 1, "runtime-cross-checks", "number"], "requests dispatched, requests queued and the operation's start-time record at 100 ms");
+    toggle.set(false);
+    await h.clock.advanceTo(449);
+    expected.equal(h.executions.length, 0, "requests dispatched before the grace ends");
+    // Switching off is not a canceller: what was admitted goes out, 350 ms after the switch-off.
+    await h.clock.advanceTo(450);
+    expected.equal(dispatched(h), [["lqu-current", "task-relation-parent-affinity", "intelligent", 450],
+      ["lqu-current", "task-relation-parent-affinity", "fast", 450]], "requests dispatched when the grace ends");
+    completeCandidate(candidate(h, "affinity", "intelligent"), { rawOutput: PARENT_INDEPENDENT });
+    await h.clock.advanceTo(500);
+    expected.equal([affinity.state, affinity.value?.parent.adjudication?.decision, h.metadata.taskRelationParentAffinityDisposition,
+      h.metadata.taskRelationParentAffinityObservationTrigger], ["resolved", "independent", "shadow-observed", "runtime-cross-checks"],
+    "Affinity terminal under its start-time configuration");
+    // The follow-up Canonical is a new request and the switch is off.
+    expected.equal([canonical.state, canonical.value?.unavailableReason, h.metadata.taskRelationSplitCanonicalDisposition],
+      ["resolved", "runtime-cross-checks-off", "runtime-cross-checks-off"], "Canonical terminal");
+    await h.clock.advanceTo(3 * STAGE_MS);
+    expected.equal([candidates(h, "canonical").length, h.executions.length, h.clock.timers.size], [0, 2, 0],
+      "Canonical requests, all physical requests and timers left");
+    assert.deepEqual(expected.failures, [], "switch-off inside the admission grace");
+  } finally { h.restore(); }
+});
+
+// A measurement of existing coordinator behaviour, not a contract this slice
+// introduces: the coordinator has no preemption, so an admitted evaluation-lane
+// request holds its slot until it completes or reaches its 4 s stage deadline.
+// The first scenario is the worst case found for Relation observations: an
+// active child and parent, two short no-window questions 600 ms apart, and a
+// provider that does not answer. Other critical-lane work cannot free those
+// slots. A formal Relation supersedes observation Affinity of its own kind, so
+// observation Affinity does not delay it. An observation Canonical is not
+// superseded until the formal Canonical starts: it keeps its slot through the
+// formal Affinity stage. The second scenario measures that.
+async function measureContention({ crossChecks, arrival }) {
+  const h = st183Harness({ crossChecks, child: true });
+  try {
+    const admission = installProductionAdmission(h);
+    scheduleRelation(h, { unit: shortUnit({ id: "lqu-short-1" }), traceId: "trace-short-1" });
+    await h.clock.advanceTo(600);
+    scheduleRelation(h, { unit: shortUnit({ id: "lqu-short-2" }), traceId: "trace-short-2" });
+    await h.clock.advanceTo(1_200);
+    const slotsAt1200 = ["fast", "intelligent"].map((tier) => admission.readSnapshot(tier).activeCount);
+    const observationRequests = dispatched(h);
+    const receipts = {};
+    if (arrival === "other critical work") {
+      // A critical-lane request of another operation, for example Question Type.
+      for (const providerTier of ["fast", "intelligent"]) {
+        void admission.run({ operationId: `critical-${providerTier}`, lane: "critical", providerTier,
+          signal: new AbortController().signal, execute: () => new Promise(() => {}),
+          onAdmitted: (receipt) => { receipts[providerTier] = [receipt.waitMs, receipt.admittedAt - 10_000]; } })
+          .catch(() => undefined);
+      }
+    } else {
+      const handle = scheduleEntry(h, "screen");
+      watch(h, startScreenConsumer(h, handle));
+    }
+    await h.clock.advanceTo(1_200 + 3 * STAGE_MS);
+    return plain({ slotsAt1200, observationRequests, receipts,
+      formalAffinityDispatchedAt: ofQuestion(h, logicalQuestionUnit.id, "affinity").map((execution) => execution.dispatchedAt - 10_000) });
+  } finally { h.restore(); }
+}
+
+// One short question is observed: its Affinity goes out when the grace ends at
+// 450 ms and answers at 500 ms, and its automatic Canonical goes out at 950 ms
+// and does not answer. A formal Relation with an active child and parent
+// arrives at 1000 ms, optionally with one other critical Intelligent request
+// (for example another question's Type) in flight for 1.5 s.
+async function measureFormalBehindObservationCanonical({ crossChecks, otherCritical }) {
+  const h = st183Harness({ crossChecks, child: true });
+  try {
+    const admission = installProductionAdmission(h);
+    scheduleRelation(h, { unit: observedUnit(), traceId: OBSERVED_TRACE });
+    h.clock.setTimeout(() => {
+      for (const execution of ofQuestion(h, OBSERVED_UNIT_ID, "affinity", "intelligent")) {
+        completeCandidate(execution, { rawOutput: execution.request.affinityKind === "child" ? FAST_CHILD_UNRELATED : PARENT_RELATED });
+      }
+    }, 500);
+    await h.clock.advanceTo(1_000);
+    const slotsAt1000 = ["fast", "intelligent"].map((tier) => admission.readSnapshot(tier).activeCount);
+    const observationInFlight = h.executions.filter((execution) => !execution.signal.aborted).map((execution) =>
+      [execution.request.operationKind, tierOf(execution), execution.dispatchedAt - 10_000]);
+    if (otherCritical) {
+      void admission.run({ operationId: "other-critical", lane: "critical", providerTier: "intelligent",
+        signal: new AbortController().signal, execute: () => new Promise((resolve) => h.clock.setTimeout(resolve, 1_500)) });
+    }
+    const handle = scheduleEntry(h, "screen");
+    watch(h, startScreenConsumer(h, handle));
+    await h.clock.advanceTo(1_000 + 2 * STAGE_MS + 200);
+    return plain({ slotsAt1000, observationInFlight,
+      // Kind, tier, dispatch time and the request's own budget, in dispatch order.
+      formalAffinity: ofQuestion(h, logicalQuestionUnit.id, "affinity").map((execution) =>
+        [execution.request.operationKind, tierOf(execution), execution.dispatchedAt - 10_000, execution.timeoutMs]) });
+  } finally { h.restore(); }
+}
+
+test("PC8 contention measured at the production admission settings: unanswered Relation observations can hold every slot and other critical work then waits for the stage deadline; a formal Relation is not delayed by observation Affinity, but can wait behind an observation Canonical when another critical request holds a slot, until the next slot frees", { concurrency: false }, async () => {
+  const expected = expectations();
+  const off = await measureContention({ crossChecks: false, arrival: "other critical work" });
+  expected.equal(off, { slotsAt1200: [0, 0], observationRequests: [], receipts: { fast: [0, 1_200], intelligent: [0, 1_200] },
+    formalAffinityDispatchedAt: [] }, "Cross-checks off");
+  const on = await measureContention({ crossChecks: true, arrival: "other critical work" });
+  // The first question's Affinity goes out when the grace ends and is superseded by
+  // the second question at 600 ms. From 1050 ms each provider group carries the
+  // second question's two Affinity requests and the first question's automatic Canonical.
+  expected.equal(on.observationRequests, [
+    ["lqu-short-1", "task-relation-child-affinity", 450], ["lqu-short-1", "task-relation-parent-affinity", 450],
+    ["lqu-short-2", "task-relation-child-affinity", 1_050], ["lqu-short-2", "task-relation-parent-affinity", 1_050],
+    ["lqu-short-1", "task-relation-canonical-shadow", 1_050],
+  ].flatMap(([unit, kind, at]) => ["intelligent", "fast"].map((tier) => [unit, kind, tier, at])),
+  "observation requests dispatched by 1200 ms");
+  expected.equal(on.slotsAt1200, [3, 3], "slots held at 1200 ms, Fast and Intelligent group");
+  // Admitted at 4600 ms, when the requests started at 600 ms reach their 4 s stage deadline.
+  expected.equal(on.receipts, { fast: [3_400, 4_600], intelligent: [3_400, 4_600] },
+    "critical-lane wait and admission time behind the observations");
+  // A formal Relation arriving at the same moment supersedes the observation Affinity of its own kind and is
+  // dispatched at once: observation Affinity does not delay it.
+  const formal = await measureContention({ crossChecks: true, arrival: "formal relation" });
+  expected.equal([formal.slotsAt1200, formal.formalAffinityDispatchedAt], [[3, 3], [1_200, 1_200, 1_200, 1_200]],
+    "formal Affinity dispatch behind the same observations");
+  // An observation Canonical is different: nothing supersedes it during the formal Affinity stage.
+  const AFFINITY_AT_ONCE = [["task-relation-child-affinity", "intelligent", 1_000, STAGE_MS],
+    ["task-relation-child-affinity", "fast", 1_000, STAGE_MS], ["task-relation-parent-affinity", "intelligent", 1_000, STAGE_MS],
+    ["task-relation-parent-affinity", "fast", 1_000, STAGE_MS]];
+  const CANONICAL_IN_FLIGHT = [["task-relation-canonical-shadow", "intelligent", 950], ["task-relation-canonical-shadow", "fast", 950]];
+  // With Cross-checks off, one other critical request leaves two Intelligent slots: nothing waits.
+  expected.equal(await measureFormalBehindObservationCanonical({ crossChecks: false, otherCritical: true }),
+    { slotsAt1000: [0, 0], observationInFlight: [], formalAffinity: AFFINITY_AT_ONCE }, "Cross-checks off with one other critical request");
+  // With the observation Canonical alone holding a slot, two are left: nothing waits.
+  expected.equal(await measureFormalBehindObservationCanonical({ crossChecks: true, otherCritical: false }),
+    { slotsAt1000: [1, 1], observationInFlight: CANONICAL_IN_FLIGHT, formalAffinity: AFFINITY_AT_ONCE },
+    "an observation Canonical in flight and no other critical request");
+  // With both, the Intelligent group is full after the formal child Affinity: the formal parent Affinity's
+  // Intelligent candidate is dispatched at 2500 ms, when the other critical request ends and frees a slot,
+  // and has 2500 ms of its 4 s stage left. Its Fast candidate was dispatched at once.
+  expected.equal(await measureFormalBehindObservationCanonical({ crossChecks: true, otherCritical: true }),
+    { slotsAt1000: [1, 1], observationInFlight: CANONICAL_IN_FLIGHT,
+      formalAffinity: [AFFINITY_AT_ONCE[0], AFFINITY_AT_ONCE[1], AFFINITY_AT_ONCE[3],
+        ["task-relation-parent-affinity", "intelligent", 2_500, STAGE_MS - 1_500]] },
+    "an observation Canonical in flight and one other critical request");
+  assert.deepEqual(expected.failures, [], "contention measurement");
+});
+
+// ---- PC3: no parent, an invalid source, the Type wait and the other entries ----
+
+for (const debug of [false, true]) {
+  test(`PC3 voice no-window debug=${debug}: with no parent Cross-checks starts no request and the first-question release is unchanged`, { concurrency: false }, async () => {
+    const baseline = await runNoWindowVoice({ debug, parent: false });
+    baseline.h.restore();
+    const run = await runNoWindowVoice({ debug, parent: false, crossChecks: true, observed: [20, PARENT_INDEPENDENT] });
+    try {
+      const expected = expectations();
+      expected.equal([run.h.executions.length, baseline.h.executions.length], [0, 0], "physical requests");
+      expected.equal([String(run.handle.operationId).startsWith("task-relation-local:"), run.handle.operationId],
+        [true, baseline.handle.operationId], "local operation id");
+      expected.equal(run.release.releasedAt, [50], "released at");
+      expected.same(run.release, baseline.release, "released");
+      assert.deepEqual(expected.failures, [], "no-parent release");
+    } finally { run.h.restore(); }
+  });
+
+  test(`PC3 voice no-window debug=${debug}: a source that became invalid stays refused, whatever the observation returned`, { concurrency: false }, async () => {
+    // The question's own source lease goes stale at 30 ms, before the Type window releases at 50 ms.
+    const staleSource = () => {
+      let stale = false;
+      return { source: () => (stale ? { authorized: false, reason: "logical-question-revision-changed", mismatchedKey: "source" }
+        : sourceCurrent()), during: (h) => { h.clock.setTimeout(() => { stale = true; }, 30); } };
+    };
+    const baseline = await runNoWindowVoice({ debug, ...staleSource() });
+    baseline.h.restore();
+    const run = await runNoWindowVoice({ debug, crossChecks: true, observed: [20, PARENT_INDEPENDENT], ...staleSource() });
+    try {
+      const expected = expectations();
+      expected.equal([run.h.metadata.taskRelationParentAffinityDecision, run.h.metadata.taskRelationParentAffinityLeaseAuthorized],
+        ["independent", true], "the observation had already returned independent");
+      expected.equal([run.release.releasedAt, run.release.traceFinished.map((finish) => finish[0])], [[], ["cancelled"]],
+        "nothing released and the trace cancelled");
+      expected.same(run.release, baseline.release, "released");
+      assert.deepEqual(expected.failures, [], "invalid source");
+    } finally { run.h.restore(); }
+  });
+}
+
+// The Type wait of a no-window question starts when its consumer starts. A
+// product handle that carried the observation's stage deadline would measure it
+// from the observation schedule instead and close it early.
+for (const [name, typeAt, releasedAt, disposition] of [
+  ["Type settles 1700 ms into its 2 s wait", 1_700, 2_200, "type-settled-and-released-before-deadline"],
+  ["Type never settles", undefined, 2_500, "deadline-expired-finalized"],
+]) {
+  test(`PC3 voice no-window: with the consumer starting 500 ms after scheduling, ${name} and the full Type wait still applies under Cross-checks`, { concurrency: false }, async () => {
+    const options = { consumerStartsAt: 500, typeAt, typeOutcome: typeAt === undefined ? () => new Promise(() => {}) : undefined };
+    const baseline = await runNoWindowVoice(options);
+    baseline.h.restore();
+    const run = await runNoWindowVoice({ ...options, crossChecks: true, observed: [20, PARENT_INDEPENDENT] });
+    try {
+      const expected = expectations();
+      expected.equal([run.release.releasedAt, run.h.metadata.questionTypeAdjudicationWaitDisposition,
+        run.h.metadata.orderedSettlementForegroundDeadlineAt], [[releasedAt], disposition, 10_000 + 2_500], "Type wait");
+      expected.equal(run.release.settlement?.relation, "followup-parent", "released relation");
+      expected.same(run.release, baseline.release, "released");
+      assert.deepEqual(expected.failures, [], "Type wait under an observation");
+    } finally { run.h.restore(); }
+  });
+}
+
+// Screen and Correction never read an Affinity without a release window. What
+// they do hold is the handle, so it is compared whole, including what its
+// authorizer answers.
+const handleShape = (handle) => plain({ ...handle, authorizeOperation: undefined, authorization: handle.authorizeOperation(),
+  functionFields: Object.entries(handle).filter(([, value]) => typeof value === "function").map(([key]) => key).sort(),
+  promiseFields: Object.entries(handle).filter(([, value]) => value instanceof Promise).map(([key]) => key).sort() });
+for (const [entry, options] of [["voice", {}], ["screen", { sourceKind: "screen" }], ["correction", { manualCorrectionOwned: true }]]) {
+  for (const debug of [false, true]) {
+    test(`PC3 ${entry} no-window debug=${debug}: the product handle under Cross-checks equals the handle without the observation`, { concurrency: false }, async () => {
+      const shape = async (crossChecks) => {
+        const h = st183Harness({ debug, crossChecks });
+        try {
+          const handle = scheduleRelation(h, { unit: shortUnit(), ...options });
+          await h.clock.advanceTo(100);
+          return { shape: handleShape(handle), requests: h.executions.length };
+        } finally { h.restore(); }
+      };
+      const off = await shape(false);
+      const on = await shape(true);
+      expectEqual([off.requests, on.requests], [0, 2], "observation Affinity physical requests");
+      expectEqual(on.shape.functionFields, ["authorizeOperation"], "functions on the handle");
+      expectEqual([on.shape.promiseFields, on.shape.operationId, on.shape.affinityDeadlineAt, on.shape.releaseWindowRequested],
+        [[], undefined, undefined, false], "model fields on the handle");
+      assert.deepEqual(on.shape, off.shape, "handle with the observation admitted");
+    });
+  }
+}
+
+test("PC3 no Hook consumer passes an Affinity to the settlement coordinator or reads one from a relation handle", () => {
+  const coordinatorCalls = [];
+  const visit = (node) => {
+    if (ts.isCallExpression(node) && node.expression.getText(sourceFile) === "coordinateOrderedSettlement") coordinatorCalls.push(node);
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  assert.equal(coordinatorCalls.length, 5, "settlement coordinator call sites in the Hook");
+  for (const call of coordinatorCalls) {
+    const argument = call.arguments[0];
+    assert.ok(ts.isObjectLiteralExpression(argument));
+    assert.deepEqual(argument.properties.map((property) => property.name?.getText(sourceFile))
+      .filter((name) => /Affinity/.test(String(name))), [], "Affinity passed to the settlement coordinator");
+  }
+  // The executor builds these two for the formal Ordered operation; no consumer in the Hook calls them.
+  assert.doesNotMatch(hookSource, /[Hh]andle\??\.(readAffinityOutcome|revalidateAffinityOutcome)\??\.?\(/);
+  const voiceConsumer = callbackSources[callbackNames.indexOf("scheduleAdvisorAfterQuestionTypeWindow")];
+  assert.doesNotMatch(voiceConsumer, /readAffinityOutcome|revalidateAffinityOutcome|filterTaskRelationAffinityOutcomeAtCutoff/);
+});
+
+// ---- PC3: Screen and Correction through their own settlement regions ----
+//
+// The Voice consumer above is a whole Hook callback. Screen and Correction keep
+// their Relation settlement inline in a larger entry, so the region itself is
+// extracted by AST and run: for Screen, from the deterministic proposal through
+// the scheduling call and the formal release block to the no-window settlement
+// block of captureScreenContext; for Correction, from the settled Type through
+// the Ordered operation and the settlement coordinator to the resettlement call
+// of submitSpeechCorrection. The real settlement, coordinator, provenance and
+// resettlement functions run. What the entry computed before the region (the
+// Screen source and its Type, the Correction's Type outcome) is supplied as
+// locals. Each run is compared with the same run with Cross-checks off.
+
+const settlementModule = await compiledMeetingModule("current-question-settlement");
+const coordinatorModule = await compiledMeetingModule("ordered-settlement-coordinator");
+const provenanceModule = await compiledMeetingModule("relation-decision-provenance");
+const correctionModule = await compiledMeetingModule("correction-owned-resettlement");
+const typeModule = await compiledMeetingModule("question-type-adjudication");
+const taxonomyModule = await compiledMeetingModule("task-taxonomy");
+
+// The statements of one block from the declaration of `firstName` to the first
+// later statement `isLast` accepts, as written in the Hook.
+function regionSource(declaration, firstName, isLast, what) {
+  let found;
+  const visit = (node) => {
+    if (!found && ts.isBlock(node)) {
+      const start = node.statements.findIndex((statement) => ts.isVariableStatement(statement) &&
+        statement.declarationList.declarations.some((candidate) => candidate.name.getText(sourceFile) === firstName));
+      if (start >= 0) {
+        const end = node.statements.findIndex((statement, index) => index > start && isLast(statement));
+        if (end >= 0) found = node.statements.slice(start, end + 1).map((statement) => statement.getText(sourceFile)).join("\n");
+      }
+    }
+    if (!found) ts.forEachChild(node, visit);
+  };
+  visit(declaration);
+  assert.ok(found, what);
+  return found;
+}
+const screenRegionSource = regionSource(captureScreenDeclaration, "screenDeterministicSettlementProposal",
+  (statement) => ts.isIfStatement(statement) &&
+    statement.expression.getText(sourceFile).includes("!screenCurrentQuestionSettlement?.relationMutationAuthorized"),
+  "Screen relation region");
+const correctionRegionSource = regionSource(termCorrectionDeclaration, "correctionTypeResolution",
+  (statement) => ts.isExpressionStatement(statement) && statement.getText(sourceFile).startsWith("correctionOwnedResettlement") &&
+    statement.getText(sourceFile).includes("resolveCorrectionOwnedTypeResettlement"),
+  "Correction relation region");
+
+// The Screen region schedules its own Relation operation through the Hook's
+// scheduleTaskRelationAdjudication and settles the current question.
+function runScreenRegion(h, { unit, complete }) {
+  const state = h.environment.contextManagerRef.current.getState();
+  const screenCurrentQuestion = imports.createProvisionalCurrentQuestion({ logicalQuestionUnit: unit, sourceKind: "screen",
+    sourceObservationIds: ["screen-observation"] });
+  const context = vm.createContext({
+    ...h.environment,
+    settleCurrentQuestion: settlementModule.settleCurrentQuestion,
+    coordinateOrderedSettlement: coordinatorModule.coordinateOrderedSettlement,
+    formatOrderedSettlementCoordinatorForTrace: coordinatorModule.formatOrderedSettlementCoordinatorForTrace,
+    createOrderedRelationProvenance: provenanceModule.createOrderedRelationProvenance,
+    projectOrderedTaskRelationAdjudication: splitModule.projectOrderedTaskRelationAdjudication,
+    formatOrderedTaskRelationResolutionForTrace: splitModule.formatOrderedTaskRelationResolutionForTrace,
+    formatFirstBatchRelationReleaseForTrace: splitModule.formatFirstBatchRelationReleaseForTrace,
+    createTaskRelationSettlementProposal: relationModule.createTaskRelationSettlementProposal,
+    screenRelationQuestion: unit.normalizedText,
+    screenRelationLogicalQuestionUnit: unit,
+    screenCurrentQuestion,
+    screenMemoryQuestionType: "coding",
+    screenDirectRelationAuthority: false,
+    localScreenTaskRelation: "unknown",
+    screenTypeConfidence: 0.95,
+    screenSectionHintConsumption: { disposition: "none" },
+    screenTaskRelationDecision: { confidence: 0.5 },
+    screenTypeEvidenceAuthorized: true,
+    localScreenRelationEvidenceAuthorized: false,
+    preflightContextState: state,
+    screenTypeAuthoritySource: "screen-preflight",
+    screenQuestionComplete: complete,
+    trace: { id: "trace" },
+    inferQuestionTypeDecisionFromText: () => ({ type: "coding" }),
+    screenPreparationRuntime: {},
+    screenSourcePacket: { visualEvidence: {} },
+    toTaskRelationOperationAuthorization: (decision, mismatchedKey = "source") => ({ authorized: decision.authorized,
+      reason: decision.reason, mismatchedKey: decision.authorized ? undefined : mismatchedKey }),
+    readScreenAuthorization: () => ({ authorized: true, reason: "source-operation-current" }),
+    rejectStaleScreenOperation: () => false,
+    SCREEN_ORDERED_RELATION_FOREGROUND_BUDGET_MS: splitModule.SCREEN_ORDERED_RELATION_FOREGROUND_BUDGET_MS,
+  });
+  return vm.runInContext(transpile(`(async () => {
+    let screenCurrentQuestionSettlement; let screenTerminalError; let returnedEarly = true;
+    const body = async () => { ${screenRegionSource}
+      returnedEarly = false; return { handle: taskRelationAdjudicationHandle, screenCoordinatorDecision,
+        screenFirstBatchRelationRelease, waitDisposition: screenRelationSettlementWaitDisposition }; };
+    const result = await body();
+    return { ...(result ?? {}), returnedEarly, screenCurrentQuestionSettlement, screenTerminalError };
+  })()`), context);
+}
+
+// The Correction region consumes the handle its entry scheduled before the
+// Correction-owned Type adjudication. `typeOutcome` is that adjudication's result.
+const CORRECTION_TYPE_OUTCOME = { settlement: { questionType: "coding", confidence: 0.95, typeMutationAuthorized: true },
+  enforcement: { authorized: true }, candidate: { questionType: "coding", confidence: 0.95 }, operationLeaseAuthorized: true,
+  disposition: "completed", providerTimedOut: false };
+function runCorrectionRegion(h, { unit, handle, typeOutcome = CORRECTION_TYPE_OUTCOME }) {
+  const state = h.environment.contextManagerRef.current.getState();
+  const resettlementInputs = [];
+  const coordinatorDecisions = [];
+  const context = vm.createContext({
+    ...h.environment,
+    Error,
+    // The region keeps its coordinator decision in a local; it is read here as it is made.
+    coordinateOrderedSettlement: (input) => {
+      const decision = coordinatorModule.coordinateOrderedSettlement(input);
+      coordinatorDecisions.push(decision);
+      return decision;
+    },
+    formatOrderedSettlementCoordinatorForTrace: coordinatorModule.formatOrderedSettlementCoordinatorForTrace,
+    createOrderedRelationProvenance: provenanceModule.createOrderedRelationProvenance,
+    decideOrderedVoiceQuestionTypeResolution: typeModule.decideOrderedVoiceQuestionTypeResolution,
+    normalizeCanonicalQuestionType: taxonomyModule.normalizeCanonicalQuestionType,
+    resolveCorrectionOwnedTypeResettlement: (input) => {
+      resettlementInputs.push(input);
+      return correctionModule.resolveCorrectionOwnedTypeResettlement(input);
+    },
+    CORRECTION_ORDERED_RELATION_FOREGROUND_BUDGET_MS: splitModule.CORRECTION_ORDERED_RELATION_FOREGROUND_BUDGET_MS,
+    outcome: typeOutcome,
+    latestContext: state,
+    latestParent: state.activeMeetingTask?.parent,
+    latestParentType: "coding",
+    revisionStableTopologyBinding: undefined,
+    correctionRelationHandle: handle,
+    repairTrace: { id: "trace" },
+    correctionSourceKind: "voice",
+    application: { logicalQuestionUnit: unit },
+    targetSourceObservationIds: [],
+    correctionTargetOwnsActiveParent: false,
+    correctionCurrentQuestion: handle.currentQuestion,
+  });
+  return vm.runInContext(transpile(`(async () => {
+    let correctionOwnedResettlement; let correctionRelationTerminal; let error;
+    try { ${correctionRegionSource} } catch (caught) { error = String(caught && caught.message || caught); }
+    return { correctionOwnedResettlement, correctionRelationTerminal, error };
+  })()`), context).then((value) => ({ ...value, resettlementInputs, coordinatorDecisions }));
+}
+
+// What the question's observation, or a neighbouring question's, answers, and when.
+// No-window variants: this very question is observed and answers independent and
+// new-parent, the opposite of the null hypothesis that settles it. Formal
+// variants: a neighbouring short question is observed while the formal window is
+// open and answers related and follow-up, the opposite of the formal independent.
+function scriptRegionObservation(h, { formal, unit }) {
+  const complete = (unitId, stage, rawOutput, at) => h.clock.setTimeout(() => {
+    for (const execution of ofQuestion(h, unitId, stage, "intelligent")) {
+      if (!execution.signal.aborted) completeCandidate(execution, { rawOutput });
+    }
+  }, at);
+  if (formal) {
+    h.clock.setTimeout(() => { scheduleRelation(h, { unit: observedUnit(), traceId: OBSERVED_TRACE }); }, 100);
+    complete(OBSERVED_UNIT_ID, "affinity", PARENT_RELATED, 200);
+    complete(OBSERVED_UNIT_ID, "canonical", canonicalOutput("followup-parent"), 250);
+    complete(unit.id, "affinity", PARENT_INDEPENDENT, FORMAL_AFFINITY_AT);
+  } else {
+    complete(unit.id, "affinity", PARENT_INDEPENDENT, 20);
+    complete(unit.id, "canonical", canonicalOutput("new-parent"), 40);
+  }
+}
+// The observation's own record: on the question's trace when the question itself
+// is observed, on the neighbour's trace otherwise.
+const regionObservation = (h, { formal, unit }) => {
+  const trace = (formal ? h.otherTraces[OBSERVED_TRACE] : h.metadata) ?? {};
+  const unitId = formal ? OBSERVED_UNIT_ID : unit.id;
+  return plain({ requests: [ofQuestion(h, unitId, "affinity").length, ofQuestion(h, unitId, "canonical").length],
+    decision: trace.taskRelationParentAffinityDecision ?? null, canonicalRelation: trace.taskRelationSplitCanonicalRelation ?? null,
+    trigger: trace.taskRelationParentAffinityObservationTrigger ?? null });
+};
+// A formal question's own trace is compared whole. A no-window question that is
+// itself observed shares its trace with the observation, so the Trace-only
+// observation fields are set aside there.
+const regionTrace = (h, formal) => (formal ? h.metadata : formalTrace(h.metadata));
+const OBSERVED = { noWindow: { requests: [2, 2], decision: "independent", canonicalRelation: "new-parent", trigger: "runtime-cross-checks" },
+  neighbour: { requests: [2, 2], decision: "related", canonicalRelation: "followup-parent", trigger: "runtime-cross-checks" },
+  none: { requests: [0, 0], decision: null, canonicalRelation: null, trigger: null } };
+
+async function runScreenEntryRegion({ crossChecks, variant }) {
+  const h = st183Harness({ crossChecks });
+  try {
+    if (variant === "manual-correction-active") {
+      h.environment.manualCorrectionOperationCoordinatorRef.current.getActiveOperationId = () => "manual-correction-op";
+    }
+    const formal = variant === "formal";
+    const unit = variant === "short" ? shortUnit() : logicalQuestionUnit;
+    scriptRegionObservation(h, { formal, unit });
+    const seen = watch(h, runScreenRegion(h, { unit, complete: variant !== "short" }));
+    await h.clock.advanceTo(FORMAL_AFFINITY_AT + 2 * STAGE_MS + 300);
+    if (seen.state === "rejected") throw seen.error;
+    const value = seen.value ?? {};
+    return plain({
+      observation: regionObservation(h, { formal, unit }),
+      ownRequests: requestsOf(h, unit.id), timersLeft: h.clock.timers.size,
+      // Everything the region produced for the formal path.
+      region: { state: seen.state, endedAt: seen.at, returnedEarly: value.returnedEarly,
+        settlement: value.screenCurrentQuestionSettlement, coordinator: value.screenCoordinatorDecision,
+        firstBatch: value.screenFirstBatchRelationRelease, waitDisposition: value.waitDisposition,
+        terminalError: value.screenTerminalError, handle: value.handle && handleShape(value.handle),
+        operationIds: { handle: value.handle?.operationId, settlement: value.screenCurrentQuestionSettlement?.operationId,
+          provenance: value.screenCurrentQuestionSettlement?.orderedRelationProvenance?.operationId },
+        trace: regionTrace(h, formal) },
+    });
+  } finally { h.restore(); }
+}
+
+for (const [variant, name] of [
+  ["short", "a short question with no release window"],
+  ["manual-correction-active", "a complete question with no release window because a manual correction is active"],
+  ["formal", "a formal question with a neighbouring observation"],
+]) {
+  test(`PC3 screen settlement region, ${name}: the settlement, the coordinator decision and the operation ids equal the Cross-checks-off run`, { concurrency: false }, async () => {
+    const off = await runScreenEntryRegion({ crossChecks: false, variant });
+    const on = await runScreenEntryRegion({ crossChecks: true, variant });
+    const formal = variant === "formal";
+    const expected = expectations();
+    // The observation really ran, with the opposite answers; with the switch off nothing was observed.
+    expected.equal([off.observation, on.observation], [OBSERVED.none, formal ? OBSERVED.neighbour : OBSERVED.noWindow],
+      "observation requests and answers, Cross-checks off and on");
+    const { region } = on;
+    expected.equal([region.state, region.returnedEarly, region.terminalError, region.handle?.releaseWindowRequested],
+      ["resolved", false, undefined, formal], "region ran to its end");
+    if (formal) {
+      // The formal independent Affinity decides; Canonical never answers.
+      expected.equal([region.settlement?.relation, region.coordinator?.relation.stage, region.coordinator?.relation.reason,
+        region.trace.orderedSettlementCoordinatorRelationStage, region.waitDisposition, on.ownRequests.length],
+      ["new-parent", "runtime-matrix", "same-type-independent-new-parent", "runtime-matrix", "settled-and-released-before-deadline", 4],
+      "formal settlement");
+      expected.equal([String(region.operationIds.handle).startsWith("task-relation-ordered:"),
+        region.operationIds.settlement === region.operationIds.handle, region.operationIds.provenance === region.operationIds.handle],
+      [true, true, true], "the formal operation's own id on the handle, the settlement and the provenance");
+    } else {
+      // The null hypothesis settles it at once; the observation's own requests are the only ones.
+      expected.equal([region.endedAt, region.settlement?.relation, region.coordinator?.relation.stage,
+        region.trace.orderedSettlementCoordinatorRelationStage, region.waitDisposition],
+      [0, "followup-parent", NULL_HYPOTHESIS, NULL_HYPOTHESIS, "not-awaited"], "no-window settlement");
+      // No observation operation id reaches the handle, the settlement or the provenance.
+      expected.equal(region.operationIds, { handle: undefined, settlement: `screen-coordinator:${logicalQuestionUnit.id}:1`,
+        provenance: undefined }, "operation ids");
+      expected.equal([region.handle?.functionFields, region.handle?.promiseFields], [["authorizeOperation"], []],
+        "model fields on the handle");
+    }
+    expected.equal([off.timersLeft, on.timersLeft], [0, 0], "timers left");
+    expected.same(on.region, off.region, "region");
+    assert.deepEqual(expected.failures, [], "observation changed the Screen settlement");
+  });
+}
+
+// The Correction-owned Type adjudication ends 600 ms after the correction was
+// submitted; the region starts then, with the Relation handle scheduled at 0.
+const CORRECTION_REGION_STARTS_AT = 600;
+async function runCorrectionEntryRegion({ crossChecks, variant }) {
+  const h = st183Harness({ crossChecks });
+  try {
+    const formal = variant === "formal";
+    const unit = formal ? logicalQuestionUnit : shortUnit();
+    h.environment.logicalQuestionUnitRef.current = unit;
+    const handle = scheduleRelation(h, { unit, manualCorrectionOwned: true });
+    scriptRegionObservation(h, { formal, unit });
+    const started = {};
+    h.clock.setTimeout(() => { started.wait = watch(h, runCorrectionRegion(h, { unit, handle })); }, CORRECTION_REGION_STARTS_AT);
+    await h.clock.advanceTo(CORRECTION_REGION_STARTS_AT + 2 * STAGE_MS + 300);
+    if (started.wait?.state === "rejected") throw started.wait.error;
+    const value = started.wait?.value ?? {};
+    return plain({
+      observation: regionObservation(h, { formal, unit }),
+      ownRequests: requestsOf(h, unit.id), timersLeft: h.clock.timers.size,
+      region: { state: started.wait?.state, endedAt: started.wait?.at, error: value.error, terminal: value.correctionRelationTerminal,
+        resettlement: value.correctionOwnedResettlement, resettlementInputs: value.resettlementInputs,
+        coordinator: value.coordinatorDecisions, handle: handleShape(handle),
+        operationIds: { handle: handle.operationId, provenance: value.resettlementInputs?.[0]?.orderedRelationProvenance?.operationId,
+          settlementProvenance: value.correctionOwnedResettlement?.settlement?.orderedRelationProvenance?.operationId,
+          trace: h.metadata.correctionRelationOperationId },
+        trace: regionTrace(h, formal) },
+    });
+  } finally { h.restore(); }
+}
+
+for (const [variant, name] of [
+  ["short", "a short question with no release window"],
+  ["formal", "a formal question with a neighbouring observation"],
+]) {
+  test(`PC3 correction settlement region, ${name}: the resettlement, the coordinator decision and the operation ids equal the Cross-checks-off run`, { concurrency: false }, async () => {
+    const off = await runCorrectionEntryRegion({ crossChecks: false, variant });
+    const on = await runCorrectionEntryRegion({ crossChecks: true, variant });
+    const formal = variant === "formal";
+    const expected = expectations();
+    expected.equal([off.observation, on.observation], [OBSERVED.none, formal ? OBSERVED.neighbour : OBSERVED.noWindow],
+      "observation requests and answers, Cross-checks off and on");
+    const { region } = on;
+    const input = region.resettlementInputs?.[0];
+    const coordinator = region.coordinator?.[0];
+    expected.equal([region.state, region.error, region.terminal, region.resettlementInputs?.length, region.coordinator?.length,
+      region.handle.releaseWindowRequested], ["resolved", undefined, undefined, 1, 1, formal], "region ran to its resettlement call");
+    if (formal) {
+      expected.equal([input?.orderedRelation, input?.orderedRelationReason, region.resettlement?.relation,
+        coordinator?.relation.stage, coordinator?.relation.reason, region.trace.orderedSettlementCoordinatorRelationStage,
+        on.ownRequests.length],
+      ["new-parent", "ordered-relation:runtime-matrix", "new-parent", "runtime-matrix", "same-type-independent-new-parent",
+        "runtime-matrix", 4], "formal resettlement");
+      expected.equal([String(region.operationIds.handle).startsWith("task-relation-ordered:"),
+        region.operationIds.provenance === region.operationIds.handle, region.operationIds.trace === region.operationIds.handle],
+      [true, true, true], "the formal operation's own id on the handle, the provenance and the trace");
+    } else {
+      // The observation had answered independent and new-parent 560 ms before the region started.
+      expected.equal([region.endedAt, input?.orderedRelation, region.resettlement?.relation, coordinator?.relation.stage,
+        region.trace.orderedSettlementCoordinatorRelationStage],
+      [CORRECTION_REGION_STARTS_AT, "followup-parent", "followup-parent", NULL_HYPOTHESIS, NULL_HYPOTHESIS], "no-window resettlement");
+      expected.equal(region.operationIds, { handle: undefined, provenance: undefined, settlementProvenance: undefined, trace: undefined },
+        "operation ids");
+      expected.equal([region.handle.functionFields, region.handle.promiseFields], [["authorizeOperation"], []],
+        "model fields on the handle");
+    }
+    expected.equal([off.timersLeft, on.timersLeft], [0, 0], "timers left");
+    expected.same(on.region, off.region, "region");
+    assert.deepEqual(expected.failures, [], "observation changed the Correction resettlement");
+  });
+}
+
+// ---- PC4: the formal Relation is the same under every switch combination ----
+
+async function runFormalAlone({ entry, debug, recording, crossChecks }) {
+  const h = st183Harness({ debug, recording, crossChecks });
+  try {
+    const handle = scheduleEntry(h, entry);
+    const started = {};
+    if (entry === "voice") startVoiceFor(h, handle, logicalQuestionUnit);
+    else if (entry === "screen") started.wait = watch(h, startScreenConsumer(h, handle));
+    else h.clock.setTimeout(() => { started.wait = watch(h, startCorrectionConsumer(h, handle)); }, 200);
+    h.clock.setTimeout(() => completeCandidate(candidate(h, "affinity", "intelligent"), { rawOutput: PARENT_INDEPENDENT }),
+      FORMAL_AFFINITY_AT);
+    h.clock.setTimeout(() => completeCandidate(candidate(h, "canonical", "intelligent"),
+      { rawOutput: canonicalOutput("new-parent") }), FORMAL_CANONICAL_AT);
+    await h.clock.advanceTo(FORMAL_CANONICAL_AT + 200);
+    return { h, formal: plain({
+      relation: finalRelation(h, entry, started),
+      consumer: entry === "voice" ? voiceRelease(h) : started.wait?.value,
+      trace: h.metadata,
+      // Prompt input, route, budget, lane-independent dispatch time and identity of every physical request.
+      requests: h.executions.map((execution) => ({ request: execution.request, tier: tierOf(execution),
+        selectedProvider: execution.selectedProvider, timeoutMs: execution.timeoutMs, dispatchedAt: execution.dispatchedAt - 10_000,
+        identity: execution.executionIdentity, aborted: execution.signal.aborted })),
+      handle: { operationId: handle.operationId, affinityDeadlineAt: handle.affinityDeadlineAt,
+        releaseWindowRequested: handle.releaseWindowRequested },
+    }) };
+  } catch (error) {
+    h.restore();
+    throw error;
+  }
+}
+const SWITCH_COMBINATIONS = [false, true].flatMap((debug) => [false, true].flatMap((recording) =>
+  [false, true].map((crossChecks) => ({ debug, recording, crossChecks }))));
+
+for (const entry of ["voice", "screen", "correction"]) {
+  test(`PC4 ${entry} formal Relation: requests, routes, budgets, recorded stages and the release are identical for every Debug x Recording x Cross-checks combination`, { concurrency: false }, async () => {
+    const runs = [];
+    for (const switches of SWITCH_COMBINATIONS) {
+      const run = await runFormalAlone({ entry, ...switches });
+      run.h.restore();
+      runs.push({ switches, ...run });
+    }
+    const reference = runs[0].formal;
+    expectEqual([reference.relation, reference.trace.taskRelationOrderedResolutionStage, reference.requests.length,
+      reference.requests.map((request) => request.tier).sort(), reference.requests.map((request) => request.timeoutMs),
+      reference.trace.taskRelationParentAffinityAdmissionLane, reference.trace.taskRelationSplitCanonicalAdmissionLane,
+      reference.trace.taskRelationParentAffinityObservationTrigger, reference.trace.taskRelationSplitCanonicalObservationTrigger],
+    ["new-parent", "canonical-relation", 4, ["fast", "fast", "intelligent", "intelligent"],
+      [STAGE_MS, STAGE_MS, STAGE_MS, STAGE_MS], "critical", "critical", undefined, undefined], "formal operation with every switch off");
+    for (const { switches, formal, h } of runs) {
+      assert.deepEqual(formal, reference, `formal Relation with ${JSON.stringify(switches)}`);
+      // Each switch feeds only its own sink.
+      expectEqual(h.debugOutputs.length > 0, switches.debug, `candidate outputs written to the trace with ${JSON.stringify(switches)}`);
+      expectEqual(h.recorded.length > 0, switches.recording, `recorder written with ${JSON.stringify(switches)}`);
+    }
   });
 }
