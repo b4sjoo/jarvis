@@ -122,6 +122,7 @@ import {
   ClockIcon,
   EyeOffIcon,
   FileTextIcon,
+  FlaskConicalIcon,
   HelpCircleIcon,
   LanguagesIcon,
   Loader2Icon,
@@ -201,6 +202,17 @@ const responseLanguageOptions: Array<{
   { id: "auto", label: "Auto" },
   { id: "english", label: "English" },
   { id: "chinese", label: "Chinese" },
+];
+
+// The two modes a feature offers. A stored legacy "off" is shown, never offered.
+type EnforcementShadowMode = "enforcement" | "shadow";
+
+const enforcementShadowModeOptions: Array<{
+  id: EnforcementShadowMode;
+  label: string;
+}> = [
+  { id: "enforcement", label: "Enforcement" },
+  { id: "shadow", label: "Shadow" },
 ];
 
 const meetingAudioProfileOptions: Array<{
@@ -2008,6 +2020,12 @@ export const MeetingAssistant = ({
                 onMicrophoneContextEnabledChange={
                   meeting.setMicrophoneContextEnabled
                 }
+                runtimeCrossChecksEnabled={
+                  meeting.settings.runtimeCrossChecksEnabled
+                }
+                onRuntimeCrossChecksEnabledChange={
+                  meeting.setRuntimeCrossChecksEnabled
+                }
                 debugMode={meeting.settings.debugMode}
                 onDebugModeChange={meeting.setDebugMode}
                 nativeStallDiagnosticsEnabled={meeting.settings.nativeStallDiagnosticsEnabled}
@@ -2067,6 +2085,12 @@ export const MeetingAssistant = ({
                 preparationRuntime={meeting.preparationRuntime}
                 onPreparationRuntimeChange={
                   meeting.setPreparationRuntimeCapabilities
+                }
+                taxonomyAdjudication={
+                  meeting.settings.taxonomyAdjudication
+                }
+                onTaxonomyAdjudicationChange={
+                  meeting.setTaxonomyAdjudicationConfig
                 }
               />
 
@@ -4000,6 +4024,8 @@ const InterviewSessionBriefPanel = ({
   onClear,
   preparationRuntime,
   onPreparationRuntimeChange,
+  taxonomyAdjudication,
+  onTaxonomyAdjudicationChange,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -4011,9 +4037,22 @@ const InterviewSessionBriefPanel = ({
     runtimeReinforcementEnabled?: boolean;
     personalizedGuidanceEnabled?: boolean;
   }) => Promise<void>;
+  // The Meeting Metadata mode is shown here and stays a Meeting setting: it is
+  // read from and written to settings.taxonomyAdjudication, never to the Brief.
+  taxonomyAdjudication: MeetingTaxonomyAdjudicationSettings;
+  onTaxonomyAdjudicationChange: (
+    config: MeetingTaxonomyAdjudicationSettings
+  ) => void;
 }) => {
   const editableBrief = getEditableInterviewSessionBrief(brief);
   const hasBrief = !isEditableInterviewSessionBriefEmpty(editableBrief);
+  const storedMeetingMetadataMode = taxonomyAdjudication.meetingMetadataMode;
+  // A stored legacy "off" selects neither option and is not rewritten on render.
+  const meetingMetadataModeSelection: EnforcementShadowMode | undefined =
+    storedMeetingMetadataMode === "enforcement" ||
+    storedMeetingMetadataMode === "shadow"
+      ? storedMeetingMetadataMode
+      : undefined;
 
   const updateBrief = (patch: Partial<InterviewSessionBrief>) => {
     onBriefChange({
@@ -4174,6 +4213,35 @@ const InterviewSessionBriefPanel = ({
             </div>
           </div>
 
+          <div className="space-y-1.5 rounded-sm border border-border/60 p-2">
+            <ConfigButtonGrid
+              label="Meeting Metadata"
+              options={enforcementShadowModeOptions}
+              value={meetingMetadataModeSelection}
+              columns={2}
+              onChange={(meetingMetadataMode) => {
+                onTaxonomyAdjudicationChange({
+                  ...taxonomyAdjudication,
+                  enabled: true,
+                  meetingMetadataMode,
+                });
+              }}
+            />
+            <div className="text-[10px] text-muted-foreground">
+              Enforcement can set the company for this session from grounded
+              opening evidence when none is set; the Target company field
+              above and the saved Brief are not edited. Shadow makes the same
+              request and only records the result. Neither mode changes a
+              company that is already set. Saved as a Meeting setting; Clear
+              does not reset it.
+            </div>
+            {storedMeetingMetadataMode === "off" ? (
+              <div className="text-[10px] text-amber-700 dark:text-amber-300">
+                Stored mode is Off: no request is made until you pick a mode.
+              </div>
+            ) : null}
+          </div>
+
           <div>
             <Label className="mb-1.5 block text-[10px] font-medium uppercase text-muted-foreground">
               Interview type
@@ -4254,6 +4322,8 @@ const ConfigurationsPanel = ({
   onAudioConfigChange,
   microphoneContextEnabled,
   onMicrophoneContextEnabledChange,
+  runtimeCrossChecksEnabled,
+  onRuntimeCrossChecksEnabledChange,
   debugMode,
   onDebugModeChange,
   nativeStallDiagnosticsEnabled,
@@ -4303,6 +4373,8 @@ const ConfigurationsPanel = ({
   onAudioConfigChange: (config: MeetingAudioConfig) => void;
   microphoneContextEnabled: boolean;
   onMicrophoneContextEnabledChange: (enabled: boolean) => void;
+  runtimeCrossChecksEnabled: boolean;
+  onRuntimeCrossChecksEnabledChange: (enabled: boolean) => void;
   debugMode: boolean;
   onDebugModeChange: (enabled: boolean) => void;
   nativeStallDiagnosticsEnabled: boolean;
@@ -4483,73 +4555,22 @@ const ConfigurationsPanel = ({
               <Switch checked={useMemory} onCheckedChange={onUseMemoryChange} />
             </div>
 
-            <div className="flex items-center justify-between gap-2 rounded-sm border border-border/60 p-2">
-              <div>
-                <div className="text-[10px] font-medium uppercase text-muted-foreground">
-                  Personal Fact Guardrail
-                </div>
-                <div className="mt-0.5 text-[10px] text-muted-foreground">
-                  {personalEvidenceGuardrailMode === "enforcement"
-                    ? "Enforcement mode"
-                    : "Shadow mode (trace only)"}
-                </div>
-              </div>
-              <Switch
-                checked={personalEvidenceGuardrailMode === "enforcement"}
-                onCheckedChange={(enabled) => {
-                  onPersonalEvidenceGuardrailModeChange(
-                    enabled ? "enforcement" : "shadow"
-                  );
-                }}
-              />
-            </div>
-
-            <div className="space-y-2 rounded-sm border border-border/60 p-2">
-              <div className="flex items-center justify-between gap-2">
-                <div>
-                  <div className="text-[10px] font-medium uppercase text-muted-foreground">
-                    Meeting Metadata Enforcement
-                  </div>
-                  <div className="mt-0.5 text-[10px] text-muted-foreground">
-                    {taxonomyAdjudication.meetingMetadataMode ===
-                    "enforcement"
-                      ? "Fill an empty company from grounded opening evidence"
-                      : "Shadow only; company stays unknown"}
-                  </div>
-                </div>
-                <Switch
-                  checked={
-                    taxonomyAdjudication.meetingMetadataMode ===
-                    "enforcement"
-                  }
-                  onCheckedChange={(enabled) => {
-                    onTaxonomyAdjudicationChange({
-                      ...taxonomyAdjudication,
-                      enabled: true,
-                      meetingMetadataMode: enabled
-                        ? "enforcement"
-                        : "shadow",
-                    });
-                  }}
-                />
-              </div>
-              <MeetingModelOverrideConfig
-                label="Fast Runtime model"
-                description="Used by bounded low-complexity checks; Question Type and Relation are always active and inherit the session's Main Advisor model"
-                providers={aiProviders}
-                value={taxonomyAdjudication}
-                onChange={(selected) => {
-                  onTaxonomyAdjudicationChange({
-                    enabled: true,
-                    questionTypeMode: "enforcement",
-                    taskRelationMode: "shadow",
-                    meetingMetadataMode:
-                      taxonomyAdjudication.meetingMetadataMode,
-                    ...selected,
-                  });
-                }}
-              />
-            </div>
+            <MeetingModelOverrideConfig
+              label="Fast Runtime model"
+              description="Used by bounded low-complexity checks; Question Type and Relation are always active and inherit the session's Main Advisor model"
+              providers={aiProviders}
+              value={taxonomyAdjudication}
+              onChange={(selected) => {
+                onTaxonomyAdjudicationChange({
+                  enabled: true,
+                  questionTypeMode: "enforcement",
+                  taskRelationMode: "shadow",
+                  meetingMetadataMode:
+                    taxonomyAdjudication.meetingMetadataMode,
+                  ...selected,
+                });
+              }}
+            />
           </ConfigurationGroup>
 
           <ConfigurationGroup
@@ -4659,6 +4680,51 @@ const ConfigurationsPanel = ({
                 });
               }}
             />
+          </ConfigurationGroup>
+
+          {/* A grouping only: it has no switch of its own and is not a mode. */}
+          <ConfigurationGroup
+            icon={<FlaskConicalIcon className="h-3.5 w-3.5" />}
+            title="Preview"
+          >
+            <div className="flex items-center justify-between gap-2 rounded-sm border border-border/60 p-2">
+              <div className="min-w-0">
+                <div className="text-[10px] font-medium uppercase text-muted-foreground">
+                  Runtime Cross-checks
+                </div>
+                <div className="mt-0.5 text-[10px] text-muted-foreground">
+                  Allows four extra record-only comparison runs: split
+                  Relation with Canonical, Whiteboard syntax repair, Meeting
+                  Metadata against a company that is already set, and Semantic
+                  Type / Interviewer Intent. Formal Question Type, Relation,
+                  answers and Fact Risk Review are not controlled by this
+                  switch. On adds model requests.
+                </div>
+              </div>
+              <Switch
+                checked={runtimeCrossChecksEnabled}
+                onCheckedChange={onRuntimeCrossChecksEnabledChange}
+              />
+            </div>
+
+            <div className="space-y-1.5 rounded-sm border border-border/60 p-2">
+              <ConfigButtonGrid
+                label="Fact Risk Review"
+                options={enforcementShadowModeOptions}
+                value={personalEvidenceGuardrailMode}
+                columns={2}
+                onChange={onPersonalEvidenceGuardrailModeChange}
+              />
+              <div className="text-[10px] text-muted-foreground">
+                Both modes send the review request for an eligible answer after
+                it is shown. Enforcement displays the risk notes with the
+                answer; Shadow only records them. The same mode also sets the
+                personal-fact guardrail, which can change the answer: in
+                Enforcement it can hold back streamed text and remove or
+                replace unsupported personal claims; in Shadow it leaves the
+                answer as generated and only records what it observed.
+              </div>
+            </div>
           </ConfigurationGroup>
 
           <ConfigurationGroup
@@ -5219,18 +5285,27 @@ const ConfigButtonGrid = <T extends string>({
   options,
   value,
   onChange,
+  columns = 3,
 }: {
   label: string;
   options: Array<{ id: T; label: string }>;
-  value: T;
+  // Undefined highlights no option.
+  value: T | undefined;
   onChange: (value: T) => void;
+  columns?: 2 | 3;
 }) => {
   return (
     <div>
       <Label className="mb-1.5 block text-[10px] font-medium uppercase text-muted-foreground">
         {label}
       </Label>
-      <div className="grid grid-cols-3 gap-1">
+      <div
+        className={cn(
+          "grid",
+          columns === 2 ? "grid-cols-2" : "grid-cols-3",
+          "gap-1"
+        )}
+      >
         {options.map((option) => (
           <Button
             key={option.id}

@@ -474,7 +474,7 @@ function uiHarness() {
     ts.forEachChild(node, visit);
   };
   visit(panel);
-  load(ui, globals, ["responseLengthOptions", "responseLanguageOptions", "meetingAudioProfileOptions", "TASK_TIMEOUT_OPTIONS",
+  load(ui, globals, ["responseLengthOptions", "responseLanguageOptions", "enforcementShadowModeOptions", "meetingAudioProfileOptions", "TASK_TIMEOUT_OPTIONS",
     "formatTaskTimeout", "formatSilenceDuration", "ConfigurationGroup", "ConfigButtonGrid", "MeetingModelOverrideConfig", "ConfigurationsPanel"]);
   const settings = globals.state.settings;
   const changes: any[] = [];
@@ -523,8 +523,14 @@ test("168-C1 actual settings rendering has no Semantic Type Rescue entry and kee
   const h = uiHarness();
   const html = renderToStaticMarkup(expand(h.globals.ConfigurationsPanel(h.props)));
   assert.doesNotMatch(html, /Semantic Type Rescue|unknown-only rescue|Shadow mode \(recommended\)/);
-  assert.match(html, /Personal Fact Guardrail/);
-  assert.match(html, /Meeting Metadata Enforcement/);
+  // 178 (PC C3) renamed and moved the two neighbours. The guardrail mode is now the
+  // "Fact Risk Review" selector in the Preview group of this panel. The Meeting
+  // Metadata mode is rendered by the Interview Brief panel, so it is no longer in
+  // this markup; tests/preview-controls-ui.test.ts renders it there. The Fast
+  // Runtime model selector that shared its container stays here.
+  assert.doesNotMatch(html, /Personal Fact Guardrail|Meeting Metadata Enforcement/);
+  assert.match(html, /Fact Risk Review/);
+  assert.match(html, /Fast Runtime model/);
   const panel = expression(ui, "ConfigurationsPanel");
   assert.doesNotMatch(panel.getText(ui), /[sS]emanticTaxonomyMode/);
   assert.equal(/[sS]emanticTaxonomyMode/.test(ui.getFullText()), false, "no prop is passed from the page either");
