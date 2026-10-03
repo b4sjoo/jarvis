@@ -45,8 +45,7 @@ export type TaskBoundaryAuthoritySource =
   | "manual-correction"
   | "opening-route"
   | "accepted-transcript"
-  | "accepted-llm-type-first-parent"
-  | "semantic-unknown-rescue";
+  | "accepted-llm-type-first-parent";
 
 
 export type TaskBoundaryMutationDisposition =

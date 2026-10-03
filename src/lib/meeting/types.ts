@@ -434,7 +434,6 @@ export type PersonalEvidenceRequirement =
 export type PersonalEvidenceConfidenceTier = "low" | "medium" | "high";
 
 export type PersonalEvidenceGuardrailMode = "enforcement" | "shadow";
-export type SemanticTaxonomyMode = "enforcement" | "shadow";
 
 export type PersonalEvidenceStatusDomain =
   | "health-status"
@@ -1486,7 +1485,6 @@ export interface MeetingAssistantSettings {
   activeScreenTaskTimeoutMinutes: number;
   useMemory: boolean;
   personalEvidenceGuardrailMode: PersonalEvidenceGuardrailMode;
-  semanticTaxonomyMode: SemanticTaxonomyMode;
   debugMode: boolean;
   nativeStallDiagnosticsEnabled: boolean;
   microphoneContextEnabled: boolean;

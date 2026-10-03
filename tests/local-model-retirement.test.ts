@@ -17,6 +17,9 @@ import * as supersession from "../src/lib/meeting/advisor-generation-supersessio
 import * as generationLease from "../src/lib/meeting/answer-generation-lease.js";
 import * as commitAuthorization from "../src/lib/meeting/runtime-commit-authorization.js";
 import * as sourceTransition from "../src/lib/meeting/source-owned-transition-runtime.js";
+import * as metadataInference from "../src/lib/meeting/meeting-metadata-inference.js";
+import * as runtimeInference from "../src/lib/meeting/runtime-inference.js";
+import { hashTaxonomySourceTurnIds } from "../src/lib/meeting/taxonomy-adjudication.js";
 import { createScreenPreflightDeadlineArbiter } from "../src/lib/meeting/screen-preflight-deadline.js";
 import { createMeetingId } from "../src/lib/meeting/meeting-id.js";
 
@@ -75,6 +78,11 @@ const oldSettings = [
   { privacyMode: "memory-only", screenContextEnabled: false },
   { privacyMode: "text-and-screen-to-cloud", screenContextEnabled: false },
   { privacyMode: "memory-only", screenContextEnabled: true },
+  // Task 168 (PC C1): values a store may still hold for the retired Semantic Type Rescue mode.
+  { semanticTaxonomyMode: "enforcement" },
+  { semanticTaxonomyMode: "shadow" },
+  { semanticTaxonomyMode: "off" },
+  { privacyMode: "memory-only", screenContextEnabled: false, semanticTaxonomyMode: { not: "a mode" } },
 ];
 
 function settingsHarness(stored?: string) {
@@ -93,7 +101,7 @@ function settingsHarness(stored?: string) {
     "isRecord", "normalizeNumber", "normalizeVadDurationMs", "normalizeActiveScreenTaskTimeoutMinutes",
     "normalizeMeetingResponseConfig", "normalizeMeetingCodingModelSettings", "normalizeTaxonomyAdjudicationSettings",
     "normalizeMeetingAudioSettings", "normalizeMeetingAudioProfile", "normalizeMeetingAudioConfig",
-    "isPersonalEvidenceGuardrailMode", "isSemanticTaxonomyMode", "readMeetingAssistantSettings",
+    "isPersonalEvidenceGuardrailMode", "readMeetingAssistantSettings",
   ]);
   const initialSettings = find(expression(hook, "INITIAL_STATE"), (node) =>
     ts.isPropertyAssignment(node) && node.name.getText(hook) === "settings"
@@ -115,7 +123,7 @@ test("L115-D2 actual defaults/read/write ignore all retired key combinations and
   assert.equal("screenContextEnabled" in defaults, false);
   const valid = {
     ...defaults, activeScreenTaskTimeoutMinutes: 60, useMemory: false,
-    personalEvidenceGuardrailMode: "shadow", semanticTaxonomyMode: "enforcement",
+    personalEvidenceGuardrailMode: "shadow",
     microphoneContextEnabled: false, response: { length: "detailed", language: "chinese" },
     codingModel: { provider: "coding", variables: { API_KEY: "fixture-only", MODEL: "coding-model" } },
     taxonomyAdjudication: { ...defaults.taxonomyAdjudication, provider: "runtime", variables: { MODEL: "runtime-model" }, meetingMetadataMode: "off" },
@@ -144,7 +152,124 @@ test("L115-D2 reader never even accesses retired fields", () => {
   h.globals.readMeetingAssistantSettings();
   assert.equal(accessed.includes("privacyMode"), false);
   assert.equal(accessed.includes("screenContextEnabled"), false);
+  assert.equal(accessed.includes("semanticTaxonomyMode"), false);
   assert.deepEqual(h.writes, []);
+});
+
+// Task 168 (PC C1): the Semantic Type Rescue mode is retired. Stored values of the old key,
+// valid or not, must behave exactly like a store that never had it.
+const legacySemanticModes: unknown[] = [
+  "enforcement", "shadow", "off", "", "garbage", 0, 42, true, null, ["enforcement"], { mode: "enforcement" },
+];
+
+function legacySemanticStore() {
+  const defaults = plain(settingsHarness().globals.state.settings);
+  return {
+    ...defaults, useMemory: false, personalEvidenceGuardrailMode: "shadow",
+    taxonomyAdjudication: { ...defaults.taxonomyAdjudication, meetingMetadataMode: "off" },
+  };
+}
+
+test("168-C1 defaults and the settings type carry no semantic rescue mode", () => {
+  const defaults = plain(settingsHarness().globals.state.settings);
+  assert.equal("semanticTaxonomyMode" in defaults, false);
+  assert.equal(defaults.debugMode, false);
+  const settingsType = find(
+    ts.createSourceFile("types.ts", readFileSync("src/lib/meeting/types.ts", "utf8"), ts.ScriptTarget.Latest, true),
+    (node) => ts.isInterfaceDeclaration(node) && node.name.text === "MeetingAssistantSettings"
+  ) as ts.InterfaceDeclaration;
+  assert.deepEqual(
+    settingsType.members.map((member) => (member.name as ts.Identifier).text).sort(),
+    Object.keys(defaults).sort()
+  );
+});
+
+test("168-C1 a stored semanticTaxonomyMode of any value loads without error, without a write, and is dropped by the next save", () => {
+  const stored = legacySemanticStore();
+  assert.deepEqual(plain(settingsHarness(JSON.stringify(stored)).globals.state.settings), stored);
+  for (const legacy of legacySemanticModes) {
+    const label = JSON.stringify(legacy);
+    const h = settingsHarness(JSON.stringify({ ...stored, semanticTaxonomyMode: legacy }));
+    // Equal to the store without the key: no error fallback to defaults and nothing derived from it.
+    assert.deepEqual(plain(h.globals.state.settings), stored, label);
+    assert.deepEqual(h.writes, [], `read has no migration write: ${label}`);
+    h.globals.setDebugMode(true);
+    assert.equal(h.writes.length, 1, label);
+    const saved = JSON.parse(h.writes[0]!);
+    assert.equal("semanticTaxonomyMode" in saved, false, label);
+    assert.deepEqual(saved, { ...stored, debugMode: true }, label);
+    assert.deepEqual(plain(settingsHarness(h.writes[0]).globals.state.settings), { ...stored, debugMode: true }, label);
+  }
+});
+
+test("168-C1 the reader never accesses a stored semanticTaxonomyMode", () => {
+  const stored = legacySemanticStore();
+  for (const legacy of legacySemanticModes) {
+    const h = settingsHarness(JSON.stringify({ ...stored, semanticTaxonomyMode: legacy }));
+    const accessed: string[] = [];
+    h.globals.JSON = { parse: (text: string) => new Proxy(JSON.parse(text), {
+      get: (target, key, receiver) => { accessed.push(String(key)); return Reflect.get(target, key, receiver); },
+    }) };
+    assert.deepEqual(plain(h.globals.readMeetingAssistantSettings()), stored);
+    assert.equal(accessed.includes("personalEvidenceGuardrailMode"), true, "the access recorder sees the live fields");
+    assert.equal(accessed.includes("semanticTaxonomyMode"), false, JSON.stringify(legacy));
+    assert.deepEqual(h.writes, []);
+  }
+});
+
+function metadataHarness(storedSettings: Record<string, unknown>) {
+  const { globals } = settingsHarness(JSON.stringify(storedSettings));
+  const turn = { id: "opening", speaker: "them", text: "Welcome to Oracle. I am the interviewer for the backend engineering role.",
+    source: "system-audio", isFinal: true, startedAt: 100, endedAt: 200 };
+  const observations: Record<string, unknown> = {};
+  const requests: unknown[] = [];
+  let scheduled = 0;
+  Object.assign(globals, metadataInference, runtimeInference, {
+    AbortController, hashTaxonomySourceTurnIds,
+    shutdownRequestedRef: { current: false }, debugModeRef: { current: false }, runtimeEpochRef: { current: 1 },
+    contextManagerRef: { current: { getState: () => ({ sessionId: "s", startedAt: 100, transcriptTurns: [turn],
+      interviewSessionContext: { targetCompany: undefined } }) } },
+    taxonomyAdjudicationSettingsRef: { current: undefined },
+    meetingModelProviderSnapshotRef: { current: {} },
+    meetingMetadataInferenceCircuitRef: { current: { read: () => ({ open: false }) } },
+    meetingMetadataInferenceRuntimeRef: { current: { getCurrentOperationId: () => undefined, schedule: (operation: any) => {
+      scheduled += 1;
+      operation.onStarted?.(operation.job, 300, { startsBefore: 0, startsAfter: 1, remaining: 1 });
+      operation.execute(operation.job, new AbortController().signal);
+    } } },
+    traceStoreRef: { current: { updateMetadata: (_id: string, value: object) => Object.assign(observations, value),
+      recordInput() {}, startStep: () => "step" } },
+    sessionRecordingManagerRef: { current: { getState: () => ({ active: false }), recordModelInput() {} } },
+    resolveRuntimeInferenceModelRouteFromSnapshot: () => ({ provider: { id: "provider" }, selectedProvider: { provider: "provider", variables: { model: "fixture" } } }),
+    formatRuntimeInferenceModelRouteForTrace: () => ({}), readSelectedProviderModelId: () => "fixture",
+    requestMeetingMetadataInference: (args: unknown) => requests.push(args),
+  });
+  // The production effect body that hands the stored mode to the scheduler.
+  evaluate(find(hook, (node) => ts.isBinaryExpression(node) &&
+    node.left.getText(hook) === "taxonomyAdjudicationSettingsRef.current" &&
+    node.right.getText(hook) === "state.settings.taxonomyAdjudication"), hook, globals);
+  evaluate(callback("scheduleMeetingMetadataInference"), hook, globals)({ turn, traceId: "trace" });
+  return { observations, requests, scheduled: () => scheduled };
+}
+
+test("168-C1 a stored Meeting Metadata off is still honoured next to any legacy semantic mode", () => {
+  const stored = legacySemanticStore();
+  for (const legacy of legacySemanticModes) {
+    const off = metadataHarness({ ...stored, semanticTaxonomyMode: legacy });
+    assert.equal(off.observations.meetingMetadataInferenceMode, "off");
+    assert.equal(off.observations.meetingMetadataInferenceDisposition, "operation-disabled");
+    assert.equal(off.observations.meetingMetadataInferenceSkipReason, "runtime-inference-disabled");
+    assert.equal(off.scheduled(), 0);
+    assert.deepEqual(off.requests, []);
+  }
+  // Control: the same unresolved-company opening is requested once when the stored mode is not off.
+  for (const mode of ["shadow", "enforcement"]) {
+    const on = metadataHarness({ ...stored, semanticTaxonomyMode: "enforcement",
+      taxonomyAdjudication: { ...stored.taxonomyAdjudication, meetingMetadataMode: mode } });
+    assert.equal(on.observations.meetingMetadataInferenceMode, mode);
+    assert.equal(on.scheduled(), 1);
+    assert.equal(on.requests.length, 1);
+  }
 });
 
 // Run the complete production callbacks, supplying native I/O and UI state only.
@@ -392,6 +517,18 @@ test("L115-D1 actual settings rendering has static processing text and functiona
   assert.deepEqual(h.changes, [], "rendering invokes no setting setter");
   selects[0]!.props.onChange({ target: { value: "test-provider" } });
   assert.deepEqual(h.changes, [{ provider: "test-provider", variables: {} }]);
+});
+
+test("168-C1 actual settings rendering has no Semantic Type Rescue entry and keeps the neighbouring controls", () => {
+  const h = uiHarness();
+  const html = renderToStaticMarkup(expand(h.globals.ConfigurationsPanel(h.props)));
+  assert.doesNotMatch(html, /Semantic Type Rescue|unknown-only rescue|Shadow mode \(recommended\)/);
+  assert.match(html, /Personal Fact Guardrail/);
+  assert.match(html, /Meeting Metadata Enforcement/);
+  const panel = expression(ui, "ConfigurationsPanel");
+  assert.doesNotMatch(panel.getText(ui), /[sS]emanticTaxonomyMode/);
+  assert.equal(/[sS]emanticTaxonomyMode/.test(ui.getFullText()), false, "no prop is passed from the page either");
+  assert.deepEqual(h.changes, [], "rendering invokes no setting setter");
 });
 
 test("L115-D1 actual Screen button retains lifecycle disabling and explicit capture action", () => {

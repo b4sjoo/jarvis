@@ -11,7 +11,11 @@ import { formatSemanticEmbeddingRuntimeTelemetryForTrace } from "../../src/lib/m
 import { calculateWordEquivalent } from "../../src/lib/meeting/transcript-fusion.js";
 import { detectOpeningTaskRoute } from "../../src/lib/meeting/opening-route.js";
 
-export async function runSemanticScheduling(source: string, input: { eligible?: boolean; embeddingStatus?: string; parent?: boolean; stale?: boolean } = {}) {
+export async function runSemanticScheduling(source: string, input: {
+  eligible?: boolean; embeddingStatus?: string; parent?: boolean; stale?: boolean;
+  // Embedding result vectors in request order ([unit] or [unit, relation]). Defaults to zero vectors.
+  embeddings?: number[][];
+} = {}) {
   const ast = ts.createSourceFile("hook.ts", source, ts.ScriptTarget.Latest, true);
   function declaration(name: string) {
     let found: ts.VariableDeclaration | ts.FunctionDeclaration | undefined;
@@ -35,7 +39,7 @@ export async function runSemanticScheduling(source: string, input: { eligible?: 
   const env: Record<string, any> = { ...taxonomy, ...unit, ...ownership, ...shadow, ...semantic, ...intent,
     formatSemanticEmbeddingRuntimeTelemetryForTrace, calculateWordEquivalent, detectOpeningTaskRoute,
     contextManagerRef: { current: { getState: () => contextState } }, runtimeEpochRef: { current: 1 },
-    semanticTaxonomyModeRef: { current: "shadow" }, logicalQuestionUnitRef: { current: logicalQuestionUnit },
+    logicalQuestionUnitRef: { current: logicalQuestionUnit },
     semanticEmbeddingRevisionRef: { current: 0 }, semanticTaxonomyEvidenceByTurnRef: { current: new Map() },
     readEffectiveSemanticTask: (task: unknown) => task,
     traceStoreRef: { current: { updateMetadata: (...args: unknown[]) => events.push(["metadata", ...args]),
@@ -75,7 +79,7 @@ export async function runSemanticScheduling(source: string, input: { eligible?: 
   assert.equal(result.questionType, typeHandle); assert.equal(result.taskRelation, relationHandle);
   if (complete) {
     if (input.stale) contextState.sessionId = "other";
-    complete({ status: input.embeddingStatus ?? "success", embeddings: [Array(384).fill(0), Array(384).fill(0)],
+    complete({ status: input.embeddingStatus ?? "success", embeddings: input.embeddings ?? [Array(384).fill(0), Array(384).fill(0)],
       telemetry: {}, cacheHit: false, reason: "fixture", durationMs: 5 });
     await new Promise<void>(resolve => setImmediate(resolve));
   }

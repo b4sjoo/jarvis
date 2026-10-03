@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   decideSemanticTaxonomyShadowEligibility,
-  decideSemanticTaxonomyUnknownRescue,
   formatSemanticTaxonomyShadowMetadata,
 } from "../src/lib/meeting/semantic-taxonomy-shadow.js";
 import { inferQuestionTypeDecisionFromText } from "../src/lib/meeting/task-taxonomy.js";
@@ -43,75 +42,6 @@ test("semantic shadow accepts substantive interviewer turns without authorizing 
       wordEquivalent: 8,
     }).eligible,
     false
-  );
-});
-
-test("semantic evidence remains non-authoritative in compatibility enforcement mode", () => {
-  const enforcement = decideSemanticTaxonomyUnknownRescue({
-    mode: "enforcement",
-    lexicalType: "unknown",
-    deterministicType: "unknown",
-    recommendedType: "field-knowledge",
-    wouldRescue: true,
-    hasManualCorrection: false,
-  });
-  assert.equal(enforcement.applied, false);
-  assert.equal(enforcement.effectiveType, "unknown");
-  assert.equal(enforcement.parentMutationBlocked, true);
-  assert.equal(enforcement.reason, "semantic-evidence-non-authoritative");
-
-  const shadow = decideSemanticTaxonomyUnknownRescue({
-    mode: "shadow",
-    lexicalType: "unknown",
-    deterministicType: "unknown",
-    recommendedType: "coding",
-    wouldRescue: true,
-    hasManualCorrection: false,
-  });
-  assert.equal(shadow.applied, false);
-  assert.equal(shadow.effectiveType, "unknown");
-});
-
-test("semantic compatibility mode preserves manual, lexical, route, and parent authority", () => {
-  const base = {
-    mode: "enforcement" as const,
-    lexicalType: "unknown" as const,
-    deterministicType: "unknown" as const,
-    recommendedType: "ai-ml-system-design" as const,
-    wouldRescue: true,
-    hasManualCorrection: false,
-  };
-  assert.equal(
-    decideSemanticTaxonomyUnknownRescue({
-      ...base,
-      hasManualCorrection: true,
-    }).reason,
-    "manual-correction-authoritative"
-  );
-  assert.equal(
-    decideSemanticTaxonomyUnknownRescue({
-      ...base,
-      lexicalType: "coding",
-      deterministicType: "coding",
-    }).reason,
-    "concrete-lexical-type-authoritative"
-  );
-  assert.equal(
-    decideSemanticTaxonomyUnknownRescue({
-      ...base,
-      deterministicType: "project-deep-dive",
-    }).reason,
-    "deterministic-route-type-authoritative"
-  );
-  const parentConflict = decideSemanticTaxonomyUnknownRescue({
-    ...base,
-    activeParentType: "general-system-design",
-  });
-  assert.equal(parentConflict.applied, false);
-  assert.equal(parentConflict.parentMutationBlocked, true);
-  assert.equal(
-    parentConflict.reason,
-    "semantic-evidence-non-authoritative-with-active-parent"
   );
 });
 
@@ -211,4 +141,5 @@ test("shadow metadata preserves lexical behavior and records would-rescue only",
   );
   assert.equal(metadata.taxonomySemanticRescueApplied, false);
   assert.equal(metadata.taxonomySemanticBehaviorMutationBlocked, true);
+  assert.equal("semanticTaxonomyMode" in metadata, false);
 });

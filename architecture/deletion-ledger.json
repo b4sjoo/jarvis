@@ -1,7 +1,7 @@
 {
   "$schema": "./deletion-ledger.schema.json",
   "version": 1,
-  "updatedAt": "2026-09-30",
+  "updatedAt": "2026-10-03",
   "entries": [
     {
       "id": "correction-private-reduction-and-scope-decision",
@@ -683,6 +683,32 @@
         "recordHumanEvaluations(evaluations:",
         "recordQuestionHumanEvaluations(evaluations:",
         "shouldRequestSuggestion(turn:"
+      ]
+    },
+    {
+      "id": "semantic-type-rescue-surface",
+      "symbolOrSurface": "Semantic Type Rescue switch, its stored mode, setter and ref, the always-unapplied unknown-rescue decision, the unreachable Advisor override and rescue authority source, and the rescue-only Advisor trace keys",
+      "verdict": "delete",
+      "ownerTaskId": 168,
+      "replacement": "The settled Question Type continues on its existing path; the Semantic Type and Interviewer Intent observation, shared embedding runtime and Answer Sufficiency are unchanged, and the Advisor still records the effective Type and evidence currency",
+      "persistedDataImpact": "settings",
+      "historicalReader": "A stored mode of any value is never read, causes no error or read-time write and disappears on the next normal save; original recordings stay untouched and the recording and reflection readers keep decoding the old mode, rescue and authority-source values.",
+      "proofCommands": [
+        "npm run verify:deletion-ledger",
+        "npm run verify:architecture",
+        "npm test",
+        "npm run build"
+      ],
+      "deletionGate": "Real settings, observer, Advisor-record and reader fixtures prove legacy-value tolerance, unchanged retained trace-metadata values against the pre-retirement export, and old-record decoding; no rescue decision, mode or control is reachable. One derived evaluation value changes for new recordings and is pinned by a test: the reflection parent-mutation-blocked count is no longer populated. A trace that carries only the Advisor-side effective Type keeps its compact semantic summary block.",
+      "rollbackBoundary": "Control, setting and unreachable override leave together without migration code or a compatibility branch; observation admission is not changed here.",
+      "status": "deleted",
+      "forbiddenPatterns": [
+        "decideSemanticTaxonomyUnknownRescue",
+        "SemanticTaxonomyUnknownRescueDecision",
+        "semanticTaxonomyModeRef",
+        "onSemanticTaxonomyModeChange",
+        "Semantic Type Rescue",
+        "semantic-unknown-rescue"
       ]
     }
   ]

@@ -39,7 +39,6 @@ export type CurrentQuestionAuthoritySource =
   | "manual-correction"
   | "opening-route"
   | "accepted-transcript"
-  | "semantic-unknown-rescue"
   | "accepted-llm-type-first-parent"
   | "runtime-adjudication"
   | "provisional-only";
@@ -871,7 +870,6 @@ function resolveCurrentQuestionAuthority(
     return "deterministic-fast-path";
   }
   if (
-    source === "semantic-unknown-rescue" ||
     source === "accepted-llm-type-first-parent" ||
     source === "runtime-adjudication"
   ) {

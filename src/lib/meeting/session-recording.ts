@@ -6352,7 +6352,13 @@ function buildSemanticTaxonomyTraceSummary(
     metadataSources,
     "taxonomyHybridOutcome"
   );
-  if (!mode && !embeddingStatus && !hybridOutcome) return undefined;
+  const hybridEffectiveType = readFirstString(
+    metadataSources,
+    "taxonomyHybridEffectiveType"
+  );
+  // A trace that carries only the Advisor-side effective Type keeps its summary block.
+  if (!mode && !embeddingStatus && !hybridOutcome && !hybridEffectiveType)
+    return undefined;
 
   return {
     mode,
@@ -6364,10 +6370,7 @@ function buildSemanticTaxonomyTraceSummary(
     ),
     semanticTopCandidateType: readSemanticTopCandidateType(metadataSources),
     hybridOutcome,
-    hybridEffectiveType: readFirstString(
-      metadataSources,
-      "taxonomyHybridEffectiveType"
-    ),
+    hybridEffectiveType,
     wouldRescue: readFirstBoolean(
       metadataSources,
       "taxonomyHybridWouldRescue"

@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const tscPath = path.join(repoRoot, "node_modules", ".bin", "tsc");
@@ -340,6 +340,59 @@ test("projects raw committed source-transition identity into longitudinal parent
     denominator: 1,
     rate: 1,
   });
+});
+
+test("168-C1 Advisor-only trace: longitudinal hybrid Type is unchanged with the trace export and from the compact summary alone", async (t) => {
+  ensureCliCompiled();
+  // Compact summaries come from the real recorder projection of the current build.
+  const { buildCompactTraceSummary } = await import(pathToFileURL(path.resolve(
+    repoRoot, process.env.JARVIS_TEST_OUTPUT_DIR ?? ".tmp-tests", "src/lib/meeting/session-recording.js")));
+  const root = await mkdtemp(path.join(tmpdir(), "jarvis-semantic-rescue-retirement-cli-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  // What the Advisor writes on a trace with no observer metadata of its own (Screen, manual action,
+  // absent or stale turn evidence): after the retirement, and before it.
+  const retained = { semanticTaxonomyEvidenceCurrent: false, taxonomyHybridEffectiveType: "coding" };
+  const shapes = {
+    now: retained,
+    before: { ...retained, semanticTaxonomyMode: "shadow", taxonomySemanticEnforcementReason: "semantic-taxonomy-shadow-mode",
+      taxonomySemanticParentMutationBlocked: false, taxonomySemanticRescueApplied: false },
+  };
+  const coverage = async (shape, withTraceExport) => {
+    const name = `${shape}-${withTraceExport ? "export" : "compact-only"}`;
+    const session = path.join(root, name, "recording");
+    const trace = { id: "advisor-only", kind: "screen", status: "success", startedAt: 1, endedAt: 2,
+      steps: [], inputs: [], outputs: [], metadata: shapes[shape] };
+    const summary = buildCompactTraceSummary({ sessionId: "session_recording_c1", trigger: "manual", trace,
+      traceExportPath: "traces/advisor-only.json", summaryPath: "traces/advisor-only/summary.json" });
+    const files = {
+      "manifest.json": JSON.stringify({ sessionId: "session_recording_c1", status: "running" }),
+      "traces/advisor-only/summary.json": JSON.stringify(summary),
+      ...(withTraceExport ? { "traces/advisor-only.json": JSON.stringify({ exportedAt: 30, trace }) } : {}),
+    };
+    for (const [filename, contents] of Object.entries(files)) {
+      await mkdir(path.dirname(path.join(session, filename)), { recursive: true });
+      await writeFile(path.join(session, filename), contents);
+    }
+    const output = path.join(root, name, "output");
+    const run = runCli(["--session", session, "--output", output, "--allow-incomplete"]);
+    assert.equal(run.status, 0, run.stderr);
+    const report = JSON.parse(await readFile(path.join(output, "report.json"), "utf8"));
+    assert.equal(report.cohort.productionTraceCount, 1, name);
+    const { keyword, hybrid } = report.typeFunnel.stageCoverage;
+    assert.deepEqual([keyword.numerator, keyword.denominator, hybrid.denominator], [0, 1, 1], name);
+    return { compactBlock: summary.semanticTaxonomy && JSON.parse(JSON.stringify(summary.semanticTaxonomy)), hybridKnown: hybrid.numerator };
+  };
+
+  // With the trace export (every complete recording): the hybrid stage reads the retained key and is
+  // the same before and after the retirement.
+  assert.deepEqual(await coverage("before", true), {
+    compactBlock: { mode: "shadow", hybridEffectiveType: "coding", rescueApplied: false }, hybridKnown: 1 });
+  assert.deepEqual(await coverage("now", true), { compactBlock: { hybridEffectiveType: "coding" }, hybridKnown: 1 });
+  // Compact summaries alone: the summary written before the retirement still decodes, and a summary
+  // written now keeps the effective Type, so the hybrid stage is the same.
+  assert.deepEqual(await coverage("before", false), {
+    compactBlock: { mode: "shadow", hybridEffectiveType: "coding", rescueApplied: false }, hybridKnown: 1 });
+  assert.deepEqual(await coverage("now", false), { compactBlock: { hybridEffectiveType: "coding" }, hybridKnown: 1 });
 });
 
 function ensureCliCompiled() {

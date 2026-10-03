@@ -374,7 +374,6 @@ import {
   InterviewSessionContext,
   PersonalEvidenceDecision,
   PersonalEvidenceGuardrailMode,
-  SemanticTaxonomyMode,
   SelectedProviderState,
   MeetingResponseActionMode,
   MeetingResponseConfig,
@@ -883,7 +882,6 @@ import {
   decideScreenResultScope,
   formatAdvisorScreenSourceReadForTrace,
   decideSemanticTaxonomyShadowEligibility,
-  decideSemanticTaxonomyUnknownRescue,
   formatScreenScopeDecisionForTrace,
   formatSemanticEmbeddingRuntimeTelemetryForTrace,
   formatSemanticTaxonomyShadowMetadata,
@@ -1460,7 +1458,6 @@ const INITIAL_STATE: MeetingAssistantState = {
     activeScreenTaskTimeoutMinutes: DEFAULT_ACTIVE_SCREEN_TASK_TIMEOUT_MINUTES,
     useMemory: true,
     personalEvidenceGuardrailMode: "enforcement",
-    semanticTaxonomyMode: "shadow",
     debugMode: false,
     nativeStallDiagnosticsEnabled: false,
     microphoneContextEnabled: true,
@@ -1524,9 +1521,6 @@ function readMeetingAssistantSettings(): MeetingAssistantSettings {
         isPersonalEvidenceGuardrailMode(parsed.personalEvidenceGuardrailMode)
           ? parsed.personalEvidenceGuardrailMode
           : DEFAULT_MEETING_ASSISTANT_SETTINGS.personalEvidenceGuardrailMode,
-      semanticTaxonomyMode: isSemanticTaxonomyMode(parsed.semanticTaxonomyMode)
-        ? parsed.semanticTaxonomyMode
-        : DEFAULT_MEETING_ASSISTANT_SETTINGS.semanticTaxonomyMode,
       debugMode:
         typeof parsed.debugMode === "boolean"
           ? parsed.debugMode
@@ -2078,7 +2072,6 @@ interface AdvisorTaskSignals {
     | LatestTurnTaxonomyBoundaryReason
     | "active-parent-continuity"
     | "manual-question-type-correction"
-    | "semantic-unknown-rescue"
     | "current-question-settlement"
     | "source-owned-phase-control"
     | "section-hint"
@@ -2281,12 +2274,6 @@ function buildSemanticInterviewerIntentRelationText(input: {
 function isPersonalEvidenceGuardrailMode(
   value: unknown
 ): value is PersonalEvidenceGuardrailMode {
-  return value === "enforcement" || value === "shadow";
-}
-
-function isSemanticTaxonomyMode(
-  value: unknown
-): value is SemanticTaxonomyMode {
   return value === "enforcement" || value === "shadow";
 }
 
@@ -2600,7 +2587,6 @@ interface SemanticTaxonomyTurnEvidence {
   sessionId: string;
   runtimeEpoch: number;
   lexical: QuestionTypeInferenceDecision;
-  hybrid?: ReturnType<typeof resolveHybridQuestionType>;
   metadata: Record<string, unknown>;
 }
 
@@ -3129,9 +3115,6 @@ export function useMeetingAssistant() {
   const autoExportProcessedTraceIdsRef = useRef(new Set<string>());
   const sessionRecordedTraceIdsRef = useRef(new Set<string>());
   const debugModeRef = useRef(INITIAL_STATE.settings.debugMode);
-  const semanticTaxonomyModeRef = useRef<SemanticTaxonomyMode>(
-    INITIAL_STATE.settings.semanticTaxonomyMode
-  );
   const captureLifecycleCoordinatorRef = useRef<CaptureLifecycleCoordinator | null>(
     null
   );
@@ -9312,16 +9295,6 @@ export function useMeetingAssistant() {
     [updateSettings]
   );
 
-  const setSemanticTaxonomyMode = useCallback(
-    (semanticTaxonomyMode: SemanticTaxonomyMode) => {
-      updateSettings((previous) => ({
-        ...previous,
-        semanticTaxonomyMode,
-      }));
-    },
-    [updateSettings]
-  );
-
   const setResponseConfig = useCallback(
     (response: MeetingResponseConfig) => {
       updateSettings((previous) => ({
@@ -11262,46 +11235,14 @@ export function useMeetingAssistant() {
         semanticEvidence.runtimeEpoch ===
           advisorJob.runtimeCommitToken.runtimeEpoch
     );
-    const semanticUnknownRescueDecision =
-      decideSemanticTaxonomyUnknownRescue({
-        mode: state.settings.semanticTaxonomyMode,
-        lexicalType:
-          semanticEvidenceIsCurrent && semanticEvidence
-            ? semanticEvidence.lexical.type ?? "unknown"
-            : "unknown",
-        deterministicType:
-          normalizeCanonicalQuestionType(
-            correctedAdvisorTaskSignals.questionType
-          ) ?? "unknown",
-        recommendedType:
-          semanticEvidenceIsCurrent && semanticEvidence
-            ? semanticEvidence.hybrid?.recommendedType
-            : undefined,
-        wouldRescue: Boolean(
-          semanticEvidenceIsCurrent && semanticEvidence?.hybrid?.wouldRescue
-        ),
-        activeParentType:
-          normalizeCanonicalQuestionType(
-            getAdvisorActiveQuestionType(promptContext)
-          ) ?? undefined,
-        hasManualCorrection: Boolean(options.manualQuestionTypeCorrection),
-      });
-    const semanticAdvisorTaskSignals = semanticUnknownRescueDecision.applied
-      ? {
-          ...correctedAdvisorTaskSignals,
-          questionType: semanticUnknownRescueDecision.effectiveType,
-          openingRoute:
-            semanticUnknownRescueDecision.effectiveType ===
-            "project-deep-dive"
-              ? correctedAdvisorTaskSignals.openingRoute
-              : undefined,
-          source: "semantic-unknown-rescue",
-          latestTurnTaxonomyBoundaryReason:
-            "semantic-unknown-rescue" as const,
-          taxonomyFallbackSuppressed: false,
-          unknownTaskMutationBlocked: false,
-        }
-      : correctedAdvisorTaskSignals;
+    const semanticEvidenceLexicalType =
+      semanticEvidenceIsCurrent && semanticEvidence
+        ? semanticEvidence.lexical.type ?? "unknown"
+        : "unknown";
+    const advisorDeterministicQuestionType =
+      normalizeCanonicalQuestionType(
+        correctedAdvisorTaskSignals.questionType
+      ) ?? "unknown";
     const sourceOwnedPhaseControl =
       advisorJob.turnIntentDecision?.phaseControl;
     const activePhaseControlQuestionType =
@@ -11313,18 +11254,18 @@ export function useMeetingAssistant() {
       (activePhaseControlQuestionType === "general-system-design" ||
         activePhaseControlQuestionType === "ai-ml-system-design")
         ? {
-            ...semanticAdvisorTaskSignals,
+            ...correctedAdvisorTaskSignals,
             questionType: activePhaseControlQuestionType,
             questionTypeDecision: undefined,
             askFrame:
               getAdvisorActiveAskFrame(promptContext) ??
-              semanticAdvisorTaskSignals.askFrame,
+              correctedAdvisorTaskSignals.askFrame,
             topicDomain:
               getAdvisorActiveTopicDomain(promptContext) ??
-              semanticAdvisorTaskSignals.topicDomain,
+              correctedAdvisorTaskSignals.topicDomain,
             projectAnchor:
               getAdvisorActiveProjectAnchor(promptContext) ??
-              semanticAdvisorTaskSignals.projectAnchor,
+              correctedAdvisorTaskSignals.projectAnchor,
             query: buildFocusedAdvisorTaskQuery(
               semanticPromptContext,
               advisorQuestionSemanticEvidenceText
@@ -11341,7 +11282,7 @@ export function useMeetingAssistant() {
             taxonomyFallbackSuppressed: true,
             unknownTaskMutationBlocked: false,
           }
-        : semanticAdvisorTaskSignals;
+        : correctedAdvisorTaskSignals;
     const committedSettlementRelation: InterviewTaskRelation | undefined =
       currentQuestionSettlement?.relationMutationAuthorized &&
       isRuntimeTaskRelation(currentQuestionSettlement.relation) &&
@@ -11394,7 +11335,7 @@ export function useMeetingAssistant() {
           });
     const routedAdvisorTaskSignals = transientPersonalStatusDecision
       ? {
-          ...semanticAdvisorTaskSignals,
+          ...correctedAdvisorTaskSignals,
           questionType: "unknown" as const,
           questionTypeDecision: undefined,
           askFrame: "unknown" as const,
@@ -11486,14 +11427,14 @@ export function useMeetingAssistant() {
             askFrame: outputOnlyCurrentBranch
               ? routedAdvisorTaskSignals.askFrame
               : getAdvisorActiveAskFrame(promptContext) ??
-                semanticAdvisorTaskSignals.askFrame,
+                correctedAdvisorTaskSignals.askFrame,
             topicDomain: outputOnlyCurrentBranch
               ? routedAdvisorTaskSignals.topicDomain
               : getAdvisorActiveTopicDomain(promptContext) ??
-                semanticAdvisorTaskSignals.topicDomain,
+                correctedAdvisorTaskSignals.topicDomain,
             projectAnchor:
               getAdvisorActiveProjectAnchor(promptContext) ??
-              semanticAdvisorTaskSignals.projectAnchor,
+              correctedAdvisorTaskSignals.projectAnchor,
             query: outputOnlyCurrentBranch
               ? routedAdvisorTaskSignals.query
               : buildExplicitActionAdvisorTaskQuery(
@@ -11768,9 +11709,7 @@ export function useMeetingAssistant() {
       ? "manual-correction"
       : advisorTaskSignals.openingRoute?.commitParent
         ? "opening-route"
-        : advisorTaskSignals.source === "semantic-unknown-rescue"
-          ? "semantic-unknown-rescue"
-          : "accepted-transcript";
+        : "accepted-transcript";
     const questionComplete = executionAuthorization.authorized;
     const commitParent =
       advisorTaskMutationDecision.commitParent &&
@@ -12181,16 +12120,12 @@ export function useMeetingAssistant() {
     }
     const questionTypeTraceMetadata =
       formatAdvisorQuestionTypeDecisionForTrace(advisorTaskSignals);
-    const semanticEnforcementMetadata = {
-      semanticTaxonomyMode: state.settings.semanticTaxonomyMode,
+    const semanticEvidenceTraceMetadata = {
       semanticTaxonomyEvidenceCurrent: semanticEvidenceIsCurrent,
-      taxonomySemanticEnforcementReason:
-        semanticUnknownRescueDecision.reason,
-      taxonomySemanticParentMutationBlocked:
-        semanticUnknownRescueDecision.parentMutationBlocked,
-      taxonomySemanticRescueApplied: semanticUnknownRescueDecision.applied,
       taxonomyHybridEffectiveType:
-        semanticUnknownRescueDecision.effectiveType,
+        advisorDeterministicQuestionType !== "unknown"
+          ? advisorDeterministicQuestionType
+          : semanticEvidenceLexicalType,
     };
     if (traceId) {
       const intentMetadata = inferredTurnIntentDecision
@@ -12199,7 +12134,7 @@ export function useMeetingAssistant() {
       const executionMetadata = {
         ...intentMetadata,
         ...questionTypeTraceMetadata,
-        ...semanticEnforcementMetadata,
+        ...semanticEvidenceTraceMetadata,
         ...formatScreenScopeDecisionForTrace(
           advisorScreenScopeDecision,
           {
@@ -12283,7 +12218,7 @@ export function useMeetingAssistant() {
           taskId: promptContext.activeMeetingTask?.id,
           metadata: {
             ...semanticEvidence.metadata,
-            ...semanticEnforcementMetadata,
+            ...semanticEvidenceTraceMetadata,
           },
         });
       }
@@ -20844,7 +20779,6 @@ export function useMeetingAssistant() {
     }) => {
       const sessionId = contextState.sessionId;
       const runtimeEpoch = runtimeEpochRef.current;
-      const semanticTaxonomyMode = semanticTaxonomyModeRef.current;
       const runtime = semanticTaxonomyRuntimeRef.current!;
       const activeParent = contextState.activeMeetingTask?.parent;
       const activeParentId = activeParent?.id;
@@ -20866,7 +20800,6 @@ export function useMeetingAssistant() {
           lexical,
           eligibility,
           runtime: runtime.getSnapshot(),
-          mode: semanticTaxonomyMode,
         }),
         ...formatSemanticInterviewerIntentForTrace(undefined, {
           embeddingStatus: "not-requested",
@@ -21001,7 +20934,6 @@ export function useMeetingAssistant() {
                 embedding,
                 semantic,
                 hybrid,
-                mode: semanticTaxonomyMode,
               }),
               ...formatSemanticEmbeddingRuntimeTelemetryForTrace(
                 embedding.telemetry
@@ -21027,7 +20959,6 @@ export function useMeetingAssistant() {
               sessionId,
               runtimeEpoch,
               lexical,
-              hybrid,
               metadata,
             });
             while (semanticTaxonomyEvidenceByTurnRef.current.size > 32) {
@@ -35944,10 +35875,6 @@ export function useMeetingAssistant() {
   }, [state.sessionRecording.lifecycle, state.settings.debugMode]);
 
   useEffect(() => {
-    semanticTaxonomyModeRef.current = state.settings.semanticTaxonomyMode;
-  }, [state.settings.semanticTaxonomyMode]);
-
-  useEffect(() => {
     taxonomyAdjudicationSettingsRef.current =
       state.settings.taxonomyAdjudication;
   }, [state.settings.taxonomyAdjudication]);
@@ -36978,7 +36905,6 @@ export function useMeetingAssistant() {
     setPreparationRuntimeCapabilities,
     setUseMemory,
     setPersonalEvidenceGuardrailMode,
-    setSemanticTaxonomyMode,
     setDebugMode,
     setNativeStallDiagnosticsEnabled,
     nativeStallDiagnosticsError,
