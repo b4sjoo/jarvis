@@ -194,7 +194,7 @@ export async function openProjectSelectionBrowserHost(t,bundle,browser,execution
       await route.abort();
     });
     await page.goto("https://s63.fixture/");
-    await page.evaluate(({memory,answers,question,nextQuestion,surface,source,holdFactReview,guardrailMode}) => {
+    await page.evaluate(({memory,answers,question,nextQuestion,surface,source,holdFactReview,guardrailMode,settings}) => {
       const listeners = new Map();
       const transports = new Map();
       const writes = new Map();
@@ -252,6 +252,12 @@ export async function openProjectSelectionBrowserHost(t,bundle,browser,execution
           if (name==='read_meeting_trace_metrics') return null;
           if (name==='write_meeting_trace_metrics') return null;
           if (name==='write_meeting_trace_log') return null;
+          // Task 178 LG: the level of the call is applied and every entry is taken. An invalid level rejects, as on native.
+          if (name==='write_diagnostic_log') {
+            if (!['error','warn','info','debug','trace'].includes(args.level)) throw new Error('Diagnostic log level is not one of error, warn, info, debug, trace');
+            return {v:1,appliedLevel:args.level,accepted:(args.entries??[]).length,filtered:0,rejected:0,dropped:0,
+              sink:{state:'ready',droppedTotal:0,writeFailures:0,unsavedAtExit:0}};
+          }
           if (name==='export_meeting_trace') {
             writes.set(`exports/${args.fileName}`,args.payload);
             return `/s63-recording/exports/${args.fileName}`;
@@ -277,8 +283,9 @@ export async function openProjectSelectionBrowserHost(t,bundle,browser,execution
           unexpected.push(name); throw new Error('Uncontrolled native command: '+name);
         },
       };
+      // inputs.settings (Task 178 LG) overrides single stored settings; without it the store is what it was.
       localStorage.setItem('meeting_assistant_settings',JSON.stringify({debugMode:true,microphoneContextEnabled:false,semanticTaxonomyMode:'off',useMemory:true,
-        personalEvidenceGuardrailMode:guardrailMode??'enforcement'}));
+        personalEvidenceGuardrailMode:guardrailMode??'enforcement',...settings}));
       window.Worker=class { constructor(){throw new Error('External model worker unavailable in S63 fixture');} };
       window.fetch=async (url,init)=>{
         if(String(url)!=='https://s63.fixture/provider') throw new Error('Uncontrolled fetch: '+url);
@@ -324,7 +331,7 @@ export async function openProjectSelectionBrowserHost(t,bundle,browser,execution
       };
     }, {memory:inputs.memory??fixtures.S63_MEMORY,answers:inputs.answers??fixtures.S63_PROVIDER_ANSWERS,question:fixtures.S63_SOURCE_QUESTION,
       nextQuestion:fixtures.S63_NEXT_SOURCE_QUESTION,surface:execution.surface,source:execution.source,
-      holdFactReview:inputs.holdFactReview??false,guardrailMode:inputs.guardrailMode});
+      holdFactReview:inputs.holdFactReview??false,guardrailMode:inputs.guardrailMode,settings:inputs.settings??{}});
     await page.addScriptTag({ content: bundle.outputFiles[0].text });
     try {
       await page.waitForFunction(() => Boolean(window.__s63.meeting), undefined, { timeout: 10000 });
@@ -333,6 +340,8 @@ export async function openProjectSelectionBrowserHost(t,bundle,browser,execution
       throw error;
     }
     t.diagnostic(`mounted Hook; external commands=${JSON.stringify(await page.evaluate(()=>window.__s63.calls.filter(c=>c.name).map(c=>c.name)))}`);
+    // inputs.mountOnly (Task 178 LG) hands the mounted Hook to the caller, which starts and feeds the session itself.
+    if(inputs.mountOnly)return {page,context,failures};
     const started = await page.evaluate(() => window.__s63.meeting.startRuntimeRegressionRun());
     t.diagnostic(`Replay start=${started}; unexpected=${JSON.stringify(await page.evaluate(()=>window.__s63.unexpected))}`);
     assert.equal(started, true, JSON.stringify(await page.evaluate(()=>({error:window.__s63.meeting.error,recording:window.__s63.meeting.sessionRecording,unexpected:window.__s63.unexpected}))));

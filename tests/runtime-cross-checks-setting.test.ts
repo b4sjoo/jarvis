@@ -14,6 +14,7 @@ import { commitStableAnswerRevision } from "../src/lib/meeting/stable-answer.js"
 import { parseMeetingAnswer } from "../src/lib/meeting/meeting-answer.js";
 import type { ArtifactRegenerationTarget } from "../src/lib/meeting/artifact-regeneration.js";
 import type { MeetingAssistantSettings } from "../src/lib/meeting/types.js";
+import { isDiagnosticLogLevel } from "../src/lib/meeting/diagnostic-log.js";
 
 const hookText = readFileSync("src/hooks/useMeetingAssistant.ts", "utf8");
 const hook = ts.createSourceFile("hook.ts", hookText, ts.ScriptTarget.Latest, true);
@@ -67,6 +68,8 @@ function settingsHarness(stored?: string, options: { deferState?: boolean; manag
       getItem: () => stored ?? null,
       setItem: (_key: string, value: string) => writes.push(value),
     },
+    // Task 178 LG: the one function the settings reader imports from the diagnostic log module.
+    isDiagnosticLogLevel,
   }) as Record<string, any>;
   for (const name of [
     "DEFAULT_ACTIVE_SCREEN_TASK_TIMEOUT_MINUTES", "MIN_ACTIVE_SCREEN_TASK_TIMEOUT_MINUTES", "MAX_ACTIVE_SCREEN_TASK_TIMEOUT_MINUTES",
@@ -303,10 +306,11 @@ test("PC7 every other setting still invalidates a reusable Artifact", () => {
     ["audio", (globals) => globals.updateSettings((previous: MeetingAssistantSettings) =>
       ({ ...previous, audio: { ...previous.audio, profile: "custom" } }))],
   ];
-  // Every setting except the observation switch is covered by a change above.
+  // Every setting except the observation switch and the diagnostic Log Level (Task 178 LG, projected to one
+  // constant the same way; tests/diagnostic-log-level-setting.test.ts) is covered by a change above.
   const defaults = settingsHarness().globals.state.settings;
   assert.deepEqual(changes.map(([key]) => key).sort(),
-    Object.keys(defaults).filter((key) => key !== "runtimeCrossChecksEnabled").sort());
+    Object.keys(defaults).filter((key) => key !== "runtimeCrossChecksEnabled" && key !== "diagnosticLogLevel").sort());
   for (const [key, change] of changes) {
     const h = reuseHarness();
     const slot = new UnpublishedArtifactSlot();

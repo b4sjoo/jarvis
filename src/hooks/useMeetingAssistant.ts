@@ -42,6 +42,15 @@ import {
   type NativeStallDiagnosticsReceipt,
 } from "@/lib/meeting/native-stall-diagnostics-receipt";
 import {
+  applyDiagnosticLogLevel,
+  beginDiagnosticLogLevelApply,
+  isDiagnosticLogLevel,
+  projectDiagnosticLogLevel,
+  settleDiagnosticLogLevelApply,
+  type DiagnosticLogLevelApply,
+  type DiagnosticLogLevelOutcome,
+} from "@/lib/meeting/diagnostic-log";
+import {
   assertShutdownQueueDrained,
   createNativeStopTerminalWait,
   stopShutdownEvaluationCapture,
@@ -370,6 +379,7 @@ import {
   NativeAudioManualRecoveryState,
   NativeAudioStopResult,
   MeetingAssistantSettings,
+  MeetingDiagnosticLogLevel,
   HumanEvaluationCollectionProvenance,
   MeetingAudioProfile,
   MeetingCodingModelSettings,
@@ -1497,6 +1507,7 @@ const INITIAL_STATE: MeetingAssistantState = {
     useMemory: true,
     personalEvidenceGuardrailMode: "enforcement",
     debugMode: false,
+    diagnosticLogLevel: "info",
     nativeStallDiagnosticsEnabled: false,
     runtimeCrossChecksEnabled: false,
     microphoneContextEnabled: true,
@@ -1564,6 +1575,9 @@ function readMeetingAssistantSettings(): MeetingAssistantSettings {
         typeof parsed.debugMode === "boolean"
           ? parsed.debugMode
           : DEFAULT_MEETING_ASSISTANT_SETTINGS.debugMode,
+      diagnosticLogLevel: isDiagnosticLogLevel(parsed.diagnosticLogLevel)
+        ? parsed.diagnosticLogLevel
+        : DEFAULT_MEETING_ASSISTANT_SETTINGS.diagnosticLogLevel,
       nativeStallDiagnosticsEnabled:
         typeof parsed.nativeStallDiagnosticsEnabled === "boolean"
           ? parsed.nativeStallDiagnosticsEnabled
@@ -3722,10 +3736,13 @@ export function useMeetingAssistant() {
     latestObservationId: contextManagerRef.current.getState().screenObservations.at(-1)?.id,
     // Runtime Cross-checks only admits observation. It is not an answer input, so
     // it is projected to one constant here: toggling it neither invalidates a
-    // reusable Artifact nor grants generation. Every other setting stays compared.
+    // reusable Artifact nor grants generation. The diagnostic Log Level only
+    // filters the ordinary log and is projected the same way. Every other
+    // setting stays compared.
     settings: structuredClone({
       ...artifactReuseSettingsRef.current,
       runtimeCrossChecksEnabled: false,
+      diagnosticLogLevel: "info" as const,
     }),
   }), []);
   const displayedStreamRef = useRef<{ traceId?: string; generationId: string; leaseId: string;
@@ -8934,6 +8951,51 @@ export function useMeetingAssistant() {
     receipt: nativeStallDiagnosticsReceipt,
   });
 
+  // Task 178 LG. A read-only record of the latest level apply, ordered by a
+  // Hook-local request id. It has two writers, both in the effect below: when
+  // the request is sent, and when the native reply of the latest request
+  // arrives. Nothing reads it to decide a request, and no Start, Resume, Pause,
+  // Stop or Quit path waits for it.
+  const [diagnosticLogLevelApply, setDiagnosticLogLevelApply] =
+    useState<DiagnosticLogLevelApply | null>(null);
+  const diagnosticLogLevelRequestIdRef = useRef(0);
+  // The saved level as the setter reads it, so that selecting it again writes
+  // no setting.
+  const diagnosticLogLevelRef = useRef(state.settings.diagnosticLogLevel);
+  // Raised by the setter when the saved level is selected again: the effect
+  // below then sends the apply once more, which is how a failed apply is
+  // retried. Nothing is saved and the settings object stays the same one.
+  const [diagnosticLogLevelReapply, setDiagnosticLogLevelReapply] = useState(0);
+  // The one place the saved level is applied: to the frontend logger at once,
+  // and to native in a call with an empty batch. It runs on mount with the
+  // loaded setting, whenever the setting changes, and when the saved level is
+  // selected again.
+  useEffect(() => {
+    const level = state.settings.diagnosticLogLevel;
+    diagnosticLogLevelRef.current = level;
+    const requestId = ++diagnosticLogLevelRequestIdRef.current;
+    setDiagnosticLogLevelApply(beginDiagnosticLogLevelApply(requestId, level));
+    const settle = (outcome: DiagnosticLogLevelOutcome) => {
+      // Written only to the pending record of this request, so a reply for an
+      // older request changes nothing that is shown.
+      setDiagnosticLogLevelApply((previous) =>
+        settleDiagnosticLogLevelApply(previous, requestId, outcome));
+    };
+    void applyDiagnosticLogLevel(level).then(
+      (receipt) => settle({ receipt }),
+      (error) => settle({
+        message: error instanceof Error ? error.message : String(error),
+      })
+    );
+  }, [state.settings.diagnosticLogLevel, diagnosticLogLevelReapply]);
+
+  // What the configuration panel shows. The setting is user intent; applied and
+  // failed come only from the settled record of a request for that level.
+  const diagnosticLogLevelStatus = projectDiagnosticLogLevel({
+    level: state.settings.diagnosticLogLevel,
+    apply: diagnosticLogLevelApply,
+  });
+
   const setSessionScriptedValidation = useCallback((enabled: boolean) => {
     const recordingState =
       sessionRecordingManagerRef.current?.getState();
@@ -9790,6 +9852,23 @@ export function useMeetingAssistant() {
   const setNativeStallDiagnosticsEnabled = useCallback(
     (nativeStallDiagnosticsEnabled: boolean) => {
       updateSettings((previous) => ({ ...previous, nativeStallDiagnosticsEnabled }));
+    },
+    [updateSettings]
+  );
+
+  // Task 178 LG. Saves the level and nothing else: Debug Mode is not read or
+  // written here. The level effect applies what was saved. The saved level
+  // selected again saves nothing: no storage write and no new settings object,
+  // so nothing that depends on the settings sees a change. It only asks the
+  // effect to send the apply again.
+  const setDiagnosticLogLevel = useCallback(
+    (diagnosticLogLevel: MeetingDiagnosticLogLevel) => {
+      if (diagnosticLogLevelRef.current === diagnosticLogLevel) {
+        setDiagnosticLogLevelReapply((count) => count + 1);
+        return;
+      }
+      diagnosticLogLevelRef.current = diagnosticLogLevel;
+      updateSettings((previous) => ({ ...previous, diagnosticLogLevel }));
     },
     [updateSettings]
   );
@@ -38018,6 +38097,8 @@ export function useMeetingAssistant() {
     setDebugMode,
     setNativeStallDiagnosticsEnabled,
     nativeStallDiagnostics,
+    setDiagnosticLogLevel,
+    diagnosticLogLevelStatus,
     setRuntimeCrossChecksEnabled,
     setMicrophoneContextEnabled,
     toggleMicrophoneContext,

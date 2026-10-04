@@ -40,6 +40,7 @@ import {
   type NativeStallDiagnosticsReceipt,
   type NativeStallDiagnosticsReceiptStatus,
 } from "../src/lib/meeting/native-stall-diagnostics-receipt.js";
+import { isDiagnosticLogLevel } from "../src/lib/meeting/diagnostic-log.js";
 
 const HOOK = "src/hooks/useMeetingAssistant.ts";
 const PAGE = "src/pages/app/components/meeting/index.tsx";
@@ -130,7 +131,7 @@ const panelCallSite = only<ts.JsxSelfClosingElement>(findAll(ui, (node) => ts.is
   node.tagName.getText(ui) === "ConfigurationsPanel"), "ConfigurationsPanel call site");
 
 const SETTINGS_KEY = "test-settings";
-const SETTINGS_KEYS = ["activeScreenTaskTimeoutMinutes", "audio", "codingModel", "debugMode", "microphoneContextEnabled",
+const SETTINGS_KEYS = ["activeScreenTaskTimeoutMinutes", "audio", "codingModel", "debugMode", "diagnosticLogLevel", "microphoneContextEnabled",
   "nativeStallDiagnosticsEnabled", "personalEvidenceGuardrailMode", "response", "runtimeCrossChecksEnabled",
   "taxonomyAdjudication", "useMemory"];
 const COMMAND = "set_native_stall_diagnostics";
@@ -208,6 +209,8 @@ function mount(options: MountOptions = {}) {
     // The five functions the Hook imports from the leaf module.
     beginNativeStallDiagnosticsRequest, createNativeStallDiagnosticsRequest, isNativeStallDiagnosticsRequestRecording,
     projectNativeStallDiagnostics, settleNativeStallDiagnosticsRequest,
+    // Task 178 LG: the one function the settings reader imports from the diagnostic log module.
+    isDiagnosticLogLevel,
     useRef: (value: unknown) => ({ current: value }),
     useState: (initial: unknown) => [initial],
   }) as Record<string, any>;
@@ -1386,8 +1389,8 @@ function panel(h: Mounted, options: { dev?: boolean; withoutProjection?: boolean
       ts.isJsxSelfClosingElement(candidate) && candidate.tagName.getText(ui).endsWith("Icon")))
       .map((node) => (node as ts.JsxSelfClosingElement).tagName.getText(ui));
     for (const icon of panelIconNames) globals[icon] = () => null;
-    for (const name of ["responseLengthOptions", "responseLanguageOptions", "enforcementShadowModeOptions", "meetingAudioProfileOptions",
-      "TASK_TIMEOUT_OPTIONS", "formatTaskTimeout", "formatSilenceDuration", "ConfigurationGroup", "ConfigButtonGrid",
+    for (const name of ["responseLengthOptions", "responseLanguageOptions", "enforcementShadowModeOptions", "diagnosticLogLevelOptions",
+      "meetingAudioProfileOptions", "TASK_TIMEOUT_OPTIONS", "formatTaskTimeout", "formatSilenceDuration", "ConfigurationGroup", "ConfigButtonGrid",
       "MeetingModelOverrideConfig", "ConfigurationsPanel"]) globals[name] = evaluate(expression(ui, name), ui, globals);
   }
   globals.importMeta = { env: { DEV: options.dev ?? false } };
@@ -1397,6 +1400,8 @@ function panel(h: Mounted, options: { dev?: boolean; withoutProjection?: boolean
     get: (_target, key) => {
       if (typeof key !== "string") return undefined;
       if (key === "nativeStallDiagnostics") return h.shown();
+      // Task 178 LG: this harness holds no level apply, so the page is given no Log Level status.
+      if (key === "diagnosticLogLevelStatus") return undefined;
       if (key in globals.state) return globals.state[key];
       if (real.includes(key)) return globals[key];
       return () => { h.actions.push(key); };

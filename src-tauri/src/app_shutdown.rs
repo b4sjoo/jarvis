@@ -215,6 +215,9 @@ fn exit(app: &AppHandle, receipt: Value) {
             }
         }
     }
+    // Ordinary diagnostic log: best effort, with its own fixed bound. The receipt
+    // line above stays raw and is never routed through the logger.
+    crate::diagnostic_log::flush_at_exit();
     app.exit(0);
 }
 

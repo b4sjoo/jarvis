@@ -1751,18 +1751,22 @@ mod tests {
     // ---------------------------------------------------------------------
     // NDI5 log isolation.
     //
-    // NOT RUN: a five-level logger comparison (ERROR, WARN, INFO, DEBUG,
-    // TRACE) cannot be run, because no logger levels exist yet. `tracing` is a
-    // dependency, but no subscriber is installed anywhere in this crate and
-    // this module does not log through it. The three tests below prove only
-    // what exists today: the dedicated evidence is written with no logger at
-    // all, the same evidence is written whatever debug-like or
-    // log-level-like variables the process starts with, and the production
-    // source consults no Debug flag, environment variable, build-profile
-    // gate or logger. When a logger is wired, keep these tests and add the
-    // five-level comparison here. If a subscriber is ever installed in the
-    // test process, `ndi5_assert_no_logger_installed` fails; that is the cue
-    // to add the comparison, not to delete the assertion.
+    // The crate has one logger, the ordinary diagnostic log
+    // (`crate::diagnostic_log`): a `tracing` subscriber with a level threshold.
+    // The app installs it process-wide at startup; the test process never does,
+    // and this module does not log through it. The first three tests prove
+    // that the dedicated evidence is written with no logger at all, that the
+    // same evidence is written whatever debug-like or log-level-like variables
+    // the process starts with, and that the production source consults no
+    // Debug flag, environment variable, build-profile gate or logger. The
+    // fourth is the five-level comparison (ERROR, WARN, INFO, DEBUG, TRACE):
+    // with that subscriber installed for the test's own thread at each level,
+    // the evidence is the same and none of it passes through the sink. A
+    // thread this module spawns does not inherit a subscriber scoped to the
+    // test thread; the source guard is what covers it. If a subscriber is ever
+    // installed for the whole test process, `ndi5_assert_no_logger_installed`
+    // fails; that is the cue to extend the comparison, not to delete the
+    // assertion.
     //
     // The stack file `sample-N.txt` is written by `/usr/bin/sample` itself and
     // is outside these tests.
@@ -1775,11 +1779,11 @@ mod tests {
             tracing::dispatcher::get_default(|current| {
                 current.is::<tracing::subscriber::NoSubscriber>()
             }),
-            "a tracing subscriber is installed: add the five-level comparison"
+            "a tracing subscriber is installed process-wide: extend the five-level comparison"
         );
         assert!(
             !tracing::enabled!(tracing::Level::ERROR),
-            "a logger level is enabled: add the five-level comparison"
+            "a logger level is enabled process-wide: extend the five-level comparison"
         );
     }
 
@@ -1931,6 +1935,59 @@ mod tests {
         assert_eq!(evidence.len(), 4);
         for other in &evidence[1..] {
             assert_eq!(other, &evidence[0]);
+        }
+    }
+
+    // NDI5: with the ordinary diagnostic log's subscriber installed at each of
+    // its five levels, the dedicated evidence is the one written with no
+    // logger, and nothing of it passes through the sink.
+    #[test]
+    fn ndi5_dedicated_evidence_is_identical_at_each_of_the_five_log_levels() {
+        ndi5_assert_no_logger_installed();
+        let without_logger = ndi5_write_dedicated_evidence();
+
+        for level in ["error", "warn", "info", "debug", "trace"] {
+            let log = crate::diagnostic_log::tests::TestSink::started("ndi5");
+            let applied = serde_json::to_value(log.apply(level).applied_level).unwrap();
+            assert_eq!(applied, level);
+
+            let evidence = tracing::dispatcher::with_default(&log.dispatch(), || {
+                assert!(
+                    !tracing::dispatcher::get_default(|current| {
+                        current.is::<tracing::subscriber::NoSubscriber>()
+                    }),
+                    "the sink's subscriber is this thread's default"
+                );
+                let evidence = ndi5_write_dedicated_evidence();
+                // Proves that the sink was live while the evidence was written:
+                // an error passes every threshold.
+                tracing::error!(target: "jarvis_lib::speaker::commands", "ndi5 sink canary");
+                evidence
+            });
+            ndi5_assert_no_logger_installed();
+            assert_eq!(evidence, without_logger, "level {level}");
+
+            log.finish();
+            let lines = log.file_lines();
+            assert_eq!(lines.len(), 1, "level {level}: {lines:?}");
+            assert_eq!(lines[0]["message"], "ndi5 sink canary");
+            for output in [log.file_text(), log.terminal_text()] {
+                assert_eq!(output.lines().count(), 1, "level {level}: {output}");
+                for evidence_text in [
+                    "run-ndi5",
+                    "native-stall",
+                    "recovery",
+                    "sample",
+                    "attempt",
+                    "capture",
+                    "capacity-or-disabled",
+                ] {
+                    assert!(
+                        !output.contains(evidence_text),
+                        "level {level}: {evidence_text} reached the sink"
+                    );
+                }
+            }
         }
     }
 

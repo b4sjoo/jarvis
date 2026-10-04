@@ -22,6 +22,7 @@ import * as runtimeInference from "../src/lib/meeting/runtime-inference.js";
 import { hashTaxonomySourceTurnIds } from "../src/lib/meeting/taxonomy-adjudication.js";
 import { createScreenPreflightDeadlineArbiter } from "../src/lib/meeting/screen-preflight-deadline.js";
 import { createMeetingId } from "../src/lib/meeting/meeting-id.js";
+import { isDiagnosticLogLevel } from "../src/lib/meeting/diagnostic-log.js";
 import {
   createRuntimeCriticalEventHarness,
   RUNTIME_CRITICAL_EVENT_HOOK_CALLBACKS,
@@ -102,6 +103,8 @@ function settingsHarness(stored?: string) {
       getItem: () => stored ?? null,
       setItem: (_key: string, value: string) => writes.push(value),
     },
+    // Task 178 LG: the one function the settings reader imports from the diagnostic log module.
+    isDiagnosticLogLevel,
   });
   load(hook, globals, [
     "DEFAULT_ACTIVE_SCREEN_TASK_TIMEOUT_MINUTES", "MIN_ACTIVE_SCREEN_TASK_TIMEOUT_MINUTES", "MAX_ACTIVE_SCREEN_TASK_TIMEOUT_MINUTES",
@@ -495,7 +498,7 @@ function uiHarness() {
     ts.forEachChild(node, visit);
   };
   visit(panel);
-  load(ui, globals, ["responseLengthOptions", "responseLanguageOptions", "enforcementShadowModeOptions", "meetingAudioProfileOptions", "TASK_TIMEOUT_OPTIONS",
+  load(ui, globals, ["responseLengthOptions", "responseLanguageOptions", "enforcementShadowModeOptions", "diagnosticLogLevelOptions", "meetingAudioProfileOptions", "TASK_TIMEOUT_OPTIONS",
     "formatTaskTimeout", "formatSilenceDuration", "ConfigurationGroup", "ConfigButtonGrid", "MeetingModelOverrideConfig", "ConfigurationsPanel"]);
   const settings = globals.state.settings;
   const changes: any[] = [];

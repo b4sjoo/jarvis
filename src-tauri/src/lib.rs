@@ -1,6 +1,7 @@
 mod app_shutdown;
 mod capture;
 mod db;
+mod diagnostic_log;
 mod native_stall_diagnostics;
 mod preparation_material_extraction;
 mod preparation_material_storage;
@@ -503,8 +504,11 @@ pub fn run() {
             speaker::get_output_devices,
             native_stall_diagnostics::set_native_stall_diagnostics,
             native_stall_diagnostics::acknowledge_native_stall_marker,
+            diagnostic_log::write_diagnostic_log,
         ])
         .setup(|app| {
+            // Ordinary diagnostic log: the sink and its tracing subscriber start here, once.
+            diagnostic_log::start(app.path().app_data_dir().ok());
             #[cfg(target_os = "macos")]
             app_shutdown::install_quit_menu(app)?;
             if let Err(error) =

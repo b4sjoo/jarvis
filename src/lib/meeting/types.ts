@@ -1481,11 +1481,31 @@ export interface NativeAudioDebugFaultResult {
   currentStatus: MeetingAudioStatus;
 }
 
+// Task 178 LG: the threshold of the ordinary diagnostic log, most severe first.
+// A threshold includes every more severe level. It is the same five literals as
+// DiagnosticLogLevel in diagnostic-log.ts, declared here because this file may
+// not import that module.
+export type MeetingDiagnosticLogLevel =
+  | "error"
+  | "warn"
+  | "info"
+  | "debug"
+  | "trace";
+
 export interface MeetingAssistantSettings {
   activeScreenTaskTimeoutMinutes: number;
   useMemory: boolean;
   personalEvidenceGuardrailMode: PersonalEvidenceGuardrailMode;
   debugMode: boolean;
+  // Filters the ordinary diagnostic log only. Stored and applied separately
+  // from debugMode. Its value is never read by a formal decision or an answer,
+  // and it gates nothing in Session Recording, the critical event stream or
+  // Native Stall Diagnostics. A recording stores the settings it started with,
+  // this one among them; a change during a running recording is not recorded.
+  // Changing it during a session is a settings write like any other: the
+  // settings object is replaced, and what depends on that object is refreshed
+  // as it is for every other setting. The value itself is not the cause.
+  diagnosticLogLevel: MeetingDiagnosticLogLevel;
   nativeStallDiagnosticsEnabled: boolean;
   // Admits the four extra runtime observation families (extra Split Relation and
   // its automatic Canonical, Whiteboard syntax-repair observation, the Meeting

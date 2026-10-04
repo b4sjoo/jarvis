@@ -131,6 +131,14 @@ function installBoundaries() {
       if (name === 'evaluation_store_import_status') return { imported: true };
       if (name === 'evaluation_store_read') return { events: [], projections: [] };
       if (name === 'evaluation_store_project') return JSON.parse(JSON.stringify(args.projection));
+      // Task 178 LG: a scenario may answer the diagnostic log command itself. Otherwise the level of the call is applied
+      // and every entry is taken; an invalid level rejects, as on native.
+      if (name === 'write_diagnostic_log' && pc.diagnosticLog) return pc.diagnosticLog(args);
+      if (name === 'write_diagnostic_log') {
+        if (!['error', 'warn', 'info', 'debug', 'trace'].includes(args.level)) throw new Error('Diagnostic log level is not one of error, warn, info, debug, trace');
+        return { v: 1, appliedLevel: args.level, accepted: (args.entries ?? []).length, filtered: 0, rejected: 0, dropped: 0,
+          sink: { state: 'ready', droppedTotal: 0, writeFailures: 0, unsavedAtExit: 0 } };
+      }
       pc.unexpected.push(name);
       throw new Error('Uncontrolled native command: ' + name);
     },
@@ -334,6 +342,40 @@ async function runOpeningTurn(page) {
   });
 }
 
+// ---- Task 178 LG: the Log Level selector, mounted ----
+// The Log Level block of the Debug group as it is drawn, next to what the Hook exports, what it returned in each
+// render and what reached the native command.
+const logLevel = page => page.evaluate(SETTINGS => {
+  const line = element => element.textContent.replace(/\s+/g, ' ').trim();
+  const labels = [...document.querySelectorAll('#configurations label')].filter(element => line(element) === 'Log Level');
+  const grid = labels[0].parentElement;
+  const block = grid.parentElement;
+  const buttons = [...grid.querySelectorAll('button')];
+  const rows = [...block.children];
+  const status = rows.slice(2);
+  // The group this block belongs to, by its title row.
+  const group = block.parentElement.parentElement;
+  return {
+    selectors: labels.length,
+    group: line(group.firstElementChild),
+    previous: line(block.previousElementSibling),
+    options: buttons.map(button => button.textContent.trim()),
+    selected: buttons.filter(button => button.className.split(/\s+/).includes('bg-primary')).map(button => button.textContent.trim()),
+    help: line(rows[1]),
+    status: status.map(line),
+    red: status.map(element => element.className.split(/\s+/).includes('text-red-600')),
+    controls: status.reduce((count, element) => count + element.querySelectorAll('button,a,input,select,textarea,[role="button"]').length, 0),
+    exported: JSON.parse(JSON.stringify(window.__pc.meeting.diagnosticLogLevelStatus)),
+    setting: window.__pc.meeting.settings.diagnosticLogLevel,
+    debugMode: window.__pc.meeting.settings.debugMode,
+    stored: localStorage.getItem(SETTINGS),
+    commands: window.__pc.calls.filter(call => call.name === 'write_diagnostic_log').map(call => call.args),
+    held: (window.__pc.diagnosticLogHeld ?? []).map(request => request.args),
+    renders: (window.__pc.diagnosticLogRenders ?? []).slice(),
+    requests: window.__pc.requests.length,
+  };
+}, SETTINGS);
+
 test('PC1 and PC7: Preview controls and the Meeting Metadata selector with the real Hook in a real browser', { timeout: 180000, skip: browserTestSkip }, async t => {
   const browser = await playwright.chromium.launch({ headless: true, executablePath: process.env.JARVIS_CHROMIUM_EXECUTABLE });
   try {
@@ -399,8 +441,9 @@ test('PC1 and PC7: Preview controls and the Meeting Metadata selector with the r
       view = await shown(page);
       assert.deepEqual(view.factRisk.selected, ['Enforcement']);
       assert.deepEqual(Object.keys(JSON.parse(view.stored)).sort(), ['activeScreenTaskTimeoutMinutes', 'audio', 'codingModel', 'debugMode',
-        'microphoneContextEnabled', 'nativeStallDiagnosticsEnabled', 'personalEvidenceGuardrailMode', 'response', 'runtimeCrossChecksEnabled',
-        'taxonomyAdjudication', 'useMemory'], 'the saved settings hold the keys they held before this commit');
+        'diagnosticLogLevel', 'microphoneContextEnabled', 'nativeStallDiagnosticsEnabled', 'personalEvidenceGuardrailMode', 'response',
+        'runtimeCrossChecksEnabled', 'taxonomyAdjudication', 'useMemory'],
+        'the saved settings hold the keys they held before this commit, and diagnosticLogLevel, which Task 178 LG added later');
     });
 
     const storedBrief = { targetCompany: 'Oracle', companyLocked: true, interviewTypes: ['coding'], updatedAt: 5 };
@@ -664,8 +707,9 @@ test('PC1 and PC7: Preview controls and the Meeting Metadata selector with the r
       assert.deepEqual([view.recordingStarts, view.recording.active, view.requests, view.held.length], [0, false, 0, 0]);
       const stored = JSON.parse(await page.evaluate(key => localStorage.getItem(key), SETTINGS));
       assert.equal(stored.nativeStallDiagnosticsEnabled, true, 'the setting is saved');
-      assert.deepEqual(Object.keys(stored).sort(), ['activeScreenTaskTimeoutMinutes', 'audio', 'codingModel', 'debugMode', 'microphoneContextEnabled',
-        'nativeStallDiagnosticsEnabled', 'personalEvidenceGuardrailMode', 'response', 'runtimeCrossChecksEnabled', 'taxonomyAdjudication', 'useMemory']);
+      assert.deepEqual(Object.keys(stored).sort(), ['activeScreenTaskTimeoutMinutes', 'audio', 'codingModel', 'debugMode', 'diagnosticLogLevel',
+        'microphoneContextEnabled', 'nativeStallDiagnosticsEnabled', 'personalEvidenceGuardrailMode', 'response', 'runtimeCrossChecksEnabled',
+        'taxonomyAdjudication', 'useMemory']);
 
       // arming: recording A is active, the arm request is with native, and it is not shown as armed.
       await recordingSwitch.click();
@@ -827,6 +871,150 @@ test('PC1 and PC7: Preview controls and the Meeting Metadata selector with the r
       t.diagnostic(`NDI renders=${JSON.stringify(view.renders.map(entry => [names[entry[0]] ?? entry[0], entry[1], names[entry[2]] ?? entry[2], entry[3] ? 'path' : null]))}`);
       await recordingSwitch.click();
       await page.waitForFunction(() => window.__pc.meeting.sessionRecording.lifecycle === 'idle', undefined, { timeout: 15000 });
+    });
+
+    // Task 178 LG: LG1, LG7 and the LG UI, through real clicks on the Log Level selector.
+    await scenario('LG1, LG7 and LG UI: a real click on a level is saved at once and shown as requested, then applied or failed from the native reply; a reload applies it again', {}, async (page, host) => {
+      const HELP = 'Sets the threshold of the diagnostic log: entries at the selected level and every more severe level go to the terminal ' +
+        'and to the local log files, which keep at most 50 MiB or 14 days. In this version the diagnostic log holds only the errors of the ' +
+        'native system audio commands, so every level gives the same output. Saved separately from Debug Mode: changing one never changes ' +
+        'the other. Log Level controls no other terminal or console output: not the Debug Mode trace printing, not Preparation, the focus ' +
+        'window or native prints, and not Session Recording or Native Stall Diagnostics files. It starts no model request, sampler or capture.';
+      const pending = level => `Status: ${level} requested, waiting for the native reply. Not yet confirmed on native.`;
+      const applied = (level, sink = 'ready') => `Status: native applied ${level}. Log sink at that time: ${sink}.`;
+      const failed = (level, message) => `Status: native did not confirm ${level}. Select ${level} again to retry. Reason: ${message}`;
+      const apply = level => ({ level, entries: [] });
+      const receipt = (level, state = 'ready') => ({ v: 1, appliedLevel: level, accepted: 0, filtered: 0, rejected: 0, dropped: 0,
+        sink: { state, droppedTotal: 0, writeFailures: 0, unsavedAtExit: 0 } });
+      const phase = name => page.waitForFunction(name => window.__pc.meeting.diagnosticLogLevelStatus.phase === name, name, { timeout: 15000 });
+      const heldCalls = count => page.waitForFunction(count => window.__pc.diagnosticLogHeld.length === count, count, { timeout: 15000 });
+      const answer = (kind, value) => page.evaluate(([kind, value]) => window.__pc.diagnosticLogHeld.shift()[kind](value), [kind, value]);
+      // From here native answers only when the test says so, and every projection the Hook returns is listed.
+      const hold = () => page.evaluate(() => {
+        const pc = window.__pc;
+        pc.diagnosticLogHeld = [];
+        pc.diagnosticLog = args => new Promise((resolve, reject) => pc.diagnosticLogHeld.push({ args, resolve, reject }));
+        pc.diagnosticLogRenders = [];
+        let meeting = pc.meeting;
+        Object.defineProperty(pc, 'meeting', { configurable: true, get: () => meeting, set: value => {
+          meeting = value;
+          const shown = value.diagnosticLogLevelStatus;
+          const entry = [value.settings.diagnosticLogLevel, shown.phase, shown.level, shown.appliedLevel ?? null];
+          if (JSON.stringify(pc.diagnosticLogRenders.at(-1)) !== JSON.stringify(entry)) pc.diagnosticLogRenders.push(entry);
+        } });
+      });
+
+      // A fresh store: info, applied once at mount with an empty batch, nothing written, Debug Mode off.
+      await phase('applied');
+      let view = await logLevel(page);
+      assert.deepEqual([view.selectors, view.group, view.previous], [1, 'Debug', 'Debug Mode'], 'one selector, in the Debug group, right under Debug Mode');
+      assert.deepEqual(view.options, ['Error', 'Warn', 'Info', 'Debug', 'Trace']);
+      assert.deepEqual([view.selected, view.setting, view.debugMode, view.stored], [['Info'], 'info', false, null]);
+      assert.equal(view.help, HELP);
+      assert.deepEqual([view.status, view.red, view.controls], [[applied('info')], [false], 0]);
+      assert.deepEqual(view.exported, { phase: 'applied', level: 'info', appliedLevel: 'info', sinkState: 'ready' });
+      assert.deepEqual(view.commands, [apply('info')], 'one apply at mount: the level and an empty batch');
+
+      // A real click on Trace while native is silent: saved and selected at once, shown as requested, not as applied.
+      await hold();
+      const picked = await act(page, () => option(page, '#configurations', 'Log Level', 'Trace').click());
+      assert.deepEqual(picked.moved.sort(), ['diagnosticLogLevelStatus.appliedLevel: "info" -> undefined', 'diagnosticLogLevelStatus.level: "info" -> "trace"',
+        'diagnosticLogLevelStatus.phase: "applied" -> "pending"', 'diagnosticLogLevelStatus.sinkState: "ready" -> undefined',
+        'settings.diagnosticLogLevel: "info" -> "trace"'], 'the click moved its setting and the projection, and nothing else the Hook exports');
+      assert.deepEqual([picked.nativeCalls, picked.requests], [1, 0], 'one native call, the apply, and no provider request');
+      await heldCalls(1);
+      view = await logLevel(page);
+      assert.deepEqual([view.selected, view.setting, view.status, view.red], [['Trace'], 'trace', [pending('trace')], [false]]);
+      assert.deepEqual(view.held, [apply('trace')]);
+      assert.equal(JSON.parse(view.stored).diagnosticLogLevel, 'trace', 'the setting is saved before native answers');
+      assert.equal(JSON.parse(view.stored).debugMode, false);
+
+      // Native answers: applied, with the level and the sink state of the receipt.
+      await answer('resolve', receipt('trace', 'degraded'));
+      await phase('applied');
+      await frames(page);
+      view = await logLevel(page);
+      assert.deepEqual([view.status, view.red], [[applied('trace', 'degraded')], [false]]);
+      assert.deepEqual(view.exported, { phase: 'applied', level: 'trace', appliedLevel: 'trace', sinkState: 'degraded' });
+
+      // Debug Mode on and off while a level is applied: the level, its status and native are left alone.
+      for (const expected of [true, false]) {
+        const toggled = await act(page, () => rowSwitch(page, 'Debug Mode').click());
+        assert.deepEqual(toggled.moved, [`settings.debugMode: ${!expected} -> ${expected}`]);
+        const now = await logLevel(page);
+        assert.deepEqual([now.selected, now.setting, now.status, now.held.length, now.commands.length], [['Trace'], 'trace', [applied('trace', 'degraded')], 0, 2]);
+      }
+
+      // A click on Debug (the level) that native rejects: failed with the reason, in red, and never shown as applied.
+      await option(page, '#configurations', 'Log Level', 'Debug').click();
+      await heldCalls(1);
+      view = await logLevel(page);
+      assert.deepEqual([view.selected, view.status, view.held], [['Debug'], [pending('debug')], [apply('debug')]]);
+      await answer('reject', 'The diagnostic log sink is not available');
+      await phase('failed');
+      await frames(page);
+      view = await logLevel(page);
+      assert.deepEqual([view.selected, view.setting, view.status, view.red, view.controls],
+        [['Debug'], 'debug', [failed('debug', 'The diagnostic log sink is not available')], [true], 0]);
+      assert.deepEqual(view.exported, { phase: 'failed', level: 'debug', message: 'The diagnostic log sink is not available' });
+      assert.equal(JSON.parse(view.stored).diagnosticLogLevel, 'debug', 'the selection stays saved');
+      assert.equal(view.debugMode, false, 'the Debug Mode switch was not moved by the Debug level');
+
+      // A real click on the level that is already selected retries the apply. Nothing is saved: the stored text and
+      // the settings object the Hook exports are the ones from before the click.
+      const savedBeforeRetry = view.stored;
+      await page.evaluate(() => { window.__lgSettingsBeforeRetry = window.__pc.meeting.settings; });
+      const retried = await act(page, () => option(page, '#configurations', 'Log Level', 'Debug').click());
+      assert.deepEqual(retried.moved.sort(), ['diagnosticLogLevelStatus.message: "The diagnostic log sink is not available" -> undefined',
+        'diagnosticLogLevelStatus.phase: "failed" -> "pending"'], 'the retry moved the projection and no setting');
+      assert.deepEqual([retried.nativeCalls, retried.requests], [1, 0]);
+      await heldCalls(1);
+      view = await logLevel(page);
+      assert.deepEqual([view.selected, view.status, view.held, view.stored], [['Debug'], [pending('debug')], [apply('debug')], savedBeforeRetry]);
+      assert.equal(await page.evaluate(() => window.__pc.meeting.settings === window.__lgSettingsBeforeRetry), true,
+        'the settings object is the same one: nothing that depends on the settings saw a change');
+      await answer('resolve', receipt('debug'));
+      await phase('applied');
+      await frames(page);
+      view = await logLevel(page);
+      assert.deepEqual([view.selected, view.status, view.red, view.stored], [['Debug'], [applied('debug')], [false], savedBeforeRetry]);
+
+      // Two quick clicks: only the reply of the latest request is shown, and an older one changes nothing.
+      await page.evaluate(() => { const meeting = window.__pc.meeting; meeting.setDiagnosticLogLevel('warn'); });
+      await heldCalls(1);
+      await option(page, '#configurations', 'Log Level', 'Error').click();
+      await frames(page);
+      view = await logLevel(page);
+      assert.deepEqual([view.selected, view.status, view.held], [['Error'], [pending('error')], [apply('warn')]], 'one call at a time: error waits for the reply to warn');
+      await answer('resolve', receipt('warn'));
+      await heldCalls(1);
+      await frames(page);
+      view = await logLevel(page);
+      assert.deepEqual([view.status, view.held], [[pending('error')], [apply('error')]], 'the reply to warn is not the status of error');
+      await answer('resolve', receipt('error'));
+      await phase('applied');
+      await frames(page);
+      view = await logLevel(page);
+      assert.deepEqual([view.selected, view.status, view.red], [['Error'], [applied('error')], [false]]);
+
+      // Every render: a level was shown as applied only after native confirmed that level.
+      assert.deepEqual(view.renders.filter(entry => entry[1] === 'applied'),
+        [['trace', 'applied', 'trace', 'trace'], ['debug', 'applied', 'debug', 'debug'], ['error', 'applied', 'error', 'error']]);
+      assert.equal(view.renders.some(entry => entry[1] === 'applied' && entry[0] === 'warn'), false, 'warn was superseded: it was never shown as applied');
+      const debugPhases = view.renders.filter(entry => entry[0] === 'debug').map(entry => entry[1]);
+      assert.deepEqual(debugPhases, ['pending', 'failed', 'pending', 'applied'], 'debug was rejected, and shown as applied only once the retry was confirmed');
+      for (const entry of view.renders) assert.equal(entry[0], entry[2], 'the status always names the saved level');
+      assert.deepEqual(view.commands, [apply('info'), apply('trace'), apply('debug'), apply('debug'), apply('warn'), apply('error')]);
+      assert.equal(view.requests, 0, 'no provider request was made');
+      t.diagnostic(`LG mounted Hook; renders=${JSON.stringify(view.renders)}`);
+
+      // Reload: the saved level is read back, applied again with an empty batch, and nothing is written.
+      const saved = view.stored;
+      await host.reload();
+      await phase('applied');
+      view = await logLevel(page);
+      assert.deepEqual([view.selected, view.setting, view.status, view.stored], [['Error'], 'error', [applied('error')], saved]);
+      assert.deepEqual(view.commands, [apply('error')], 'the new page applied the saved level once');
     });
   } finally { await browser.close(); }
 });

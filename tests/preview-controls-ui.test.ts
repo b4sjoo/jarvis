@@ -26,6 +26,10 @@ import { enforceFactAnchorOutput, projectFactAnchorStreamingPartial } from "../s
 import { buildMeetingMetadataInferenceRequest, decideMeetingMetadataInferenceCommit, parseMeetingMetadataInferenceOutput,
   projectMeetingMetadataOpeningEvidence } from "../src/lib/meeting/meeting-metadata-inference.js";
 import type { InterviewSessionBrief, MeetingMetadataInferenceMode, TranscriptTurn } from "../src/lib/meeting/types.js";
+import {
+  beginDiagnosticLogLevelApply, isDiagnosticLogLevel, projectDiagnosticLogLevel, settleDiagnosticLogLevelApply,
+  type DiagnosticLogLevelProjection, type DiagnosticLogReceipt,
+} from "../src/lib/meeting/diagnostic-log.js";
 
 const hookText = readFileSync("src/hooks/useMeetingAssistant.ts", "utf8");
 const uiText = readFileSync("src/pages/app/components/meeting/index.tsx", "utf8");
@@ -111,7 +115,7 @@ const compact = (value: string) => value.replace(/\s+/g, "");
 const SETTINGS_KEY = "test-settings";
 const BRIEF_KEY = "test-brief";
 const REAL_SETTERS = [
-  "setDebugMode", "setNativeStallDiagnosticsEnabled", "setRuntimeCrossChecksEnabled", "setUseMemory",
+  "setDebugMode", "setNativeStallDiagnosticsEnabled", "setDiagnosticLogLevel", "setRuntimeCrossChecksEnabled", "setUseMemory",
   "setPersonalEvidenceGuardrailMode", "setCodingModelConfig", "setTaxonomyAdjudicationConfig",
 ];
 // Every other function the two call sites pass down. A call is recorded, never performed.
@@ -153,6 +157,8 @@ function harness(stored?: string, options: HarnessOptions = {}) {
       getItem: (key: string) => (key === SETTINGS_KEY ? stored ?? null : null),
       setItem: (key: string, value: string) => { writes.push({ key, value }); },
     },
+    // Task 178 LG: the one function the settings reader imports from the diagnostic log module.
+    isDiagnosticLogLevel,
   }) as Record<string, any>;
   load(hook, globals, [
     "DEFAULT_ACTIVE_SCREEN_TASK_TIMEOUT_MINUTES", "MIN_ACTIVE_SCREEN_TASK_TIMEOUT_MINUTES", "MAX_ACTIVE_SCREEN_TASK_TIMEOUT_MINUTES",
@@ -168,6 +174,8 @@ function harness(stored?: string, options: HarnessOptions = {}) {
   globals.DEFAULT_MEETING_ASSISTANT_SETTINGS = evaluate(initialSettings.initializer, hook, globals);
   globals.state = {
     status: "idle", isActive: false, audioStatus: undefined, nativeStallDiagnostics: undefined,
+    // Task 178 LG: this harness holds no level apply, so the page is given no Log Level status.
+    diagnosticLogLevelStatus: undefined,
     settings: globals.readMeetingAssistantSettings(),
     interviewSessionBrief: brief, preparationRuntime,
     aiProviders: [{ id: "test-provider", curl: "" }],
@@ -181,6 +189,12 @@ function harness(stored?: string, options: HarnessOptions = {}) {
   // The refs start from the loaded settings, as the Hook declares and syncs them.
   globals.runtimeCrossChecksEnabledRef = { current: globals.state.settings.runtimeCrossChecksEnabled };
   globals.taxonomyAdjudicationSettingsRef = { current: globals.state.settings.taxonomyAdjudication };
+  // Task 178 LG: the saved level as the level setter reads it, and the counter it raises when that level is selected again.
+  globals.diagnosticLogLevelRef = { current: globals.state.settings.diagnosticLogLevel };
+  globals.diagnosticLogLevelReapplies = 0;
+  globals.setDiagnosticLogLevelReapply = (update: (count: number) => number) => {
+    globals.diagnosticLogLevelReapplies = update(globals.diagnosticLogLevelReapplies);
+  };
   globals.sessionRecordingManagerRef = { current: undefined };
   globals.updateSettings = evaluate(callback("updateSettings"), hook, globals);
   for (const name of REAL_SETTERS) globals[name] = evaluate(callback(name), hook, globals);
@@ -224,7 +238,7 @@ function harness(stored?: string, options: HarnessOptions = {}) {
   for (const icon of panelIcons()) globals[icon] = () => null;
   load(ui, globals, [
     "WRAP_TEXT_CLASS", "responseLengthOptions", "responseLanguageOptions", "enforcementShadowModeOptions",
-    "meetingAudioProfileOptions", "TASK_TIMEOUT_OPTIONS", "formatTaskTimeout", "formatSilenceDuration",
+    "diagnosticLogLevelOptions", "meetingAudioProfileOptions", "TASK_TIMEOUT_OPTIONS", "formatTaskTimeout", "formatSilenceDuration",
     "EMPTY_INTERVIEW_SESSION_BRIEF", "interviewBriefTypeOptions", "concreteInterviewBriefTypes", "toggleInterviewBriefType",
     "getEditableInterviewSessionBrief", "isEditableInterviewSessionBriefEmpty", "formatInterviewBriefType",
     "formatInterviewBriefSummary", "formatPreparationRuntimeIdentity", "formatPreparationRuntimeDetail",
@@ -459,7 +473,8 @@ test("PC1 the Rescue entry and the two old switch rows are gone from Configurati
     "the page source carries none of the retired labels or props");
   // No Meeting Metadata control is left in Configurations.
   assert.equal(c.of(h.globals.ConfigButtonGrid).some((node) => node.props.label === "Meeting Metadata"), false);
-  assert.deepEqual(c.of(h.globals.ConfigButtonGrid).map((node) => node.props.label), ["Length", "Language", "Fact Risk Review"]);
+  // "Log Level" is the selector Task 178 LG added to the Debug group.
+  assert.deepEqual(c.of(h.globals.ConfigButtonGrid).map((node) => node.props.label), ["Length", "Language", "Fact Risk Review", "Log Level"]);
   const context = c.group("Context");
   const models = c.of(h.globals.MeetingModelOverrideConfig, context.all);
   assert.deepEqual(models.map((node) => node.props.label), ["Fast Runtime model"]);
@@ -651,9 +666,9 @@ test("PC1 both call sites bind the existing owner values and setters; no setting
   assert.equal(bound(briefSite, "onTaxonomyAdjudicationChange"), "meeting.setTaxonomyAdjudicationConfig");
   assert.equal(bound(briefSite, "onBriefChange"), "meeting.setInterviewSessionBrief");
   assert.equal(bound(briefSite, "onClear"), "meeting.clearInterviewSessionBrief");
-  // The settings object has the keys it had before this commit.
+  // The settings object has the keys it had before this commit, and diagnosticLogLevel, which Task 178 LG added later.
   assert.deepEqual(Object.keys(harness().settings()).sort(), ["activeScreenTaskTimeoutMinutes", "audio", "codingModel", "debugMode",
-    "microphoneContextEnabled", "nativeStallDiagnosticsEnabled", "personalEvidenceGuardrailMode", "response",
+    "diagnosticLogLevel", "microphoneContextEnabled", "nativeStallDiagnosticsEnabled", "personalEvidenceGuardrailMode", "response",
     "runtimeCrossChecksEnabled", "taxonomyAdjudication", "useMemory"]);
   // One Hook instance feeds the page, and neither panel reads or writes storage itself.
   assert.equal(uiText.split("useMeetingAssistant(").length - 1, 1);
@@ -1117,7 +1132,10 @@ test("PC7 the Debug group is the same with Cross-checks on and off, and Session 
     const on = render(true, "shadow");
     assert.equal(on.html, off.html, JSON.stringify({ dev, debug, recording }));
     const { h, c, group } = off;
-    const order = ["Debug Mode", "Native Stall Diagnostics", "Session Recording", "STT Evaluation Capture"].map((entry) => group.text.indexOf(entry));
+    // The entries by their own labels. The Log Level help text (Task 178 LG) names two of them, so a text search would find it first.
+    const entryLabels = group.all.filter((node) => typeof node.props.className === "string" && node.props.className.includes("uppercase"))
+      .map((node) => text(node.children));
+    const order = ["Debug Mode", "Native Stall Diagnostics", "Session Recording", "STT Evaluation Capture"].map((entry) => entryLabels.indexOf(entry));
     assert.ok(order.every((index, position) => index >= 0 && (position === 0 || index > order[position - 1]!)), "entries in their order");
     const switches = c.of(h.globals.Switch, group.all);
     const handlers = switches.map((node) => node.props.onCheckedChange);
@@ -1189,4 +1207,190 @@ test("PC7 Normal and Focus surfaces display one fact-risk result read from the H
     'readFactRiskReview: (stable: StableAnswerRevision | null | undefined) => state.settings.personalEvidenceGuardrailMode === "enforcement"'), true);
   assert.equal(uiText.split("onPersonalEvidenceGuardrailModeChange(").length - 1, 0, "the panel passes the setter through and wraps no logic around it");
   assert.equal(uiText.split("setPersonalEvidenceGuardrailMode").length - 1, 1);
+});
+
+// ---- Task 178 LG: the Log Level selector and its status line in the Debug group ----
+// The projections are built by the real begin / settle / project functions of the diagnostic log
+// module and handed to the page as the Hook member the call site reads. The Hook's own level block
+// is exercised in tests/diagnostic-log-level-setting.test.ts and, mounted, in
+// tests/preview-controls-consumer.test.mjs.
+
+const LOG_LEVELS = ["error", "warn", "info", "debug", "trace"] as const;
+const LOG_LEVEL_LABELS = ["Error", "Warn", "Info", "Debug", "Trace"];
+// Verbatim UI text of the selector.
+const LOG_LEVEL_HELP = "Sets the threshold of the diagnostic log: entries at the selected level and every more severe level go to the " +
+  "terminal and to the local log files, which keep at most 50 MiB or 14 days. In this version the diagnostic log holds only the " +
+  "errors of the native system audio commands, so every level gives the same output. Saved separately from Debug Mode: changing " +
+  "one never changes the other. Log Level controls no other terminal or console output: not the Debug Mode trace printing, not " +
+  "Preparation, the focus window or native prints, and not Session Recording or Native Stall Diagnostics files. It starts no model " +
+  "request, sampler or capture.";
+const logLevelPending = (level: string) => `Status: ${level} requested, waiting for the native reply. Not yet confirmed on native.`;
+const logLevelApplied = (level: string, sink: string) => `Status: native applied ${level}. Log sink at that time: ${sink}.`;
+const logLevelFailed = (level: string, message: string) => `Status: native did not confirm ${level}. Select ${level} again to retry. Reason: ${message}`;
+const logLevelReceipt = (level: string, state: "ready" | "degraded" | "failed" = "ready"): DiagnosticLogReceipt => ({
+  v: 1, appliedLevel: level as DiagnosticLogReceipt["appliedLevel"], accepted: 0, filtered: 0, rejected: 0, dropped: 0,
+  sink: { state, droppedTotal: 0, writeFailures: 0, unsavedAtExit: 0 } });
+
+// The Log Level block of the Debug group as rendered: the selector, the help text and the status lines.
+function logLevelBlock(h: Harness) {
+  const c = configurations(h);
+  const debug = c.group("Debug");
+  const grid = c.grid("Log Level");
+  const block = debug.all.find((node) => node.children.includes(grid.node));
+  assert.ok(block, "the Log Level block is in the Debug group");
+  const rows = block.children.filter((child): child is Rendered => typeof child !== "string");
+  assert.equal(rows[0], grid.node, "the selector comes first");
+  const status = rows.slice(2);
+  return { h, c, debug, grid, block, help: text(rows[1]!.children), status,
+    statusText: status.map((node) => text(node.children)),
+    red: status.map((node) => String(node.props.className).split(/\s+/).includes("text-red-600")) };
+}
+
+test("LG UI the Log Level selector is one five-option ConfigButtonGrid in the Debug group, under Debug Mode, with Debug on or off; it shows the saved level and writes it through the Hook's setter", () => {
+  const site = callSiteExpressions("ConfigurationsPanel");
+  assert.equal(compact(site.diagnosticLogLevel!.getText(ui)), "meeting.settings.diagnosticLogLevel");
+  assert.equal(compact(site.onDiagnosticLogLevelChange!.getText(ui)), "meeting.setDiagnosticLogLevel");
+  assert.equal(compact(site.diagnosticLogLevelStatus!.getText(ui)), "meeting.diagnosticLogLevelStatus");
+  let cells = 0;
+  for (const dev of booleans) for (const debug of booleans) for (const level of LOG_LEVELS) {
+    const label = JSON.stringify({ dev, debug, level });
+    const h = harness(JSON.stringify({ debugMode: debug, diagnosticLogLevel: level }), { dev });
+    const { c, debug: group, grid, block } = logLevelBlock(h);
+    assert.deepEqual(grid.options, LOG_LEVEL_LABELS, label);
+    assert.deepEqual(grid.selected, [LOG_LEVEL_LABELS[LOG_LEVELS.indexOf(level)]], label);
+    assert.equal(grid.node.props.value, level);
+    assert.equal(grid.node.props.onChange, h.globals.setDiagnosticLogLevel, "the Hook's own setter, with nothing wrapped around it");
+    assert.equal(c.of(h.globals.ConfigButtonGrid).filter((node) => node.props.label === "Log Level").length, 1, "one selector in the panel");
+    // In the Debug group, directly after the Debug Mode row, and in no other group.
+    const entryLabels = group.all.filter((node) => typeof node.props.className === "string" && node.props.className.includes("uppercase"))
+      .map((node) => text(node.children));
+    assert.deepEqual(entryLabels.slice(0, 3), ["Debug Mode", "Log Level", "Native Stall Diagnostics"], label);
+    for (const title of ["Response", "Context", "Audio", "Preview"]) assert.equal(c.group(title).text.includes("Log Level"), false, title);
+    // Buttons only: no switch, input, select or text area belongs to it.
+    assert.equal(c.of(h.globals.Button, nodes(block.children)).length, 5, label);
+    for (const other of [h.globals.Switch, "select", "input", "textarea"]) assert.equal(c.of(other, nodes(block.children)).length, 0, label);
+    assert.equal(c.of("select").length, 2, "the panel still holds its two provider selectors and no new one");
+    assert.deepEqual(h.writes, [], "rendering writes nothing");
+    cells += 1;
+  }
+  assert.equal(cells, 20);
+  // A click on each option, through the rendered button.
+  for (const debug of booleans) {
+    const h = harness(JSON.stringify({ debugMode: debug }));
+    const before = h.settings();
+    assert.equal(before.diagnosticLogLevel, "info", "the default");
+    for (const [index, option] of LOG_LEVEL_LABELS.entries()) {
+      logLevelBlock(h).grid.click(option);
+      assert.deepEqual(h.settings(), { ...before, diagnosticLogLevel: LOG_LEVELS[index] }, "no other setting moves, Debug Mode included");
+      assert.deepEqual(JSON.parse(h.settingsWrites().at(-1)!), { ...before, diagnosticLogLevel: LOG_LEVELS[index] });
+      assert.deepEqual(logLevelBlock(h).grid.selected, [option]);
+    }
+    assert.equal(h.settingsWrites().length, 5);
+    assert.deepEqual(h.actions, []);
+    // And the Debug Mode switch leaves the level where it is.
+    const debugSwitch = configurations(h).of(h.globals.Switch, configurations(h).group("Debug").all)
+      .find((node) => node.props.onCheckedChange === h.globals.setDebugMode)!;
+    debugSwitch.props.onCheckedChange(!debug);
+    assert.deepEqual(h.settings(), { ...before, debugMode: !debug, diagnosticLogLevel: "trace" });
+  }
+});
+
+test("LG UI one status line per projection state with exact text: pending, applied with the sink state, failed with the reason; no line when the Hook gives none", () => {
+  const render = (level: string, status: DiagnosticLogLevelProjection | undefined, debug = false) =>
+    logLevelBlock(harness(JSON.stringify({ debugMode: debug, diagnosticLogLevel: level }), { state: { diagnosticLogLevelStatus: status } }));
+  let rendered = 0;
+  for (const debug of booleans) for (const level of LOG_LEVELS) {
+    const selected = [LOG_LEVEL_LABELS[LOG_LEVELS.indexOf(level)]];
+    // No projection: the selector and the help, and no status.
+    const none = render(level, undefined, debug);
+    assert.deepEqual([none.statusText, none.grid.selected], [[], selected]);
+    assert.equal(none.help, LOG_LEVEL_HELP);
+    // Pending: before the first reply and while a request is unanswered.
+    const request = beginDiagnosticLogLevelApply(1, level);
+    for (const apply of [null, request]) {
+      const pending = render(level, projectDiagnosticLogLevel({ level, apply }), debug);
+      assert.deepEqual(pending.statusText, [logLevelPending(level)]);
+      assert.deepEqual(pending.red, [false]);
+      assert.deepEqual(pending.grid.selected, selected, "the selector shows the saved level");
+      rendered += 1;
+    }
+    // Applied: the level native answered and the sink state of that answer.
+    for (const sink of ["ready", "degraded", "failed"] as const) {
+      const applied = render(level, projectDiagnosticLogLevel({ level,
+        apply: settleDiagnosticLogLevelApply(request, 1, { receipt: logLevelReceipt(level, sink) }) }), debug);
+      assert.deepEqual(applied.statusText, [logLevelApplied(level, sink)]);
+      assert.deepEqual(applied.red, [sink === "failed"]);
+      rendered += 1;
+    }
+    // Failed: native rejected, answered another level, answered something else, or did not answer.
+    const failures: Array<[Parameters<typeof settleDiagnosticLogLevelApply>[2], string]> = [
+      [{ message: "Diagnostic log level is not one of error, warn, info, debug, trace" }, "Diagnostic log level is not one of error, warn, info, debug, trace"],
+      [{ message: "No native reply within 5000 ms." }, "No native reply within 5000 ms."],
+      [{ receipt: logLevelReceipt(level === "info" ? "warn" : "info") }, `Native reports ${level === "info" ? "warn" : "info"}.`],
+      [{ receipt: { v: 3 } as unknown as DiagnosticLogReceipt }, "The native reply was not a version 1 diagnostic log receipt."],
+    ];
+    for (const [outcome, message] of failures) {
+      const failed = render(level, projectDiagnosticLogLevel({ level, apply: settleDiagnosticLogLevelApply(request, 1, outcome) }), debug);
+      assert.deepEqual(failed.statusText, [logLevelFailed(level, message)]);
+      assert.deepEqual(failed.red, [true]);
+      assert.deepEqual(failed.grid.selected, selected, "the saved level stays selected; the line says it is not confirmed");
+      rendered += 1;
+    }
+    // The record of another level is never this level's status: it reads as pending.
+    const other = LOG_LEVELS[(LOG_LEVELS.indexOf(level) + 1) % LOG_LEVELS.length]!;
+    const stale = render(level, projectDiagnosticLogLevel({ level,
+      apply: settleDiagnosticLogLevelApply(beginDiagnosticLogLevelApply(1, other), 1, { receipt: logLevelReceipt(other) }) }), debug);
+    assert.deepEqual(stale.statusText, [logLevelPending(level)]);
+  }
+  assert.equal(rendered, 2 * 5 * 9);
+  // The status is text only, and the words that claim a native state belong to the applied line alone.
+  const pending = render("trace", { phase: "pending", level: "trace" });
+  const failed = render("trace", { phase: "failed", level: "trace", message: "boom" });
+  const applied = render("trace", { phase: "applied", level: "trace", appliedLevel: "trace", sinkState: "ready" });
+  for (const state of [pending, failed, applied]) {
+    const controls = [state.h.globals.Button, state.h.globals.Switch, "button", "input", "select", "textarea", "a"];
+    assert.equal(nodes(state.status).filter((node) => controls.includes(node.type)).length, 0, "no control in the status line");
+    assert.equal(state.status.length, 1, "one line");
+    assert.equal(state.help, LOG_LEVEL_HELP);
+  }
+  assert.match(text(applied.block.children), /native applied trace/);
+  for (const state of [pending, failed]) {
+    assert.doesNotMatch(text(state.block.children), /native applied|is active|in effect|Log sink/);
+  }
+  assert.match(text(pending.block.children), /Not yet confirmed on native/);
+  assert.match(text(failed.block.children), /native did not confirm trace\. Select trace again to retry\. Reason: boom/);
+});
+
+test("LG UI the help text states what Log Level controls and what it does not, in the same words with Debug on and off", () => {
+  for (const dev of booleans) for (const debug of booleans) for (const recording of booleans) {
+    const h = harness(JSON.stringify({ debugMode: debug, diagnosticLogLevel: "trace" }),
+      { dev, state: { sessionRecording: { lifecycle: recording ? "active" : "idle", active: recording } } });
+    const { help, block } = logLevelBlock(h);
+    assert.equal(help, LOG_LEVEL_HELP, JSON.stringify({ dev, debug, recording }));
+    assert.equal(text(block.children), `Log Level${LOG_LEVEL_LABELS.join("")}${LOG_LEVEL_HELP}`, "the selector, the help and nothing else");
+  }
+  // What the log holds in this version is said, with what follows from it for the selector: no level changes the output.
+  assert.match(LOG_LEVEL_HELP, /In this version the diagnostic log holds only the errors of the native system audio commands, so every level gives the same output\./);
+  // What it does not control is named, each by its own name, and nothing wider is promised.
+  for (const named of ["no other terminal or console output", "the Debug Mode trace printing", "Preparation", "the focus window", "native prints",
+    "Session Recording", "Native Stall Diagnostics files"]) {
+    assert.ok(LOG_LEVEL_HELP.includes(named), named);
+  }
+  // The retention bounds of the local files, as the sink enforces them.
+  assert.match(LOG_LEVEL_HELP, /the local log files, which keep at most 50 MiB or 14 days\./);
+  assert.match(LOG_LEVEL_HELP, /Saved separately from Debug Mode: changing one never changes the other\./);
+  assert.match(LOG_LEVEL_HELP, /It starts no model request, sampler or capture\./);
+  assert.doesNotMatch(LOG_LEVEL_HELP, /all logs|every log|controls the console|recording level/i);
+  // The page source holds each sentence once, in the Debug group.
+  const debugGroup = find(expression(ui, "ConfigurationsPanel"), (node) => ts.isJsxElement(node) &&
+    node.openingElement.tagName.getText(ui) === "ConfigurationGroup" &&
+    node.openingElement.attributes.properties.some((property) => property.getText(ui) === 'title="Debug"'), "the Debug group");
+  assert.equal(uiText.split('label="Log Level"').length - 1, 1);
+  assert.equal(debugGroup.getText(ui).split('label="Log Level"').length - 1, 1);
+  // The selector and its status sit outside every Debug Mode, DEV and recording condition of the group.
+  const selector = find(debugGroup, (node) => ts.isJsxSelfClosingElement(node) && node.tagName.getText(ui) === "ConfigButtonGrid") as ts.JsxSelfClosingElement;
+  for (let node: ts.Node = selector; node !== debugGroup; node = node.parent) {
+    assert.equal(ts.isConditionalExpression(node) || (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken),
+      false, "no condition encloses the selector");
+  }
 });

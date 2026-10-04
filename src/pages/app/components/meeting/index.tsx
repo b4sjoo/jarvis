@@ -36,6 +36,7 @@ import type {
   NativeAudioDebugFaultKind,
   NativeAudioPauseResumeControlPresentation,
   MeetingCodingModelSettings,
+  MeetingDiagnosticLogLevel,
   MeetingTaxonomyAdjudicationSettings,
   CodingArtifactCache,
   CriticalMomentCandidate,
@@ -160,6 +161,7 @@ import { TypeCorrectionMenuButton, type TypeCorrectionMenuActions } from "./type
 import type { ManualCorrectionMenuSelection, ProjectChoicePresentation, ProjectChoiceSelection } from "@/lib/meeting/focus-window";
 import type { AdviseDisplayTarget } from "@/lib/meeting/manual-advise-display";
 import type { NativeStallDiagnosticsProjection } from "@/lib/meeting/native-stall-diagnostics-receipt";
+import type { DiagnosticLogLevelProjection } from "@/lib/meeting/diagnostic-log";
 import type { CriticalMomentTimingCandidates, CriticalMomentTimingSelection } from "@/lib/meeting/critical-moment-timing";
 import { observeRelationDecisionProvenance } from "@/lib/meeting/relation-decision-provenance";
 import { ProjectChoiceControl } from "./project-choice-control";
@@ -214,6 +216,19 @@ const enforcementShadowModeOptions: Array<{
 }> = [
   { id: "enforcement", label: "Enforcement" },
   { id: "shadow", label: "Shadow" },
+];
+
+// Task 178 LG: the five levels, most severe first. A level includes every one
+// before it.
+const diagnosticLogLevelOptions: Array<{
+  id: MeetingDiagnosticLogLevel;
+  label: string;
+}> = [
+  { id: "error", label: "Error" },
+  { id: "warn", label: "Warn" },
+  { id: "info", label: "Info" },
+  { id: "debug", label: "Debug" },
+  { id: "trace", label: "Trace" },
 ];
 
 const meetingAudioProfileOptions: Array<{
@@ -2029,6 +2044,9 @@ export const MeetingAssistant = ({
                 }
                 debugMode={meeting.settings.debugMode}
                 onDebugModeChange={meeting.setDebugMode}
+                diagnosticLogLevel={meeting.settings.diagnosticLogLevel}
+                onDiagnosticLogLevelChange={meeting.setDiagnosticLogLevel}
+                diagnosticLogLevelStatus={meeting.diagnosticLogLevelStatus}
                 nativeStallDiagnosticsEnabled={meeting.settings.nativeStallDiagnosticsEnabled}
                 onNativeStallDiagnosticsChange={meeting.setNativeStallDiagnosticsEnabled}
                 nativeStallDiagnostics={meeting.nativeStallDiagnostics}
@@ -4327,6 +4345,9 @@ const ConfigurationsPanel = ({
   onRuntimeCrossChecksEnabledChange,
   debugMode,
   onDebugModeChange,
+  diagnosticLogLevel,
+  onDiagnosticLogLevelChange,
+  diagnosticLogLevelStatus,
   nativeStallDiagnosticsEnabled,
   onNativeStallDiagnosticsChange,
   nativeStallDiagnostics,
@@ -4378,6 +4399,11 @@ const ConfigurationsPanel = ({
   onRuntimeCrossChecksEnabledChange: (enabled: boolean) => void;
   debugMode: boolean;
   onDebugModeChange: (enabled: boolean) => void;
+  // Task 178 LG. The saved level, its writer, and what the Hook knows about the
+  // native reply to the latest apply. Absent status means unknown.
+  diagnosticLogLevel: MeetingDiagnosticLogLevel;
+  onDiagnosticLogLevelChange: (level: MeetingDiagnosticLogLevel) => void;
+  diagnosticLogLevelStatus?: DiagnosticLogLevelProjection;
   nativeStallDiagnosticsEnabled: boolean;
   onNativeStallDiagnosticsChange: (enabled: boolean) => void;
   // Read-only: what the Hook knows about the native reply. Absent means unknown.
@@ -4738,6 +4764,44 @@ const ConfigurationsPanel = ({
                 Debug Mode
               </div>
               <Switch checked={debugMode} onCheckedChange={onDebugModeChange} />
+            </div>
+            <div className="space-y-1.5 rounded-sm border border-border/60 p-2">
+              <ConfigButtonGrid
+                label="Log Level"
+                options={diagnosticLogLevelOptions}
+                value={diagnosticLogLevel}
+                onChange={onDiagnosticLogLevelChange}
+              />
+              <div className="text-[10px] text-muted-foreground">
+                Sets the threshold of the diagnostic log: entries at the
+                selected level and every more severe level go to the terminal
+                and to the local log files, which keep at most 50 MiB or 14
+                days. In this version the diagnostic log holds only the errors
+                of the native system audio commands, so every level gives the
+                same output. Saved separately from Debug Mode: changing one
+                never changes the other. Log Level controls no other terminal
+                or console output: not the Debug Mode trace printing, not
+                Preparation, the focus window or native prints, and not Session
+                Recording or Native Stall Diagnostics files. It starts no model
+                request, sampler or capture.
+              </div>
+              {diagnosticLogLevelStatus ? (
+                <div
+                  className={cn(
+                    "break-words text-[10px] text-muted-foreground",
+                    (diagnosticLogLevelStatus.phase === "failed" ||
+                      (diagnosticLogLevelStatus.phase === "applied" &&
+                        diagnosticLogLevelStatus.sinkState === "failed")) &&
+                      "text-red-600"
+                  )}
+                >
+                  {diagnosticLogLevelStatus.phase === "applied"
+                    ? `Status: native applied ${diagnosticLogLevelStatus.appliedLevel}. Log sink at that time: ${diagnosticLogLevelStatus.sinkState}.`
+                    : diagnosticLogLevelStatus.phase === "failed"
+                      ? `Status: native did not confirm ${diagnosticLogLevelStatus.level}. Select ${diagnosticLogLevelStatus.level} again to retry. Reason: ${diagnosticLogLevelStatus.message}`
+                      : `Status: ${diagnosticLogLevelStatus.level} requested, waiting for the native reply. Not yet confirmed on native.`}
+                </div>
+              ) : null}
             </div>
             <div className="flex items-center justify-between gap-2">
               <div className="min-w-0">
