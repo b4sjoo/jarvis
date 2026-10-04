@@ -118,9 +118,12 @@ function installBoundaries() {
     emit: (name, payload) => { for (const fn of listeners.get(name) ?? []) fn({ event: name, payload }); },
     invoke: async (name, args = {}) => {
       pc.calls.push({ name, args });
+      // Tasks 145/183 NDI: a scenario may answer the diagnostics command itself. Otherwise it answers null, as before.
+      if (name === 'set_native_stall_diagnostics' && pc.nativeStallDiagnostics) return pc.nativeStallDiagnostics(args);
       if (['preparation_extraction_initialize', 'memory_content_initialize', 'set_native_stall_diagnostics', 'read_meeting_trace_metrics',
         'write_meeting_trace_metrics', 'write_meeting_trace_log', 'write_meeting_session_recording_text'].includes(name)) return null;
-      if (name === 'start_meeting_session_recording') return '/pc-c3-recording';
+      // Tasks 145/183 NDI: a scenario may give each recording its own folder path. Otherwise one path, as before.
+      if (name === 'start_meeting_session_recording') return pc.recordingFolderPath ? pc.recordingFolderPath(args) : '/pc-c3-recording';
       if (name === 'write_meeting_session_recording_base64') return `/pc-c3-recording/${args.relativePath}`;
       if (name === 'export_meeting_trace') return `/pc-c3-recording/exports/${args.fileName}`;
       if (name === 'cleanup_stt_evaluation_captures') return 0;
@@ -269,6 +272,42 @@ const clean = async (page, failures) => {
   assert.deepEqual(failures, [], 'no page error and no uncontrolled network');
   assert.deepEqual(await page.evaluate(() => window.__pc.unexpected), [], 'no uncontrolled native command or fetch');
 };
+
+// Tasks 145/183 NDI: the Native Stall Diagnostics row of the Debug group as it is drawn, next to what the Hook exports,
+// what it returned in each render, what reached the native command and what each recording's timeline received.
+const diagnostics = page => page.evaluate(() => {
+  const line = element => element.textContent.replace(/\s+/g, ' ').trim();
+  const timelines = {};
+  for (const call of window.__pc.calls) {
+    if (call.name !== 'write_meeting_session_recording_text' || call.args.relativePath !== 'timeline.jsonl') continue;
+    for (const text of String(call.args.payload).split('\n').filter(Boolean)) {
+      const event = JSON.parse(text);
+      if (event.kind !== 'capture-lifecycle' || !String(event.metadata?.stage).startsWith('native-stall-diagnostics')) continue;
+      (timelines[call.args.folderName] ??= []).push({ sessionId: event.sessionId, ...event.metadata });
+    }
+  }
+  const label = [...document.querySelectorAll('#configurations div')].find(element => element.children.length === 0 && line(element) === 'Native Stall Diagnostics');
+  const row = label.parentElement.parentElement;
+  const block = row.nextElementSibling;
+  const lines = block && block.firstElementChild && line(block.firstElementChild).startsWith('Status: ') ? [...block.children] : [];
+  const recording = window.__pc.meeting.sessionRecording;
+  return {
+    caption: line(label.nextElementSibling),
+    checked: row.querySelector('button[role="switch"]').getAttribute('aria-checked'),
+    lines: lines.map(line),
+    red: lines.map(element => element.className.split(/\s+/).includes('text-red-600')),
+    controls: lines.length ? block.querySelectorAll('button,a,input,select,textarea,[role="button"]').length : -1,
+    exported: JSON.parse(JSON.stringify(window.__pc.meeting.nativeStallDiagnostics)),
+    recording: { active: recording.active, lifecycle: recording.lifecycle, folderName: recording.folderName ?? null, folderPath: recording.folderPath ?? null,
+      sessionId: recording.sessionId ?? null },
+    renders: (window.__pc.nativeStallRenders ?? []).slice(),
+    timelines,
+    commands: window.__pc.calls.filter(call => call.name === 'set_native_stall_diagnostics').map(call => call.args),
+    held: (window.__pc.nativeStallHeld ?? []).map(request => request.args),
+    recordingStarts: window.__pc.calls.filter(call => call.name === 'start_meeting_session_recording').length,
+    requests: window.__pc.requests.length,
+  };
+});
 
 // One interviewer turn through the real runtime, and what Meeting Metadata did with it. The run is
 // left open: stopping it starts a new session, which would discard a company set for this one.
@@ -539,5 +578,255 @@ test('PC1 and PC7: Preview controls and the Meeting Metadata selector with the r
         await page.evaluate(() => window.__pc.meeting.stopRuntimeRegressionRun());
       });
     }
+
+    // Tasks 145/183 NDI. Real: the Hook's arming effect, its serial queue and receipt, the recording manager, the
+    // panel and its switches. Controlled: the native command, which answers an arm only when the scenario lets it,
+    // and the recording folder path, which is one per recording here.
+    await scenario('NDI1, NDI2 and NDI6 Native Stall Diagnostics: the status line follows the native reply through off, waiting, arming, armed, a recording change in one commit, Stop, switch-off, failed and a late reply', {}, async page => {
+      const CAPTION = 'Arms only while Session Recording is active. The setting is saved: once on, each later recording re-arms from it.';
+      const OFF = 'Status: switch off.';
+      const WAITING = 'Status: waiting for a recording. Arming is requested when one starts.';
+      const ARMING = 'Status: arming requested for this recording, waiting for the native reply.';
+      const RUN_A = 'f3b1c2d4-5e6f-4a7b-8c9d-0e1f2a3b4c5d';
+      const RUN_B = '0a9b8c7d-6e5f-4d3c-8b1a-f0e9d8c7b6a5';
+      const RUN_C = '7c6d5e4f-3a2b-4c1d-9e8f-a7b6c5d4e3f2';
+      const RUN_D = '1d2e3f4a-5b6c-4d7e-8f9a-0b1c2d3e4f5a';
+      const FAILURE = 'Cannot create diagnostics directory: Permission denied (os error 13)';
+      const disarm = { enabled: false, folderName: null };
+      const armedLine = runId => `Status: armed for this recording, run ${runId}. Armed means only that the native observer started.`;
+      const evidencePath = recording => `/pc-ndi/${recording.folderName}/diagnostics/native-stall`;
+      const disarmsOnly = commands => commands.length >= 1 && commands.every(args => args.enabled === false && args.folderName === null);
+      // With JARVIS_VISUAL_EVIDENCE_DIR set and a build present: the row is drawn with the built stylesheet, nothing may
+      // overflow the panel, and a picture of the Debug group is kept.
+      let styled = false;
+      const picture = async name => {
+        if (!process.env.JARVIS_VISUAL_EVIDENCE_DIR) return;
+        if (!styled) {
+          const css = readdirSync('dist/assets').find(file => file.startsWith('index-') && file.endsWith('.css'));
+          assert.ok(css, 'run npm run build first: the built stylesheet is needed for the layout check');
+          await page.addStyleTag({ content: readFileSync(`dist/assets/${css}`, 'utf8') +
+            '\n*,*::before,*::after{transition:none!important;animation:none!important}' });
+          styled = true;
+        }
+        for (const width of [440, 860]) {
+          await page.setViewportSize({ width, height: 2400 });
+          await frames(page);
+          const overflowing = await page.evaluate(() => [...document.querySelector('#configurations').querySelectorAll('*')]
+            .filter(element => element.scrollWidth > element.clientWidth + 1 && getComputedStyle(element).overflowX === 'visible')
+            .map(element => `${element.tagName.toLowerCase()} "${element.textContent.trim().slice(0, 40)}" ${element.scrollWidth}>${element.clientWidth}`));
+          assert.deepEqual(overflowing, [], `nothing overflows at ${width}px (${name})`);
+          const group = page.locator('#configurations').getByText(/^Native Stall Diagnostics$/i).locator('xpath=ancestor::div[./div[1][normalize-space()="Debug"]][1]');
+          await group.screenshot({ path: `${process.env.JARVIS_VISUAL_EVIDENCE_DIR}/ndi-debug-group-${name}-${width}.png` });
+        }
+      };
+      await page.evaluate(() => {
+        const pc = window.__pc;
+        pc.nativeStallHeld = [];
+        pc.nativeStallDiagnostics = args => args.enabled ? new Promise((resolve, reject) => pc.nativeStallHeld.push({ args, resolve, reject })) : null;
+        // One folder path per recording, so a path on screen names exactly one recording.
+        pc.recordingFolderPath = args => '/pc-ndi/' + args.folderName;
+        // Every render of the Hook's owner: the recording it holds and the projection the Hook returns. A frame that
+        // is replaced before the browser paints it is still listed here.
+        pc.nativeStallRenders = [];
+        let meeting = pc.meeting;
+        Object.defineProperty(pc, 'meeting', { configurable: true, get: () => meeting, set: value => {
+          meeting = value;
+          const recording = value.sessionRecording;
+          const shown = value.nativeStallDiagnostics;
+          const entry = [recording.active ? recording.folderName : null, shown.phase, shown.runId ?? null, shown.evidencePath ?? null];
+          if (JSON.stringify(pc.nativeStallRenders.at(-1)) !== JSON.stringify(entry)) pc.nativeStallRenders.push(entry);
+        } });
+      });
+      const answer = (kind, value) => page.evaluate(([kind, value]) => window.__pc.nativeStallHeld.shift()[kind](value), [kind, value]);
+      const phase = name => page.waitForFunction(name => window.__pc.meeting.nativeStallDiagnostics.phase === name, name, { timeout: 15000 });
+      const idle = () => page.waitForFunction(() => !window.__pc.meeting.sessionRecording.active && window.__pc.meeting.sessionRecording.lifecycle === 'idle', undefined, { timeout: 15000 });
+      const armRequest = () => page.waitForFunction(() => window.__pc.nativeStallHeld.length === 1, undefined, { timeout: 15000 });
+      const recordingSwitch = rowSwitch(page, 'Session Recording');
+      const diagnosticsSwitch = rowSwitch(page, 'Native Stall Diagnostics');
+      assert.deepEqual([await recordingSwitch.count(), await diagnosticsSwitch.count()], [1, 1]);
+
+      // off: mounting sent one disarm. Debug Mode and Runtime Cross-checks are both off and the row is there.
+      let view = await diagnostics(page);
+      assert.equal(view.caption, CAPTION);
+      assert.deepEqual([view.checked, view.lines, view.exported], ['false', [OFF], { phase: 'off' }]);
+      assert.deepEqual(view.commands, [disarm]);
+      const settings = await page.evaluate(() => window.__pc.meeting.settings);
+      assert.deepEqual([settings.debugMode, settings.runtimeCrossChecksEnabled, settings.nativeStallDiagnosticsEnabled], [false, false, false]);
+
+      // waiting: the switch is on and shows intent; nothing is armed and nothing else started.
+      const on = await act(page, () => diagnosticsSwitch.click());
+      assert.deepEqual(on.moved.sort(), ['nativeStallDiagnostics.phase: "off" -> "waiting-for-recording"', 'settings.nativeStallDiagnosticsEnabled: false -> true'],
+        'the switch moved its setting and the projection, and nothing else the Hook exports');
+      assert.deepEqual([on.nativeCalls, on.requests], [1, 0]);
+      view = await diagnostics(page);
+      assert.deepEqual([view.checked, view.lines, view.exported], ['true', [WAITING], { phase: 'waiting-for-recording' }]);
+      assert.deepEqual(view.commands, [disarm, disarm], 'no arm request without a recording');
+      assert.deepEqual([view.recordingStarts, view.recording.active, view.requests, view.held.length], [0, false, 0, 0]);
+      const stored = JSON.parse(await page.evaluate(key => localStorage.getItem(key), SETTINGS));
+      assert.equal(stored.nativeStallDiagnosticsEnabled, true, 'the setting is saved');
+      assert.deepEqual(Object.keys(stored).sort(), ['activeScreenTaskTimeoutMinutes', 'audio', 'codingModel', 'debugMode', 'microphoneContextEnabled',
+        'nativeStallDiagnosticsEnabled', 'personalEvidenceGuardrailMode', 'response', 'runtimeCrossChecksEnabled', 'taxonomyAdjudication', 'useMemory']);
+
+      // arming: recording A is active, the arm request is with native, and it is not shown as armed.
+      await recordingSwitch.click();
+      await armRequest();
+      await frames(page);
+      view = await diagnostics(page);
+      const first = view.recording;
+      assert.deepEqual([first.active, first.folderPath, view.recordingStarts], [true, `/pc-ndi/${first.folderName}`, 1]);
+      assert.deepEqual(view.held, [{ enabled: true, folderName: first.folderName }], 'the arm request names the current recording folder');
+      assert.deepEqual([view.lines, view.exported], [[ARMING], { phase: 'arming' }]);
+
+      // armed: only after the native reply, with its run id and the path derived from the recording folder.
+      await answer('resolve', RUN_A);
+      await phase('armed');
+      await frames(page);
+      view = await diagnostics(page);
+      assert.deepEqual(view.lines, [armedLine(RUN_A), `Evidence folder for this recording (may be empty): ${evidencePath(first)}`]);
+      assert.deepEqual(view.exported, { phase: 'armed', runId: RUN_A, evidencePath: evidencePath(first), evidenceOwner: 'current-recording' });
+      assert.deepEqual([view.red, view.controls], [[false, false], 0], 'plain text: no button, link or input');
+      await picture('armed');
+
+      // Debug Mode and Runtime Cross-checks, each switched on and off while armed (this bundle is a DEV build): the
+      // two lines stay as they are and no diagnostics request is sent.
+      const armed = await diagnostics(page);
+      const cells = [];
+      for (const label of ['Debug Mode', 'Runtime Cross-checks', 'Debug Mode', 'Runtime Cross-checks']) {
+        await act(page, () => rowSwitch(page, label).click());
+        const now = await diagnostics(page);
+        assert.deepEqual([now.lines, now.red, now.exported, now.commands, now.checked], [armed.lines, armed.red, armed.exported, armed.commands, 'true'], `after ${label}`);
+        cells.push(await page.evaluate(() => [window.__pc.meeting.settings.debugMode, window.__pc.meeting.settings.runtimeCrossChecksEnabled]));
+      }
+      assert.deepEqual(cells, [[true, false], [true, true], [false, true], [false, false]]);
+
+      // Stop A and Start B in one tick. The fixture's native boundary answers in microtasks, so React renders the
+      // change as one commit: recording B is current while the receipt in state is still A's armed one.
+      await page.evaluate(() => { const meeting = window.__pc.meeting; meeting.setSessionRecordingEnabled(false); meeting.setSessionRecordingEnabled(true); });
+      await armRequest();
+      await frames(page);
+      view = await diagnostics(page);
+      const second = view.recording;
+      assert.notEqual(second.folderName, first.folderName);
+      assert.deepEqual([second.active, second.folderPath, view.recordingStarts], [true, `/pc-ndi/${second.folderName}`, 2]);
+      assert.deepEqual(view.held, [{ enabled: true, folderName: second.folderName }]);
+      assert.deepEqual([view.lines, view.exported], [[ARMING], { phase: 'arming' }]);
+      const lastOfFirst = view.renders.findLastIndex(entry => entry[0] === first.folderName);
+      assert.deepEqual(view.renders.slice(lastOfFirst), [[first.folderName, 'armed', RUN_A, evidencePath(first)], [second.folderName, 'arming', null, null]],
+        'no render between the two recordings, and B is arming from its first render');
+      const between = view.commands.slice(armed.commands.length, -1);
+      assert.deepEqual(view.commands.at(-1), { enabled: true, folderName: second.folderName });
+      assert.ok(disarmsOnly(between), 'between the two arm requests: disarms only');
+      // The disarm of that commit was issued while the manager already held B: it is B's disarm, with nothing of A.
+      assert.deepEqual((view.timelines[second.folderName] ?? []).map(entry => [entry.stage, entry.enabled, entry.runId, entry.folderName, entry.recordingSessionId, entry.sessionId]),
+        between.map(() => ['native-stall-diagnostics', false, null, second.folderName, second.sessionId, second.sessionId]));
+      await answer('resolve', RUN_B);
+      await phase('armed');
+      await frames(page);
+      view = await diagnostics(page);
+      assert.deepEqual(view.lines, [armedLine(RUN_B), `Evidence folder for this recording (may be empty): ${evidencePath(second)}`]);
+      assert.deepEqual(view.exported, { phase: 'armed', runId: RUN_B, evidencePath: evidencePath(second), evidenceOwner: 'current-recording' });
+      for (const entry of view.renders.filter(entry => entry[0] === second.folderName)) {
+        assert.ok(entry[2] !== RUN_A && entry[3] !== evidencePath(first), `B was rendered with something of A: ${JSON.stringify(entry)}`);
+      }
+      // Each recording's timeline holds its own receipts only, each with its identity and request id.
+      for (const [recording, runId] of [[first, RUN_A], [second, RUN_B]]) {
+        const entries = view.timelines[recording.folderName];
+        assert.ok(entries.every(entry => entry.folderName === recording.folderName && entry.recordingSessionId === recording.sessionId &&
+          entry.sessionId === recording.sessionId && Number.isInteger(entry.requestId)), JSON.stringify(entries));
+        assert.deepEqual(entries.filter(entry => entry.enabled).map(entry => [entry.stage, entry.runId]), [['native-stall-diagnostics', runId]]);
+        assert.deepEqual(entries.map(entry => entry.requestId), entries.map(entry => entry.requestId).sort((left, right) => left - right));
+      }
+
+      // Stop: waiting again, and the folder named is that of B, the last armed recording.
+      const beforeStop = view.commands.length;
+      await recordingSwitch.click();
+      await idle();
+      await settledState(page);
+      view = await diagnostics(page);
+      assert.deepEqual(view.lines, [WAITING, `Evidence folder of the last armed recording (may be empty): ${evidencePath(second)}`]);
+      assert.deepEqual(view.exported, { phase: 'waiting-for-recording', evidencePath: evidencePath(second), evidenceOwner: 'last-armed-recording' });
+      await picture('stopped');
+      assert.ok(disarmsOnly(view.commands.slice(beforeStop)), 'Stop sent disarms only');
+
+      // The switch off, then on again with no recording: the last armed folder is forgotten, not hidden.
+      await act(page, () => diagnosticsSwitch.click());
+      view = await diagnostics(page);
+      assert.deepEqual([view.checked, view.lines, view.exported], ['false', [OFF], { phase: 'off' }]);
+      await picture('off');
+      await act(page, () => diagnosticsSwitch.click());
+      view = await diagnostics(page);
+      assert.deepEqual([view.checked, view.lines, view.exported], ['true', [WAITING], { phase: 'waiting-for-recording' }]);
+      await picture('waiting-after-off');
+      assert.ok(disarmsOnly(view.commands.slice(beforeStop)));
+
+      // failed: the next recording's arm request is rejected.
+      await recordingSwitch.click();
+      await armRequest();
+      await frames(page);
+      view = await diagnostics(page);
+      const third = view.recording;
+      assert.ok(third.folderName !== first.folderName && third.folderName !== second.folderName);
+      assert.deepEqual(view.held, [{ enabled: true, folderName: third.folderName }]);
+      assert.deepEqual([view.lines, view.exported], [[ARMING], { phase: 'arming' }]);
+      await answer('reject', FAILURE);
+      await phase('failed');
+      await frames(page);
+      view = await diagnostics(page);
+      assert.deepEqual([view.lines, view.red], [[`Status: arming failed for this recording: ${FAILURE}`], [true]]);
+      assert.deepEqual(view.exported, { phase: 'failed', message: FAILURE });
+      await picture('failed');
+
+      // off again, inside the recording.
+      await act(page, () => diagnosticsSwitch.click());
+      view = await diagnostics(page);
+      assert.deepEqual([view.checked, view.lines, view.exported], ['false', [OFF], { phase: 'off' }]);
+
+      // A late reply. C is asked to arm again; before native answers, Stop C and Start D happen in one tick. The
+      // reply for C arrives while D is the writable recording: it is not D's state and it is not written to D.
+      await diagnosticsSwitch.click();
+      await armRequest();
+      await settledState(page);
+      view = await diagnostics(page);
+      assert.deepEqual([view.held, view.exported], [[{ enabled: true, folderName: third.folderName }], { phase: 'arming' }]);
+      await page.evaluate(() => { const meeting = window.__pc.meeting; meeting.setSessionRecordingEnabled(false); meeting.setSessionRecordingEnabled(true); });
+      await page.waitForFunction(folderName => window.__pc.meeting.sessionRecording.active && window.__pc.meeting.sessionRecording.folderName !== folderName,
+        third.folderName, { timeout: 15000 });
+      await settledState(page);
+      view = await diagnostics(page);
+      const fourth = view.recording;
+      assert.deepEqual(view.held, [{ enabled: true, folderName: third.folderName }], "still C's request: the queue is serial and nothing waited for it");
+      assert.deepEqual([view.lines, view.exported], [[ARMING], { phase: 'arming' }]);
+      const timelineOfThird = JSON.stringify(view.timelines[third.folderName]);
+      await answer('resolve', RUN_C);
+      await armRequest();
+      await settledState(page);
+      view = await diagnostics(page);
+      assert.deepEqual(view.held, [{ enabled: true, folderName: fourth.folderName }], "D's own request reached native after C's was answered");
+      assert.deepEqual([view.lines, view.exported], [[ARMING], { phase: 'arming' }], "C's reply did not arm D");
+      assert.ok((view.timelines[fourth.folderName] ?? []).every(entry => entry.enabled === false && entry.runId === null && entry.folderName === fourth.folderName &&
+        entry.recordingSessionId === fourth.sessionId), `C's reply was written to D: ${JSON.stringify(view.timelines[fourth.folderName])}`);
+      assert.equal(JSON.stringify(view.timelines[third.folderName]), timelineOfThird, 'and C, sealed, was not written again');
+      await answer('resolve', RUN_D);
+      await phase('armed');
+      await frames(page);
+      view = await diagnostics(page);
+      assert.deepEqual(view.lines, [armedLine(RUN_D), `Evidence folder for this recording (may be empty): ${evidencePath(fourth)}`]);
+      assert.deepEqual(view.timelines[fourth.folderName].filter(entry => entry.enabled).map(entry => [entry.runId, entry.folderName, entry.recordingSessionId, entry.sessionId]),
+        [[RUN_D, fourth.folderName, fourth.sessionId, fourth.sessionId]]);
+
+      assert.deepEqual(view.commands.filter(args => args.enabled).map(args => args.folderName),
+        [first.folderName, second.folderName, third.folderName, third.folderName, fourth.folderName], 'five arm requests in all, each naming the recording that was current');
+      assert.equal(view.requests, 0, 'no provider request was made');
+      for (const args of view.commands) assert.deepEqual(Object.keys(args), ['enabled', 'folderName']);
+      // In no render was a recording shown as armed with another recording's run id or folder; C was never armed.
+      const own = { [first.folderName]: [RUN_A, evidencePath(first)], [second.folderName]: [RUN_B, evidencePath(second)], [fourth.folderName]: [RUN_D, evidencePath(fourth)] };
+      for (const entry of view.renders.filter(entry => entry[1] === 'armed')) assert.deepEqual(entry.slice(2), own[entry[0]], JSON.stringify(entry));
+      assert.equal(view.renders.some(entry => entry[2] === RUN_C), false, 'the late run id was never rendered');
+      t.diagnostic(`NDI mounted Hook; set_native_stall_diagnostics calls=${JSON.stringify(view.commands.map(args => args.enabled ? 'arm' : 'disarm'))}`);
+      const names = { [first.folderName]: 'A', [second.folderName]: 'B', [third.folderName]: 'C', [fourth.folderName]: 'D', [RUN_A]: 'RUN_A', [RUN_B]: 'RUN_B', [RUN_D]: 'RUN_D' };
+      t.diagnostic(`NDI renders=${JSON.stringify(view.renders.map(entry => [names[entry[0]] ?? entry[0], entry[1], names[entry[2]] ?? entry[2], entry[3] ? 'path' : null]))}`);
+      await recordingSwitch.click();
+      await page.waitForFunction(() => window.__pc.meeting.sessionRecording.lifecycle === 'idle', undefined, { timeout: 15000 });
+    });
   } finally { await browser.close(); }
 });

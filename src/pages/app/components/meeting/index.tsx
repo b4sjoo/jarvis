@@ -159,6 +159,7 @@ import { AdvisePinButton } from "./advise-pin-button";
 import { TypeCorrectionMenuButton, type TypeCorrectionMenuActions } from "./type-correction-menu";
 import type { ManualCorrectionMenuSelection, ProjectChoicePresentation, ProjectChoiceSelection } from "@/lib/meeting/focus-window";
 import type { AdviseDisplayTarget } from "@/lib/meeting/manual-advise-display";
+import type { NativeStallDiagnosticsProjection } from "@/lib/meeting/native-stall-diagnostics-receipt";
 import type { CriticalMomentTimingCandidates, CriticalMomentTimingSelection } from "@/lib/meeting/critical-moment-timing";
 import { observeRelationDecisionProvenance } from "@/lib/meeting/relation-decision-provenance";
 import { ProjectChoiceControl } from "./project-choice-control";
@@ -2030,7 +2031,7 @@ export const MeetingAssistant = ({
                 onDebugModeChange={meeting.setDebugMode}
                 nativeStallDiagnosticsEnabled={meeting.settings.nativeStallDiagnosticsEnabled}
                 onNativeStallDiagnosticsChange={meeting.setNativeStallDiagnosticsEnabled}
-                nativeStallDiagnosticsError={meeting.nativeStallDiagnosticsError}
+                nativeStallDiagnostics={meeting.nativeStallDiagnostics}
                 nativeAudioFaultAvailable={Boolean(
                   import.meta.env.DEV &&
                     meeting.settings.debugMode &&
@@ -4328,7 +4329,7 @@ const ConfigurationsPanel = ({
   onDebugModeChange,
   nativeStallDiagnosticsEnabled,
   onNativeStallDiagnosticsChange,
-  nativeStallDiagnosticsError,
+  nativeStallDiagnostics,
   nativeAudioFaultAvailable,
   nativeAudioFaultFeedback,
   onNativeAudioFaultInject,
@@ -4379,7 +4380,8 @@ const ConfigurationsPanel = ({
   onDebugModeChange: (enabled: boolean) => void;
   nativeStallDiagnosticsEnabled: boolean;
   onNativeStallDiagnosticsChange: (enabled: boolean) => void;
-  nativeStallDiagnosticsError: string | null;
+  // Read-only: what the Hook knows about the native reply. Absent means unknown.
+  nativeStallDiagnostics?: NativeStallDiagnosticsProjection;
   nativeAudioFaultAvailable: boolean;
   nativeAudioFaultFeedback: NativeAudioFaultFeedback;
   onNativeAudioFaultInject: (
@@ -4743,7 +4745,8 @@ const ConfigurationsPanel = ({
                   Native Stall Diagnostics
                 </div>
                 <div className="text-[10px] text-muted-foreground">
-                  Arms only while Session Recording is active
+                  Arms only while Session Recording is active. The setting is
+                  saved: once on, each later recording re-arms from it.
                 </div>
               </div>
               <Switch
@@ -4751,8 +4754,36 @@ const ConfigurationsPanel = ({
                 onCheckedChange={onNativeStallDiagnosticsChange}
               />
             </div>
-            {nativeStallDiagnosticsError ? (
-              <div className="text-[10px] text-red-600">{nativeStallDiagnosticsError}</div>
+            {nativeStallDiagnostics ? (
+              <div className="space-y-0.5 break-words text-[10px] text-muted-foreground">
+                <div
+                  className={
+                    nativeStallDiagnostics.phase === "failed"
+                      ? "text-red-600"
+                      : undefined
+                  }
+                >
+                  {nativeStallDiagnostics.phase === "armed"
+                    ? `Status: armed for this recording, run ${nativeStallDiagnostics.runId}. Armed means only that the native observer started.`
+                    : nativeStallDiagnostics.phase === "failed"
+                      ? `Status: arming failed for this recording: ${nativeStallDiagnostics.message}`
+                      : nativeStallDiagnostics.phase === "arming"
+                        ? "Status: arming requested for this recording, waiting for the native reply."
+                        : nativeStallDiagnostics.phase === "waiting-for-recording"
+                          ? "Status: waiting for a recording. Arming is requested when one starts."
+                          : "Status: switch off."}
+                </div>
+                {nativeStallDiagnostics.evidencePath ? (
+                  <div className="break-all">
+                    {nativeStallDiagnostics.evidenceOwner === "last-armed-recording"
+                      ? "Evidence folder of the last armed recording (may be empty): "
+                      : "Evidence folder for this recording (may be empty): "}
+                    <span className="font-mono">
+                      {nativeStallDiagnostics.evidencePath}
+                    </span>
+                  </div>
+                ) : null}
+              </div>
             ) : null}
             {import.meta.env.DEV && debugMode ? (
               <div className="space-y-1.5 rounded-sm border border-border/60 p-2">

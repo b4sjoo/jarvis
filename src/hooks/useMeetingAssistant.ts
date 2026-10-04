@@ -33,6 +33,15 @@ import type { PreparedMeetingTaskDeadlineUpdate } from "@/lib/meeting/context-ma
 import { useApplicationShutdown } from "./useApplicationShutdown";
 import type { NativeAudioLifecycleEvent } from "@/lib/meeting/native-audio-lifecycle";
 import {
+  beginNativeStallDiagnosticsRequest,
+  createNativeStallDiagnosticsRequest,
+  isNativeStallDiagnosticsRequestRecording,
+  projectNativeStallDiagnostics,
+  settleNativeStallDiagnosticsRequest,
+  type NativeStallDiagnosticsOutcome,
+  type NativeStallDiagnosticsReceipt,
+} from "@/lib/meeting/native-stall-diagnostics-receipt";
+import {
   assertShutdownQueueDrained,
   createNativeStopTerminalWait,
   stopShutdownEvaluationCapture,
@@ -8823,9 +8832,48 @@ export function useMeetingAssistant() {
     [startSessionRecording, stopSessionRecording]
   );
 
-  const [nativeStallDiagnosticsError, setNativeStallDiagnosticsError] = useState<string | null>(null);
+  // Tasks 145/183 NDI. A read-only record of the latest
+  // set_native_stall_diagnostics request, ordered by a Hook-local request id
+  // and never by the native run id. It has two writers, both in
+  // queueNativeStallDiagnostics: at enqueue, and when the native reply of the
+  // latest request arrives. Nothing reads it to decide a request.
+  const [nativeStallDiagnosticsReceipt, setNativeStallDiagnosticsReceipt] =
+    useState<NativeStallDiagnosticsReceipt | null>(null);
+  const nativeStallDiagnosticsRequestIdRef = useRef(0);
+  // The switch as last rendered. The queue function reads it once, at enqueue,
+  // for the receipt alone: a disarm issued while the switch is off forgets the
+  // last armed recording. It decides no request and no IPC argument.
+  const nativeStallDiagnosticsSettingRef = useRef(
+    state.settings.nativeStallDiagnosticsEnabled
+  );
+  nativeStallDiagnosticsSettingRef.current =
+    state.settings.nativeStallDiagnosticsEnabled;
   const nativeStallDiagnosticsUpdateRef = useRef<Promise<void>>(Promise.resolve());
   const queueNativeStallDiagnostics = useCallback((enabled: boolean, folderName?: string) => {
+    const requestId = ++nativeStallDiagnosticsRequestIdRef.current;
+    // The recording this request is issued in, captured before anything is awaited.
+    const request = createNativeStallDiagnosticsRequest({
+      requestId,
+      enabled,
+      folderName,
+      recording: sessionRecordingManagerRef.current?.getState(),
+    });
+    const settingEnabled = nativeStallDiagnosticsSettingRef.current;
+    setNativeStallDiagnosticsReceipt((previous) =>
+      beginNativeStallDiagnosticsRequest(previous, request, settingEnabled));
+    const settle = (outcome: NativeStallDiagnosticsOutcome) => {
+      // A reply for an older request changes nothing that is shown.
+      if (requestId !== nativeStallDiagnosticsRequestIdRef.current) return;
+      setNativeStallDiagnosticsReceipt((previous) =>
+        settleNativeStallDiagnosticsRequest(previous, requestId, outcome));
+    };
+    // The receipt belongs to the recording captured above. It is written only
+    // while the manager still holds that recording.
+    const recordingIsCurrent = () =>
+      isNativeStallDiagnosticsRequestRecording(
+        request,
+        sessionRecordingManagerRef.current?.getState()
+      );
     nativeStallDiagnosticsUpdateRef.current = nativeStallDiagnosticsUpdateRef.current
       .catch(() => undefined)
       .then(async () => {
@@ -8834,21 +8882,31 @@ export function useMeetingAssistant() {
             enabled,
             folderName: enabled ? folderName : null,
           });
-          setNativeStallDiagnosticsError(null);
-          sessionRecordingManagerRef.current?.recordCaptureLifecycle({
-            stage: "native-stall-diagnostics",
-            enabled,
-            runId,
-          });
+          settle({ runId });
+          if (recordingIsCurrent()) {
+            sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+              stage: "native-stall-diagnostics",
+              enabled,
+              runId,
+              folderName: request.folderName,
+              recordingSessionId: request.recordingSessionId,
+              requestId,
+            });
+          }
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          setNativeStallDiagnosticsError(message);
+          settle({ message });
           console.warn("Native stall diagnostics could not be armed", message);
-          sessionRecordingManagerRef.current?.recordCaptureLifecycle({
-            stage: "native-stall-diagnostics-error",
-            enabled,
-            message,
-          });
+          if (recordingIsCurrent()) {
+            sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+              stage: "native-stall-diagnostics-error",
+              enabled,
+              message,
+              folderName: request.folderName,
+              recordingSessionId: request.recordingSessionId,
+              requestId,
+            });
+          }
         }
       });
   }, []);
@@ -8866,6 +8924,15 @@ export function useMeetingAssistant() {
     state.sessionRecording.active,
     state.sessionRecording.folderName,
   ]);
+
+  // What the configuration panel shows. The setting is user intent; armed and
+  // failed come only from the receipt of the current recording.
+  const nativeStallDiagnostics = projectNativeStallDiagnostics({
+    settingEnabled: state.settings.nativeStallDiagnosticsEnabled,
+    recordingActive: state.sessionRecording.active,
+    folderName: state.sessionRecording.folderName,
+    receipt: nativeStallDiagnosticsReceipt,
+  });
 
   const setSessionScriptedValidation = useCallback((enabled: boolean) => {
     const recordingState =
@@ -37950,7 +38017,7 @@ export function useMeetingAssistant() {
     setPersonalEvidenceGuardrailMode,
     setDebugMode,
     setNativeStallDiagnosticsEnabled,
-    nativeStallDiagnosticsError,
+    nativeStallDiagnostics,
     setRuntimeCrossChecksEnabled,
     setMicrophoneContextEnabled,
     toggleMicrophoneContext,

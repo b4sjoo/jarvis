@@ -167,7 +167,7 @@ function harness(stored?: string, options: HarnessOptions = {}) {
     ts.isPropertyAssignment(node) && node.name.getText(hook) === "settings") as ts.PropertyAssignment;
   globals.DEFAULT_MEETING_ASSISTANT_SETTINGS = evaluate(initialSettings.initializer, hook, globals);
   globals.state = {
-    status: "idle", isActive: false, audioStatus: undefined, nativeStallDiagnosticsError: null,
+    status: "idle", isActive: false, audioStatus: undefined, nativeStallDiagnostics: undefined,
     settings: globals.readMeetingAssistantSettings(),
     interviewSessionBrief: brief, preparationRuntime,
     aiProviders: [{ id: "test-provider", curl: "" }],
