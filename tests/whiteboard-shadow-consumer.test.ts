@@ -14,6 +14,8 @@ import { MeetingContextManager } from "../src/lib/meeting/context-manager.js";
 import { commitStableAnswerRevision } from "../src/lib/meeting/stable-answer.js";
 import { parseMeetingAnswer } from "../src/lib/meeting/meeting-answer.js";
 import type { ActiveInterviewParent } from "../src/lib/meeting/types.js";
+import { assertEntryInLedger, assertNothingPlanted, createDiagnosticLogSpy, DIAGNOSTIC_LOG_SPY_FAILING_DELIVERIES, PLANTED, PLANTED_VALUES,
+  type DiagnosticLogSpyDelivery } from "./helpers/diagnostic-log-spy.js";
 
 function productionFunction(file: string, name: string, callback = false) {
   const source = readFileSync(file, "utf8");
@@ -46,7 +48,10 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-async function fixture(t: test.TestContext) {
+async function fixture(t: test.TestContext, logLevel: "error" | "warn" | "info" | "debug" | "trace" = "trace",
+  logDelivery?: DiagnosticLogSpyDelivery) {
+  // Task 178 LG: the settle names the logger, so the environment supplies it by hand.
+  const diagnosticLog = createDiagnosticLogSpy({ threshold: logLevel, delivery: logDelivery });
   const good = await artifact.validateWhiteboardRenderCandidate({ whiteboard: fenced(validMermaid), operationId: "valid-original" });
   assert.equal(good.valid, true, "real Mermaid parser accepts the original graph");
   const invalid = await artifact.validateWhiteboardRenderCandidate({ whiteboard: candidate, operationId: "invalid-candidate" });
@@ -74,6 +79,7 @@ async function fixture(t: test.TestContext) {
   manager.commitTaskRuntimeTransition = input => { repairWrites++; return realCommit(input); };
   const globals = {
     ...repair, ...artifact, ...inference, ...health, ...response, ...admission, Date, Math,
+    logDiagnostic: diagnosticLog.logDiagnostic,
     WHITEBOARD_REPAIR_OPERATION: inference.getRuntimeInferenceOperationDefinition("whiteboard-syntax-repair"),
     requestRuntimeInferenceResponse: async () => { requests++; started.resolve(); return { ...await delivery.promise, completedAt: Date.now() }; },
     validateWhiteboardRenderCandidate: async (input: artifact.WhiteboardRenderValidationInput) => {
@@ -101,7 +107,7 @@ async function fixture(t: test.TestContext) {
   const schedule = vm.runInContext(scheduleSource, context);
   t.after(() => { runtime.cancelAll("disposed"); delivery.resolve({ rawOutput: "", providerDisposition: "completed-empty" }); });
   const input = { traceId: "trace", source: "voice", candidateWhiteboard: candidate, validation: invalid, parent };
-  return { manager, parent, runtime, shared, metadata, recoveries, delivery, started, terminal,
+  return { manager, parent, runtime, shared, metadata, recoveries, delivery, started, terminal, diagnosticLog,
     crossChecks: globals.runtimeCrossChecksEnabledRef,
     schedule: () => schedule(input),
     changeParent: (value: ActiveInterviewParent) => {
@@ -152,7 +158,9 @@ for (const [name, scenario, expected] of cases) {
     const expectedState = structuredClone(h.manager.getState().taskRuntime);
     const rawOutput = scenario === "invalid" ? "{broken" : scenario === "drift"
       ? JSON.stringify({ mermaid: "flowchart TD\nOther --> Service", asciiFallback: "Other -> Service", changedSyntaxOnly: true }) : validOutput;
-    h.delivery.resolve(scenario === "timeout" ? { rawOutput: "", providerDisposition: "provider-error-content", providerOutcome: { status: "timed-out" } }
+    h.delivery.resolve(scenario === "timeout" ? { rawOutput: "", providerDisposition: "provider-error-content",
+      // The provider layer's terminal carries its error text; none of it may reach a log entry.
+      providerOutcome: { status: "timed-out", safeErrorSummary: `${PLANTED.providerError} ${PLANTED.secret}` } }
       : { rawOutput, providerDisposition: "completed-with-content" });
     const final = await h.terminal.promise;
     assert.equal(final.whiteboardRepairDisposition, expected);
@@ -164,8 +172,66 @@ for (const [name, scenario, expected] of cases) {
     if (scenario === "revision") assert.equal(final.whiteboardRepairAuthorizationReason, "candidate-revision-changed");
     if (scenario === "repeat") assert.equal(h.metadata.filter(m=>m.whiteboardRepairDisposition === "already-attempted").length, 2);
     assert.equal(h.repairWrites, 0); assert.deepEqual(h.manager.getState().taskRuntime, expectedState);
+    // Task 178 LG, summary site 6 (LG1 Timeout 4 and 5, LG3, LG4): one entry at the settle, graded from the typed
+    // provider status of a repair that is still current. W2 is the timed-out check; W6 to W8 are stale work.
+    const stale = ["revision", "parent", "session"].includes(scenario);
+    const entries = h.diagnosticLog.entries();
+    assert.equal(entries.length, 1, "one entry for the repair operation");
+    assertEntryInLedger(entries[0]!);
+    assert.deepEqual([entries[0]!.level, entries[0]!.source, entries[0]!.event, entries[0]!.refs],
+      [scenario === "timeout" ? "warn" : "debug", "meeting.whiteboard-repair", "repair-settled", { traceId: "trace" }]);
+    const { durationMs, queueWaitMs, ...data } = entries[0]!.data!;
+    assert.ok(typeof durationMs === "number" && durationMs >= 0 && typeof queueWaitMs === "number" && queueWaitMs >= 0);
+    assert.deepEqual(data, { disposition: "completed", leaseAuthorized: !stale,
+      ...(scenario === "timeout" ? { providerStatus: "timed-out" } : {}),
+      parseValid: !["timeout", "invalid", "drift"].includes(scenario) });
+    assertNothingPlanted(entries, [...PLANTED_VALUES, validMermaid, "Client --> API", "Design an API"], name);
+    const counters = h.diagnosticLog.snapshot();
+    assert.deepEqual([counters.refusedEntries, counters.refusedFields, counters.truncatedFields, counters.detailFailures], [0, 0, 0, 0]);
   });
 }
+
+// Timeout table 3.1, row 5 for the repair: the same typed timeout, for a candidate that is no longer the current one.
+test("149 LG1 Timeout 5: a timed-out repair of a candidate that was replaced meanwhile is debug, and the same timeout of the current one is warn at every level but error", { timeout: 8000 }, async t => {
+  const timedOut = { rawOutput: "", providerDisposition: "provider-error-content", providerOutcome: { status: "timed-out", safeErrorSummary: PLANTED.providerError } };
+  const stale = await fixture(t);
+  stale.schedule();
+  await stale.started.promise;
+  stale.changeParent({ ...stale.parent, whiteboardArtifact: { ...stale.parent.whiteboardArtifact!,
+    renderState: { ...stale.parent.whiteboardArtifact!.renderState!, candidateRevision: 3 } } });
+  stale.delivery.resolve(timedOut);
+  assert.equal((await stale.terminal.promise).whiteboardRepairDisposition, "stale");
+  assert.deepEqual(stale.diagnosticLog.entries().map(entry => [entry.level, entry.data!.leaseAuthorized, entry.data!.providerStatus]),
+    [["debug", false, "timed-out"]]);
+  // LG2: the settle's own record is the same at every level; only the entry is filtered. The same holds with the
+  // log delivery failing: the call site reads no delivery result, and the same entry is handed to the logger.
+  // Each run has its own context manager, admission coordinator and runtime, and waits out the real admission grace,
+  // so the twenty-five runs are started together.
+  const combinations = (["ok", ...DIAGNOSTIC_LOG_SPY_FAILING_DELIVERIES] as const).flatMap(logDelivery =>
+    (["trace", "debug", "info", "warn", "error"] as const).map(level => ({ logDelivery, level })));
+  const runs = await Promise.all(combinations.map(async ({ logDelivery, level }) => {
+    const h = await fixture(t, level, logDelivery);
+    h.schedule();
+    await h.started.promise;
+    h.delivery.resolve(timedOut);
+    const final = await h.terminal.promise;
+    const business = JSON.parse(JSON.stringify([final, h.recoveries.length, h.requests, h.finishes, h.repairWrites, h.manager.getState().taskRuntime],
+      (key, value) => /(At|Ms|OperationId|operationId|Id|id)$/.test(key) ? undefined : value));
+    return { logDelivery, level, h, final, business };
+  }));
+  assert.deepEqual([runs.length, runs[0]!.logDelivery, runs[0]!.level], [25, "ok", "trace"]);
+  for (const { logDelivery, level, h, final, business } of runs) {
+    const name = `${level} with delivery ${logDelivery}`;
+    assert.deepEqual(business, runs[0]!.business, name);
+    assert.equal(final.whiteboardRepairProviderOutcomeStatus, "timed-out");
+    const handedOver = h.diagnosticLog.entries();
+    assert.deepEqual(handedOver.map(entry => [entry.level, entry.data!.leaseAuthorized, entry.data!.providerStatus]),
+      level === "error" ? [] : [["warn", true, "timed-out"]], name);
+    const counters = h.diagnosticLog.snapshot();
+    assert.deepEqual([counters.undeliveredEntries, counters.internalErrors, counters.queued, counters.inFlight],
+      [logDelivery === "ok" ? 0 : handedOver.length, 0, 0, false], name);
+  }
+});
 
 // 178/168 PC6: the switch is read once, when the repair observation starts. A
 // repair already in flight when it is switched off ends as it would have, and

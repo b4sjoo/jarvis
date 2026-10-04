@@ -23,10 +23,32 @@ export type TaskRelationSplitShadowParseResult =
   | TaskRelationAffinityParseResult
   | TaskRelationCanonicalShadowParseResult;
 
+// Task 178 LG. Which branch of the candidate selector ended the stage. It is
+// read-only: the selector passes it as an argument where it already decides,
+// and nothing selects, waits or retries on it. A selected tier does not say why
+// it was selected, and a parse disposition is the cached candidate's own: only
+// this names a stage that ended at its deadline with an invalid candidate
+// cached. A cancelled or superseded stage rejects and has no reason.
+export type TaskRelationCandidateSelectionReason =
+  // A parse-valid Intelligent result, "unclear" and "unknown" included.
+  | "intelligent-valid"
+  // Intelligent ended with an unusable result and Fast is parse-valid.
+  | "intelligent-invalid-fast-valid"
+  // Both candidates ended before the deadline and neither is usable.
+  | "candidates-ended-unusable"
+  // A candidate ended with an authentication or configuration failure.
+  | "client-error"
+  // The stage deadline: at entry, at the timer, at an admission granted after
+  // it, or at a completion that arrived at or after it. With a selected Fast
+  // tier this is the expected switch to a timely Fast candidate. It does not
+  // say that a provider reported a timeout or that a request was dispatched.
+  | "candidate-deadline-expired";
+
 export interface TaskRelationSplitShadowRequestResult {
   selectedProviderTier?: RuntimeInferenceProviderTier;
   selectedCandidateCompletedAt?: number;
   stageDeadlineAt?: number;
+  selectionReason?: TaskRelationCandidateSelectionReason;
   rawOutput: string;
   outputHash?: string;
   parsed: TaskRelationSplitShadowParseResult;

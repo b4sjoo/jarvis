@@ -875,11 +875,12 @@ test('PC1 and PC7: Preview controls and the Meeting Metadata selector with the r
 
     // Task 178 LG: LG1, LG7 and the LG UI, through real clicks on the Log Level selector.
     await scenario('LG1, LG7 and LG UI: a real click on a level is saved at once and shown as requested, then applied or failed from the native reply; a reload applies it again', {}, async (page, host) => {
-      const HELP = 'Sets the threshold of the diagnostic log: entries at the selected level and every more severe level go to the terminal ' +
-        'and to the local log files, which keep at most 50 MiB or 14 days. In this version the diagnostic log holds only the errors of the ' +
-        'native system audio commands, so every level gives the same output. Saved separately from Debug Mode: changing one never changes ' +
-        'the other. Log Level controls no other terminal or console output: not the Debug Mode trace printing, not Preparation, the focus ' +
-        'window or native prints, and not Session Recording or Native Stall Diagnostics files. It starts no model request, sampler or capture.';
+      const HELP = 'Sets the threshold of the diagnostic log: entries at this level and every more severe level go to the terminal and to ' +
+        'local log files, which keep at most 50 MiB or 14 days. The log currently holds native system-audio command errors and one ' +
+        'summary for each Relation wait, Voice Type deadline, failed or abandoned Advisor answer, Fact Risk Review, Meeting Metadata ' +
+        'inference and Whiteboard check. Screen answers are not logged yet. Saved separately from Debug Mode. Log Level does not control ' +
+        'Debug Mode trace printing, Preparation, the focus window, native prints, Session Recording or Native Stall Diagnostics files, ' +
+        'and starts no model request, sampler or capture.';
       const pending = level => `Status: ${level} requested, waiting for the native reply. Not yet confirmed on native.`;
       const applied = (level, sink = 'ready') => `Status: native applied ${level}. Log sink at that time: ${sink}.`;
       const failed = (level, message) => `Status: native did not confirm ${level}. Select ${level} again to retry. Reason: ${message}`;
@@ -1007,6 +1008,32 @@ test('PC1 and PC7: Preview controls and the Meeting Metadata selector with the r
       assert.deepEqual(view.commands, [apply('info'), apply('trace'), apply('debug'), apply('debug'), apply('warn'), apply('error')]);
       assert.equal(view.requests, 0, 'no provider request was made');
       t.diagnostic(`LG mounted Hook; renders=${JSON.stringify(view.renders)}`);
+
+      // LG5, the loss counts. A receipt carries the native sink's own totals. The Hook reads the logger's counters when
+      // it renders, so the render that shows this reply also shows what the sink reported, in red, under the status.
+      await option(page, '#configurations', 'Log Level', 'Error').click();
+      await heldCalls(1);
+      view = await logLevel(page);
+      assert.deepEqual([view.status, view.held], [[pending('error')], [apply('error')]], 'the saved level selected again: the apply is sent once more');
+      await answer('resolve', { ...receipt('error', 'degraded'), sink: { state: 'degraded', droppedTotal: 7, writeFailures: 2, unsavedAtExit: 0 } });
+      await phase('applied');
+      await frames(page);
+      view = await logLevel(page);
+      assert.deepEqual([view.status, view.red, view.controls],
+        [[applied('error', 'degraded'), 'Log loss: native dropped 7, native write failures 2.'], [false, true], 0]);
+      assert.deepEqual(await page.evaluate(() => JSON.parse(JSON.stringify(window.__pc.meeting.diagnosticLogLoss))),
+        { frontendShed: 0, frontendRefusedEntries: 0, frontendDetailLeftOut: 0, frontendInternalErrors: 0, frontendUndelivered: 0,
+          nativeRejected: 0, nativeDropped: 7, nativeWriteFailures: 2 });
+      // The next receipt is the latest one: a sink that reports nothing lost removes the line. No timer refreshed it.
+      await option(page, '#configurations', 'Log Level', 'Error').click();
+      await heldCalls(1);
+      await answer('resolve', receipt('error'));
+      await phase('applied');
+      await frames(page);
+      view = await logLevel(page);
+      assert.deepEqual([view.status, view.red], [[applied('error')], [false]]);
+      assert.deepEqual(view.commands.slice(-2), [apply('error'), apply('error')]);
+      assert.equal(view.requests, 0, 'no provider request was made');
 
       // Reload: the saved level is read back, applied again with an empty batch, and nothing is written.
       const saved = view.stored;

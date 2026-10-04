@@ -45,7 +45,9 @@ import {
   applyDiagnosticLogLevel,
   beginDiagnosticLogLevelApply,
   isDiagnosticLogLevel,
+  logDiagnostic,
   projectDiagnosticLogLevel,
+  readDiagnosticLogSnapshot,
   settleDiagnosticLogLevelApply,
   type DiagnosticLogLevelApply,
   type DiagnosticLogLevelOutcome,
@@ -2467,6 +2469,10 @@ interface TaskRelationSplitScheduleHandle {
     }
   ) => Promise<TaskRelationSplitCanonicalResult>;
   cancelForegroundWork: () => void;
+  // Task 178 LG, diagnostics only: this operation's own stage selections.
+  stageSelections: NonNullable<
+    TaskRelationAdjudicationScheduleHandle["stageSelections"]
+  >;
 }
 
 type ReadTaskRelationSourceOperationAuthorization =
@@ -3681,6 +3687,36 @@ export function useMeetingAssistant() {
           if (trace && trace.status !== "running") {
             sessionRecordingManagerRef.current?.refreshRecordedTrace(trace, getAutoExportTrigger(trace));
           }
+        }
+        // Task 178 LG, summary site 5. One entry when a review ends: settled,
+        // cancelled, discarded with its answer, or a result that arrived after
+        // the end. The level is read from the stage and status the runtime
+        // decided: warn only for a review that settled as failed, which leaves
+        // the answer as it was and unreviewed. A cancelled review also carries
+        // the status "failed" in its record, so the status alone never grades.
+        // The reason is copied only when it is the deadline code: on a generic
+        // failure it can be error text, and the entry then says "failed" alone.
+        const stage = event.stage;
+        if (stage === "settled" || stage === "cancelled" || stage === "discarded" || stage === "late-result-discarded") {
+          const settledFailed = stage === "settled" && event.status === "failed";
+          logDiagnostic(settledFailed ? "warn" : "debug", "meeting.fact-risk-review", "review-ended", () => ({
+            refs: {
+              traceId,
+              runtimeSessionId: typeof event.sessionId === "string" ? event.sessionId : undefined,
+            },
+            data: {
+              stage,
+              status: stage === "settled" && (event.status === "completed" || event.status === "failed" || event.status === "skipped")
+                ? event.status
+                : undefined,
+              cause: event.reason === "deadline-exceeded" || event.reason === "answer-retired" || event.reason === "runtime-invalidated"
+                ? event.reason
+                : undefined,
+              flagCount: typeof event.flagCount === "number" ? event.flagCount : undefined,
+              durationMs: typeof event.durationMs === "number" ? event.durationMs : undefined,
+              answerRevision: typeof event.answerRevision === "number" ? event.answerRevision : undefined,
+            },
+          }));
         }
       });
   }
@@ -8536,6 +8572,34 @@ export function useMeetingAssistant() {
               ),
             };
             traceStoreRef.current.updateMetadata(traceId, metadata);
+            // Task 178 LG, summary site 6. One entry per repair observation,
+            // at its settle. The level is read from the typed provider status
+            // of this settlement: warn when the repair still belongs to the
+            // current candidate, the runtime completed it and the provider
+            // request timed out. A stale, superseded or cancelled repair and
+            // every other ending are debug. The Whiteboard itself is untouched
+            // either way.
+            logDiagnostic(
+              settlement.disposition === "completed" &&
+                authorization.authorized &&
+                result?.providerOutcome?.status === "timed-out"
+                ? "warn"
+                : "debug",
+              "meeting.whiteboard-repair",
+              "repair-settled",
+              () => ({
+                refs: { traceId },
+                data: {
+                  disposition: settlement.disposition,
+                  leaseAuthorized: authorization.authorized,
+                  providerStatus: result?.providerOutcome?.status,
+                  failureClass: result?.providerOutcome?.failureClass,
+                  parseValid: result?.parsed.ok,
+                  durationMs: settlement.durationMs,
+                  queueWaitMs: settlement.queueWaitMs,
+                },
+              })
+            );
             sessionRecordingManagerRef.current?.recordWhiteboardRenderRecovery({
               traceId,
               taskId: settlement.job.lease.parentTaskId,
@@ -8995,6 +9059,47 @@ export function useMeetingAssistant() {
     level: state.settings.diagnosticLogLevel,
     apply: diagnosticLogLevelApply,
   });
+
+  // Task 178 LG. What the diagnostic log lost, for the same panel. It is read
+  // from the logger's own counters each time the Hook renders: no effect,
+  // timer, state or subscription refreshes it, so the panel shows the counts
+  // as of the latest render. The native counts are as of the latest receipt
+  // this page received. Read-only: nothing decides on it. Not shown: strings
+  // cut to their limit (the entry is sent with the cut text), and the sink's
+  // count of entries not saved at exit, which is known only at exit.
+  const diagnosticLogCounters = readDiagnosticLogSnapshot();
+  const diagnosticLogLoss = {
+    // Entries a full frontend queue shed, at any level.
+    frontendShed:
+      diagnosticLogCounters.dropped.error +
+      diagnosticLogCounters.dropped.warn +
+      diagnosticLogCounters.dropped.info +
+      diagnosticLogCounters.dropped.debug +
+      diagnosticLogCounters.dropped.trace,
+    // Entry calls refused whole: an unknown level or a malformed tag, and a
+    // call made from inside the logger.
+    frontendRefusedEntries:
+      diagnosticLogCounters.refusedEntries +
+      diagnosticLogCounters.reentrantCalls,
+    // Detail left out of an entry that was still sent: single parts, the
+    // whole detail when its function or its reading threw, and the detail of
+    // an entry over the size limit.
+    frontendDetailLeftOut:
+      diagnosticLogCounters.refusedFields +
+      diagnosticLogCounters.detailFailures +
+      diagnosticLogCounters.oversizeEntries,
+    // Failures of the logger itself. What each one lost is not known.
+    frontendInternalErrors: diagnosticLogCounters.internalErrors,
+    // Entries of calls native rejected, did not answer, or answered unreadably.
+    frontendUndelivered: diagnosticLogCounters.undeliveredEntries,
+    // Entries native refused as malformed or over a bound. A receipt counts
+    // its own call; this is the logger's sum over the receipts this page
+    // received, up to the latest one.
+    nativeRejected: diagnosticLogCounters.native.rejected,
+    // The native sink's own totals, as its latest receipt reported them.
+    nativeDropped: diagnosticLogCounters.native.sink?.droppedTotal ?? 0,
+    nativeWriteFailures: diagnosticLogCounters.native.sink?.writeFailures ?? 0,
+  };
 
   const setSessionScriptedValidation = useCallback((enabled: boolean) => {
     const recordingState =
@@ -17172,6 +17277,53 @@ export function useMeetingAssistant() {
         traceStoreRef.current.finishTrace(traceId, "success");
       }
     } catch (error) {
+      // Task 178 LG, summary site 4. One entry for this Advisor request, made
+      // in the branch below that decides its ending, after that branch read
+      // the commit decision: error where the user-visible error is set, debug
+      // for an aborted request and for a failure that is no longer shown: its
+      // commit is not authorized (late or invalidated work), or its commit is
+      // authorized and the meeting is no longer active. The physical attempt
+      // is recorded above this in the generation ledger whatever the level.
+      // The entry carries the typed outcome only, never the message.
+      const logAdvisorRequestEnded = (
+        level: "error" | "debug",
+        ending:
+          | "visible-error"
+          | "aborted"
+          | "commit-not-authorized"
+          | "meeting-inactive",
+        commitDecision: { authorized: boolean; reason: string }
+      ) =>
+        logDiagnostic(level, "meeting.advisor", "request-ended", () => {
+          const outcome =
+            error instanceof MeetingAIResponseOutcomeError
+              ? error.outcome
+              : undefined;
+          return {
+            refs: {
+              traceId,
+              operationId: answerGenerationLease?.id,
+              requestId: outcome?.requestId,
+            },
+            data: {
+              ending,
+              status: outcome?.status,
+              failureClass: outcome?.failureClass,
+              httpStatus: outcome?.statusCode,
+              budgetKind: outcome?.budgetTimeout?.kind,
+              budgetLimitMs: outcome?.budgetTimeout?.limitMs,
+              attemptNumber: outcome?.attemptNumber,
+              maxAttempts: outcome?.maxAttempts,
+              chunkCount: outcome?.chunkCount,
+              durationMs: outcome
+                ? outcome.finishedAt - outcome.startedAt
+                : undefined,
+              commitAuthorized: commitDecision.authorized,
+              commitReason: commitDecision.reason,
+              meetingActive: runtimeActiveRef.current,
+            },
+          };
+        });
       if (answerGenerationLease) {
         if (error instanceof MeetingAIResponseOutcomeError) {
           for (const outcome of error.attempts) {
@@ -17269,6 +17421,7 @@ export function useMeetingAssistant() {
             partialSuggestion: "",
           }));
         }
+        logAdvisorRequestEnded("debug", "aborted", commitDecision);
         return;
       }
 
@@ -17328,9 +17481,17 @@ export function useMeetingAssistant() {
         (!runtimeActiveRef.current && !force) ||
         !commitDecision.authorized
       ) {
+        logAdvisorRequestEnded(
+          "debug",
+          commitDecision.authorized
+            ? "meeting-inactive"
+            : "commit-not-authorized",
+          commitDecision
+        );
         return;
       }
 
+      logAdvisorRequestEnded("error", "visible-error", commitDecision);
       setState((previous) => ({
         ...previous,
         status: runtimeActiveRef.current
@@ -18917,6 +19078,35 @@ export function useMeetingAssistant() {
             meetingMetadataInferenceRevision: settlement.completedAt,
           };
           traceStoreRef.current.updateMetadata(traceId, metadata);
+          // Task 178 LG, summary site 6. One entry per Meeting Metadata
+          // inference, at its settle. The level is read from the typed
+          // provider status of this settlement, not from the text-derived
+          // flag recorded above: warn when the lease is still current, the
+          // runtime completed the operation and the provider request timed
+          // out. A stale, superseded or cancelled inference and every other
+          // ending are debug.
+          logDiagnostic(
+            settlement.disposition === "completed" &&
+              authorization.authorized &&
+              result?.providerOutcome?.status === "timed-out"
+              ? "warn"
+              : "debug",
+            "meeting.metadata-inference",
+            "inference-settled",
+            () => ({
+              refs: { traceId },
+              data: {
+                disposition: settlement.disposition,
+                leaseAuthorized: authorization.authorized,
+                providerStatus: result?.providerOutcome?.status,
+                failureClass: result?.providerOutcome?.failureClass,
+                parseValid: parsed?.ok,
+                committed,
+                durationMs: settlement.durationMs,
+                queueWaitMs: settlement.queueWaitMs,
+              },
+            })
+          );
           sessionRecordingManagerRef.current?.recordMeetingMetadataInferenceDecision(
             {
               traceId,
@@ -20749,6 +20939,57 @@ export function useMeetingAssistant() {
             manualCorrectionRevisionRef.current,
         });
       };
+      // Task 178 LG, diagnostics only. This scheduled operation's own record of
+      // what the candidate selector of each of its stages ended with. A stage
+      // settle writes its stage here when it holds a selection, before it
+      // resolves the stage terminal; a cancelled, superseded or refused stage
+      // has no result and writes nothing. The formal Relation summary reads it
+      // through the handle. Nothing decides, selects, waits or records on it.
+      const stageSelections: NonNullable<
+        TaskRelationAdjudicationScheduleHandle["stageSelections"]
+      > = {};
+      // Task 178 LG, summary site 2. One entry for each stage of an observation
+      // (Runtime Cross-checks) operation, at that stage's own settle. A formal
+      // operation is summarised once, where the Ordered operation writes its
+      // metadata, so its stages log nothing here. The level is read from this
+      // settle's typed outcome: warn only when the stage really ended (it is
+      // still current and the runtime completed it) at its deadline with no
+      // parse-valid candidate. A cancelled, superseded or stale stage, a
+      // usable result and every other ending are debug. It decides nothing.
+      const logObservationStageSettled = (
+        stage: "child-affinity" | "parent-affinity" | "canonical",
+        settled: {
+          current: boolean;
+          disposition: string;
+          result: TaskRelationSplitShadowRequestResult | undefined;
+          durationMs: number | undefined;
+        }
+      ) => {
+        if (runtimeReleaseRequested) return;
+        logDiagnostic(
+          settled.current &&
+            settled.disposition === "completed" &&
+            settled.result?.selectionReason === "candidate-deadline-expired" &&
+            !settled.result.parsed.ok
+            ? "warn"
+            : "debug",
+          "meeting.relation",
+          "observation-stage-settled",
+          () => ({
+            refs: { traceId },
+            data: {
+              stage,
+              disposition: settled.disposition,
+              current: settled.current,
+              selection: settled.result?.selectionReason,
+              tier: settled.result?.selectedProviderTier,
+              parseValid: settled.result?.parsed.ok,
+              providerStatus: settled.result?.providerOutcome?.status,
+              durationMs: settled.durationMs,
+            },
+          })
+        );
+      };
       const runAffinity = (
         affinityRequest: TaskRelationAffinityRequest | undefined
       ): Promise<TaskRelationSplitAffinityResult> => {
@@ -20900,6 +21141,17 @@ export function useMeetingAssistant() {
                 }
               );
               const result = settlement.result;
+              // Task 178 LG, diagnostics only (see stageSelections above).
+              if (result?.selectionReason) {
+                stageSelections[
+                  affinityRequest.affinityKind === "child"
+                    ? "childAffinity"
+                    : "parentAffinity"
+                ] = {
+                  selectionReason: result.selectionReason,
+                  tierSelected: result.selectedProviderTier !== undefined,
+                };
+              }
               const parsed = result?.parsed;
               const adjudication =
                 authorization.authorized &&
@@ -20925,6 +21177,9 @@ export function useMeetingAssistant() {
                   prefix
                 ),
                 ...formatTaskRelationSplitObservationForTrace(result, prefix),
+                // Task 178 LG: which selector branch ended this stage. Additive
+                // and read-only; absent when the stage has no selection.
+                [`${prefix}SelectionReason`]: result?.selectionReason,
                 [`${prefix}Disposition`]: adjudication
                   ? "shadow-observed"
                   : unavailableReason,
@@ -20974,6 +21229,17 @@ export function useMeetingAssistant() {
                   settlement.error
                 );
               }
+              logObservationStageSettled(
+                affinityRequest.affinityKind === "child"
+                  ? "child-affinity"
+                  : "parent-affinity",
+                {
+                  current: authorization.authorized,
+                  disposition: settlement.disposition,
+                  result,
+                  durationMs: settlement.durationMs,
+                }
+              );
               if (settlement.disposition === "error") {
                 reject(settlement.error ?? new Error("Relation candidate execution failed"));
                 return;
@@ -21231,6 +21497,13 @@ export function useMeetingAssistant() {
                 currentParentOutputHash: parent.outputHash,
               });
             const result = settlement.result;
+            // Task 178 LG, diagnostics only (see stageSelections above).
+            if (result?.selectionReason) {
+              stageSelections.canonical = {
+                selectionReason: result.selectionReason,
+                tierSelected: result.selectedProviderTier !== undefined,
+              };
+            }
             const parsed = result?.parsed;
             const adjudication: TaskRelationCanonicalShadowAdjudication | undefined =
               authorization.authorized &&
@@ -21265,6 +21538,10 @@ export function useMeetingAssistant() {
                 result,
                 "taskRelationSplitCanonical"
               ),
+              // Task 178 LG: which selector branch ended this stage. Additive
+              // and read-only; absent when the stage has no selection.
+              taskRelationSplitCanonicalSelectionReason:
+                result?.selectionReason,
               taskRelationSplitCanonicalDisposition: adjudication
                 ? "shadow-observed"
                 : !authorization.authorized
@@ -21340,6 +21617,14 @@ export function useMeetingAssistant() {
                 settlement.error
               );
             }
+            logObservationStageSettled("canonical", {
+              current:
+                authorization.authorized &&
+                predecessorAuthorization.authorized,
+              disposition: settlement.disposition,
+              result,
+              durationMs: settlement.durationMs,
+            });
             if (settlement.disposition === "error") {
               rejectCanonicalOutcome?.(settlement.error ?? new Error("Relation candidate execution failed"));
               return;
@@ -21451,6 +21736,7 @@ export function useMeetingAssistant() {
         canonicalOutcome,
         startCanonical,
         cancelForegroundWork,
+        stageSelections,
       };
     },
     [refreshRecordedCompletedTrace]
@@ -21640,6 +21926,7 @@ export function useMeetingAssistant() {
         localQuestionType:
           normalizeCanonicalQuestionType(lexical.type) ?? "unknown",
         sourceKind,
+        stageSelections: formalSplitHandle?.stageSelections,
       };
       const retiredMetadata = {
         ...formatRuntimeInferenceOperationForTrace(
@@ -21665,7 +21952,104 @@ export function useMeetingAssistant() {
   const resolveOrderedTaskRelationWithinWindow = useCallback((input: Parameters<typeof resolveOrderedTaskRelationOperation>[0]) =>
     resolveOrderedTaskRelationOperation(input, {
       now: Date.now,
-      recordMetadata: (traceId, metadata) => traceStoreRef.current.updateMetadata(traceId, metadata),
+      recordMetadata: (traceId, metadata) => {
+        traceStoreRef.current.updateMetadata(traceId, metadata);
+        // Task 178 LG, summary site 1. One entry per formal Relation operation,
+        // where the Ordered operation writes its metadata once. The level is
+        // read from typed values of this operation alone: this metadata write
+        // and the stage selections that the operation's own stage settles put
+        // in its handle before their terminals resolved. Nothing is read back
+        // from the trace.
+        // warn when all hold: a formal model operation; still authorized at
+        // its end; no stage disposition is "available"; and the operation
+        // recorded a client error or lost at least one stage. A stage is lost
+        // when its candidate selector ended with no tier selected, at the
+        // stage deadline or with both candidates unusable. A stage that
+        // selected a tier and was then unusable (a predecessor mismatch, say)
+        // is not lost, and a cancelled, superseded or refused stage has no
+        // selection. Whether the null hypothesis or the runtime matrix then
+        // settled the relation does not grade: the turn lost its model
+        // evidence either way.
+        // debug in every other case: resolved from model evidence, a
+        // parse-valid "unknown" or "unclear", an operation that is no longer
+        // authorized, stages that were only cancelled, superseded or refused
+        // by the runtime budget, a handle with no release window, and an
+        // operation that lost one stage and used another. The entry decides
+        // nothing.
+        const stageSelections = input.handle.stageSelections;
+        const stageLost = (
+          selection: NonNullable<typeof stageSelections>["canonical"]
+        ) =>
+          selection !== undefined &&
+          !selection.tierSelected &&
+          (selection.selectionReason === "candidate-deadline-expired" ||
+            selection.selectionReason === "candidates-ended-unusable");
+        const lostModelEvidence =
+          Boolean(
+            input.handle.releaseWindowRequested && input.handle.affinityOutcome
+          ) &&
+          metadata.taskRelationOrderedResolutionOperationAuthorized === true &&
+          metadata.taskRelationOrderedResolutionAffinityChildDisposition !==
+            "available" &&
+          metadata.taskRelationOrderedResolutionAffinityParentDisposition !==
+            "available" &&
+          metadata.taskRelationOrderedResolutionCanonicalDisposition !==
+            "available" &&
+          (metadata.taskRelationOrderedResolutionClientError === true ||
+            stageLost(stageSelections?.childAffinity) ||
+            stageLost(stageSelections?.parentAffinity) ||
+            stageLost(stageSelections?.canonical));
+        logDiagnostic(
+          lostModelEvidence ? "warn" : "debug",
+          "meeting.relation",
+          "formal-operation-settled",
+          () => {
+            const enumValue = (value: unknown) =>
+              typeof value === "string" ? value : undefined;
+            // Per stage: usable, the selector's reason and whether it selected
+            // a tier. Whether a request was dispatched is not here: it stays
+            // in the critical event stream and the recorded candidate rows.
+            return {
+              refs: { traceId },
+              data: {
+                sourceKind: input.sourceKind,
+                operationAuthorized:
+                  metadata.taskRelationOrderedResolutionOperationAuthorized ===
+                  true,
+                clientError:
+                  metadata.taskRelationOrderedResolutionClientError === true,
+                stage: enumValue(metadata.taskRelationOrderedResolutionStage),
+                reason: enumValue(metadata.taskRelationOrderedResolutionReason),
+                waitDisposition: enumValue(
+                  metadata.taskRelationOrderedResolutionWaitDisposition
+                ),
+                waitMs:
+                  typeof metadata.taskRelationOrderedResolutionWaitMs ===
+                  "number"
+                    ? metadata.taskRelationOrderedResolutionWaitMs
+                    : undefined,
+                childUsable:
+                  metadata.taskRelationOrderedResolutionAffinityChildDisposition ===
+                  "available",
+                childSelection: stageSelections?.childAffinity?.selectionReason,
+                childTierSelected: stageSelections?.childAffinity?.tierSelected,
+                parentUsable:
+                  metadata.taskRelationOrderedResolutionAffinityParentDisposition ===
+                  "available",
+                parentSelection:
+                  stageSelections?.parentAffinity?.selectionReason,
+                parentTierSelected:
+                  stageSelections?.parentAffinity?.tierSelected,
+                canonicalUsable:
+                  metadata.taskRelationOrderedResolutionCanonicalDisposition ===
+                  "available",
+                canonicalSelection: stageSelections?.canonical?.selectionReason,
+                canonicalTierSelected: stageSelections?.canonical?.tierSelected,
+              },
+            };
+          }
+        );
+      },
     }), []);
 
 
@@ -22627,6 +23011,11 @@ export function useMeetingAssistant() {
           ) {
             return;
           }
+          // Task 178 LG. Read-only: a Type window was requested and its
+          // outcome was still pending when the foreground deadline arrived.
+          // It goes to the diagnostic log entry below and nowhere else.
+          const typeOutcomePendingAtDeadline =
+            questionTypeWindowRequested && !typeSettled;
           deadlineFinalizationRequested = true;
           typeSettled = true;
           const relationResolution = startRelationResolution();
@@ -22669,6 +23058,35 @@ export function useMeetingAssistant() {
                 "deadline-expired-finalized",
                 "deadline"
               );
+              // Task 178 LG, summary site 3. One entry where the foreground
+              // deadline finalizes this turn's wait: warn when the Type
+              // outcome was still pending then, so the wait ended with the
+              // prior type; debug when Type had settled or no Type window was
+              // requested. The entry reports the deadline finalization, not
+              // the handoff: dispatchAdvisor above hands the turn to the
+              // Advisor only while the meeting is active and the question is
+              // current, and it returns no value, so this branch holds no
+              // typed fact of the handoff and the entry is made either way.
+              // Known limit, listed in the ledger: a turn finalized here in a
+              // meeting that is no longer active is still a warning. This is
+              // the foreground window, not a provider timeout: the Type
+              // request has its own longer budget and its own terminal.
+              logDiagnostic(
+                typeOutcomePendingAtDeadline ? "warn" : "debug",
+                "meeting.question-type",
+                "foreground-deadline-finalized",
+                () => ({
+                  refs: { traceId: input.traceId },
+                  data: {
+                    typeWindowRequested: questionTypeWindowRequested,
+                    typeOutcomePending: typeOutcomePendingAtDeadline,
+                    relationWindowRequested,
+                    typeWaitBudgetMs: questionTypeWaitBudgetMs,
+                    foregroundBudgetMs: foregroundWaitBudgetMs,
+                    waitMs: Math.max(0, Date.now() - waitStartedAt),
+                  },
+                })
+              );
             },
             () => undefined
           );
@@ -22707,6 +23125,23 @@ export function useMeetingAssistant() {
             ),
           };
           traceStoreRef.current.updateMetadata(input.traceId, metadata);
+          // Task 178 LG, summary site 3. A Type result that arrived after the
+          // turn was released: it is kept as an observation and applied to
+          // nothing, so it is debug whatever it holds, a provider timeout
+          // included.
+          logDiagnostic(
+            "debug",
+            "meeting.question-type",
+            "late-result-discarded",
+            () => ({
+              refs: { traceId: input.traceId },
+              data: {
+                providerTimedOut: outcome.providerTimedOut,
+                leaseAuthorized: outcome.operationLeaseAuthorized,
+                waitMs: metadata.questionTypeAdjudicationWaitMs,
+              },
+            })
+          );
           sessionRecordingManagerRef.current?.recordCaptureLifecycle({
             stage: "question-type-enforcement-late-result",
             traceId: input.traceId,
@@ -38099,6 +38534,7 @@ export function useMeetingAssistant() {
     nativeStallDiagnostics,
     setDiagnosticLogLevel,
     diagnosticLogLevelStatus,
+    diagnosticLogLoss,
     setRuntimeCrossChecksEnabled,
     setMicrophoneContextEnabled,
     toggleMicrophoneContext,

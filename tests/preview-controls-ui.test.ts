@@ -174,8 +174,9 @@ function harness(stored?: string, options: HarnessOptions = {}) {
   globals.DEFAULT_MEETING_ASSISTANT_SETTINGS = evaluate(initialSettings.initializer, hook, globals);
   globals.state = {
     status: "idle", isActive: false, audioStatus: undefined, nativeStallDiagnostics: undefined,
-    // Task 178 LG: this harness holds no level apply, so the page is given no Log Level status.
+    // Task 178 LG: this harness holds no level apply and no logger, so the page is given no Log Level status and no loss counts.
     diagnosticLogLevelStatus: undefined,
+    diagnosticLogLoss: undefined,
     settings: globals.readMeetingAssistantSettings(),
     interviewSessionBrief: brief, preparationRuntime,
     aiProviders: [{ id: "test-provider", curl: "" }],
@@ -1218,12 +1219,12 @@ test("PC7 Normal and Focus surfaces display one fact-risk result read from the H
 const LOG_LEVELS = ["error", "warn", "info", "debug", "trace"] as const;
 const LOG_LEVEL_LABELS = ["Error", "Warn", "Info", "Debug", "Trace"];
 // Verbatim UI text of the selector.
-const LOG_LEVEL_HELP = "Sets the threshold of the diagnostic log: entries at the selected level and every more severe level go to the " +
-  "terminal and to the local log files, which keep at most 50 MiB or 14 days. In this version the diagnostic log holds only the " +
-  "errors of the native system audio commands, so every level gives the same output. Saved separately from Debug Mode: changing " +
-  "one never changes the other. Log Level controls no other terminal or console output: not the Debug Mode trace printing, not " +
-  "Preparation, the focus window or native prints, and not Session Recording or Native Stall Diagnostics files. It starts no model " +
-  "request, sampler or capture.";
+const LOG_LEVEL_HELP = "Sets the threshold of the diagnostic log: entries at this level and every more severe level go to the terminal and to " +
+  "local log files, which keep at most 50 MiB or 14 days. The log currently holds native system-audio command errors and one " +
+  "summary for each Relation wait, Voice Type deadline, failed or abandoned Advisor answer, Fact Risk Review, Meeting Metadata " +
+  "inference and Whiteboard check. Screen answers are not logged yet. Saved separately from Debug Mode. Log Level does not control " +
+  "Debug Mode trace printing, Preparation, the focus window, native prints, Session Recording or Native Stall Diagnostics files, " +
+  "and starts no model request, sampler or capture.";
 const logLevelPending = (level: string) => `Status: ${level} requested, waiting for the native reply. Not yet confirmed on native.`;
 const logLevelApplied = (level: string, sink: string) => `Status: native applied ${level}. Log sink at that time: ${sink}.`;
 const logLevelFailed = (level: string, message: string) => `Status: native did not confirm ${level}. Select ${level} again to retry. Reason: ${message}`;
@@ -1251,6 +1252,7 @@ test("LG UI the Log Level selector is one five-option ConfigButtonGrid in the De
   assert.equal(compact(site.diagnosticLogLevel!.getText(ui)), "meeting.settings.diagnosticLogLevel");
   assert.equal(compact(site.onDiagnosticLogLevelChange!.getText(ui)), "meeting.setDiagnosticLogLevel");
   assert.equal(compact(site.diagnosticLogLevelStatus!.getText(ui)), "meeting.diagnosticLogLevelStatus");
+  assert.equal(compact(site.diagnosticLogLoss!.getText(ui)), "meeting.diagnosticLogLoss");
   let cells = 0;
   for (const dev of booleans) for (const debug of booleans) for (const level of LOG_LEVELS) {
     const label = JSON.stringify({ dev, debug, level });
@@ -1361,6 +1363,51 @@ test("LG UI one status line per projection state with exact text: pending, appli
   assert.match(text(failed.block.children), /native did not confirm trace\. Select trace again to retry\. Reason: boom/);
 });
 
+// Task 178 LG (A4, A5, A6): the loss counts of the diagnostic log, as the Hook reads them from the logger's counters.
+const NO_LOG_LOSS = { frontendShed: 0, frontendRefusedEntries: 0, frontendDetailLeftOut: 0, frontendInternalErrors: 0, frontendUndelivered: 0,
+  nativeRejected: 0, nativeDropped: 0, nativeWriteFailures: 0 };
+test("LG UI the loss line: absent while every count is zero, and otherwise one red text line that names each non-zero count in a fixed order, under the status", () => {
+  const render = (loss: Record<string, number> | undefined, status?: DiagnosticLogLevelProjection) =>
+    logLevelBlock(harness(JSON.stringify({ diagnosticLogLevel: "info" }), { state: { diagnosticLogLevelStatus: status, diagnosticLogLoss: loss } }));
+  // Nothing lost, or nothing known: no line, with or without a status.
+  const applied: DiagnosticLogLevelProjection = { phase: "applied", level: "info", appliedLevel: "info", sinkState: "ready" };
+  for (const loss of [undefined, NO_LOG_LOSS]) {
+    assert.deepEqual(render(loss).statusText, []);
+    assert.deepEqual(render(loss, applied).statusText, [logLevelApplied("info", "ready")]);
+  }
+  // Each count alone, verbatim.
+  for (const [key, line] of [
+    ["frontendShed", "Log loss: frontend shed 3."],
+    ["frontendRefusedEntries", "Log loss: frontend refused 3."],
+    ["frontendDetailLeftOut", "Log loss: frontend detail left out 3."],
+    ["frontendInternalErrors", "Log loss: frontend internal errors 3."],
+    ["frontendUndelivered", "Log loss: frontend not delivered 3."],
+    ["nativeRejected", "Log loss: native rejected 3."],
+    ["nativeDropped", "Log loss: native dropped 3."],
+    ["nativeWriteFailures", "Log loss: native write failures 3."],
+  ] as const) {
+    const alone = render({ ...NO_LOG_LOSS, [key]: 3 });
+    assert.deepEqual([alone.statusText, alone.red], [[line], [true]], key);
+  }
+  // All of them, in the fixed order, under an unchanged status line.
+  const all = render({ frontendShed: 5, frontendRefusedEntries: 1, frontendDetailLeftOut: 2, frontendInternalErrors: 4, frontendUndelivered: 64,
+    nativeRejected: 3, nativeDropped: 7, nativeWriteFailures: 2 }, applied);
+  assert.deepEqual(all.statusText, [logLevelApplied("info", "ready"),
+    "Log loss: frontend shed 5, frontend refused 1, frontend detail left out 2, frontend internal errors 4, frontend not delivered 64, native rejected 3, native dropped 7, native write failures 2."]);
+  // What native had not saved at exit is known only at exit: the page takes no such count and names none.
+  assert.equal(/unsavedAtExit|not saved at exit/i.test(uiText), false);
+  // Every count the Hook hands over is shown: the line has one part per member, and no member is left unnamed.
+  assert.deepEqual(Object.keys(NO_LOG_LOSS).length, all.statusText[1]!.split(", ").length);
+  assert.deepEqual(all.red, [false, true], "the applied line keeps its own colour");
+  assert.equal(all.help, LOG_LEVEL_HELP);
+  // Text only: the line holds no control, and a loss never changes what the selector shows or writes.
+  const controls = [all.h.globals.Button, all.h.globals.Switch, "button", "input", "select", "textarea", "a"];
+  assert.equal(nodes(all.status).filter((node) => controls.includes(node.type)).length, 0, "no control in the status lines");
+  assert.deepEqual([all.grid.selected, all.h.writes], [["Info"], []]);
+  // The page reads the counts from the Hook member alone: it imports nothing that runs from the logger module.
+  assert.equal(/readDiagnosticLogSnapshot|logDiagnostic\(/.test(uiText), false);
+});
+
 test("LG UI the help text states what Log Level controls and what it does not, in the same words with Debug on and off", () => {
   for (const dev of booleans) for (const debug of booleans) for (const recording of booleans) {
     const h = harness(JSON.stringify({ debugMode: debug, diagnosticLogLevel: "trace" }),
@@ -1369,17 +1416,21 @@ test("LG UI the help text states what Log Level controls and what it does not, i
     assert.equal(help, LOG_LEVEL_HELP, JSON.stringify({ dev, debug, recording }));
     assert.equal(text(block.children), `Log Level${LOG_LEVEL_LABELS.join("")}${LOG_LEVEL_HELP}`, "the selector, the help and nothing else");
   }
-  // What the log holds in this version is said, with what follows from it for the selector: no level changes the output.
-  assert.match(LOG_LEVEL_HELP, /In this version the diagnostic log holds only the errors of the native system audio commands, so every level gives the same output\./);
+  // What the log holds now is said, one summary per named operation, and what it does not hold yet.
+  assert.match(LOG_LEVEL_HELP, /The log currently holds native system-audio command errors and one summary for each /);
+  const held = LOG_LEVEL_HELP.slice(LOG_LEVEL_HELP.indexOf("one summary for each "), LOG_LEVEL_HELP.indexOf(" Screen answers"));
+  assert.equal(held, "one summary for each Relation wait, Voice Type deadline, failed or abandoned Advisor answer, Fact Risk Review, " +
+    "Meeting Metadata inference and Whiteboard check.");
+  assert.match(LOG_LEVEL_HELP, /Screen answers are not logged yet\./);
+  // It claims no entry per Relation decision, no level for any entry and no sameness of the levels.
+  assert.doesNotMatch(LOG_LEVEL_HELP, /each Relation decision|is an error|Warnings are|every level gives the same output|holds only/);
   // What it does not control is named, each by its own name, and nothing wider is promised.
-  for (const named of ["no other terminal or console output", "the Debug Mode trace printing", "Preparation", "the focus window", "native prints",
-    "Session Recording", "Native Stall Diagnostics files"]) {
-    assert.ok(LOG_LEVEL_HELP.includes(named), named);
-  }
+  const notControlled = LOG_LEVEL_HELP.slice(LOG_LEVEL_HELP.indexOf("Log Level does not control "));
+  assert.equal(notControlled, "Log Level does not control Debug Mode trace printing, Preparation, the focus window, native prints, " +
+    "Session Recording or Native Stall Diagnostics files, and starts no model request, sampler or capture.");
   // The retention bounds of the local files, as the sink enforces them.
-  assert.match(LOG_LEVEL_HELP, /the local log files, which keep at most 50 MiB or 14 days\./);
-  assert.match(LOG_LEVEL_HELP, /Saved separately from Debug Mode: changing one never changes the other\./);
-  assert.match(LOG_LEVEL_HELP, /It starts no model request, sampler or capture\./);
+  assert.match(LOG_LEVEL_HELP, /local log files, which keep at most 50 MiB or 14 days\./);
+  assert.match(LOG_LEVEL_HELP, /Saved separately from Debug Mode\./);
   assert.doesNotMatch(LOG_LEVEL_HELP, /all logs|every log|controls the console|recording level/i);
   // The page source holds each sentence once, in the Debug group.
   const debugGroup = find(expression(ui, "ConfigurationsPanel"), (node) => ts.isJsxElement(node) &&

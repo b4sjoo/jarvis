@@ -7,7 +7,9 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  readdir,
   rm,
+  stat,
   writeFile,
 } from "node:fs/promises";
 import path from "node:path";
@@ -42,6 +44,7 @@ import {
 } from "../src/lib/meeting/human-evaluation-attempt-projection.js";
 import { MeetingTraceStore } from "../src/lib/meeting/trace.js";
 import { createRuntimeCriticalEventHarness, RUNTIME_CRITICAL_EVENT_HOOK_CALLBACKS } from "./helpers/runtime-critical-events.js";
+import { assertEntryInLedger, assertNothingPlanted, createDiagnosticLogSpy } from "./helpers/diagnostic-log-spy.js";
 
 import type { LogicalQuestionUnit } from "../src/lib/meeting/logical-question-unit.js";
 import type { MeetingAssistantSettings } from "../src/lib/meeting/types.js";
@@ -251,9 +254,12 @@ async function harness(options: { mode?: Mode; child?: boolean; source?: string;
     intelligentFingerprint: route.resolveRuntimeInferenceModelRouteFromSnapshot({ snapshot: providerSnapshot,
       operationKind: "task-relation-parent-affinity", providerTier: "intelligent" }).configFingerprint,
   });
+  // Task 178 LG: the stage settle names the logger, so the environment supplies it by hand.
+  const diagnosticLog = createDiagnosticLogSpy({ threshold: "trace", now: () => clock.now });
   const environment: Record<string, any> = {
     ...split, ...operation, ...response, ...admission, ...route, ...taxonomy, isRuntimeTaskRelation,
     requestTaskRelationProviderCandidates,
+    logDiagnostic: diagnosticLog.logDiagnostic,
     Date, Promise, Error, DOMException, console,
     debugModeRef: { current: false },
     // 178/168 PC: the one switch that admits an observation-only operation.
@@ -378,7 +384,7 @@ async function harness(options: { mode?: Mode; child?: boolean; source?: string;
   await clock.startPending();
   return {
     root, disk, clock, trace, state, metadata, effects, refreshed, callbackMs, serializationMs, executions, physicalExecutions, admissionReceipts, environment, handle,
-    criticalEvents,
+    criticalEvents, diagnosticLog,
     async affinities(fault: Fault = "success") {
       if (fault === "cancel") {
         environment.taskRelationChildAffinityRuntimeRef.current.cancelAll("fixture-cancel");
@@ -681,6 +687,32 @@ test("ST183-7 deadline handoff reads back from recorder files: completed -> sele
     assert.equal(recordedCanonical.taskRelationSplitChildPredecessorOutputHash, recordedCanonical.taskRelationChildAffinityOutputHash);
     assert.equal(recordedCanonical.taskRelationSplitCanonicalSelectedProviderTier, "fast");
     assert.equal(recordedCanonical.taskRelationSplitCanonicalSelectedAt, canonicalDeadlineAt);
+    // Task 178 LG3. The selection reason is the one additive key of the stage settle, read back here from the
+    // recorder's own files: each stage ended at its deadline with a timely Fast, which the selected tier alone does not say.
+    for (const key of ["taskRelationChildAffinity", "taskRelationParentAffinity", "taskRelationSplitCanonical"] as const) {
+      assert.equal(latest(decisions, key)[`${key}SelectionReason`], "candidate-deadline-expired", key);
+      assert.equal(h.metadata[`${key}SelectionReason`], "candidate-deadline-expired", `${key} in the trace`);
+    }
+    // Where the recording holds it: in the Relation decision file, and in the timeline lines of the three stage
+    // settles, each a decision line and the line of that stage's saved model output, which carry the settle's
+    // metadata. No candidate row and no other file has it.
+    const holding: string[] = [];
+    for (const file of await readdir(h.disk.folder, { recursive: true })) {
+      const absolute = path.join(h.disk.folder, file);
+      if (!(await stat(absolute)).isFile()) continue;
+      const text = await readFile(absolute, "utf8");
+      if (/taskRelation(?:ChildAffinity|ParentAffinity|SplitCanonical)SelectionReason/.test(text)) holding.push(file.split(path.sep).join("/"));
+      assert.equal(text.includes('"selectionReason"'), false, `${file}: no candidate row carries the reason`);
+    }
+    assert.deepEqual(holding.sort(), ["runtime-inference/task-relation-decisions.jsonl", "timeline.jsonl"]);
+    const timelineKinds = (await readFile(path.join(h.disk.folder, "timeline.jsonl"), "utf8")).split("\n")
+      .filter((line) => line.includes("SelectionReason")).map((line) => JSON.parse(line).kind as string);
+    assert.deepEqual(timelineKinds.sort(), ["model-output", "model-output", "model-output", "task-relation-adjudication-decision",
+      "task-relation-adjudication-decision", "task-relation-adjudication-decision"]);
+    // This test drives the shared Ordered operation with its own metadata writer, and the stages of a formal
+    // operation log nothing at their own settle: the logger was never called.
+    assert.deepEqual(h.diagnosticLog.entries(), []);
+    assert.equal(h.diagnosticLog.snapshot().filtered + h.diagnosticLog.snapshot().accepted, 0);
     // consumed -> final source.
     assert.equal(h.metadata.taskRelationOrderedResolutionAffinityParentDisposition, "available");
     assert.equal(h.metadata.taskRelationOrderedResolutionAffinityChildDisposition, "available");
@@ -776,6 +808,17 @@ test("PC2 RC3: Runtime Cross-checks, not the recorder's state, admits observatio
       assert.equal(affinity.parent.adjudication.decision, "independent");
       assert.equal(h.disk.manager.getState().active, false);
       assert.equal(h.disk.calls.length, writesBefore, "an inactive recorder receives nothing from the observation");
+      // Task 178 LG, summary site 2: each observation stage logs one entry at its own settle. Both ended with a
+      // parse-valid Intelligent result, so both are debug, whatever the recorder's state is.
+      const entries = h.diagnosticLog.entries();
+      for (const entry of entries) assertEntryInLedger(entry);
+      assert.deepEqual(entries.map((entry) => [entry.level, entry.event, entry.refs, entry.data!.stage, entry.data!.disposition,
+        entry.data!.current, entry.data!.selection, entry.data!.tier, entry.data!.parseValid, entry.data!.providerStatus])
+        .sort((left, right) => String(left[3]).localeCompare(String(right[3]))), [
+        ["debug", "observation-stage-settled", { traceId: "trace" }, "child-affinity", "completed", true, "intelligent-valid", "intelligent", true, "success"],
+        ["debug", "observation-stage-settled", { traceId: "trace" }, "parent-affinity", "completed", true, "intelligent-valid", "intelligent", true, "success"],
+      ]);
+      assertNothingPlanted(entries, ["Implement a queue.", "Implement a cache.", "Explain cache eviction."], mode);
     } finally { await h.close(); }
   }
 });

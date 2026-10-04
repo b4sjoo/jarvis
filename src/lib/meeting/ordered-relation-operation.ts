@@ -7,6 +7,7 @@ import { createOrderedSettlementDeadline, createOrderedRelationPhaseBudget, crea
 import { ORDERED_RELATION_STAGE_BUDGET_MS, filterTaskRelationAffinityOutcomeAtCutoff,
   decideOrderedTaskRelationResolution, formatOrderedTaskRelationResolutionForTrace,
   type TaskRelationSplitAffinityOutcome, type TaskRelationCanonicalShadowAdjudication } from './task-relation-split-shadow.js';
+import type { TaskRelationCandidateSelectionReason } from './task-relation-split-shadow-request.js';
 
 export interface TaskRelationAdjudicationScheduleHandle {
   releaseWindowRequested: boolean;
@@ -32,6 +33,14 @@ export interface TaskRelationAdjudicationScheduleHandle {
   deterministicProposal?: CurrentQuestionSettlementProposal;
   localQuestionType?: CanonicalQuestionType;
   sourceKind?: "voice" | "screen" | "mixed";
+  // Task 178 LG, diagnostics only. What the candidate selector of each stage of
+  // this one operation ended with: its reason and whether it selected a tier.
+  // The stage owner writes a stage here when that stage settles with a
+  // selection, before the stage terminal resolves; a cancelled, superseded or
+  // refused stage has none. Only the diagnostic log summary of the operation
+  // reads it: nothing here or elsewhere decides, selects, waits or records on it.
+  stageSelections?: Partial<Record<"childAffinity" | "parentAffinity" | "canonical",
+    { selectionReason: TaskRelationCandidateSelectionReason; tierSelected: boolean }>>;
 }
 
 export interface TaskRelationOperationAuthorization {

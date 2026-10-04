@@ -12,7 +12,13 @@
 // metadata the user is given, the provider requests, the 178A facts delivered and journalled, every
 // file the recording wrote, the Native Stall Diagnostics requests, and the native commands with
 // their counts. The recording stores the settings it started with, so the one value expected to differ
-// is the recorded diagnosticLogLevel itself, which is checked against the level the session was mounted with.
+// there is the recorded diagnosticLogLevel itself, which is checked against the level the session was mounted with.
+// The other thing that differs by level is the diagnostic log itself, and only it: the calls of its one
+// command are taken out of the command counts and checked on their own. Each session's first call is the
+// apply, with an empty batch, and the entries that follow are the summaries of this turn that pass the
+// level. The scripted Screen turn has one: its Fact Risk Review, completed, at debug.
+// The combination with every switch on runs once more at trace with a sink that rejects that entry's batch
+// after it confirmed the apply: a failing delivery is held to the same comparison as a level.
 //
 // How numbers are compared. Exact: the list of 178A facts, the count of each native command, the
 // number of recorded files, and the size of every array and the key set of every object (so the
@@ -118,11 +124,26 @@ const label = event => event.terminal ? `${event.fact}:${event.terminal.object}:
 // stable answer, let trailing work finish, stop the recording, and collect what the session produced.
 // With `between`, the session goes on after the first answer: the action runs once while the session is idle, then
 // the project is selected, which is the second turn and its Advisor request.
-async function runSession(t, bundle, browser, { debug, recording, crossChecks, level, between }) {
+// With `rejectLogEntries`, the native side confirms the level apply and then rejects every later diagnostic log call
+// that carries entries, as a sink that became unwritable would.
+async function runSession(t, bundle, browser, { debug, recording, crossChecks, level, between, rejectLogEntries }) {
   const settings = { debugMode: debug, runtimeCrossChecksEnabled: crossChecks, diagnosticLogLevel: level, nativeStallDiagnosticsEnabled: true };
   const { page, context, failures } = await openProjectSelectionBrowserHost(t, bundle, browser, EXECUTION, { mountOnly: true, settings });
   try {
     await page.waitForFunction(() => window.__s63.meeting.diagnosticLogLevelStatus.phase === 'applied', undefined, { timeout: 10000 });
+    if (rejectLogEntries) {
+      await page.evaluate(() => {
+        const host = window.__s63, invoke = host.invoke;
+        host.rejectedLogCalls = 0;
+        host.invoke = (name, args = {}) => {
+          if (name !== 'write_diagnostic_log' || (args.entries ?? []).length === 0) return invoke(name, args);
+          // What the logger handed over is still recorded, as the host records every command.
+          host.calls.push({ name, args });
+          host.rejectedLogCalls += 1;
+          return Promise.reject(new Error('the diagnostic log directory is not writable'));
+        };
+      });
+    }
     if (recording) {
       await page.evaluate(() => window.__s63.meeting.setSessionRecordingEnabled(true));
       await page.waitForFunction(() => window.__s63.meeting.sessionRecording.active, undefined, { timeout: 10000 });
@@ -185,6 +206,7 @@ async function runSession(t, bundle, browser, { debug, recording, crossChecks, l
         binaries: [...s63.binaryWrites.keys()],
         commands: s63.calls.filter(call => call.name).map(call => ({ name: call.name, args: call.name === 'write_diagnostic_log' ||
           call.name === 'set_native_stall_diagnostics' ? call.args : undefined })),
+        rejectedLogCalls: s63.rejectedLogCalls ?? 0,
         unexpected: s63.unexpected,
       };
     });
@@ -208,8 +230,9 @@ const BETWEEN_TURNS = {
 
 // What one session produced: the shaped evidence compared across levels, and the exact counts that are not shaped.
 function evidence(raw) {
+  // Every native command but the diagnostic log's own: its calls are the one thing a level is meant to change.
   const commandCounts = {};
-  for (const { name } of raw.commands) commandCounts[name] = (commandCounts[name] ?? 0) + 1;
+  for (const { name } of raw.commands) if (name !== 'write_diagnostic_log') commandCounts[name] = (commandCounts[name] ?? 0) + 1;
   const facts = raw.deliveries.map(delivery => delivery.kind === 'event' ? label(delivery.event) : `<${delivery.kind}>`);
   return {
     facts,
@@ -239,9 +262,11 @@ async function levelChangeBetweenTwoTurns(t, bundle, browser) {
     assert.equal(raw.selected.length, 1, `${between}: one Advisor request for the selected project`);
     assert.ok(raw.traces.some(trace => trace.metadata.clarifyingSelectionState === 'succeeded'), between);
     const produced = evidence(raw);
-    // The applies are the one difference that is expected by construction: they are compared on their own below.
-    const { write_diagnostic_log: applies, ...commandCounts } = produced.commandCounts;
-    return { raw, ...produced, commandCounts, applies: raw.commands.filter(command => command.name === 'write_diagnostic_log').map(command => command.args.level),
+    // The diagnostic log calls are the one difference that is expected by construction: the applies (the calls with
+    // an empty batch) and the entries are compared on their own below.
+    const logCalls = raw.commands.filter(command => command.name === 'write_diagnostic_log').map(command => command.args);
+    return { raw, ...produced, applies: logCalls.filter(call => call.entries.length === 0).map(call => call.level),
+      logged: logCalls.flatMap(call => call.entries.map(entry => [call.level, entry.level, entry.source, entry.event])),
       guidance: raw.selected[0] };
   };
   // `left` twice gives the session noise of this pair; `right` then has to equal `left` beyond it.
@@ -272,6 +297,11 @@ async function levelChangeBetweenTwoTurns(t, bundle, browser) {
   // A level change against another settings write.
   const changed = await same('another settings write', 'level change');
   assert.deepEqual([changed.left.applies, changed.right.applies], [['info'], ['info', 'debug']], 'the level change is applied; the other write sends nothing');
+  // At info these two turns log nothing: they have no warning and no error. After the change to debug, the second
+  // turn's debug summaries are sent, at that level, and nothing else of the session differs (compared above).
+  assert.deepEqual(changed.left.logged, [], 'no entry at info');
+  assert.ok(changed.right.logged.length > 0 && changed.right.logged.every(([callLevel, level]) => callLevel === 'debug' && level === 'debug'),
+    `entries after the change to debug: ${JSON.stringify(changed.right.logged)}`);
   assert.deepEqual([changed.left.raw.settings.diagnosticLogLevel, changed.right.raw.settings.diagnosticLogLevel], ['info', 'debug']);
   assert.deepEqual(changed.right.raw.applied, { phase: 'applied', level: 'debug', appliedLevel: 'debug', sinkState: 'ready' });
   // The recording was running when the level changed. Its settings file is written once, at the start, so it holds
@@ -283,6 +313,7 @@ async function levelChangeBetweenTwoTurns(t, bundle, browser) {
   // The saved level selected again against no action at all.
   const reselected = await same('no action', 'saved level again');
   assert.deepEqual([reselected.left.applies, reselected.right.applies], [['info'], ['info', 'info']], 'the re-selection sends the apply again, and that is all it does');
+  assert.deepEqual([reselected.left.logged, reselected.right.logged], [[], []], 'no entry at info in either session');
   assert.deepEqual(reselected.right.raw.settings, reselected.left.raw.settings);
 
   // The level change adds no recording write: the session wrote the recording as often, and into as many files, as
@@ -315,14 +346,28 @@ test('LG2 the log level changes no formal result, 178A fact, recording write, di
       const cell = `debug=${debug} recording=${recording} crossChecks=${crossChecks}`;
       if (only && !only.includes(`${Number(debug)}${Number(recording)}${Number(crossChecks)}`)) continue;
       await t.test(`LG2 ${cell}`, async child => {
-        const session = async level => {
-          const raw = await runSession(child, bundle, browser, { debug, recording, crossChecks, level });
-          const at = `${cell} level=${level}`;
+        const session = async (level, rejectLogEntries = false) => {
+          const raw = await runSession(child, bundle, browser, { debug, recording, crossChecks, level, rejectLogEntries });
+          const at = `${cell} level=${level}${rejectLogEntries ? ' with the log entries rejected' : ''}`;
           // The session ran with the level it was given, native confirmed it, and the other settings are what was stored.
           assert.deepEqual([raw.settings.diagnosticLogLevel, raw.settings.debugMode, raw.settings.runtimeCrossChecksEnabled], [level, debug, crossChecks], at);
           assert.deepEqual(raw.applied, { phase: 'applied', level, appliedLevel: level, sinkState: 'ready' }, at);
-          // The only diagnostic log call is the apply: this level and an empty batch. Nothing else was sent.
-          assert.deepEqual(raw.commands.filter(command => command.name === 'write_diagnostic_log').map(command => command.args), [{ level, entries: [] }], at);
+          // The diagnostic log calls: the apply first, this level and an empty batch, then the entries of this turn
+          // that pass the level. The turn has one summary, at debug: its Fact Risk Review completed with no flag. It
+          // holds enum values, counts, a duration and two identifiers, and no text of the answer or of the review.
+          const logCalls = raw.commands.filter(command => command.name === 'write_diagnostic_log').map(command => command.args);
+          assert.deepEqual(logCalls[0], { level, entries: [] }, at);
+          assert.ok(logCalls.every(call => call.level === level), `${at}: every call carries the session's level`);
+          const logged = logCalls.flatMap(call => call.entries);
+          assert.deepEqual(logged.map(entry => [entry.v, entry.level, entry.source, entry.event, Object.keys(entry).sort().join(','),
+            entry.data.stage, entry.data.status, entry.data.flagCount, entry.data.answerRevision, typeof entry.data.durationMs,
+            Object.keys(entry.data).sort().join(','), Object.keys(entry.refs).sort().join(',')]),
+          ['debug', 'trace'].includes(level) ? [[1, 'debug', 'meeting.fact-risk-review', 'review-ended', 'at,data,event,level,refs,source,v',
+            'settled', 'completed', 0, 1, 'number', 'answerRevision,durationMs,flagCount,stage,status', 'runtimeSessionId,traceId']] : [], at);
+          assert.equal(logCalls.length, logged.length ? 2 : 1, `${at}: one apply, and one batch when the turn logged`);
+          // With a rejecting sink that one batch was rejected; otherwise nothing was.
+          assert.equal(raw.rejectedLogCalls, rejectLogEntries ? logCalls.length - 1 : 0, `${at}: rejected diagnostic log calls`);
+          assert.equal(logged.some(entry => JSON.stringify(entry).includes(raw.answer.slice(8, 40))), false, `${at}: no answer text in an entry`);
           // The turn itself completed: a stable answer, shown, with no error.
           assert.ok(raw.answer && raw.answer.startsWith('Answer:'), at);
           assert.equal(raw.error, null, at);
@@ -368,6 +413,20 @@ test('LG2 the log level changes no formal result, 178A fact, recording write, di
           assert.deepEqual(moved.slice(0, 12).map(leaf => `${leaf}: ${JSON.stringify(reference.shaped.get(leaf))} -> ${JSON.stringify(current.shaped.get(leaf))}`), [],
             `${at}: ${moved.length} leaves differ from level=info beyond the session noise`);
         }
+        // One more session of the combination with every switch on, at trace, where native rejects the batch that
+        // carries the turn's entry after it confirmed the apply. No call site reads a delivery result: the session is
+        // what it is at info with a working sink, and the same entry was handed over (checked in `session`).
+        if (debug && recording && crossChecks) {
+          const at = `${cell} level=trace with the log entries rejected`;
+          const current = await session('trace', true);
+          assert.deepEqual(current.facts, reference.facts, `${at}: the 178A facts and their order`);
+          assert.deepEqual(current.nativeStall, reference.nativeStall, `${at}: the Native Stall Diagnostics requests`);
+          assert.deepEqual(current.commandCounts, reference.commandCounts, `${at}: the native commands and how often each was called`);
+          assert.equal(current.fileCount, reference.fileCount, `${at}: the number of recorded files`);
+          const moved = differing(reference.shaped, current.shaped).filter(leaf => !masked(leaf));
+          assert.deepEqual(moved.slice(0, 12).map(leaf => `${leaf}: ${JSON.stringify(reference.shaped.get(leaf))} -> ${JSON.stringify(current.shaped.get(leaf))}`), [],
+            `${at}: ${moved.length} leaves differ from level=info beyond the session noise`);
+        }
         child.diagnostic(`LG2 ${cell}: five levels identical over ${reference.shaped.size} leaves (${maskedLeaves} masked as session noise); ` +
           `facts=${reference.facts.length} requests=${reference.shaped.get('/requests#length')} ` +
           `recordedFiles=${reference.fileCount} recordingWrites=${reference.commandCounts.write_meeting_session_recording_text ?? 0} ` +
@@ -379,5 +438,5 @@ test('LG2 the log level changes no formal result, 178A fact, recording write, di
         child => levelChangeBetweenTwoTurns(child, bundle, browser));
     }
   } finally { await browser.close(); }
-  if (!only) assert.equal(sessions, 48, 'eight combinations, six sessions each: info twice and the four other levels');
+  if (!only) assert.equal(sessions, 49, 'eight combinations, six sessions each (info twice and the four other levels), and one with the log entries rejected');
 });

@@ -19,6 +19,8 @@ import { decideStagedAnswerPartial, formatStagedAnswerDeliveryForTrace } from ".
 import { generationFailureDispositionFromProviderStatus } from "../src/lib/meeting/generation-result-ledger.js";
 import { formatTaskBoundaryCandidateForTrace, taskBoundarySurvivesAdvisorOutcome } from "../src/lib/meeting/task-boundary-transaction.js";
 import { formatSourceOwnedDurableTransitionForTrace, sourceOwnedDurableTransitionSurvivesModelOutcome } from "../src/lib/meeting/source-owned-transition-runtime.js";
+import { assertEntryInLedger, assertNothingPlanted, createDiagnosticLogSpy, DIAGNOSTIC_LOG_SPY_FAILING_DELIVERIES, PLANTED, PLANTED_VALUES,
+  type DiagnosticLogSpyDelivery } from "./helpers/diagnostic-log-spy.js";
 
 const require = createRequire(path.join(process.cwd(), "package.json"));
 const compiled = buildSync({ stdin: { contents: `export {fetchAIResponseEvents} from './src/lib/functions/ai-response.function';
@@ -363,7 +365,10 @@ for (const displayCase of ["visible-partial", "pinned-stream", "pinned-stable", 
     let ui: any = { latestSuggestion: stable.suggestion, latestReliableSuggestion: stable.suggestion,
       partialSuggestion: displayCase === "superseded" ? "new active partial" : partialDecision.visible ? "Answer: unfinished" : "", status: "thinking" };
     const terminalized: any[] = [], attempts: any[] = [], receipts: any[] = [];
+    // Task 178 LG: the catch names the logger, so the environment supplies it by hand.
+    const diagnosticLog = createDiagnosticLogSpy({ threshold: "trace" });
     const env: Record<string, any> = {
+      logDiagnostic: diagnosticLog.logDiagnostic,
       manualAdviseDisplayRef: { current: display }, sessionRecordingManagerRef: { current: { recordCaptureLifecycle: (e: unknown) => receipts.push(e) } },
       displayedStreamRef: { current: { traceId: displayCase === "superseded" ? "next-trace" : "failed-trace" } }, traceId: "failed-trace",
       setState: (update: (s: any) => any) => { ui = update(ui); },
@@ -376,7 +381,9 @@ for (const displayCase of ["visible-partial", "pinned-stream", "pinned-stable", 
       generationResultLedgerRef: { current: { recordProviderAttempt: (_lease: unknown, outcome: unknown) => attempts.push(outcome) } },
       terminalizeGenerationLease: (value: unknown) => terminalized.push(value), generationFailureDispositionFromProviderStatus,
       advisorJob: { id: "failed-job" }, activeAdvisorJobRef: { current: { id: displayCase === "superseded" ? "next-job" : "failed-job" } },
-      readCommitDecision: () => ({ authorized: displayCase !== "superseded", reason: "fixture" }),
+      // The reason is one the real commit authorization gives.
+      readCommitDecision: () => ({ authorized: displayCase !== "superseded",
+        reason: displayCase !== "superseded" ? "authorized" : "pipeline-owner-mismatch" }),
       updateForceAdviseTargetForAdvisorOutcome: () => {}, finishRunningAdvisorJobTrace: () => {}, releaseAdvisorJob: () => {},
       taskBoundaryCandidate: undefined, taskBoundaryCommittedBeforeAdvisor: true,
       formatTaskBoundaryCandidateForTrace, taskBoundarySurvivesAdvisorOutcome,
@@ -398,5 +405,213 @@ for (const displayCase of ["visible-partial", "pinned-stream", "pinned-stable", 
     assert.strictEqual(display.select(old, old).stable, stable);
     assert.deepEqual(manager.getTaskRuntimeState(), taskBefore);
     assert.equal(receipts.length, displayCase === "pinned-stream" ? 1 : 0);
+    // LG1 Timeout 3 and 5: one entry for the request, graded by the branch that ended it. A content-idle timeout that
+    // sets the user-visible error is an error; the same timeout of a superseded request is debug, and its physical
+    // attempt was recorded above all the same.
+    const entries = diagnosticLog.entries();
+    assert.equal(entries.length, 1, "one entry for the request");
+    assertEntryInLedger(entries[0]!);
+    const visible = displayCase !== "superseded";
+    assert.deepEqual([entries[0]!.level, entries[0]!.source, entries[0]!.event], [visible ? "error" : "debug", "meeting.advisor", "request-ended"]);
+    assert.deepEqual(entries[0]!.refs, { traceId: "failed-trace", operationId: "lease", requestId: "failed-job" });
+    assert.deepEqual(entries[0]!.data, { ending: visible ? "visible-error" : "commit-not-authorized", status: "timed-out",
+      budgetKind: "content-idle", budgetLimitMs: 15000, attemptNumber: 1, maxAttempts: 1, chunkCount: 1, durationMs: 15000,
+      commitAuthorized: visible, commitReason: visible ? "authorized" : "pipeline-owner-mismatch", meetingActive: true });
+    assert.equal(typeof ui.error === "string", visible, "the error entry is the branch that sets the user-visible error");
   });
 }
+
+// ---------------------------------------------------------------------------
+// Task 178 LG, summary site 4: the Main Advisor request, graded in the real
+// catch of runAdvisor. The error of each row is produced by the real
+// AdvisorEngine over the real response function (only fetch, the clock and the
+// timers are controlled), or is a plain Error where the row says so. The catch
+// block is the Hook's own, evaluated with an explicit environment that holds
+// the logger by hand; only the logger's delivery boundary is replaced.
+// ---------------------------------------------------------------------------
+
+type AdvisorFailureKind = "first-content" | "content-idle" | "aborted" | "http-error" | "plain-error";
+async function advisorFailure(t: TestContext, kind: AdvisorFailureKind): Promise<unknown> {
+  if (kind === "plain-error") return new Error(PLANTED.providerError);
+  const f = fixture(t, kind === "http-error" ? "http-error" : "stream"), engine = new AdvisorEngine();
+  const pending = (async () => { try {
+    for await (const _event of engine.streamSuggestion({ requestId: "failed-job", provider,
+      // A secret-shaped provider variable and a transcript sentence in the request's own inputs.
+      selectedProvider: { ...selectedProvider, variables: { api_key: PLANTED.secret } },
+      promptContext: { transcript: `Them: ${PLANTED.transcript}`, screenContext: "", taskRuntime: { revision: 0 } },
+      requestOptions: getOptions({ route: "main" }, "advisor") })) { /* no successful candidate */ }
+    return undefined;
+  } catch (error) { return error; } })();
+  await flush();
+  if (kind === "content-idle") { f.content(`Answer: ${PLANTED.transcript}`); await flush(); await f.advance(15000); }
+  else if (kind === "first-content") await f.advance(15000);
+  else if (kind === "aborted") { await f.advance(2000); engine.cancelCurrentRequest(); await flush(); }
+  else { f.requests[0]!.push(PLANTED.providerError); f.requests[0]!.end(); await flush(); }
+  const error = await pending;
+  assert.ok(error instanceof module.exports.MeetingAIResponseOutcomeError, `${kind}: a typed provider outcome`);
+  return error;
+}
+// The real catch block with the collaborators it names reduced to recorders.
+function runAdvisorCatch(error: unknown, options: { authorized?: boolean; meetingActive?: boolean; force?: boolean;
+  level?: "error" | "warn" | "info" | "debug" | "trace"; delivery?: DiagnosticLogSpyDelivery } = {}) {
+  const { authorized = true, meetingActive = true, force = false, level = "trace", delivery } = options;
+  const diagnosticLog = createDiagnosticLogSpy({ threshold: level, delivery });
+  let ui: any = { status: "thinking", partialSuggestion: "", error: undefined };
+  const terminalized: any[] = [], attempts: any[] = [], finished: any[] = [], released: any[] = [];
+  const env: Record<string, any> = {
+    logDiagnostic: diagnosticLog.logDiagnostic,
+    traceId: "failed-trace", answerGenerationLease: { id: "answer_generation_lease_1" },
+    MeetingAIResponseOutcomeError: module.exports.MeetingAIResponseOutcomeError,
+    generationResultLedgerRef: { current: { recordProviderAttempt: (_lease: unknown, outcome: unknown) => attempts.push(outcome) } },
+    terminalizeGenerationLease: (value: unknown) => terminalized.push(value), generationFailureDispositionFromProviderStatus,
+    rollbackStagedAnswerDelivery: () => {},
+    advisorJob: { id: "failed-job" }, activeAdvisorJobRef: { current: { id: authorized ? "failed-job" : "next-job" } },
+    readCommitDecision: () => ({ authorized, reason: authorized ? "authorized" : "pipeline-owner-mismatch" }),
+    updateForceAdviseTargetForAdvisorOutcome: () => {},
+    finishRunningAdvisorJobTrace: (_job: unknown, status: string) => finished.push(status),
+    releaseAdvisorJob: (_job: unknown, outcome: string) => released.push(outcome),
+    taskBoundaryCandidate: undefined, taskBoundaryCommittedBeforeAdvisor: true,
+    formatTaskBoundaryCandidateForTrace, taskBoundarySurvivesAdvisorOutcome,
+    formatAdvisorTriggerJobForTrace: () => ({}), sourceOwnedTransitionReceipt: undefined,
+    formatSourceOwnedDurableTransitionForTrace, sourceOwnedDurableTransitionSurvivesModelOutcome,
+    traceStoreRef: { current: { updateMetadata: () => {} } },
+    setState: (update: (s: any) => any) => { ui = update(ui); },
+    runtimeActiveRef: { current: meetingActive }, options: {}, force, returnStatus: "listening",
+  };
+  const catchNode = hookNode(n => ts.isCatchClause(n) && n.block.getText(hook).includes("rollbackStagedAnswerDelivery(") &&
+    n.block.getText(hook).includes("terminalizeGenerationLease({")) as ts.CatchClause;
+  new Function(...Object.keys(env), "error", ts.transpileModule(catchNode.block.getText(hook), {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 },
+  }).outputText)(...Object.values(env), error);
+  return { diagnosticLog, ui: () => ui, terminalized, attempts, finished, released };
+}
+
+const ADVISOR_ROWS: Array<{ name: string; kind: AdvisorFailureKind; options?: Parameters<typeof runAdvisorCatch>[1];
+  level: "error" | "debug"; data: Record<string, unknown>; visibleError: boolean; ledger: string; requestId?: boolean }> = [
+  // Timeout table 3.1, row 3: the Advisor's first-content or idle timeout fails this answer.
+  { name: "Timeout 3: no first content within 15 s", kind: "first-content", level: "error", visibleError: true, ledger: "timed-out",
+    data: { ending: "visible-error", status: "timed-out", budgetKind: "first-content", budgetLimitMs: 15000, attemptNumber: 1, maxAttempts: 1,
+      chunkCount: 0, durationMs: 15000, commitAuthorized: true, commitReason: "authorized", meetingActive: true } },
+  { name: "Timeout 3: content, then 15 s idle", kind: "content-idle", level: "error", visibleError: true, ledger: "timed-out",
+    data: { ending: "visible-error", status: "timed-out", budgetKind: "content-idle", budgetLimitMs: 15000, attemptNumber: 1, maxAttempts: 1,
+      chunkCount: 1, durationMs: 15000, commitAuthorized: true, commitReason: "authorized", meetingActive: true } },
+  // Row 5: the same timeout arrives for a request a newer one has replaced.
+  { name: "Timeout 5: a timeout of a request that is no longer the current one", kind: "content-idle", options: { authorized: false },
+    level: "debug", visibleError: false, ledger: "timed-out",
+    data: { ending: "commit-not-authorized", status: "timed-out", budgetKind: "content-idle", budgetLimitMs: 15000, attemptNumber: 1,
+      maxAttempts: 1, chunkCount: 1, durationMs: 15000, commitAuthorized: false, commitReason: "pipeline-owner-mismatch", meetingActive: true } },
+  // The commit is still authorized here; the answer is not shown because the meeting is no longer active. The ending says so.
+  { name: "Timeout 5: a timeout that arrives after the meeting was stopped", kind: "first-content", options: { meetingActive: false },
+    level: "debug", visibleError: false, ledger: "timed-out",
+    data: { ending: "meeting-inactive", status: "timed-out", budgetKind: "first-content", budgetLimitMs: 15000, attemptNumber: 1,
+      maxAttempts: 1, chunkCount: 0, durationMs: 15000, commitAuthorized: true, commitReason: "authorized", meetingActive: false } },
+  // Both conditions of that branch hold: the commit decision names the ending.
+  { name: "Timeout 5: a replaced request times out after the meeting was stopped", kind: "first-content",
+    options: { authorized: false, meetingActive: false }, level: "debug", visibleError: false, ledger: "timed-out",
+    data: { ending: "commit-not-authorized", status: "timed-out", budgetKind: "first-content", budgetLimitMs: 15000, attemptNumber: 1,
+      maxAttempts: 1, chunkCount: 0, durationMs: 15000, commitAuthorized: false, commitReason: "pipeline-owner-mismatch", meetingActive: false } },
+  // A forced request shows its error with the meeting inactive: that is the branch that sets the user-visible error.
+  { name: "Timeout 3: a forced request times out while the meeting is not active", kind: "first-content",
+    options: { meetingActive: false, force: true }, level: "error", visibleError: true, ledger: "timed-out",
+    data: { ending: "visible-error", status: "timed-out", budgetKind: "first-content", budgetLimitMs: 15000, attemptNumber: 1,
+      maxAttempts: 1, chunkCount: 0, durationMs: 15000, commitAuthorized: true, commitReason: "authorized", meetingActive: false } },
+  // Controls: a cancelled request is not a failure, whoever cancelled it.
+  { name: "control: the request is aborted (user cancel, Stop or a newer request)", kind: "aborted", level: "debug", visibleError: false,
+    ledger: "aborted", data: { ending: "aborted", status: "aborted", attemptNumber: 1, maxAttempts: 1, chunkCount: 0, durationMs: 2000,
+      commitAuthorized: true, commitReason: "authorized", meetingActive: true } },
+  { name: "control: the request is aborted after it was replaced", kind: "aborted", options: { authorized: false }, level: "debug",
+    visibleError: false, ledger: "aborted", data: { ending: "aborted", status: "aborted", attemptNumber: 1, maxAttempts: 1, chunkCount: 0,
+      durationMs: 2000, commitAuthorized: false, commitReason: "pipeline-owner-mismatch", meetingActive: true } },
+  // Other failures of the request itself: the class is carried, the provider's text is not.
+  { name: "a provider HTTP failure whose body is an error text", kind: "http-error", level: "error", visibleError: true, ledger: "failed",
+    data: { ending: "visible-error", status: "failed", failureClass: "provider-http", httpStatus: 503, attemptNumber: 1, maxAttempts: 1,
+      chunkCount: 0, durationMs: 0, commitAuthorized: true, commitReason: "authorized", meetingActive: true } },
+  { name: "an error that is not a provider outcome: no status is invented", kind: "plain-error", level: "error", visibleError: true,
+    ledger: "failed", requestId: false, data: { ending: "visible-error", commitAuthorized: true, commitReason: "authorized", meetingActive: true } },
+];
+for (const row of ADVISOR_ROWS) {
+  test(`LG1 LG3 LG4 Advisor request, ${row.name}: one ${row.level} entry from the catch branch that ended it`, async t => {
+    const error = await advisorFailure(t, row.kind);
+    const run = runAdvisorCatch(error, row.options);
+    // What the catch did is what it does without a logger: one terminal in the ledger, the attempt recorded, the UI branch.
+    assert.deepEqual(run.terminalized.map((value: any) => [value.disposition, value.candidateFormed]), [[row.ledger, false]]);
+    assert.equal(run.attempts.length, row.kind === "plain-error" ? 0 : 1, "the physical attempt is recorded whatever the level");
+    assert.deepEqual([run.finished, run.released], [[row.kind === "aborted" ? "cancelled" : "error"], ["error"]]);
+    assert.equal(typeof run.ui().error === "string", row.visibleError, "user-visible error");
+    const entries = run.diagnosticLog.entries();
+    assert.equal(entries.length, 1, "one entry: no other layer reports this failure again");
+    assertEntryInLedger(entries[0]!);
+    assert.deepEqual([entries[0]!.level, entries[0]!.source, entries[0]!.event], [row.level, "meeting.advisor", "request-ended"]);
+    assert.deepEqual(entries[0]!.refs, { traceId: "failed-trace", operationId: "answer_generation_lease_1",
+      ...(row.requestId === false ? {} : { requestId: "failed-job" }) });
+    assert.deepEqual(entries[0]!.data, row.data);
+    // The error level is exactly the branch that shows the error.
+    assert.equal(row.level === "error", row.visibleError);
+    // Nothing of the error text, the transcript or the provider configuration is in the entry.
+    const message = error instanceof Error ? error.message : "";
+    assertNothingPlanted(entries, [...PLANTED_VALUES, ...(message.length >= 12 ? [message] : [])], row.name);
+    const counters = run.diagnosticLog.snapshot();
+    assert.deepEqual([counters.refusedEntries, counters.refusedFields, counters.truncatedFields, counters.detailFailures], [0, 0, 0, 0]);
+  });
+}
+
+test("LG2 Advisor request at the five levels: the ledger terminal, the recorded attempt, the trace ending and the UI are identical; the entry is filtered by its level alone", async t => {
+  const timeout = await advisorFailure(t, "content-idle");
+  for (const [options, entryLevel] of [[{}, "error"], [{ authorized: false }, "debug"]] as const) {
+    const reference = runAdvisorCatch(timeout, { ...options, level: "trace" });
+    const business = (run: ReturnType<typeof runAdvisorCatch>) => JSON.parse(JSON.stringify(
+      [run.terminalized, run.attempts, run.finished, run.released, run.ui()]));
+    for (const level of ["error", "warn", "info", "debug", "trace"] as const) {
+      const run = runAdvisorCatch(timeout, { ...options, level });
+      assert.deepEqual(business(run), business(reference), `${level} ${JSON.stringify(options)}`);
+      const passes = ["error", "warn", "info", "debug", "trace"].indexOf(entryLevel) <= ["error", "warn", "info", "debug", "trace"].indexOf(level);
+      assert.deepEqual(run.diagnosticLog.entries().map(entry => entry.level), passes ? [entryLevel] : [], `${level} ${JSON.stringify(options)}`);
+    }
+  }
+});
+
+test("LG2 Advisor request with the log delivery failing, at the five levels: the ledger terminal, the recorded attempt, the trace ending and the UI are what they are with a working delivery, and the same entry is handed to the logger", async t => {
+  const timeout = await advisorFailure(t, "content-idle");
+  const business = (run: ReturnType<typeof runAdvisorCatch>) => JSON.parse(JSON.stringify(
+    [run.terminalized, run.attempts, run.finished, run.released, run.ui()]));
+  const levels = ["error", "warn", "info", "debug", "trace"] as const;
+  for (const [options, entryLevel] of [[{}, "error"], [{ authorized: false }, "debug"], [{ meetingActive: false }, "debug"]] as const) {
+    const reference = runAdvisorCatch(timeout, { ...options, level: "trace" });
+    const referenceEntries = reference.diagnosticLog.entries();
+    assert.deepEqual([referenceEntries.length, reference.diagnosticLog.snapshot().undeliveredEntries], [1, 0], "the reference delivers");
+    for (const delivery of DIAGNOSTIC_LOG_SPY_FAILING_DELIVERIES) for (const level of levels) {
+      const name = `${delivery} ${level} ${JSON.stringify(options)}`;
+      const run = runAdvisorCatch(timeout, { ...options, level, delivery });
+      assert.deepEqual(business(run), business(reference), name);
+      const passes = levels.indexOf(entryLevel) <= levels.indexOf(level);
+      const handedOver = run.diagnosticLog.entries();
+      // The same entry, apart from its own timestamp.
+      assert.deepEqual(handedOver.map(({ at: _at, ...entry }) => entry), passes ? referenceEntries.map(({ at: _at, ...entry }) => entry) : [], name);
+      const counters = run.diagnosticLog.snapshot();
+      assert.deepEqual([counters.undeliveredEntries, counters.ipcFailures + counters.ipcTimeouts + counters.ipcMalformedReceipts,
+        counters.internalErrors, counters.queued, counters.inFlight], [handedOver.length, counters.ipcCalls, 0, 0, false], name);
+    }
+  }
+});
+
+test("LG1 Advisor catch: the logger is called once in each ending branch, after that branch read the commit decision, and never from the provider text", () => {
+  const catchNode = hookNode(n => ts.isCatchClause(n) && n.block.getText(hook).includes("rollbackStagedAnswerDelivery(") &&
+    n.block.getText(hook).includes("terminalizeGenerationLease({")) as ts.CatchClause;
+  const text = catchNode.block.getText(hook);
+  const calls = [...text.matchAll(/logAdvisorRequestEnded\(\s*"(error|debug)",\s*([^;]*?),\s*commitDecision\s*\);/g)]
+    .map(match => [match[1], match[2]!.replace(/\s+/g, " "), match.index!]);
+  // The ending of the not-shown branch is chosen by the commit decision that branch read, never by a text.
+  assert.deepEqual(calls.map(([level, ending]) => [level, ending]),
+    [["debug", '"aborted"'], ["debug", 'commitDecision.authorized ? "meeting-inactive" : "commit-not-authorized"'], ["error", '"visible-error"']]);
+  // That branch is entered by exactly these two conditions.
+  assert.match(text.slice(0, calls[1]![2] as number), /if \(\s*\(!runtimeActiveRef\.current && !force\) \|\|\s*!commitDecision\.authorized\s*\) \{\s*$/);
+  // Each call comes after a commit decision read in its own branch, and the error call directly precedes the UI error.
+  const decisions = [...text.matchAll(/const commitDecision = readCommitDecision\(\);/g)].map(match => match.index!);
+  assert.ok(decisions.some(at => at < (calls[0]![2] as number)), "the abort branch reads the decision before its entry");
+  assert.ok(decisions.some(at => at > (calls[0]![2] as number) && at < (calls[1]![2] as number)),
+    "the other branch reads its own decision before its two endings");
+  assert.match(text.slice(calls[2]![2] as number), /^logAdvisorRequestEnded\("error", "visible-error", commitDecision\);\s+setState\(\(previous\) => \(\{[\s\S]*?error:/);
+  // The entry is built from the typed outcome: the helper reads no message, summary or text of the error.
+  const helper = text.slice(text.indexOf("const logAdvisorRequestEnded"), text.indexOf("if (answerGenerationLease) {"));
+  assert.doesNotMatch(helper, /\.message|safeErrorSummary|\.text\b|String\(error\)|includes\(|\.test\(|match\(/);
+});

@@ -70,6 +70,22 @@ const criticalEventCallbackSources = Object.fromEntries(
     findNamedDeclaration(sourceFile, name).initializer.arguments[0].getText(sourceFile),
   ])
 );
+// Task 178 LG: the real frontend logger with its delivery boundary replaced, and
+// the field ledger of its call sites. The callbacks extracted here hold four of
+// those call sites: the Ordered operation's metadata write, the observation
+// stage settle and the two of the Voice foreground window.
+const {
+  createDiagnosticLogSpy,
+  assertEntryInLedger,
+  assertNothingPlanted,
+  DIAGNOSTIC_LOG_SPY_LEVELS,
+  DIAGNOSTIC_LOG_SPY_FAILING_DELIVERIES,
+  PLANTED,
+  PLANTED_VALUES,
+  ledgerRowOf,
+  notGraded,
+} = await import(pathToFileURL(
+  path.join(root, ".tmp-tests/tests/helpers/diagnostic-log-spy.js")));
 // The Hook's own binding of the shared Ordered operation, so the harness runs
 // with exactly the dependencies production injects.
 const orderedOperationBindingSource = findNamedDeclaration(
@@ -464,7 +480,10 @@ function activeTask() {
   };
 }
 
-function createHarness() {
+// `logLevel` is the threshold of this harness's own logger instance. At
+// "trace" every summary a call site makes is delivered and can be read.
+// `logDelivery` is how that logger's delivery boundary answers (see the helper).
+function createHarness({ logLevel = "trace", logDelivery = "ok" } = {}) {
   const clock = new Clock();
   const realNow = Date.now;
   const realSetTimeout = globalThis.setTimeout;
@@ -535,6 +554,11 @@ function createHarness() {
     setState: (updater) => events.push({ ui: updater({}) }),
   };
   const context = vm.createContext(environment);
+  // Task 178 LG: the real logger, supplied by hand as the callbacks name it. Its
+  // timers are its own, so the exact timer assertions of this harness never see
+  // a flush timer; only its delivery boundary is replaced.
+  const diagnosticLog = createDiagnosticLogSpy({ threshold: logLevel, now: () => clock.now, delivery: logDelivery });
+  environment.logDiagnostic = diagnosticLog.logDiagnostic;
   // Task 178A: the real stream on its own manual clock, so the exact timer
   // assertions of this harness never see a delivery timer.
   const criticalEvents = createRuntimeCriticalEventHarness({
@@ -562,6 +586,7 @@ function createHarness() {
     advisorCalls,
     environment,
     criticalEvents,
+    diagnosticLog,
     restore() {
       Date.now = realNow;
       globalThis.setTimeout = realSetTimeout;
@@ -1894,8 +1919,8 @@ const sourceCurrent = () => ({ authorized: true, reason: "source-operation-curre
 // Debug and Recording are separate switches, as in production. `recordingSinkCostMs`
 // makes the recorder's synchronous write take time, as a real sink can.
 function st183Harness({ child = false, debug = false, recording = false, crossChecks = false, recordingSinkCostMs,
-  runtime } = {}) {
-  const h = createHarness();
+  runtime, logLevel, logDelivery } = {}) {
+  const h = createHarness({ logLevel, logDelivery });
   const state = h.environment.contextManagerRef.current.getState();
   state.transcriptTurns = [];
   if (child) state.activeMeetingTask = { ...activeTask(), child: activeChild() };
@@ -4302,7 +4327,7 @@ async function runNoWindowVoice({ debug = false, crossChecks = false, observed, 
   }
 }
 const NO_WINDOW_HANDLE_FIELDS = ["affinityDeadlineAt", "operationId", "affinityOutcome", "readAffinityOutcome",
-  "revalidateAffinityOutcome", "canonicalOutcome", "startCanonical", "cancelForegroundWork"];
+  "revalidateAffinityOutcome", "canonicalOutcome", "startCanonical", "cancelForegroundWork", "stageSelections"];
 
 // Leaf-level differences between two plain values, each with both sides, so a
 // failing comparison names what moved instead of printing two whole objects.
@@ -5858,8 +5883,8 @@ for (const [variant, name] of [
 
 // ---- PC4: the formal Relation is the same under every switch combination ----
 
-async function runFormalAlone({ entry, debug, recording, crossChecks }) {
-  const h = st183Harness({ debug, recording, crossChecks });
+async function runFormalAlone({ entry, debug, recording, crossChecks, logLevel, logDelivery }) {
+  const h = st183Harness({ debug, recording, crossChecks, logLevel, logDelivery });
   try {
     const handle = scheduleEntry(h, entry);
     const started = {};
@@ -5983,8 +6008,8 @@ test("AE1 Relation provider facts: each physical candidate whose request is real
 // The same question unit and revision as a formal operation and, when Runtime
 // Cross-checks admits it, as an observation that is scheduled FIRST. Operation
 // ids are identical for both, so only the purpose tells them apart.
-async function aeRunSwitches({ debug, recording, crossChecks }) {
-  const h = st183Harness({ debug, crossChecks });
+async function aeRunSwitches({ debug, recording, crossChecks, logLevel }) {
+  const h = st183Harness({ debug, crossChecks, logLevel });
   const recorder = recording ? await aeCreateFileBackedRecorder() : undefined;
   try {
     if (recorder) {
@@ -6031,6 +6056,8 @@ async function aeRunSwitches({ debug, recording, crossChecks }) {
       stats: h.criticalEvents.stream.getStats(),
       journal,
       timersLeft: h.clock.timers.size,
+      // Task 178 LG: what the logger delivered in this run.
+      diagnosticLog: h.diagnosticLog.entries().map((entry) => `${entry.level} ${entry.event}`),
     });
   } finally {
     h.restore();
@@ -6389,4 +6416,1233 @@ test("AE7 negatives: A cancelled while queued, A admitted and cancelled before i
     const late = awaitRuntimeCriticalFact(failing.criticalEvents.stream, { matches: () => true });
     expectEqual(await late.promise, { status: "rejected", reason: "not-accepting" }, "released stream");
   } finally { failing.restore(); }
+});
+
+// ===========================================================================
+// Task 178 LG, commit 2 (LG1, LG2, LG3, LG4): the selection reason in the trace
+// and the graded summaries of the Relation and Type call sites.
+//
+// Real: the Hook's schedule, stage settles, Ordered operation binding and Voice
+// foreground window, the Ordered operation, the candidate selector, the
+// operation runtimes, the admission coordinator and the logger leaf.
+// Controlled: the physical provider request, the clock and the sinks, as in the
+// rest of this file, and the logger's delivery boundary (see the helper).
+// Every entry read below was made by one of those production call sites.
+// ===========================================================================
+
+const lgEntries = (h) => h.diagnosticLog.entries();
+const lgLines = (h) => lgEntries(h).map((entry) => `${entry.level} ${entry.event}`);
+// Warnings and errors, from every layer that can log: there is no other.
+const lgAlerts = (h) => lgEntries(h).filter((entry) => entry.level === "warn" || entry.level === "error");
+const lgOf = (h, event) => lgEntries(h).filter((entry) => entry.event === event);
+const lgStageReasons = (h) => [h.metadata.taskRelationChildAffinitySelectionReason,
+  h.metadata.taskRelationParentAffinitySelectionReason, h.metadata.taskRelationSplitCanonicalSelectionReason];
+// The stage selections of one operation as its own handle holds them: per stage
+// [reason, tier selected], or null for a stage that ended with no selection.
+const lgSelections = (handle) => ["childAffinity", "parentAffinity", "canonical"].map((stage) => {
+  const selection = handle.stageSelections?.[stage];
+  return selection ? [selection.selectionReason, selection.tierSelected] : null;
+});
+// The same three pairs as a formal summary carries them.
+const lgSummarySelections = (summary) => ["child", "parent", "canonical"].map((stage) =>
+  (`${stage}Selection` in summary.data || `${stage}TierSelected` in summary.data
+    ? [summary.data[`${stage}Selection`], summary.data[`${stage}TierSelected`]] : null));
+const lgPairs = (reasons, tiers) => reasons.map((reason, index) => (reason === undefined ? null : [reason, tiers[index]]));
+const lgUsable = (summary) => [summary.data.childUsable, summary.data.parentUsable, summary.data.canonicalUsable];
+// A stage is lost when its selector ended with no tier selected, at the deadline or with both candidates unusable.
+const lgLost = (pair) => pair !== null && pair[1] === false && [DEADLINE, "candidates-ended-unusable"].includes(pair[0]);
+// What a scenario's inputs hold and no entry may: provider error text (also
+// given as an unparseable provider output), the transcript sentences of the
+// question and of the active task, and a secret-shaped provider variable.
+const LG_TEXTS = [...PLANTED_VALUES, QUESTION, PARENT];
+const lgFailedOutcome = (failureClass) => ({ status: "failed", failureClass, safeErrorSummary: PLANTED.providerError });
+function lgPlantSecret(h) {
+  const resolveRoute = h.environment.resolveRuntimeInferenceModelRouteFromSnapshot;
+  h.environment.resolveRuntimeInferenceModelRouteFromSnapshot = (input) => {
+    const route = resolveRoute(input);
+    return { ...route, selectedProvider: { ...route.selectedProvider,
+      variables: { ...route.selectedProvider.variables, api_key: PLANTED.secret } } };
+  };
+}
+// LG4 from the call sites of this file: each entry holds the ledger's fields
+// alone, nothing planted reached one, the logger left nothing out and holds no
+// timer, and it registered none on the harness clock.
+function lgCheckEntries(h, label) {
+  const entries = lgEntries(h);
+  for (const entry of entries) assertEntryInLedger(entry, `${label}: ${entry.source} ${entry.event}`);
+  assertNothingPlanted(entries, LG_TEXTS, label);
+  const counters = h.diagnosticLog.snapshot();
+  expectEqual([counters.refusedEntries, counters.refusedFields, counters.truncatedFields, counters.oversizeEntries,
+    counters.detailFailures, counters.internalErrors, h.diagnosticLog.pendingTimers()], [0, 0, 0, 0, 0, 0, 0], `${label}: logger counters`);
+  return entries;
+}
+// An abstention as the Affinity contract defines one: no evidence span and a stated ambiguity.
+const PARENT_UNCLEAR = JSON.stringify({ v: 1, d: "u", c: 0.5, q: null, b: null, a: "insufficient-evidence" });
+const DEADLINE = "candidate-deadline-expired";
+
+// ---- LG3: the reason in the trace is the branch that ended the stage ----
+
+// The Affinity stage of a formal operation, observed at its own terminal with no
+// consumer attached. The stage settle of a formal operation logs nothing: its one
+// summary is made where the Ordered operation writes its metadata.
+for (const [name, spec, reason, expected] of [
+  ["both candidates return invalid output", { drive: at(500, settleBothAffinity({ rawOutput: PLANTED.providerError })) },
+    "candidates-ended-unusable", { at: 500, reason: "malformed-json", requests: 2 }],
+  ["no candidate returns", {}, DEADLINE, { at: STAGE_MS, reason: DEADLINE, requests: 2 }],
+  ["an invalid Intelligent is cached and Fast is silent until the deadline",
+    { drive: at(700, (h) => completeCandidate(candidate(h, "affinity", "intelligent"), { rawOutput: PLANTED.providerError })) },
+    DEADLINE, { at: STAGE_MS, reason: "malformed-json", requests: 2 }],
+  ["a cached valid Fast is selected at the deadline", { drive: at(879, completeFastAffinity) },
+    DEADLINE, { at: STAGE_MS, decision: "independent", settledAt: 10_879, requests: 2 }],
+  ["an invalid Intelligent falls to the cached valid Fast before the deadline", { drive: async (h) => {
+    await h.clock.advanceTo(879); completeFastAffinity(h);
+    await h.clock.advanceTo(1_200); completeCandidate(candidate(h, "affinity", "intelligent"), { rawOutput: PLANTED.providerError });
+  } }, "intelligent-invalid-fast-valid", { at: 1_200, decision: "independent", settledAt: 10_879, requests: 2 }],
+  ["a timely valid Intelligent ends the stage at once", { drive: at(1_500, (h) => completeCandidate(
+    candidate(h, "affinity", "intelligent"), { rawOutput: FAST_PARENT_INDEPENDENT })) },
+    "intelligent-valid", { at: 1_500, decision: "independent", settledAt: 11_500, requests: 2 }],
+  ["a parse-valid unclear Intelligent ends the stage at once", { drive: at(1_500, (h) => completeCandidate(
+    candidate(h, "affinity", "intelligent"), { rawOutput: PARENT_UNCLEAR })) },
+    "intelligent-valid", { at: 1_500, decision: "unclear", settledAt: 11_500, requests: 2 }],
+  ["an exhausted admission queue dispatches nothing", { before: saturateAdmission },
+    DEADLINE, { at: STAGE_MS, reason: DEADLINE, requests: 0 }],
+  ["dispatch delayed past the deadline", { drive: (h) => { h.clock.now += 4_200; } },
+    DEADLINE, { at: 4_200, reason: DEADLINE, requests: 0 }],
+  ["an authentication failure", { drive: at(300, (h) => completeCandidate(candidate(h, "affinity", "fast"),
+    { providerDisposition: "provider-auth-error", providerOutcome: lgFailedOutcome("authentication") })) },
+    "client-error", { at: 300, reason: "not-run-provider-auth-error", clientError: true, requests: 2 }],
+  // No selection, so no reason: the stage was cancelled, superseded or never ran.
+  ["foreground cancellation", { drive: at(1_000, (_h, handle) => handle.cancelForegroundWork()) },
+    undefined, { at: 1_000, reason: "operation-id-mismatch", requests: 2 }],
+  ["Stop", { drive: at(1_000, stop) }, undefined, { at: 1_000, reason: "operation-id-mismatch", requests: 2 }],
+  ["superseded by a newer question", { drive: at(1_000, (h) => { scheduleRelation(h, { unit: nextUnit() }); }) },
+    undefined, { at: 1_000, reason: "operation-id-mismatch" }],
+  ["provider circuit open", { runtime: { circuitOpen: true } },
+    undefined, { at: 0, reason: "provider-circuit-open", clientError: true, requests: 0 }],
+  ["an internal candidate failure", { drive: at(300, (h) => completeCandidate(candidate(h, "affinity", "fast"),
+    { providerDisposition: "provider-error-content", providerOutcome: failedOutcome("unexpected") })) },
+    undefined, { state: "rejected", at: 300, error: /summary-unexpected/, requests: 2 }],
+]) {
+  test(`LG3 Affinity stage reason in the trace: ${name}`, { concurrency: false }, async () => {
+    const run = await affinityTerminal({ ...spec, before: async (h) => { lgPlantSecret(h); await spec.before?.(h); } });
+    try {
+      // The stage terminal itself is what it was: value, time and physical requests.
+      expectAffinityTerminal(run, expected);
+      // The trace holds the first operation's settle; a superseding question is another operation.
+      if (name !== "superseded by a newer question") {
+        expectEqual(run.h.metadata.taskRelationParentAffinitySelectionReason, reason, "selection reason in the trace");
+        // Written once, by the stage settle, with the other stage facts.
+        expectEqual(settlementCount(run.h, "taskRelationParentAffinitySelectionReason"),
+          settlementCount(run.h, "taskRelationParentAffinityLeaseAuthorized"), "written with the stage settle");
+      }
+      expectEqual(lgCheckEntries(run.h, name), [], "a formal stage logs nothing at its own settle");
+    } finally { run.h.restore(); }
+  });
+}
+
+for (const [name, spec, reason, expected] of [
+  ["a cached valid Fast is selected at the deadline", { drive: canonicalAt(900, (h) => completeCandidate(
+    candidate(h, "canonical", "fast"), { rawOutput: canonicalOutput("followup-parent") })) },
+    DEADLINE, { at: STAGE_MS, relation: "followup-parent", requests: 2 }],
+  ["a timely valid Intelligent ends the stage at once", { drive: canonicalAt(1_500, (h) => completeCandidate(
+    candidate(h, "canonical", "intelligent"), { rawOutput: canonicalOutput("new-parent") })) },
+    "intelligent-valid", { at: 1_500, relation: "new-parent", requests: 2 }],
+  ["a parse-valid unknown Intelligent ends the stage at once", { drive: canonicalAt(1_500, (h) => completeCandidate(
+    candidate(h, "canonical", "intelligent"), { rawOutput: canonicalOutput("unknown") })) },
+    "intelligent-valid", { at: 1_500, relation: "unknown", requests: 2 }],
+  ["both candidates return invalid output", { drive: canonicalAt(500, settleBothCanonical({ rawOutput: PLANTED.providerError })) },
+    "candidates-ended-unusable", { at: 500, reason: "malformed-json", requests: 2 }],
+  ["no candidate returns", {}, DEADLINE, { at: STAGE_MS, reason: DEADLINE, requests: 2 }],
+  ["an exhausted admission queue dispatches nothing", { beforeStart: saturateAdmission },
+    DEADLINE, { at: STAGE_MS, reason: DEADLINE, requests: 0 }],
+  ["an authentication failure", { drive: canonicalAt(300, (h) => completeCandidate(candidate(h, "canonical", "intelligent"),
+    { providerDisposition: "provider-auth-error", providerOutcome: lgFailedOutcome("authentication") })) },
+    "client-error", { at: 300, reason: "not-run-provider-auth-error", clientError: true, requests: 2 }],
+  ["Stop", { drive: canonicalAt(1_000, stop) }, undefined, { at: 1_000, reason: "operation-id-mismatch", requests: 2 }],
+  ["foreground window already closed", { beforeStart: (_h, handle) => handle.cancelForegroundWork() },
+    undefined, { at: 0, reason: "foreground-window-closed", requests: 0 }],
+]) {
+  test(`LG3 Canonical stage reason in the trace: ${name}`, { concurrency: false }, async () => {
+    const run = await canonicalTerminal(spec);
+    try {
+      expectCanonicalTerminal(run, expected);
+      expectEqual(run.h.metadata.taskRelationSplitCanonicalSelectionReason, reason, "selection reason in the trace");
+      // The Affinity stage of this run ended with both candidates invalid.
+      expectEqual(run.h.metadata.taskRelationParentAffinitySelectionReason, "candidates-ended-unusable", "Affinity reason");
+      expectEqual(lgCheckEntries(run.h, name), [], "a formal stage logs nothing at its own settle");
+    } finally { run.h.restore(); }
+  });
+}
+
+// ---- LG1 and LG3: one summary per formal Relation operation, graded by its outcome ----
+
+// Each row runs one formal operation through the entry's real consumer. `business`
+// is what the consumer ends with, stated as the ST183-4 rows state it, so the
+// summary is read next to the unchanged result, dispositions and request count.
+const lgValidCanonical = (relation) => (h) => completeCandidate(candidate(h, "canonical", "intelligent"), { rawOutput: canonicalOutput(relation) });
+const lgIntelligentAffinity = (rawOutput) => (h) => completeCandidate(candidate(h, "affinity", "intelligent"), { rawOutput });
+const LG_FORMAL_ROWS = [
+  // Timeout table 3.1, row 2: no usable candidate, confirmed at the stage deadlines.
+  { name: "Timeout 2: both stages end at their deadline with nothing usable", level: "warn", lostAll: true,
+    spec: () => ({ endsAt: 2 * STAGE_MS, script: [
+      [4_050, (h) => completeCandidate(candidate(h, "affinity", "fast"), { rawOutput: FAST_PARENT_INDEPENDENT })]] }),
+    business: { terminal: "resolved", stage: NULL_HYPOTHESIS, parent: DEADLINE, canonical: DEADLINE, requests: 4 },
+    selections: [undefined, DEADLINE, DEADLINE], tiers: [undefined, false, false], usable: [false, false, false], deadlineFinalized: true },
+  { name: "the admission queue is exhausted in both stages and nothing is dispatched", level: "warn", lostAll: true,
+    spec: () => ({ endsAt: 2 * STAGE_MS, before: saturateAdmission }),
+    business: { terminal: "resolved", stage: NULL_HYPOTHESIS, parent: DEADLINE, canonical: DEADLINE, requests: 0 },
+    selections: [undefined, DEADLINE, DEADLINE], tiers: [undefined, false, false], usable: [false, false, false], deadlineFinalized: true },
+  { name: "an invalid Intelligent is cached, Fast is silent, and Canonical is silent", level: "warn", lostAll: true,
+    spec: () => ({ endsAt: 2 * STAGE_MS, script: [[700, lgIntelligentAffinity(PLANTED.providerError)]] }),
+    // The recorded parse reason is the cached candidate's; only the selection reason names the deadline.
+    business: { terminal: "resolved", stage: NULL_HYPOTHESIS, parent: "malformed-json", canonical: DEADLINE, requests: 4 },
+    selections: [undefined, DEADLINE, DEADLINE], tiers: [undefined, false, false], usable: [false, false, false], deadlineFinalized: true },
+  { name: "both candidates end unusable in both stages, before any deadline", level: "warn", lostAll: true,
+    spec: () => ({ endsAt: 700, script: [[500, settleBothAffinity({ rawOutput: PLANTED.providerError })],
+      [700, settleBothCanonical({ rawOutput: PLANTED.providerError })]] }),
+    business: { terminal: "resolved", stage: NULL_HYPOTHESIS, parent: "malformed-json", canonical: "malformed-json", requests: 4 },
+    selections: [undefined, "candidates-ended-unusable", "candidates-ended-unusable"], tiers: [undefined, false, false],
+    usable: [false, false, false] },
+  { name: "an authentication failure in the Affinity stage", level: "warn", lostAll: true, clientError: true,
+    spec: () => ({ endsAt: 300, script: [[300, (h) => completeCandidate(candidate(h, "affinity", "fast"),
+      { providerDisposition: "provider-auth-error", providerOutcome: lgFailedOutcome("authentication") })]] }),
+    business: { terminal: "client-error", parent: "not-run-provider-auth-error", canonical: undefined, requests: 2 },
+    // The selector ends the stage on the candidate that failed, so that tier is the selected one.
+    selections: [undefined, "client-error", undefined], tiers: [undefined, true, undefined], usable: [false, false, false] },
+  { name: "an open provider circuit: no stage runs", level: "warn", lostAll: true, clientError: true,
+    spec: (startsAt) => ({ endsAt: startsAt, runtime: { circuitOpen: true } }),
+    business: { terminal: "client-error", parent: "provider-circuit-open", canonical: undefined, requests: 0 },
+    selections: [undefined, undefined, undefined], tiers: [undefined, undefined, undefined], usable: [false, false, false] },
+  // Timeout table 3.1, row 1: the Intelligent stage expires and a timely Fast settles normally.
+  { name: "Timeout 1: a timely Fast is selected at the deadline in both stages", level: "debug",
+    spec: () => ({ endsAt: 2 * STAGE_MS, script: [[879, completeFastAffinity],
+      [STAGE_MS + 600, (h) => completeCandidate(candidate(h, "canonical", "fast"), { rawOutput: canonicalOutput("followup-parent") })]] }),
+    business: { terminal: "resolved", stage: "canonical-relation", parent: "available", canonical: "available", requests: 4 },
+    selections: [undefined, DEADLINE, DEADLINE], tiers: [undefined, true, true], usable: [false, true, true], deadlineFinalized: true },
+  // Controls: a parse-valid abstention is a model result.
+  { name: "control: a parse-valid unknown Canonical after a valid Affinity", level: "debug",
+    spec: () => ({ endsAt: 1_300, script: [[300, lgIntelligentAffinity(FAST_PARENT_INDEPENDENT)], [1_300, lgValidCanonical("unknown")]] }),
+    business: { terminal: "resolved", parent: "available", canonical: "available", requests: 4,
+      source: { voice: ["runtime-matrix", "same-type-independent-new-parent", "new-parent"],
+        screen: ["runtime-matrix", "same-type-independent-new-parent", "new-parent"] } },
+    selections: [undefined, "intelligent-valid", "intelligent-valid"], tiers: [undefined, true, true], usable: [false, true, true] },
+  { name: "control: a parse-valid unclear Affinity and a parse-valid unknown Canonical end at the null hypothesis", level: "debug",
+    spec: () => ({ endsAt: 1_300, script: [[300, lgIntelligentAffinity(PARENT_UNCLEAR)], [1_300, lgValidCanonical("unknown")]] }),
+    business: { terminal: "resolved", stage: NULL_HYPOTHESIS, parent: "available", canonical: "available", requests: 4 },
+    selections: [undefined, "intelligent-valid", "intelligent-valid"], tiers: [undefined, true, true], usable: [false, true, true] },
+  // The mixed case, which the brief does not grade: one stage usable, another lost at its deadline. One row for each
+  // stage that can be the usable one.
+  { name: "not graded: a valid Affinity is used and Canonical is lost at its deadline", level: "debug",
+    spec: () => ({ endsAt: 300 + STAGE_MS, script: [[300, lgIntelligentAffinity(FAST_PARENT_INDEPENDENT)]] }),
+    business: { terminal: "resolved", parent: "available", canonical: DEADLINE, requests: 4 },
+    selections: [undefined, "intelligent-valid", DEADLINE], tiers: [undefined, true, false], usable: [false, true, false],
+    deadlineFinalized: true, notGraded: "relation-mixed" },
+  { name: "not graded: Affinity is lost at its deadline and a valid Canonical is used", level: "debug",
+    spec: () => ({ endsAt: STAGE_MS + 600, script: [[STAGE_MS + 600, lgValidCanonical("new-parent")]] }),
+    business: { terminal: "resolved", stage: "canonical-relation", parent: DEADLINE, canonical: "available", requests: 4 },
+    selections: [undefined, DEADLINE, "intelligent-valid"], tiers: [undefined, false, true], usable: [false, false, true],
+    deadlineFinalized: true, notGraded: "relation-mixed" },
+  { name: "not graded: with an active Child, a valid child Affinity is used and the parent Affinity and Canonical are lost at their deadlines",
+    level: "debug",
+    spec: () => ({ child: true, endsAt: 2 * STAGE_MS, script: [
+      [300, (h) => completeCandidate(sideCandidate(h, "child", "intelligent"), { rawOutput: FAST_CHILD_UNRELATED })]] }),
+    business: { terminal: "resolved", child: "available", parent: DEADLINE, canonical: DEADLINE, requests: 6 },
+    selections: ["intelligent-valid", DEADLINE, DEADLINE], tiers: [true, false, false], usable: [true, false, false],
+    deadlineFinalized: true, notGraded: "relation-mixed" },
+];
+for (const entry of ["voice", "screen"]) for (const row of LG_FORMAL_ROWS) {
+  test(`LG1 LG3 ${entry} formal Relation, ${row.name}: one ${row.level} summary, the real reasons, and the result and request count it had`, { concurrency: false }, async () => {
+    const spec = row.spec(entry === "voice" ? 50 : 0);
+    const run = await runConsumerWait({ entry, ...spec, before: async (h) => { lgPlantSecret(h); await spec.before?.(h); } });
+    const { h } = run;
+    try {
+      // The consumer's own result first: terminal, final source, stage dispositions, physical requests.
+      expectWaitOutcome(run, entry, row.business);
+      const entries = lgCheckEntries(h, row.name);
+      // Voice also reports its foreground window when the deadline finalizes the turn; Type had settled, so that is debug.
+      expectEqual(lgLines(h), [`${row.level} formal-operation-settled`,
+        ...(entry === "voice" && row.deadlineFinalized ? ["debug foreground-deadline-finalized"] : [])], "entries, in order");
+      // One failure, one report: no other layer raises it again.
+      expectEqual(lgAlerts(h).length, row.lostAll ? 1 : 0, "warnings and errors from every layer");
+      expectEqual(lgStageReasons(h), row.selections, "selection reasons in the trace");
+      const summary = entries[0];
+      expectEqual(summary.refs, { traceId: "trace" }, "references");
+      // Per stage the summary names the selector's reason and whether it selected a tier, as this operation's own
+      // handle holds them, and whether the stage was usable.
+      const pairs = lgPairs(row.selections, row.tiers);
+      expectEqual(lgSummarySelections(summary), pairs, "the summary names each stage's reason and whether a tier was selected");
+      expectEqual(lgSelections(run.handle), pairs, "the stage selections of the operation's own handle");
+      expectEqual(lgUsable(summary), row.usable, "usable stages");
+      expectEqual([summary.data.sourceKind, summary.data.operationAuthorized, summary.data.clientError, summary.data.stage],
+        [entry, true, Boolean(row.clientError), h.metadata.taskRelationOrderedResolutionStage], "the summary's own outcome fields");
+      expectEqual(summary.data.waitMs, h.metadata.taskRelationOrderedResolutionWaitMs, "wait");
+      // The entry holds no dispatch claim: the same summary is made with four requests dispatched and with none.
+      expectEqual(Object.keys(summary.data).filter((key) => /dispatch|request/i.test(key)), [], "no dispatch field");
+      // The rule, read off the row: a warning exactly when no stage was usable and the operation recorded a client
+      // error or lost at least one stage. Nothing else of the row grades it.
+      expectEqual(row.level === "warn", !row.usable.some(Boolean) && (Boolean(row.clientError) || pairs.some(lgLost)), "the level follows the rule");
+      expectEqual(row.lostAll, row.level === "warn" ? true : undefined, "row definition");
+      if (row.notGraded) expectEqual([notGraded(row.notGraded).entry, row.level], ["debug", "debug"], "listed as not graded");
+    } finally { h.restore(); }
+  });
+}
+
+// Correction enters the shared chain when its Type adjudication ends (600 ms).
+for (const row of LG_FORMAL_ROWS.filter((candidateRow) => candidateRow.name.includes("admission queue") ||
+  candidateRow.name.startsWith("both candidates end unusable"))) {
+  test(`LG1 LG3 correction formal Relation, ${row.name}: one ${row.level} summary`, { concurrency: false }, async () => {
+    const spec = row.spec(600);
+    const run = await runConsumerWait({ entry: "correction", ...spec, endsAt: row.name.includes("admission") ? 2 * STAGE_MS : 700,
+      before: async (h) => { lgPlantSecret(h); await spec.before?.(h); } });
+    try {
+      expectWaitOutcome(run, "correction", row.business);
+      const entries = lgCheckEntries(run.h, row.name);
+      expectEqual(lgLines(run.h), ["warn formal-operation-settled"], "entries");
+      expectEqual([entries[0].data.parentSelection, entries[0].data.canonicalSelection], row.selections.slice(1), "stage reasons");
+    } finally { run.h.restore(); }
+  });
+}
+
+// A turn that lost all its model evidence is a warning whichever stage then
+// settled the relation (decisions A6). With an active Child the runtime matrix
+// settles it from the question types: the resolution stage is "runtime-matrix"
+// and the summary is still the one warning, naming the three lost stages.
+for (const entry of ["voice", "screen"]) {
+  test(`LG1 LG3 ${entry} formal Relation with an active Child, every stage lost to an exhausted admission queue and settled by the runtime matrix: one warn summary that names the three lost stages`, { concurrency: false }, async () => {
+    const run = await runConsumerWait({ entry, child: true, endsAt: 2 * STAGE_MS, before: saturateAdmission });
+    try {
+      expectWaitOutcome(run, entry, { terminal: "resolved", child: DEADLINE, parent: DEADLINE, canonical: DEADLINE, requests: 0,
+        source: { voice: ["runtime-matrix", "active-child-preserve-child", "child-probe"],
+          screen: ["runtime-matrix", "type-location-unresolved", undefined] } });
+      lgCheckEntries(run.h, "active Child");
+      const summaries = lgOf(run.h, "formal-operation-settled");
+      expectEqual(summaries.map((summary) => summary.level), ["warn"], "one warn summary");
+      expectEqual(lgAlerts(run.h).length, 1, "warnings and errors from every layer");
+      expectEqual([summaries[0].data.stage, lgSummarySelections(summaries[0]), lgUsable(summaries[0])],
+        ["runtime-matrix", [[DEADLINE, false], [DEADLINE, false], [DEADLINE, false]], [false, false, false]], "summary");
+      expectEqual(lgSelections(run.handle), lgSummarySelections(summaries[0]), "the stage selections of the operation's own handle");
+    } finally { run.h.restore(); }
+  });
+}
+
+// The same loss in every row: an exhausted admission queue, so each stage ends
+// at its deadline and no request is dispatched. Only the current question type
+// and the active Child differ, and with them the stage that settles the
+// relation: the null hypothesis in four rows and the runtime matrix in six. The
+// level is the same in all ten. The Hook's binding is called directly so the row
+// can name the type.
+const LG_TYPE_ROWS = [
+  ["coding", false, [NULL_HYPOTHESIS, "voice-preserve-active-parent", "followup-parent"]],
+  ["project", false, [NULL_HYPOTHESIS, "voice-preserve-active-parent", "followup-parent"]],
+  ["unknown", false, [NULL_HYPOTHESIS, "voice-preserve-active-parent", "followup-parent"]],
+  ["unknown", true, [NULL_HYPOTHESIS, "voice-preserve-active-child", "child-probe"]],
+  ["behavioral", false, ["runtime-matrix", "type-excludes-existing-tree", "new-parent"]],
+  ["system-design", false, ["runtime-matrix", "type-excludes-existing-tree", "new-parent"]],
+  ["field-knowledge", false, ["runtime-matrix", "type-excludes-existing-tree", "new-parent"]],
+  ["coding", true, ["runtime-matrix", "type-location-unresolved", undefined]],
+  ["field-knowledge", true, ["runtime-matrix", "active-child-preserve-child", "child-probe"]],
+  ["behavioral", true, ["runtime-matrix", "type-excludes-existing-tree", "new-parent"]],
+];
+for (const [type, child, source] of LG_TYPE_ROWS) {
+  test(`LG1 LG3 formal Relation, every stage lost, current type ${type}, ${child ? "active Child" : "parent only"}: warn, settled by ${source[0]} (${source[1]})`, { concurrency: false }, async () => {
+    const h = st183Harness({ child });
+    try {
+      saturateAdmission(h);
+      const handle = scheduleEntry(h, "voice");
+      const wait = watch(h, h.environment.resolveOrderedTaskRelationWithinWindow({ handle, traceId: "trace", currentQuestionType: type,
+        sourceKind: "voice", activeMeetingTask: h.environment.contextManagerRef.current.getState().activeMeetingTask, waitBudgetMs: 8_000 }));
+      await h.clock.advanceTo(2 * STAGE_MS + 100);
+      expectEqual([wait.state, wait.value?.terminalDisposition, h.executions.length], ["resolved", "resolved", 0],
+        "the operation and its physical requests");
+      expectEqual([h.metadata.taskRelationOrderedResolutionStage, h.metadata.taskRelationOrderedResolutionReason,
+        h.metadata.taskRelationOrderedResolutionRelation], source, "final Relation source");
+      expectEqual([h.metadata.taskRelationOrderedResolutionAffinityChildDisposition, h.metadata.taskRelationOrderedResolutionAffinityParentDisposition,
+        h.metadata.taskRelationOrderedResolutionCanonicalDisposition], [child ? DEADLINE : "no-active-child", DEADLINE, DEADLINE],
+      "recorded stage dispositions");
+      const entries = lgCheckEntries(h, `${type} ${child}`);
+      expectEqual(lgLines(h), ["warn formal-operation-settled"], "entries");
+      expectEqual(lgAlerts(h).length, 1, "warnings and errors from every layer");
+      expectEqual([entries[0].data.stage, entries[0].data.reason, lgSummarySelections(entries[0]), lgUsable(entries[0])],
+        [source[0], source[1], [child ? [DEADLINE, false] : null, [DEADLINE, false], [DEADLINE, false]], [false, false, false]], "summary");
+    } finally { h.restore(); }
+  });
+}
+
+// A client error is a warning for every question type as well. With an open provider circuit no stage runs and no
+// stage has a selection: the operation's own client error makes the warning, whichever stage carries the decision
+// that is then never applied.
+test("LG1 formal Relation with an open provider circuit: one warn summary for every current question type and Child combination, with the null hypothesis and with the runtime matrix; the operation ends as a client error each time", { concurrency: false }, async () => {
+  const stages = [];
+  for (const [type, child] of LG_TYPE_ROWS) {
+    const h = st183Harness({ child, runtime: { circuitOpen: true } });
+    try {
+      const handle = scheduleEntry(h, "voice");
+      const wait = watch(h, h.environment.resolveOrderedTaskRelationWithinWindow({ handle, traceId: "trace", currentQuestionType: type,
+        sourceKind: "voice", activeMeetingTask: h.environment.contextManagerRef.current.getState().activeMeetingTask, waitBudgetMs: 8_000 }));
+      await h.clock.advanceTo(100);
+      const name = `circuit open ${type} ${child ? "active Child" : "parent only"}`;
+      expectEqual([wait.state, wait.value?.terminalDisposition, h.executions.length, h.metadata.taskRelationOrderedResolutionClientError],
+        ["resolved", "client-error", 0, true], `the operation, ${name}`);
+      const entries = lgCheckEntries(h, name);
+      expectEqual(lgLines(h), ["warn formal-operation-settled"], `entries, ${name}`);
+      expectEqual([entries[0].data.clientError, entries[0].data.stage, lgSummarySelections(entries[0]), lgSelections(handle), lgUsable(entries[0])],
+        [true, h.metadata.taskRelationOrderedResolutionStage, [null, null, null], [null, null, null], [false, false, false]], `summary, ${name}`);
+      stages.push(entries[0].data.stage);
+    } finally { h.restore(); }
+  }
+  // Both resolution stages occur among the ten: the stage does not grade.
+  expectEqual([...new Set(stages)].sort(), ["runtime-matrix", NULL_HYPOTHESIS].sort(), "resolution stages seen");
+});
+
+// The ledger says what the entry does not: a client error is a warning here, not an error.
+test("LG1 formal Relation client error: the ledger lists as a known limit that it is a warning although Voice then shows a configuration error", () => {
+  const row = ledgerRowOf({ source: "meeting.relation", event: "formal-operation-settled" });
+  expectEqual([row.levels, row.knownLimits.some((limit) => /client error is warn/.test(limit))], [["warn", "debug"], true], "ledger row");
+});
+
+// ---- LG1 controls: stages cancelled or superseded while the operation itself stays authorized ----
+
+// Dispose (application shutdown and unmount) cancels the stage runtimes and
+// leaves the question's source lease alone, so the Ordered operation settles
+// authorized with no usable stage, and with no Child at the null hypothesis.
+// No stage was ended by its selector, so no stage settle wrote a selection:
+// nothing was lost to a deadline, to unusable candidates or to a client error,
+// and the summary is debug.
+for (const path of DISPOSE_PATHS) for (const entry of ["voice", "screen", "correction"]) for (const child of [false, true]) {
+  test(`LG1 control ${path} with a formal ${entry} operation and an observation in flight, ${child ? "child+parent" : "parent-only"}: zero warn or error; the formal summary is debug with the operation authorized and no selection reason`, { concurrency: false }, async () => {
+    const run = await runDisposeInFlight({ path, entry, child, crossChecks: true });
+    const { h } = run;
+    try {
+      // What the operation recorded: authorized, and each stage ended on the lease reason of cancelled work.
+      expectEqual([h.metadata.taskRelationOrderedResolutionOperationAuthorized, h.metadata.taskRelationOrderedResolutionAffinityParentDisposition,
+        h.metadata.taskRelationOrderedResolutionCanonicalDisposition], [true, "operation-id-mismatch", "operation-id-mismatch"],
+      "recorded authorization and stage dispositions");
+      if (!child) expectEqual(h.metadata.taskRelationOrderedResolutionStage, NULL_HYPOTHESIS, "final Relation source");
+      expectEqual(lgStageReasons(h), [undefined, undefined, undefined], "selection reasons in the trace");
+      lgCheckEntries(h, `${path} ${entry}`);
+      expectEqual(lgAlerts(h), [], "warnings and errors");
+      const summaries = lgOf(h, "formal-operation-settled");
+      expectEqual(summaries.map((summary) => [summary.level, summary.refs.traceId]), [["debug", "trace"]], "one debug summary");
+      expectEqual([summaries[0].data.operationAuthorized, summaries[0].data.stage, lgUsable(summaries[0]), lgSummarySelections(summaries[0])],
+        [true, h.metadata.taskRelationOrderedResolutionStage, [false, false, false], [null, null, null]], "summary");
+      // The observation beside it ended the same way, stage by stage.
+      expectEqual(lgOf(h, "observation-stage-settled").map((settled) => [settled.level, settled.refs.traceId, settled.data.stage,
+        settled.data.current, settled.data.selection ?? null]),
+      [...(child ? ["child-affinity"] : []), "parent-affinity", "canonical"].map((stage) => ["debug", OBSERVED_TRACE, stage, false, null]),
+      "observation stage entries");
+    } finally { h.restore(); }
+  });
+}
+
+// Latest-wins across sources. The Relation runtimes hold one operation each, so
+// a Screen operation scheduled while a Voice operation is in flight supersedes
+// the Voice stages. The Voice question's own lease stays current: its Ordered
+// operation settles authorized, at the null hypothesis, with no usable stage.
+function lgTwoSources(h, { secondAt, secondTraceId = "trace-b" }) {
+  const activeMeetingTask = () => h.environment.contextManagerRef.current.getState().activeMeetingTask;
+  const first = scheduleRelation(h, { sourceKind: "voice", traceId: "trace" });
+  const waitFirst = watch(h, h.environment.resolveOrderedTaskRelationWithinWindow({ handle: first, traceId: "trace",
+    currentQuestionType: "coding", sourceKind: "voice", activeMeetingTask: activeMeetingTask(), waitBudgetMs: 8_000 }));
+  const second = {};
+  h.clock.setTimeout(() => {
+    second.dispatchedBefore = h.executions.length;
+    second.handle = scheduleRelation(h, { sourceKind: "screen", unit: { ...logicalQuestionUnit, id: "lqu-screen-b" }, traceId: secondTraceId });
+    second.wait = watch(h, h.environment.resolveOrderedTaskRelationWithinWindow({ handle: second.handle, traceId: secondTraceId,
+      currentQuestionType: "coding", sourceKind: "screen", activeMeetingTask: activeMeetingTask(), waitBudgetMs: 8_000 }));
+  }, secondAt);
+  return { first, waitFirst, second };
+}
+const lgOfSecond = (h, stage, tier) => h.executions.filter((execution) => execution.request.operationKind.includes(stage) &&
+  execution.request.identity.logicalQuestionUnitId === "lqu-screen-b" && tierOf(execution) === tier);
+const lgSummaryRows = (h) => lgOf(h, "formal-operation-settled").map((summary) => [summary.level, summary.refs.traceId,
+  summary.data.operationAuthorized, summary.data.stage, summary.data.parentSelection ?? null, summary.data.canonicalSelection ?? null]);
+
+test("LG1 control latest-wins across sources: a Voice operation whose two stages are superseded by a Screen operation is debug, and the Screen operation that resolves from model evidence is debug", { concurrency: false }, async () => {
+  const h = st183Harness();
+  try {
+    const { waitFirst, second } = lgTwoSources(h, { secondAt: 1_000 });
+    await h.clock.advanceTo(1_100);
+    for (const execution of lgOfSecond(h, "affinity", "intelligent")) completeCandidate(execution, { rawOutput: FAST_PARENT_INDEPENDENT });
+    await h.clock.advanceTo(1_300);
+    for (const execution of lgOfSecond(h, "canonical", "intelligent")) completeCandidate(execution, { rawOutput: canonicalOutput("new-parent") });
+    await h.clock.advanceTo(1_000 + 3 * STAGE_MS);
+    // The Voice operation: still authorized, both stages cancelled, settled at the null hypothesis at 1100 ms.
+    expectEqual([waitFirst.state, waitFirst.at, waitFirst.value?.terminalDisposition, waitFirst.value?.operationAuthorization?.authorized,
+      waitFirst.value?.metadata?.taskRelationOrderedResolutionAffinityParentDisposition,
+      waitFirst.value?.metadata?.taskRelationOrderedResolutionCanonicalDisposition, waitFirst.value?.metadata?.taskRelationOrderedResolutionStage],
+    ["resolved", 1_100, "resolved", true, "operation-id-mismatch", "operation-id-mismatch", NULL_HYPOTHESIS], "the superseded Voice operation");
+    expectEqual([second.wait.state, second.wait.at, second.wait.value?.terminalDisposition,
+      second.wait.value?.metadata?.taskRelationOrderedResolutionStage], ["resolved", 1_300, "resolved", "canonical-relation"],
+    "the Screen operation");
+    // Every physical request of the Voice operation was aborted by the supersession, none by a deadline.
+    expectEqual(h.executions.filter((execution) => execution.request.identity.logicalQuestionUnitId === logicalQuestionUnit.id)
+      .map((execution) => [execution.request.operationKind, tierOf(execution), execution.dispatchedAt - 10_000, execution.signal.aborted]),
+    [["task-relation-parent-affinity", "intelligent", 0, true], ["task-relation-parent-affinity", "fast", 0, true],
+      ["task-relation-canonical-shadow", "intelligent", 1_000, true], ["task-relation-canonical-shadow", "fast", 1_000, true]],
+    "the Voice operation's physical requests");
+    lgCheckEntries(h, "cross-source supersession");
+    expectEqual(lgAlerts(h), [], "warnings and errors");
+    expectEqual(lgSummaryRows(h), [["debug", "trace", true, NULL_HYPOTHESIS, null, null],
+      ["debug", "trace-b", true, "canonical-relation", "intelligent-valid", "intelligent-valid"]], "summaries, in order");
+  } finally { h.restore(); }
+});
+
+test("LG1 latest-wins across sources: the superseded Voice operation is debug and the superseding Screen operation, which then loses both stages at their deadlines, is the one warning", { concurrency: false }, async () => {
+  const h = st183Harness();
+  try {
+    const { waitFirst, second } = lgTwoSources(h, { secondAt: 1_000 });
+    await h.clock.advanceTo(1_000 + 3 * STAGE_MS);
+    expectEqual([waitFirst.state, waitFirst.value?.operationAuthorization?.authorized, waitFirst.value?.metadata?.taskRelationOrderedResolutionStage],
+      ["resolved", true, NULL_HYPOTHESIS], "the superseded Voice operation");
+    expectEqual([second.wait.state, second.wait.at, second.wait.value?.metadata?.taskRelationOrderedResolutionStage],
+      ["resolved", 1_000 + 2 * STAGE_MS, NULL_HYPOTHESIS], "the Screen operation");
+    lgCheckEntries(h, "superseded, then lost");
+    expectEqual(lgSummaryRows(h), [["debug", "trace", true, NULL_HYPOTHESIS, null, null],
+      ["warn", "trace-b", true, NULL_HYPOTHESIS, DEADLINE, DEADLINE]], "summaries, in order");
+    expectEqual(lgAlerts(h).length, 1, "warnings and errors");
+  } finally { h.restore(); }
+});
+
+// The reverse order. The Voice Affinity is superseded by a Screen operation that is cancelled before it starts its
+// own Canonical, so the Voice Canonical runs on. The disposition the operation records for that stage is the
+// predecessor mismatch either way, since the Affinity it follows was superseded. What grades is what its selector
+// ended with: no tier selected at the deadline is a lost stage and a warning; a parse-valid Fast selected at that
+// deadline is a stage that selected a tier, unusable only because of the supersession, and debug (next test).
+test("LG1 a Voice operation whose Affinity stage was superseded and whose Canonical stage then ran to its deadline is a warning by the Canonical reason; the cancelled Screen operation is debug", { concurrency: false }, async () => {
+  const h = st183Harness();
+  try {
+    const { waitFirst, second } = lgTwoSources(h, { secondAt: 1_000 });
+    await h.clock.advanceTo(1_050);
+    second.handle.cancelForegroundWork();
+    await h.clock.advanceTo(1_000 + 2 * STAGE_MS);
+    expectEqual([waitFirst.state, waitFirst.at, waitFirst.value?.operationAuthorization?.authorized,
+      waitFirst.value?.metadata?.taskRelationOrderedResolutionAffinityParentDisposition,
+      waitFirst.value?.metadata?.taskRelationOrderedResolutionCanonicalDisposition, waitFirst.value?.metadata?.taskRelationOrderedResolutionStage],
+    ["resolved", 1_000 + STAGE_MS, true, "operation-id-mismatch", "parent-predecessor-operation-mismatch", NULL_HYPOTHESIS], "the Voice operation");
+    expectEqual([h.metadata.taskRelationParentAffinitySelectionReason, h.metadata.taskRelationSplitCanonicalSelectionReason,
+      h.executions.filter((execution) => execution.request.operationKind.includes("canonical")).map((execution) =>
+        [execution.request.identity.logicalQuestionUnitId, tierOf(execution), execution.dispatchedAt - 10_000])],
+    [undefined, DEADLINE, [[logicalQuestionUnit.id, "intelligent", 1_000], [logicalQuestionUnit.id, "fast", 1_000]]],
+    "selection reasons in the trace, and the Canonical requests that were dispatched");
+    expectEqual([second.wait.state, second.wait.at, second.wait.value?.operationAuthorization?.authorized,
+      second.wait.value?.metadata?.taskRelationOrderedResolutionCanonicalDisposition, second.wait.value?.metadata?.taskRelationOrderedResolutionStage],
+    ["resolved", 1_050, true, "foreground-window-closed", NULL_HYPOTHESIS], "the cancelled Screen operation");
+    lgCheckEntries(h, "superseded, then lost at the Canonical deadline");
+    expectEqual(lgSummaryRows(h), [["debug", "trace-b", true, NULL_HYPOTHESIS, null, null],
+      ["warn", "trace", true, NULL_HYPOTHESIS, null, DEADLINE]], "summaries, in order");
+    expectEqual(lgOf(h, "formal-operation-settled").map(lgSummarySelections), [[null, null, null], [null, null, [DEADLINE, false]]],
+      "stage selections in the summaries");
+    expectEqual(lgAlerts(h).length, 1, "warnings and errors");
+  } finally { h.restore(); }
+});
+
+test("LG1 a Voice operation whose Affinity stage was superseded and whose Canonical stage selected a parse-valid Fast at its deadline is debug: the stage selected a tier and its result is unusable only because its predecessor was superseded", { concurrency: false }, async () => {
+  const h = st183Harness();
+  try {
+    const { first, waitFirst, second } = lgTwoSources(h, { secondAt: 1_000 });
+    await h.clock.advanceTo(1_050);
+    second.handle.cancelForegroundWork();
+    await h.clock.advanceTo(2_000);
+    // The Voice Canonical is the only Canonical that started: its Fast candidate answers with valid output.
+    completeCandidate(candidate(h, "canonical", "fast"), { rawOutput: canonicalOutput("followup-parent") });
+    await h.clock.advanceTo(1_000 + 2 * STAGE_MS);
+    expectEqual([waitFirst.state, waitFirst.at, waitFirst.value?.operationAuthorization?.authorized,
+      waitFirst.value?.metadata?.taskRelationOrderedResolutionAffinityParentDisposition,
+      waitFirst.value?.metadata?.taskRelationOrderedResolutionCanonicalDisposition, waitFirst.value?.metadata?.taskRelationOrderedResolutionStage],
+    ["resolved", 1_000 + STAGE_MS, true, "operation-id-mismatch", "parent-predecessor-operation-mismatch", NULL_HYPOTHESIS], "the Voice operation");
+    // What the stage recorded: a parse-valid Fast, selected at the deadline, and discarded for its predecessor.
+    expectEqual([h.metadata.taskRelationSplitCanonicalSelectedProviderTier, h.metadata.taskRelationSplitCanonicalParseDisposition,
+      h.metadata.taskRelationSplitCanonicalSelectionReason, h.metadata.taskRelationSplitCanonicalDisposition,
+      h.metadata.taskRelationParentAffinitySelectionReason],
+    ["fast", "valid-json", DEADLINE, "parent-predecessor-operation-mismatch", undefined], "the Canonical stage in the trace");
+    expectEqual(lgSelections(first), [null, null, [DEADLINE, true]], "the stage selections of the Voice handle");
+    lgCheckEntries(h, "superseded, then a valid Fast at the Canonical deadline");
+    expectEqual(lgSummaryRows(h), [["debug", "trace-b", true, NULL_HYPOTHESIS, null, null],
+      ["debug", "trace", true, NULL_HYPOTHESIS, null, DEADLINE]], "summaries, in order");
+    expectEqual(lgOf(h, "formal-operation-settled").map((summary) => [lgSummarySelections(summary), lgUsable(summary)]),
+      [[[null, null, null], [false, false, false]], [[null, null, [DEADLINE, true]], [false, false, false]]], "stage selections and usable stages");
+    expectEqual(lgAlerts(h), [], "warnings and errors");
+  } finally { h.restore(); }
+});
+
+// Not cancelled only. The Voice Affinity really ended at its deadline with
+// nothing usable; its Canonical was then superseded by the Screen operation. A
+// stage was lost to its deadline, so this is a warning: only an operation whose
+// stages were all cancelled is debug.
+test("LG1 a Voice operation that lost its Affinity stage at the deadline and whose Canonical stage was then superseded is a warning that names both", { concurrency: false }, async () => {
+  const h = st183Harness();
+  try {
+    const { waitFirst, second } = lgTwoSources(h, { secondAt: STAGE_MS + 500 });
+    await h.clock.advanceTo(STAGE_MS + 600);
+    for (const execution of lgOfSecond(h, "affinity", "intelligent")) completeCandidate(execution, { rawOutput: FAST_PARENT_INDEPENDENT });
+    await h.clock.advanceTo(STAGE_MS + 800);
+    for (const execution of lgOfSecond(h, "canonical", "intelligent")) completeCandidate(execution, { rawOutput: canonicalOutput("new-parent") });
+    await h.clock.advanceTo(4 * STAGE_MS);
+    expectEqual([waitFirst.state, waitFirst.at, waitFirst.value?.operationAuthorization?.authorized,
+      waitFirst.value?.metadata?.taskRelationOrderedResolutionAffinityParentDisposition,
+      waitFirst.value?.metadata?.taskRelationOrderedResolutionCanonicalDisposition, waitFirst.value?.metadata?.taskRelationOrderedResolutionStage],
+    ["resolved", STAGE_MS + 600, true, DEADLINE, "operation-id-mismatch", NULL_HYPOTHESIS], "the Voice operation");
+    expectEqual([second.wait.state, second.wait.value?.metadata?.taskRelationOrderedResolutionStage], ["resolved", "canonical-relation"],
+      "the Screen operation");
+    lgCheckEntries(h, "lost, then superseded");
+    expectEqual(lgSummaryRows(h), [["warn", "trace", true, NULL_HYPOTHESIS, DEADLINE, null],
+      ["debug", "trace-b", true, "canonical-relation", "intelligent-valid", "intelligent-valid"]], "summaries, in order");
+    expectEqual(lgOf(h, "formal-operation-settled").map(lgSummarySelections),
+      [[null, [DEADLINE, false], null], [null, ["intelligent-valid", true], ["intelligent-valid", true]]], "stage selections in the summaries");
+  } finally { h.restore(); }
+});
+
+// Not graded. The same question revision was scheduled before and spent both of
+// its budget slots, so the runtime refuses both stages of the new operation:
+// no selector runs, no stage has a selection and nothing is dispatched for it.
+// It ends authorized at the null hypothesis with no model result. That is
+// neither a loss the selector reported nor a cancellation; the summary is debug.
+test("LG1 not graded: a formal operation whose two stages are refused by the runtime budget is one debug summary with no stage selection", { concurrency: false }, async () => {
+  const h = st183Harness();
+  try {
+    // The earlier operation of this revision: its Affinity started at 0 and its Canonical at 100.
+    const earlier = scheduleRelation(h);
+    await h.clock.advanceTo(100);
+    const earlierCanonical = watch(h, earlier.startCanonical({ foreground: true, deadlineAt: h.clock.now + STAGE_MS }));
+    await h.clock.advanceTo(200);
+    expectEqual(h.executions.map((execution) => [execution.request.operationKind, tierOf(execution)]),
+      [["task-relation-parent-affinity", "intelligent"], ["task-relation-parent-affinity", "fast"],
+        ["task-relation-canonical-shadow", "intelligent"], ["task-relation-canonical-shadow", "fast"]], "the earlier operation's requests");
+    const handle = scheduleRelation(h);
+    const wait = watch(h, h.environment.resolveOrderedTaskRelationWithinWindow({ handle, traceId: "trace", currentQuestionType: "coding",
+      sourceKind: "voice", activeMeetingTask: h.environment.contextManagerRef.current.getState().activeMeetingTask, waitBudgetMs: 8_000 }));
+    await h.clock.advanceTo(300);
+    expectEqual([wait.state, wait.value?.terminalDisposition, wait.value?.operationAuthorization?.authorized,
+      h.metadata.taskRelationOrderedResolutionAffinityParentDisposition, h.metadata.taskRelationOrderedResolutionCanonicalDisposition,
+      h.metadata.taskRelationOrderedResolutionStage, h.executions.length, earlierCanonical.value?.unavailableReason],
+    ["resolved", "resolved", true, "budget-exhausted", "budget-exhausted", NULL_HYPOTHESIS, 4, "superseded"],
+    "the refused operation, its recorded stage dispositions and the physical requests");
+    expectEqual([lgSelections(handle), lgStageReasons(h)], [[null, null, null], [undefined, undefined, undefined]],
+      "no stage selection, in the handle and in the trace");
+    const entries = lgCheckEntries(h, "budget refused");
+    expectEqual(lgLines(h), ["debug formal-operation-settled"], "entries");
+    expectEqual([entries[0].data.operationAuthorized, entries[0].data.clientError, lgUsable(entries[0]), lgSummarySelections(entries[0])],
+      [true, false, [false, false, false], [null, null, null]], "summary");
+    expectEqual(notGraded("relation-runtime-budget-refused").entry, "debug", "listed as not graded");
+  } finally { h.restore(); }
+});
+
+// One lost stage is enough, whichever it is. Here it is the child Affinity alone:
+// the parent Affinity and the Canonical of this question revision are refused by
+// the runtime budget, as above, and the child Affinity, which the earlier
+// operation did not have, runs to its deadline with no candidate.
+test("LG1 a lost child Affinity alone makes the warning: the parent Affinity and Canonical are refused by the runtime budget and have no selection", { concurrency: false }, async () => {
+  const h = st183Harness({ child: true });
+  try {
+    // The earlier operation of this revision ran while the task had no Child: parent Affinity at 0, Canonical at 100.
+    const state = h.environment.contextManagerRef.current.getState();
+    const withChild = state.activeMeetingTask;
+    state.activeMeetingTask = { ...withChild, child: undefined };
+    const earlier = scheduleRelation(h);
+    await h.clock.advanceTo(100);
+    void earlier.startCanonical({ foreground: true, deadlineAt: h.clock.now + STAGE_MS });
+    await h.clock.advanceTo(200);
+    state.activeMeetingTask = withChild;
+    const handle = scheduleRelation(h);
+    const wait = watch(h, h.environment.resolveOrderedTaskRelationWithinWindow({ handle, traceId: "trace", currentQuestionType: "coding",
+      sourceKind: "voice", activeMeetingTask: state.activeMeetingTask, waitBudgetMs: 8_000 }));
+    await h.clock.advanceTo(3 * STAGE_MS);
+    expectEqual([wait.state, wait.at, wait.value?.terminalDisposition, wait.value?.operationAuthorization?.authorized,
+      h.metadata.taskRelationOrderedResolutionAffinityChildDisposition, h.metadata.taskRelationOrderedResolutionAffinityParentDisposition,
+      h.metadata.taskRelationOrderedResolutionCanonicalDisposition],
+    ["resolved", 200 + STAGE_MS, "resolved", true, DEADLINE, "budget-exhausted", "budget-exhausted"], "the operation and its recorded stage dispositions");
+    // Its only physical requests are the two child Affinity candidates.
+    expectEqual(h.executions.slice(4).map((execution) => [execution.request.operationKind, tierOf(execution), execution.dispatchedAt - 10_000]),
+      [["task-relation-child-affinity", "intelligent", 200], ["task-relation-child-affinity", "fast", 200]], "physical requests of the operation");
+    expectEqual(lgSelections(handle), [[DEADLINE, false], null, null], "the stage selections of the operation's own handle");
+    const entries = lgCheckEntries(h, "child lost alone");
+    expectEqual(lgLines(h), ["warn formal-operation-settled"], "entries");
+    expectEqual([lgSummarySelections(entries[0]), lgUsable(entries[0])], [[[DEADLINE, false], null, null], [false, false, false]], "summary");
+  } finally { h.restore(); }
+});
+
+// Two formal operations never share stage selections: each schedule has its own
+// object, and a summary reads the object of its own handle. The trace keys are
+// one per trace, so on a shared trace the later settle overwrites the earlier
+// one there; the summaries are not read from the trace and are not affected.
+const lgSourceRows = (h) => lgOf(h, "formal-operation-settled").map((summary) =>
+  [summary.level, summary.data.sourceKind, summary.refs.traceId, ...lgSummarySelections(summary).slice(1)]);
+
+test("LG1 two formal operations on one trace keep their own stage selections: the first lost its Affinity stage and is the warning, although the second then wrote its own reason over the same trace key", { concurrency: false }, async () => {
+  const h = st183Harness();
+  try {
+    const { first, waitFirst, second } = lgTwoSources(h, { secondAt: 800, secondTraceId: "trace" });
+    // The Voice Affinity ends with both candidates unusable at 500 ms; its Canonical starts.
+    await h.clock.advanceTo(500);
+    settleBothAffinity({ rawOutput: PLANTED.providerError })(h);
+    await h.clock.advanceTo(700);
+    expectEqual([lgSelections(first), h.metadata.taskRelationParentAffinitySelectionReason],
+      [[null, ["candidates-ended-unusable", false], null], "candidates-ended-unusable"], "the Voice Affinity, in its handle and in the trace");
+    // The Screen operation, on the same trace: a valid Affinity at 900 ms, whose settle overwrites the trace key, and
+    // then its Canonical, which supersedes the Voice Canonical.
+    await h.clock.advanceTo(900);
+    for (const execution of lgOfSecond(h, "affinity", "intelligent")) completeCandidate(execution, { rawOutput: FAST_PARENT_INDEPENDENT });
+    await h.clock.advanceTo(1_000);
+    for (const execution of lgOfSecond(h, "canonical", "intelligent")) completeCandidate(execution, { rawOutput: canonicalOutput("new-parent") });
+    await h.clock.advanceTo(3 * STAGE_MS);
+    expectEqual([waitFirst.state, waitFirst.at, waitFirst.value?.operationAuthorization?.authorized,
+      waitFirst.value?.metadata?.taskRelationOrderedResolutionAffinityParentDisposition,
+      waitFirst.value?.metadata?.taskRelationOrderedResolutionCanonicalDisposition, waitFirst.value?.metadata?.taskRelationOrderedResolutionStage],
+    ["resolved", 900, true, "malformed-json", "operation-id-mismatch", NULL_HYPOTHESIS], "the Voice operation");
+    expectEqual([second.wait.state, second.wait.at, second.wait.value?.metadata?.taskRelationOrderedResolutionStage],
+      ["resolved", 1_000, "canonical-relation"], "the Screen operation");
+    // One trace, and it now holds the Screen operation's reasons alone.
+    expectEqual(lgStageReasons(h), [undefined, "intelligent-valid", "intelligent-valid"], "selection reasons in the shared trace");
+    // Two handles, two objects, each with its own operation's stages.
+    expectEqual(first.stageSelections === second.handle.stageSelections, false, "the two handles do not share an object");
+    expectEqual([lgSelections(first), lgSelections(second.handle)],
+      [[null, ["candidates-ended-unusable", false], null], [null, ["intelligent-valid", true], ["intelligent-valid", true]]],
+      "the stage selections of each handle");
+    lgCheckEntries(h, "shared trace, first lost");
+    expectEqual(lgSourceRows(h), [["warn", "voice", "trace", ["candidates-ended-unusable", false], null],
+      ["debug", "screen", "trace", ["intelligent-valid", true], ["intelligent-valid", true]]], "summaries, in order");
+    expectEqual(lgAlerts(h).length, 1, "warnings and errors");
+  } finally { h.restore(); }
+});
+
+test("LG1 two formal operations on one trace keep their own stage selections: the second, whose stages were only cancelled, is debug although the trace still holds the Canonical reason of the first, which lost both stages", { concurrency: false }, async () => {
+  const h = st183Harness();
+  try {
+    const { first, waitFirst, second } = lgTwoSources(h, { secondAt: 2 * STAGE_MS + 500, secondTraceId: "trace" });
+    await h.clock.advanceTo(2 * STAGE_MS + 550);
+    second.handle.cancelForegroundWork();
+    await h.clock.advanceTo(5 * STAGE_MS);
+    expectEqual([waitFirst.state, waitFirst.at, waitFirst.value?.metadata?.taskRelationOrderedResolutionStage],
+      ["resolved", 2 * STAGE_MS, NULL_HYPOTHESIS], "the Voice operation");
+    expectEqual([second.wait.state, second.wait.at, second.wait.value?.operationAuthorization?.authorized,
+      second.wait.value?.metadata?.taskRelationOrderedResolutionAffinityParentDisposition,
+      second.wait.value?.metadata?.taskRelationOrderedResolutionCanonicalDisposition],
+    ["resolved", 2 * STAGE_MS + 550, true, "operation-id-mismatch", "foreground-window-closed"], "the cancelled Screen operation");
+    // The Screen Canonical never ran, so the trace still holds the Voice operation's Canonical reason.
+    expectEqual(lgStageReasons(h), [undefined, undefined, DEADLINE], "selection reasons in the shared trace");
+    expectEqual(first.stageSelections === second.handle.stageSelections, false, "the two handles do not share an object");
+    expectEqual([lgSelections(first), lgSelections(second.handle)], [[null, [DEADLINE, false], [DEADLINE, false]], [null, null, null]],
+      "the stage selections of each handle");
+    lgCheckEntries(h, "shared trace, second cancelled");
+    expectEqual(lgSourceRows(h), [["warn", "voice", "trace", [DEADLINE, false], [DEADLINE, false]],
+      ["debug", "screen", "trace", null, null]], "summaries, in order");
+    expectEqual(lgAlerts(h).length, 1, "warnings and errors");
+  } finally { h.restore(); }
+});
+
+// ---- LG1 controls: cancelled, stopped and superseded work is never raised ----
+
+for (const entry of ["voice", "screen"]) for (const [name, invalidate, mismatchedKey] of [
+  ["Stop", (h) => stop(h), "runtimeEpoch"],
+  ["a manual correction (user cancel of the automatic decision)", (h) => { h.environment.manualCorrectionRevisionRef.current += 1; },
+    "manualCorrectionRevision"],
+  ["a newer question (latest-wins supersession)", (_h, source) => { source.current = false; }, "source"],
+]) {
+  test(`LG1 LG3 control ${entry}: ${name} during the Affinity stage, then a late candidate result: zero warn or error and one debug summary`, { concurrency: false }, async () => {
+    const h = st183Harness();
+    try {
+      lgPlantSecret(h);
+      const source = { current: true };
+      const handle = scheduleRelation(h, { sourceKind: entry === "screen" ? "screen" : "voice",
+        authorizeSourceOperation: () => (source.current ? sourceCurrent()
+          : { authorized: false, reason: "logical-question-revision-mismatch", mismatchedKey: "source" }) });
+      let wait;
+      if (entry === "voice") startVoiceResolution(h, handle);
+      else wait = watch(h, startScreenConsumer(h, handle));
+      await h.clock.advanceTo(1_000);
+      const dispatched = [...h.executions];
+      invalidate(h, source);
+      // A late result of the invalidated work, with a provider timeout as its physical terminal.
+      await h.clock.advanceTo(1_500);
+      for (const execution of dispatched) {
+        if (!execution.signal.aborted) completeCandidate(execution, { providerDisposition: "provider-error-content",
+          providerOutcome: { status: "timed-out", safeErrorSummary: PLANTED.providerError } });
+      }
+      await h.clock.advanceTo(2 * STAGE_MS + 200);
+      expectEqual(h.advisorCalls.length, 0, "Advisor handoffs");
+      expectEqual([h.metadata.taskRelationOrderedResolutionOperationAuthorized, h.metadata.taskRelationOrderedResolutionOperationMismatchedKey],
+        [false, mismatchedKey], "operation authorization");
+      if (wait) expectEqual([wait.state, wait.value?.terminalDisposition], ["resolved", "cancelled"], "Screen consumer");
+      else expectEqual(h.events.filter((event) => event.finish).map((event) => event.finish[1]), ["cancelled"], "Voice trace");
+      const entries = lgCheckEntries(h, name);
+      expectEqual(lgAlerts(h), [], "warnings and errors");
+      expectEqual(lgLines(h), ["debug formal-operation-settled"], "entries");
+      expectEqual([entries[0].data.operationAuthorized, entries[0].data.parentUsable, entries[0].data.canonicalUsable],
+        [false, false, false], "the summary says the operation was no longer authorized");
+    } finally { h.restore(); }
+  });
+}
+
+test("LG1 control: a handle with no release window is debug when it reaches the Ordered operation, with no model operation and no request", { concurrency: false }, async () => {
+  const h = st183Harness();
+  try {
+    // No release window: the Hook lends the handle no model field, and its consumers do not call the Ordered operation.
+    h.environment.contextManagerRef.current.getState().activeMeetingTask = undefined;
+    const handle = scheduleRelation(h);
+    expectEqual([handle.releaseWindowRequested, handle.affinityOutcome], [false, undefined], "handle");
+    await settledValue(h, h.environment.resolveOrderedTaskRelationWithinWindow({ handle, traceId: "trace", currentQuestionType: "coding",
+      sourceKind: "voice", activeMeetingTask: undefined, waitBudgetMs: 8_000 }), "Ordered operation");
+    const entries = lgCheckEntries(h, "no window");
+    expectEqual(lgLines(h), ["debug formal-operation-settled"], "entries");
+    expectEqual([handle.stageSelections, lgSummarySelections(entries[0]), lgUsable(entries[0]), h.executions.length],
+      [undefined, [null, null, null], [false, false, false], 0], "no model operation: no stage selection, no usable stage and no request");
+  } finally { h.restore(); }
+});
+
+// The first clause of the rule: a formal model operation. Production never builds
+// this handle; its consumers call the Ordered operation only with a release
+// window, and a handle with one always has its model fields. It is built by hand
+// here to pin the clause: with no release window, even an authorized operation
+// that reports a client error and has no usable stage is debug.
+test("LG1 control: an operation that is not a formal model operation is debug even when it reports a client error", { concurrency: false }, async () => {
+  const h = st183Harness();
+  try {
+    const clientError = () => ({ child: { unavailableReason: "no-active-child" },
+      parent: { unavailableReason: "provider-circuit-open", clientError: true } });
+    const resolve = (handle) => settledValue(h, h.environment.resolveOrderedTaskRelationWithinWindow({ handle, traceId: "trace",
+      currentQuestionType: "coding", sourceKind: "voice", activeMeetingTask: h.environment.contextManagerRef.current.getState().activeMeetingTask,
+      waitBudgetMs: 8_000 }), "Ordered operation");
+    const noWindow = await resolve({ releaseWindowRequested: false, authorizeOperation: sourceCurrent, readAffinityOutcome: clientError });
+    expectEqual([noWindow.terminalDisposition, noWindow.operationAuthorization.authorized, h.metadata.taskRelationOrderedResolutionClientError],
+      ["client-error", true, true], "the operation without a release window");
+    // The same outcome from a handle with a release window and a stage terminal is the warning.
+    const formal = await resolve({ releaseWindowRequested: true, authorizeOperation: sourceCurrent, affinityOutcome: Promise.resolve(clientError()) });
+    expectEqual([formal.terminalDisposition, formal.operationAuthorization.authorized], ["client-error", true], "the formal operation");
+    const entries = lgCheckEntries(h, "not a formal model operation");
+    expectEqual(entries.map((entry) => [entry.level, entry.event, entry.data.clientError, entry.data.operationAuthorized, lgUsable(entry)]),
+      [["debug", "formal-operation-settled", true, true, [false, false, false]],
+        ["warn", "formal-operation-settled", true, true, [false, false, false]]], "entries, in order");
+  } finally { h.restore(); }
+});
+
+// ---- LG1: the Type window of the Voice turn ----
+
+for (const [name, options, lines, business] of [
+  // Timeout table 3.1, row 2 for Type: still pending at the foreground deadline, the turn goes on with the prior type.
+  ["Timeout 2: Type never settles", { typeOutcome: () => new Promise(() => {}) },
+    ["warn foreground-deadline-finalized"], { releasedAt: [2_000], disposition: "deadline-expired-finalized" }],
+  // Row 5 for Type: its result arrives after the turn was released.
+  ["Timeout 2 then 5: Type settles 500 ms after the deadline", { typeAt: 2_500 },
+    ["warn foreground-deadline-finalized", "debug late-result-discarded"], { releasedAt: [2_000], disposition: "settled-after-deadline-shadow-only" }],
+  ["control: Type settles in time", {}, [], { releasedAt: [50], disposition: "type-settled-and-released-before-deadline" }],
+]) {
+  test(`LG1 Voice Type window, ${name}: ${lines.length ? lines.join(", then ") : "no entry"}`, { concurrency: false }, async () => {
+    const run = await runNoWindowVoice(options);
+    const { h } = run;
+    try {
+      expectEqual([run.release.releasedAt, h.metadata.questionTypeAdjudicationWaitDisposition, h.executions.length],
+        [business.releasedAt, business.disposition, 0], "release, recorded wait disposition and physical requests");
+      const entries = lgCheckEntries(h, name);
+      expectEqual(lgLines(h), lines, "entries, in order");
+      expectEqual(lgAlerts(h).length, lines.filter((line) => line.startsWith("warn")).length, "warnings and errors");
+      if (lines.length) expectEqual([entries[0].refs, entries[0].data], [{ traceId: "trace" }, { typeWindowRequested: true,
+        typeOutcomePending: true, relationWindowRequested: false, typeWaitBudgetMs: 2_000, foregroundBudgetMs: 2_000, waitMs: 2_000 }],
+      "the deadline entry");
+      if (lines.length > 1) expectEqual(entries[1].data, { waitMs: 2_500 }, "the late result entry");
+    } finally { h.restore(); }
+  });
+}
+
+test("LG1 Voice Type window: a late Type result carries its typed provider timeout and is still debug", { concurrency: false }, async () => {
+  const run = await runNoWindowVoice({ typeOutcome: (h) => settlesAt(h, 2_700, { enforcement: { authorized: false, reason: "candidate-missing" },
+    operationId: "type-operation", operationLeaseAuthorized: true, providerTimedOut: true, disposition: PLANTED.providerError }) });
+  try {
+    const entries = lgCheckEntries(run.h, "late timed-out Type");
+    expectEqual(lgLines(run.h), ["warn foreground-deadline-finalized", "debug late-result-discarded"], "entries");
+    expectEqual(entries[1].data, { providerTimedOut: true, leaseAuthorized: true, waitMs: 2_700 }, "the late result entry");
+  } finally { run.h.restore(); }
+});
+
+for (const [name, invalidate] of [
+  ["Stop", (h) => { stop(h); h.environment.runtimeActiveRef.current = false; }],
+  ["a newer question", (h) => { h.environment.logicalQuestionUnitRef.current = nextUnit(); }],
+]) {
+  test(`LG1 control Voice Type window: ${name} while Type is pending produces no warn at the deadline`, { concurrency: false }, async () => {
+    const h = st183Harness();
+    try {
+      const unit = shortUnit();
+      h.environment.logicalQuestionUnitRef.current = unit;
+      // The source lease of a Voice question, as scheduleQuestionRuntime builds it.
+      const lease = imports.createLogicalQuestionUnitLease(unit);
+      const handle = scheduleRelation(h, { unit, authorizeSourceOperation: () => {
+        const authorization = imports.authorizeLogicalQuestionUnitLease(lease, h.environment.logicalQuestionUnitRef.current);
+        return { authorized: authorization.authorized, reason: authorization.reason, mismatchedKey: authorization.authorized ? undefined : "source" };
+      } });
+      startVoiceFor(h, handle, unit, { typeOutcome: new Promise(() => {}) });
+      await h.clock.advanceTo(1_000);
+      invalidate(h);
+      await h.clock.advanceTo(6_000);
+      expectEqual(h.advisorCalls.length, 0, "Advisor handoffs");
+      lgCheckEntries(h, name);
+      expectEqual(lgAlerts(h), [], "warnings and errors");
+      expectEqual(lgLines(h), [], "entries");
+    } finally { h.restore(); }
+  });
+}
+
+// The entry reports the deadline finalization, not the handoff. The meeting stops
+// being active without an epoch change (a capture fault, as the native terminal
+// handler leaves it): the wait still ends at the deadline with Type pending, the
+// turn is not handed to the Advisor and its trace ends cancelled.
+test("LG1 Voice Type window: Type pending at the deadline of a meeting that is no longer active: the warning is made and the turn is not handed to the Advisor", { concurrency: false }, async () => {
+  const run = await runNoWindowVoice({ typeOutcome: () => new Promise(() => {}), during: async (h) => {
+    await h.clock.advanceTo(1_000);
+    h.environment.runtimeActiveRef.current = false;
+  } });
+  const { h } = run;
+  try {
+    expectEqual([h.advisorCalls.length, h.metadata.questionTypeAdjudicationWaitDisposition,
+      h.events.filter((event) => event.finish).map((event) => event.finish.slice(1))],
+    [0, "deadline-expired-finalized", [["cancelled", "Meeting stopped during question type wait."]]],
+    "Advisor handoffs, recorded wait disposition and trace terminal");
+    const entries = lgCheckEntries(h, "inactive meeting");
+    expectEqual(lgLines(h), ["warn foreground-deadline-finalized"], "entries");
+    // A known limit, stated in the ledger: the branch holds no typed fact of the handoff, so this is still a warning.
+    assert.match(ledgerRowOf(entries[0]).knownLimits.join(" "), /no longer active.*is still warn/, "the limit is in the ledger");
+    expectEqual(entries[0].data, { typeWindowRequested: true, typeOutcomePending: true, relationWindowRequested: false,
+      typeWaitBudgetMs: 2_000, foregroundBudgetMs: 2_000, waitMs: 2_000 }, "the deadline entry");
+  } finally { h.restore(); }
+});
+
+test("LG1 Voice formal window: Type pending and every Relation stage lost in a meeting that is no longer active: the two warnings are made and the turn is not handed to the Advisor", { concurrency: false }, async () => {
+  const h = st183Harness();
+  try {
+    const handle = scheduleEntry(h, "voice");
+    startVoiceResolution(h, handle, { outcome: new Promise(() => {}) });
+    await h.clock.advanceTo(1_000);
+    h.environment.runtimeActiveRef.current = false;
+    await h.clock.advanceTo(2 * STAGE_MS + 100);
+    expectEqual([h.advisorCalls.length, h.metadata.questionTypeAdjudicationWaitDisposition,
+      h.events.filter((event) => event.finish).map((event) => event.finish.slice(1))],
+    [0, "deadline-expired-finalized", [["cancelled", "Meeting stopped during question type wait."]]],
+    "Advisor handoffs, recorded wait disposition and trace terminal");
+    lgCheckEntries(h, "inactive meeting, formal window");
+    expectEqual(lgLines(h), ["warn formal-operation-settled", "warn foreground-deadline-finalized"], "entries");
+  } finally { h.restore(); }
+});
+
+test("LG1 Voice: Type pending at the deadline and a formal Relation that lost all evidence are two operations and two warnings, one each", { concurrency: false }, async () => {
+  const h = st183Harness();
+  try {
+    const handle = scheduleEntry(h, "voice");
+    startVoiceResolution(h, handle, { outcome: new Promise(() => {}) });
+    await h.clock.advanceTo(2 * STAGE_MS + 100);
+    expectEqual(h.advisorCalls.length, 1, "Advisor handoffs");
+    lgCheckEntries(h, "two operations");
+    expectEqual(lgLines(h), ["warn formal-operation-settled", "warn foreground-deadline-finalized"], "entries");
+  } finally { h.restore(); }
+});
+
+// ---- LG1: observation Relation (Runtime Cross-checks), one entry per stage settle ----
+
+for (const [name, options, lines, selections, tiers] of [
+  // Timeout table 3.1, row 4: an extra cross-check that ends at its deadline with nothing usable.
+  ["Timeout 4: the Affinity observation and its Canonical follow-up both end at their deadline",
+    { until: 2 * STAGE_MS + 100 }, ["warn parent-affinity", "warn canonical"], [DEADLINE, DEADLINE]],
+  ["a valid Affinity observation, then its Canonical follow-up ends at its deadline",
+    { observed: [20, PARENT_INDEPENDENT], until: 20 + 2 * STAGE_MS + 100 }, ["debug parent-affinity", "warn canonical"], ["intelligent-valid", DEADLINE]],
+  // Timeout table 3.1, row 1 for an observation: the deadline reason with a timely Fast is the expected switch, not a loss.
+  ["Timeout 1: a timely Fast is selected at the deadline in both observation stages",
+    { until: 2 * STAGE_MS + 100, during: (h) => {
+      h.clock.setTimeout(() => completeFastAffinity(h), 879);
+      h.clock.setTimeout(() => completeCandidate(candidate(h, "canonical", "fast"), { rawOutput: canonicalOutput("followup-parent") }), STAGE_MS + 600);
+    } }, ["debug parent-affinity", "debug canonical"], [DEADLINE, DEADLINE], ["fast", "fast"]],
+]) {
+  test(`LG1 observation Relation, ${name}: the main release is what it is without the observation`, { concurrency: false }, async () => {
+    const baseline = await runNoWindowVoice({ until: options.until });
+    baseline.h.restore();
+    const run = await runNoWindowVoice({ crossChecks: true, ...options });
+    const { h } = run;
+    try {
+      // The observation changed nothing the turn released.
+      assert.deepEqual(run.release, baseline.release, "release with the observation running");
+      expectEqual(baseline.h.diagnosticLog.entries(), [], "no entry without the observation");
+      const entries = lgCheckEntries(h, name);
+      expectEqual(entries.map((entry) => `${entry.level} ${entry.data.stage}`), lines, "one entry per stage settle");
+      expectEqual(entries.map((entry) => [entry.event, entry.refs.traceId, entry.data.disposition, entry.data.current, entry.data.selection]),
+        selections.map((selection) => ["observation-stage-settled", "trace", "completed", true, selection]), "stage outcome");
+      // A selected tier and a parse-valid result come together; with neither, the stage had nothing usable.
+      expectEqual(entries.map((entry) => [entry.data.tier ?? null, entry.data.parseValid]),
+        lines.map((line, index) => line.startsWith("warn") ? [null, false] : [tiers?.[index] ?? "intelligent", true]), "selected tier and parse result");
+      expectEqual(lgStageReasons(h).slice(1), selections, "selection reasons in the trace");
+    } finally { h.restore(); }
+  });
+}
+
+test("LG1 LG4 observation Relation: both candidates end with a provider error before the deadline: debug, and neither the error text, the question nor the provider credential is in the entry", { concurrency: false }, async () => {
+  const h = st183Harness({ crossChecks: true });
+  try {
+    lgPlantSecret(h);
+    // The question is observed only: no release window is requested for this turn.
+    h.environment.scheduleTaskRelationAdjudication({ turn: { speaker: "them", text: QUESTION }, traceId: "trace",
+      turnGateAction: "phase-control", logicalQuestionUnit, lexical: { type: "coding" }, sourceKind: "voice",
+      authorizeSourceOperation: sourceCurrent });
+    await h.clock.advanceTo(500);
+    expectEqual(h.executions.map((execution) => execution.selectedProvider.variables.api_key), [PLANTED.secret, PLANTED.secret],
+      "the credential is in the request the provider layer was given");
+    for (const execution of candidates(h, "affinity")) completeCandidate(execution, { rawOutput: PLANTED.providerError,
+      providerOutcome: { status: "failed", failureClass: "provider-http", safeErrorSummary: PLANTED.providerError } });
+    await h.clock.advanceTo(600);
+    const entries = lgCheckEntries(h, "observation ended unusable");
+    // Ended unusable, and not because of the deadline: an observation stage warns only for the deadline.
+    expectEqual(entries.map((entry) => [entry.level, entry.event, entry.refs, entry.data]), [["debug", "observation-stage-settled", { traceId: "trace" },
+      { stage: "parent-affinity", disposition: "completed", current: true, selection: "candidates-ended-unusable", parseValid: false,
+        providerStatus: "failed", durationMs: 500 }]], "entry");
+  } finally { h.restore(); }
+});
+
+test("LG1 control observation Relation: observation stages superseded by the formal operation of the same question are debug, and the one warning is the formal operation's own", { concurrency: false }, async () => {
+  const h = st183Harness({ crossChecks: true });
+  try {
+    // An observation of the question, then the same question as a formal operation: the formal Affinity supersedes the
+    // observation Affinity at 100 ms, and the formal Canonical supersedes the observation's Canonical follow-up at 4100 ms.
+    h.environment.scheduleTaskRelationAdjudication({ turn: { speaker: "them", text: QUESTION }, traceId: SAME_REVISION_TRACE,
+      turnGateAction: "phase-control", logicalQuestionUnit, lexical: { type: "coding" }, sourceKind: "voice",
+      authorizeSourceOperation: sourceCurrent });
+    await h.clock.advanceTo(100);
+    const handle = scheduleEntry(h, "screen");
+    const wait = watch(h, startScreenConsumer(h, handle));
+    // No candidate answers: the formal operation loses both stages at their deadlines.
+    await h.clock.advanceTo(100 + 2 * STAGE_MS + 100);
+    expectEqual([wait.state, wait.value?.terminalDisposition], ["resolved", "resolved"], "formal consumer");
+    const entries = lgCheckEntries(h, "superseded observation");
+    expectEqual(entries.map((entry) => [entry.level, entry.event, entry.refs.traceId, entry.data.stage,
+      entry.data.disposition ?? null, entry.data.current ?? null, entry.data.selection ?? null]), [
+      ["debug", "observation-stage-settled", SAME_REVISION_TRACE, "parent-affinity", "superseded", false, null],
+      ["debug", "observation-stage-settled", SAME_REVISION_TRACE, "canonical", "superseded", false, null],
+      ["warn", "formal-operation-settled", "trace", "source-topology-null-hypothesis", null, null, null],
+    ], "entries, in order");
+  } finally { h.restore(); }
+});
+
+// ---- LG2: the log level changes what is logged and nothing else ----
+
+// The levels a threshold lets through, written out.
+const LG_PASSES = { error: ["error"], warn: ["error", "warn"], info: ["error", "warn", "info"],
+  debug: ["error", "warn", "info", "debug"], trace: ["error", "warn", "info", "debug", "trace"] };
+const lgPassing = (level, lines) => lines.filter((line) => LG_PASSES[level].includes(line.split(" ")[0]));
+const LG_REASON_KEYS = ["taskRelationChildAffinitySelectionReason", "taskRelationParentAffinitySelectionReason",
+  "taskRelationSplitCanonicalSelectionReason"];
+// A recorder row as the recorder was handed it.
+const lgRecorded = (h) => plain(h.recorded);
+
+for (const entry of ["voice", "screen", "correction"]) {
+  test(`LG2 ${entry} formal Relation at the five levels x Debug x Recording x Cross-checks: the result, the release, the whole trace, every physical request and every recorder row are identical; the selection reason is the same key and value in all forty runs`, { concurrency: false }, async () => {
+    const runs = [];
+    for (const logLevel of DIAGNOSTIC_LOG_SPY_LEVELS) for (const switches of SWITCH_COMBINATIONS) {
+      const run = await runFormalAlone({ entry, ...switches, logLevel });
+      run.h.restore();
+      runs.push({ logLevel, switches, ...run });
+    }
+    expectEqual(runs.length, 40, "runs");
+    const reference = runs.find((run) => run.logLevel === "info" && !run.switches.debug && !run.switches.recording && !run.switches.crossChecks);
+    const recordedReference = lgRecorded(runs.find((run) => run.logLevel === "info" && run.switches.recording).h);
+    // The business result of the reference, stated, so that "identical" is identical to something.
+    expectEqual([reference.formal.relation, reference.formal.trace.taskRelationOrderedResolutionStage, reference.formal.requests.length,
+      reference.formal.requests.map((request) => request.timeoutMs)],
+    ["new-parent", "canonical-relation", 4, [STAGE_MS, STAGE_MS, STAGE_MS, STAGE_MS]], "the formal operation at info with every switch off");
+    // The one additive key of this commit, per stage that ran.
+    expectEqual(LG_REASON_KEYS.map((key) => reference.formal.trace[key]), [undefined, "intelligent-valid", "intelligent-valid"],
+      "selection reasons in the trace");
+    expectEqual(recordedReference.filter((row) => row.kind === "relation-decision" &&
+      row.metadata.taskRelationSplitCanonicalSelectionReason !== undefined).map((row) =>
+      LG_REASON_KEYS.map((key) => row.metadata[key] ?? null)).at(-1), [null, "intelligent-valid", "intelligent-valid"],
+    "selection reasons in the recorded Relation decision");
+    for (const { logLevel, switches, formal, h } of runs) {
+      const name = `${logLevel} ${JSON.stringify(switches)}`;
+      assert.deepEqual(formal, reference.formal, `result, release, trace, requests and handle with ${name}`);
+      assert.deepEqual(lgRecorded(h), switches.recording ? recordedReference : [], `recorder rows with ${name}`);
+      // Each switch still feeds only its own sink; the level feeds only the log.
+      expectEqual([h.debugOutputs.length > 0, h.recorded.length > 0, h.clock.timers.size], [switches.debug, switches.recording, 0],
+        `Debug sink, recorder and timers with ${name}`);
+      for (const logged of lgCheckEntries(h, name)) expectEqual(logged.refs.traceId, "trace", `entry trace with ${name}`);
+      expectEqual(lgLines(h), lgPassing(logLevel, ["debug formal-operation-settled"]), `log entries with ${name}`);
+      // LG4: the operation made one logger call. Below its level that call is one comparison: nothing was built,
+      // queued or sent, and the boundary was never called.
+      const counters = h.diagnosticLog.snapshot();
+      const passes = LG_PASSES[logLevel].includes("debug");
+      expectEqual([counters.filtered, counters.accepted, counters.ipcCalls, counters.ipcEntries, h.diagnosticLog.mirrored.length],
+        passes ? [0, 1, 1, 1, 1] : [1, 0, 0, 0, 0], `logger work with ${name}`);
+    }
+  });
+}
+
+// The path that warns: both stages lost at their deadline. `at` is where the consumer's wait ends.
+async function lgRunLostEvidence({ entry, debug, recording, crossChecks, logLevel, logDelivery }) {
+  const h = st183Harness({ debug, recording, crossChecks, logLevel, logDelivery });
+  try {
+    const handle = scheduleEntry(h, entry);
+    const started = await startConsumerInOrder(h, handle, { entry });
+    h.clock.setTimeout(() => completeCandidate(candidate(h, "affinity", "intelligent"),
+      { rawOutput: PLANTED.providerError, providerOutcome: { status: "success", requestId: "candidate-request" } }), 700);
+    await h.clock.advanceTo(3 * STAGE_MS);
+    return { h, business: plain({
+      relation: finalRelation(h, entry, started),
+      consumer: entry === "voice" ? voiceRelease(h) : started.wait?.value,
+      trace: h.metadata,
+      traceUpdates: h.events,
+      requests: h.executions.map((execution) => ({ request: execution.request, tier: tierOf(execution),
+        selectedProvider: execution.selectedProvider, timeoutMs: execution.timeoutMs, dispatchedAt: execution.dispatchedAt - 10_000,
+        identity: execution.executionIdentity, aborted: execution.signal.aborted })),
+      critical: normalizeRuntimeCriticalEvents(h.criticalEvents.events(), { purpose: "formal" }),
+      timersLeft: h.clock.timers.size,
+    }) };
+  } catch (error) {
+    h.restore();
+    throw error;
+  }
+}
+
+for (const entry of ["voice", "screen", "correction"]) {
+  test(`LG2 LG3 ${entry} formal Relation that loses all model evidence, at the five levels x Debug x Recording x Cross-checks: the fallback, every trace update, every physical request, the critical facts and every recorder row are identical; the warning is filtered only at error`, { concurrency: false }, async () => {
+    const runs = [];
+    for (const logLevel of DIAGNOSTIC_LOG_SPY_LEVELS) for (const switches of SWITCH_COMBINATIONS) {
+      const run = await lgRunLostEvidence({ entry, ...switches, logLevel });
+      run.h.restore();
+      runs.push({ logLevel, switches, ...run });
+    }
+    const reference = runs.find((run) => run.logLevel === "info" && !run.switches.debug && !run.switches.recording && !run.switches.crossChecks);
+    const recordedReference = lgRecorded(runs.find((run) => run.logLevel === "info" && run.switches.recording).h);
+    const trace = reference.business.trace;
+    // What the reference is: the null-hypothesis fallback after an invalid Intelligent Affinity cached at 700 ms and nothing else.
+    expectEqual([trace.taskRelationOrderedResolutionStage, trace.taskRelationOrderedResolutionAffinityParentDisposition,
+      trace.taskRelationOrderedResolutionCanonicalDisposition, reference.business.requests.length,
+      reference.business.requests.map((request) => [request.tier, request.timeoutMs, request.aborted])],
+    [NULL_HYPOTHESIS, "malformed-json", DEADLINE, 4,
+      [["intelligent", STAGE_MS, true], ["fast", STAGE_MS, true], ["intelligent", STAGE_MS, true], ["fast", STAGE_MS, true]]],
+    "the reference run");
+    // The physical request facts the trace and the recorder hold for the cached candidate are the candidate's own.
+    expectEqual([trace.taskRelationParentAffinityParseDisposition, trace.taskRelationParentAffinityProviderOutcomeStatus,
+      trace.taskRelationParentAffinityProviderRequestId, trace.taskRelationParentAffinitySelectedProviderTier],
+    ["malformed-json", "success", "candidate-request", undefined], "physical request facts in the trace");
+    expectEqual(LG_REASON_KEYS.map((key) => trace[key]), [undefined, DEADLINE, DEADLINE], "selection reasons in the trace");
+    const candidateRows = recordedReference.filter((row) => row.kind === "lifecycle" && row.stage === "task-relation-provider-candidate");
+    expectEqual(candidateRows.filter((row) => row.taskRelationCandidateEvent === "completed" && row.taskRelationCandidateParseValid !== undefined)
+      .map((row) => [row.taskRelationCandidateTier, row.taskRelationCandidateParseDisposition, row.taskRelationParentAffinityProviderOutcomeStatus]),
+    [["intelligent", "malformed-json", "success"]], "the recorded completion of the cached candidate");
+    expectEqual(candidateRows.some((row) => "selectionReason" in row), false, "no candidate row carries the reason: it is on the selection");
+    for (const { logLevel, switches, business, h } of runs) {
+      const name = `${logLevel} ${JSON.stringify(switches)}`;
+      assert.deepEqual(business, reference.business, `fallback, trace updates, requests, critical facts and timers with ${name}`);
+      assert.deepEqual(lgRecorded(h), switches.recording ? recordedReference : [], `recorder rows with ${name}`);
+      lgCheckEntries(h, name);
+      expectEqual(lgLines(h), lgPassing(logLevel, ["warn formal-operation-settled",
+        ...(entry === "voice" ? ["debug foreground-deadline-finalized"] : [])]), `log entries with ${name}`);
+      if (logLevel !== "error") expectEqual(lgSummarySelections(lgEntries(h)[0]), [null, [DEADLINE, false], [DEADLINE, false]],
+        `the summary with ${name}`);
+      // The warning itself costs one logger call. At the threshold that filters it, nothing was built, queued or sent.
+      const counters = h.diagnosticLog.snapshot();
+      if (logLevel === "error") expectEqual([counters.accepted, counters.ipcCalls, h.diagnosticLog.mirrored.length], [0, 0, 0],
+        `logger work with ${name}`);
+    }
+  });
+}
+
+// ---- LG2: a failing delivery changes nothing either ----
+//
+// The logger's delivery boundary rejects the call, never answers it, answers
+// something that is not a receipt, or throws. The call sites never read a
+// delivery result, so the operation is what it is with a working delivery: the
+// same result, trace updates, physical requests, critical facts, recorder rows
+// and timers, and the same entries handed to the logger. What differs is the
+// logger's own count of what it could not deliver.
+const LG_DELIVERY_SWITCHES = [SWITCH_COMBINATIONS[0], SWITCH_COMBINATIONS[SWITCH_COMBINATIONS.length - 1]];
+function lgExpectUndelivered(h, name) {
+  const handedOver = lgEntries(h).length;
+  const counters = h.diagnosticLog.snapshot();
+  expectEqual([counters.undeliveredEntries, counters.ipcFailures + counters.ipcTimeouts + counters.ipcMalformedReceipts,
+    counters.native.accepted, counters.queued, counters.inFlight],
+  [handedOver, counters.ipcCalls, 0, 0, false], `undelivered entries, failed calls and the queue with ${name}`);
+}
+for (const entry of ["voice", "screen", "correction"]) {
+  test(`LG2 ${entry} formal Relation with the log delivery failing (${DIAGNOSTIC_LOG_SPY_FAILING_DELIVERIES.join(", ")}) at the five levels, every switch off and every switch on: the lost-evidence fallback and the resolved operation are what they are with a working delivery, and so are the entries handed to the logger`, { concurrency: false }, async () => {
+    expectEqual(LG_DELIVERY_SWITCHES, [{ debug: false, recording: false, crossChecks: false }, { debug: true, recording: true, crossChecks: true }],
+      "switch combinations");
+    for (const switches of LG_DELIVERY_SWITCHES) {
+      const lostReference = await lgRunLostEvidence({ entry, ...switches, logLevel: "info" });
+      lostReference.h.restore();
+      const resolvedReference = await runFormalAlone({ entry, ...switches, logLevel: "info" });
+      resolvedReference.h.restore();
+      expectEqual([lostReference.h.diagnosticLog.delivery, lostReference.h.diagnosticLog.snapshot().undeliveredEntries], ["ok", 0],
+        "the reference delivers");
+      for (const logDelivery of DIAGNOSTIC_LOG_SPY_FAILING_DELIVERIES) for (const logLevel of DIAGNOSTIC_LOG_SPY_LEVELS) {
+        const name = `${logDelivery} ${logLevel} ${JSON.stringify(switches)}`;
+        const lost = await lgRunLostEvidence({ entry, ...switches, logLevel, logDelivery });
+        lost.h.restore();
+        assert.deepEqual(lost.business, lostReference.business, `fallback, trace updates, requests, critical facts and timers with ${name}`);
+        assert.deepEqual(lgRecorded(lost.h), lgRecorded(lostReference.h), `recorder rows with ${name}`);
+        lgCheckEntries(lost.h, name);
+        expectEqual(lgLines(lost.h), lgPassing(logLevel, ["warn formal-operation-settled",
+          ...(entry === "voice" ? ["debug foreground-deadline-finalized"] : [])]), `entries handed to the logger with ${name}`);
+        lgExpectUndelivered(lost.h, name);
+        const resolved = await runFormalAlone({ entry, ...switches, logLevel, logDelivery });
+        resolved.h.restore();
+        assert.deepEqual(resolved.formal, resolvedReference.formal, `result, release, trace, requests and handle with ${name}`);
+        assert.deepEqual(lgRecorded(resolved.h), lgRecorded(resolvedReference.h), `recorder rows of the resolved operation with ${name}`);
+        lgCheckEntries(resolved.h, name);
+        expectEqual(lgLines(resolved.h), lgPassing(logLevel, ["debug formal-operation-settled"]),
+          `entries of the resolved operation handed to the logger with ${name}`);
+        lgExpectUndelivered(resolved.h, name);
+        expectEqual([lost.h.clock.timers.size, resolved.h.clock.timers.size], [0, 0], `timers left with ${name}`);
+      }
+    }
+  });
+}
+
+test("LG2 Voice Type window and observation Relation with the log delivery failing: the release is what it is with a working delivery, and the same entries are handed to the logger", { concurrency: false }, async () => {
+  // Type never settles; with Cross-checks on, the observation Affinity and its Canonical follow-up end at their deadlines.
+  const scenario = { crossChecks: true, typeOutcome: () => new Promise(() => {}), until: 2 * STAGE_MS + 100 };
+  const reference = await runNoWindowVoice(scenario);
+  reference.h.restore();
+  const lines = lgLines(reference.h);
+  expectEqual(lines, ["warn foreground-deadline-finalized", "warn observation-stage-settled", "warn observation-stage-settled"],
+    "entries with a working delivery");
+  // runNoWindowVoice builds its own harness: the delivery is set on the spy factory for the run.
+  for (const logDelivery of DIAGNOSTIC_LOG_SPY_FAILING_DELIVERIES) {
+    const h = st183Harness({ crossChecks: true, logDelivery });
+    try {
+      const unit = shortUnit();
+      h.environment.logicalQuestionUnitRef.current = unit;
+      const handle = scheduleRelation(h, { unit, authorizeSourceOperation: sourceCurrent });
+      startVoiceFor(h, handle, unit, { typeOutcome: new Promise(() => {}) });
+      await h.clock.advanceTo(scenario.until);
+      assert.deepEqual(voiceRelease(h), reference.release, `release with ${logDelivery}`);
+      lgCheckEntries(h, logDelivery);
+      expectEqual(lgLines(h), lines, `entries handed to the logger with ${logDelivery}`);
+      lgExpectUndelivered(h, logDelivery);
+      expectEqual(h.clock.timers.size, 0, `timers left with ${logDelivery}`);
+    } finally { h.restore(); }
+  }
+});
+
+test("LG2 178A critical facts at the five levels x Debug x Recording x Cross-checks: the formal facts, their order and times, the observation facts, the saved journal and the formal release are identical at every level", { concurrency: false }, async () => {
+  // One run per switch combination at each level. "info" is the reference for the facts; "trace" holds every log line.
+  const runs = {};
+  for (const logLevel of DIAGNOSTIC_LOG_SPY_LEVELS) for (const switches of SWITCH_COMBINATIONS) {
+    runs[`${logLevel} ${JSON.stringify(switches)}`] = await aeRunSwitches({ ...switches, logLevel });
+  }
+  const at = (logLevel, switches) => runs[`${logLevel} ${JSON.stringify(switches)}`];
+  const everyOff = at("info", SWITCH_COMBINATIONS[0]);
+  expectEqual([everyOff.formal.length, everyOff.business.release.settlement?.relation], [8, "new-parent"], "the reference run");
+  for (const logLevel of DIAGNOSTIC_LOG_SPY_LEVELS) for (const switches of SWITCH_COMBINATIONS) {
+    const name = `${logLevel} ${JSON.stringify(switches)}`;
+    const run = at(logLevel, switches), same = at("info", switches);
+    // Across the switches: what AE3 states. Across the levels: everything.
+    assert.deepEqual(run.formal, everyOff.formal, `formal facts with ${name}`);
+    assert.deepEqual(run.formalTimes, everyOff.formalTimes, `formal availability times with ${name}`);
+    assert.deepEqual(run.business, everyOff.business, `formal requests and release with ${name}`);
+    assert.deepEqual([run.observation, run.stats, run.timersLeft], [same.observation, same.stats, 0],
+      `observation facts, stream counters and timers with ${name}`);
+    expectEqual([run.journal?.status, run.journal?.eventCount, run.journal?.contiguous],
+      [same.journal?.status, same.journal?.eventCount, same.journal?.contiguous], `saved journal with ${name}`);
+    expectEqual(run.events.map((event) => [event.fact, event.purpose, event.refs.requestId, event.occurredAt]),
+      same.events.map((event) => [event.fact, event.purpose, event.refs.requestId, event.occurredAt]), `every fact with ${name}`);
+    // The log differs by level alone: the lines of the trace-level run, filtered.
+    expectEqual(run.diagnosticLog, lgPassing(logLevel, at("trace", switches).diagnosticLog), `log entries with ${name}`);
+  }
+  // What the log holds at trace: the formal summary, and with Cross-checks the observation stage settles.
+  expectEqual(at("trace", SWITCH_COMBINATIONS[0]).diagnosticLog, ["debug formal-operation-settled"], "log at trace with every switch off");
+  expectEqual(at("trace", { debug: false, recording: false, crossChecks: true }).diagnosticLog,
+    ["debug observation-stage-settled", "debug observation-stage-settled", "debug formal-operation-settled"],
+    "log at trace with Cross-checks on");
 });

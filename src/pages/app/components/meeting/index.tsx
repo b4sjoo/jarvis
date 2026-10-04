@@ -2047,6 +2047,7 @@ export const MeetingAssistant = ({
                 diagnosticLogLevel={meeting.settings.diagnosticLogLevel}
                 onDiagnosticLogLevelChange={meeting.setDiagnosticLogLevel}
                 diagnosticLogLevelStatus={meeting.diagnosticLogLevelStatus}
+                diagnosticLogLoss={meeting.diagnosticLogLoss}
                 nativeStallDiagnosticsEnabled={meeting.settings.nativeStallDiagnosticsEnabled}
                 onNativeStallDiagnosticsChange={meeting.setNativeStallDiagnosticsEnabled}
                 nativeStallDiagnostics={meeting.nativeStallDiagnostics}
@@ -4348,6 +4349,7 @@ const ConfigurationsPanel = ({
   diagnosticLogLevel,
   onDiagnosticLogLevelChange,
   diagnosticLogLevelStatus,
+  diagnosticLogLoss,
   nativeStallDiagnosticsEnabled,
   onNativeStallDiagnosticsChange,
   nativeStallDiagnostics,
@@ -4404,6 +4406,18 @@ const ConfigurationsPanel = ({
   diagnosticLogLevel: MeetingDiagnosticLogLevel;
   onDiagnosticLogLevelChange: (level: MeetingDiagnosticLogLevel) => void;
   diagnosticLogLevelStatus?: DiagnosticLogLevelProjection;
+  // What the diagnostic log lost, as the Hook read it from the logger's
+  // counters at its latest render. A count of zero is not shown.
+  diagnosticLogLoss?: {
+    frontendShed: number;
+    frontendRefusedEntries: number;
+    frontendDetailLeftOut: number;
+    frontendInternalErrors: number;
+    frontendUndelivered: number;
+    nativeRejected: number;
+    nativeDropped: number;
+    nativeWriteFailures: number;
+  };
   nativeStallDiagnosticsEnabled: boolean;
   onNativeStallDiagnosticsChange: (enabled: boolean) => void;
   // Read-only: what the Hook knows about the native reply. Absent means unknown.
@@ -4773,17 +4787,17 @@ const ConfigurationsPanel = ({
                 onChange={onDiagnosticLogLevelChange}
               />
               <div className="text-[10px] text-muted-foreground">
-                Sets the threshold of the diagnostic log: entries at the
-                selected level and every more severe level go to the terminal
-                and to the local log files, which keep at most 50 MiB or 14
-                days. In this version the diagnostic log holds only the errors
-                of the native system audio commands, so every level gives the
-                same output. Saved separately from Debug Mode: changing one
-                never changes the other. Log Level controls no other terminal
-                or console output: not the Debug Mode trace printing, not
-                Preparation, the focus window or native prints, and not Session
-                Recording or Native Stall Diagnostics files. It starts no model
-                request, sampler or capture.
+                Sets the threshold of the diagnostic log: entries at this level
+                and every more severe level go to the terminal and to local log
+                files, which keep at most 50 MiB or 14 days. The log currently
+                holds native system-audio command errors and one summary for
+                each Relation wait, Voice Type deadline, failed or abandoned
+                Advisor answer, Fact Risk Review, Meeting Metadata inference
+                and Whiteboard check. Screen answers are not logged yet. Saved
+                separately from Debug Mode. Log Level does not control Debug
+                Mode trace printing, Preparation, the focus window, native
+                prints, Session Recording or Native Stall Diagnostics files,
+                and starts no model request, sampler or capture.
               </div>
               {diagnosticLogLevelStatus ? (
                 <div
@@ -4800,6 +4814,46 @@ const ConfigurationsPanel = ({
                     : diagnosticLogLevelStatus.phase === "failed"
                       ? `Status: native did not confirm ${diagnosticLogLevelStatus.level}. Select ${diagnosticLogLevelStatus.level} again to retry. Reason: ${diagnosticLogLevelStatus.message}`
                       : `Status: ${diagnosticLogLevelStatus.level} requested, waiting for the native reply. Not yet confirmed on native.`}
+                </div>
+              ) : null}
+              {diagnosticLogLoss &&
+              (diagnosticLogLoss.frontendShed > 0 ||
+                diagnosticLogLoss.frontendRefusedEntries > 0 ||
+                diagnosticLogLoss.frontendDetailLeftOut > 0 ||
+                diagnosticLogLoss.frontendInternalErrors > 0 ||
+                diagnosticLogLoss.frontendUndelivered > 0 ||
+                diagnosticLogLoss.nativeRejected > 0 ||
+                diagnosticLogLoss.nativeDropped > 0 ||
+                diagnosticLogLoss.nativeWriteFailures > 0) ? (
+                <div className="break-words text-[10px] text-red-600">
+                  {`Log loss: ${[
+                    diagnosticLogLoss.frontendShed > 0
+                      ? `frontend shed ${diagnosticLogLoss.frontendShed}`
+                      : null,
+                    diagnosticLogLoss.frontendRefusedEntries > 0
+                      ? `frontend refused ${diagnosticLogLoss.frontendRefusedEntries}`
+                      : null,
+                    diagnosticLogLoss.frontendDetailLeftOut > 0
+                      ? `frontend detail left out ${diagnosticLogLoss.frontendDetailLeftOut}`
+                      : null,
+                    diagnosticLogLoss.frontendInternalErrors > 0
+                      ? `frontend internal errors ${diagnosticLogLoss.frontendInternalErrors}`
+                      : null,
+                    diagnosticLogLoss.frontendUndelivered > 0
+                      ? `frontend not delivered ${diagnosticLogLoss.frontendUndelivered}`
+                      : null,
+                    diagnosticLogLoss.nativeRejected > 0
+                      ? `native rejected ${diagnosticLogLoss.nativeRejected}`
+                      : null,
+                    diagnosticLogLoss.nativeDropped > 0
+                      ? `native dropped ${diagnosticLogLoss.nativeDropped}`
+                      : null,
+                    diagnosticLogLoss.nativeWriteFailures > 0
+                      ? `native write failures ${diagnosticLogLoss.nativeWriteFailures}`
+                      : null,
+                  ]
+                    .filter(Boolean)
+                    .join(", ")}.`}
                 </div>
               ) : null}
             </div>

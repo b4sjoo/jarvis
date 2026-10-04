@@ -12,6 +12,8 @@ import * as admission from "../src/lib/meeting/runtime-inference-provider-admiss
 import * as response from "../src/lib/meeting/runtime-inference-response.js";
 import { RuntimeInferenceOperationRuntime } from "../src/lib/meeting/runtime-inference-runtime.js";
 import { MeetingContextManager } from "../src/lib/meeting/context-manager.js";
+import { assertEntryInLedger, assertNothingPlanted, createDiagnosticLogSpy, DIAGNOSTIC_LOG_SPY_FAILING_DELIVERIES, PLANTED, PLANTED_VALUES,
+  type DiagnosticLogSpyDelivery } from "./helpers/diagnostic-log-spy.js";
 
 const source = readFileSync("src/hooks/useMeetingAssistant.ts", "utf8");
 const ast = ts.createSourceFile("hook.ts", source, ts.ScriptTarget.Latest, true);
@@ -269,7 +271,10 @@ test("PC4 the known-company cross-check and the Whiteboard observation send the 
 // provider request and the sinks are substituted.
 // ---------------------------------------------------------------------------
 function inFlightMetadata(mode: "shadow" | "enforcement", { knownCompany = true, switchedOn = true,
-  coordinator }: { knownCompany?: boolean; switchedOn?: boolean; coordinator?: admission.RuntimeInferenceProviderAdmissionCoordinator } = {}) {
+  coordinator, logLevel = "trace", logDelivery }: { knownCompany?: boolean; switchedOn?: boolean; coordinator?: admission.RuntimeInferenceProviderAdmissionCoordinator;
+    logLevel?: "error" | "warn" | "info" | "debug" | "trace"; logDelivery?: DiagnosticLogSpyDelivery } = {}) {
+  // Task 178 LG: the settle names the logger, so the environment supplies it by hand.
+  const diagnosticLog = createDiagnosticLogSpy({ threshold: logLevel, delivery: logDelivery });
   const manager = new MeetingContextManager();
   const startedAt = manager.getState().startedAt;
   const opening = { id: "opening", speaker: "them" as const, text: "I am the recruiter from Oracle.", source: "system-audio" as const,
@@ -282,13 +287,14 @@ function inFlightMetadata(mode: "shadow" | "enforcement", { knownCompany = true,
   const crossChecks = { current: switchedOn };
   const runtimeEpoch = { current: 1 };
   const runtime = new RuntimeInferenceOperationRuntime<any, any>("meeting-metadata-inference", coordinator);
-  const requests: Array<{ args: any; answer: (rawOutput: string) => void }> = [];
+  const requests: Array<{ args: any; answer: (rawOutput: string) => void; settle: (result: unknown) => void }> = [];
   const trace: Record<string, unknown> = {};
   const stateUpdates: unknown[] = [], decisions: any[] = [], steps: unknown[][] = [];
   let commits = 0;
   const commit = manager.commitRuntimeInferredTargetCompany.bind(manager);
   manager.commitRuntimeInferredTargetCompany = (input) => { commits += 1; return commit(input); };
   const env = { ...metadata, ...inference, ...health, ...admission, ...response, hashTaxonomySourceTurnIds, Date,
+    logDiagnostic: diagnosticLog.logDiagnostic,
     shutdownRequestedRef: { current: false }, debugModeRef: { current: false }, runtimeCrossChecksEnabledRef: crossChecks,
     contextManagerRef: { current: manager }, runtimeEpochRef: runtimeEpoch,
     taxonomyAdjudicationSettingsRef: { current: { meetingMetadataMode: mode } },
@@ -305,12 +311,14 @@ function inFlightMetadata(mode: "shadow" | "enforcement", { knownCompany = true,
     // The provider answers when the test says so; the output goes through the real parser.
     requestMeetingMetadataInference: (args: any) => new Promise((resolve) => {
       requests.push({ args, answer: (rawOutput) => resolve({ rawOutput, providerDisposition: "completed-with-content",
-        parseDisposition: "valid-json", parsed: metadata.parseMeetingMetadataInferenceOutput(rawOutput, args.request) }) });
+        parseDisposition: "valid-json", parsed: metadata.parseMeetingMetadataInferenceOutput(rawOutput, args.request) }),
+        // Any other terminal of the physical request, as requestMeetingMetadataInference maps it.
+        settle: resolve });
     }),
     setState: (update: unknown) => stateUpdates.push(update),
   };
   const schedule = callback("scheduleMeetingMetadataInference", env);
-  return { manager, opening, crossChecks, runtimeEpoch, runtime, requests, trace, stateUpdates, decisions, steps,
+  return { manager, opening, crossChecks, runtimeEpoch, runtime, requests, trace, stateUpdates, decisions, steps, diagnosticLog,
     get commits() { return commits; }, schedule: (turn = opening) => schedule({ turn, traceId: "trace" }) };
 }
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 5));
@@ -420,4 +428,113 @@ test("PC6 admission grace: a known-company cross-check admitted before the switc
     h.trace.meetingMetadataInferenceMutationDisposition, h.commits, h.stateUpdates.length],
   ["shadow-observed", "runtime-cross-checks", "blocked-company-already-resolved", 0, 0]);
   assert.equal(h.manager.getState().interviewSessionContext?.targetCompany?.value, "Google");
+});
+
+// ---------------------------------------------------------------------------
+// Task 178 LG, summary site 6: Meeting Metadata inference, graded at its settle
+// from the typed provider status of that settlement. The Hook's real scheduling
+// callback with the real operation runtime, lease, parser, comparison and commit
+// decision; the physical request, the sinks and the logger's delivery boundary
+// are substituted. A terminal other than content is given as
+// requestMeetingMetadataInference maps a provider response that carries none.
+// ---------------------------------------------------------------------------
+
+const providerTerminal = (status: string, failureClass?: string) => ({ rawOutput: "", providerDisposition: "provider-error-content",
+  parseDisposition: "not-run-provider-error-content",
+  parsed: { ok: false, reason: "provider-error-content", errorKind: "provider", evidenceSpansValid: false },
+  // The error text and the secret-shaped value are in the terminal the provider layer hands over.
+  providerOutcome: { status, failureClass, safeErrorSummary: `${PLANTED.providerError} ${PLANTED.secret}`, requestId: "metadata-request" } });
+type MetadataHarness = ReturnType<typeof inFlightMetadata>;
+const METADATA_ROWS: Array<{ name: string; level: "warn" | "debug"; drive: (h: MetadataHarness) => void;
+  data: Record<string, unknown>; trace: [unknown, unknown] }> = [
+  // Timeout table 3.1, row 4: an auxiliary check whose provider request timed out.
+  { name: "Timeout 4: the provider request timed out", level: "warn", drive: (h) => h.requests[0]!.settle(providerTerminal("timed-out")),
+    data: { disposition: "completed", leaseAuthorized: true, providerStatus: "timed-out", parseValid: false, committed: false },
+    trace: ["provider-error-content", "timed-out"] },
+  // Row 5: the same timeout for an inference a new runtime epoch has made stale.
+  { name: "Timeout 5: the timeout arrives after the runtime epoch changed", level: "debug",
+    drive: (h) => { h.runtimeEpoch.current += 1; h.requests[0]!.settle(providerTerminal("timed-out")); },
+    data: { disposition: "completed", leaseAuthorized: false, providerStatus: "timed-out", parseValid: false, committed: false },
+    trace: ["stale", "timed-out"] },
+  { name: "Timeout 5: Stop supersedes the inference before its request ends", level: "debug",
+    drive: (h) => { h.runtime.cancelAll("superseded"); h.requests[0]!.settle(providerTerminal("timed-out")); },
+    data: { disposition: "superseded", leaseAuthorized: false, committed: false }, trace: ["superseded", undefined] },
+  // Not graded: a provider failure that is not a timeout keeps its recorded outcome and is debug here.
+  { name: "not graded: the provider request failed without a timeout", level: "debug",
+    drive: (h) => h.requests[0]!.settle(providerTerminal("failed", "provider-http")),
+    data: { disposition: "completed", leaseAuthorized: true, providerStatus: "failed", failureClass: "provider-http", parseValid: false, committed: false },
+    trace: ["provider-error-content", "failed"] },
+  { name: "control: a valid proposal observed in shadow", level: "debug", drive: (h) => h.requests[0]!.answer(conflictingCompany),
+    data: { disposition: "completed", leaseAuthorized: true, parseValid: true, committed: false }, trace: ["shadow-observed", undefined] },
+  { name: "control: an output that is not JSON", level: "debug", drive: (h) => h.requests[0]!.answer(PLANTED.providerError),
+    data: { disposition: "completed", leaseAuthorized: true, parseValid: false, committed: false }, trace: ["invalid-output", undefined] },
+];
+// The durations come from the real clock: they are checked as durations and compared without their value.
+const withoutDurations = ({ durationMs, queueWaitMs, ...rest }: Record<string, unknown>) => {
+  for (const value of [durationMs, queueWaitMs]) assert.ok(value === undefined || (typeof value === "number" && value >= 0));
+  return rest;
+};
+for (const row of METADATA_ROWS) {
+  test(`LG1 LG3 LG4 Meeting Metadata inference, ${row.name}: one ${row.level} entry at the settle`, async (t) => {
+    const h = inFlightMetadata("shadow");
+    t.after(() => h.runtime.cancelAll("disposed"));
+    h.schedule();
+    await tick();
+    assert.equal(h.requests.length, 1, "one physical request");
+    row.drive(h);
+    await tick();
+    // The settle's own record: disposition and the provider status it recorded, one decision, no company written.
+    assert.deepEqual([h.trace.meetingMetadataInferenceDisposition, h.trace.meetingMetadataInferenceProviderOutcomeStatus], row.trace);
+    assert.deepEqual([h.decisions.length, h.commits, h.stateUpdates.length, h.requests.length], [1, 0, 0, 1]);
+    // The text-derived flag the trace records is not the grading input: it is false for a typed provider timeout.
+    assert.equal(h.trace.meetingMetadataInferenceTimedOut, false);
+    const entries = h.diagnosticLog.entries();
+    assert.equal(entries.length, 1, "one entry for the operation");
+    assertEntryInLedger(entries[0]!);
+    assert.deepEqual([entries[0]!.level, entries[0]!.source, entries[0]!.event, entries[0]!.refs],
+      [row.level, "meeting.metadata-inference", "inference-settled", { traceId: "trace" }]);
+    assert.deepEqual(withoutDurations(entries[0]!.data!), row.data);
+    // The opening transcript, the company, the provider's error text and the secret-shaped value are in no entry.
+    assertNothingPlanted(entries, [...PLANTED_VALUES, h.opening.text, "recruiter from Oracle"], row.name);
+    const counters = h.diagnosticLog.snapshot();
+    assert.deepEqual([counters.refusedEntries, counters.refusedFields, counters.truncatedFields, counters.detailFailures], [0, 0, 0, 0]);
+  });
+}
+
+test("LG2 Meeting Metadata inference at the five levels: the settle's recorded outcome, its decision row and the company are identical; the entry is filtered by its level alone", async (t) => {
+  // Each run has its own session id and opening timestamps, so identifiers, hashes and times differ between any two
+  // runs. What the settle decided is compared: every recorded field of the trace and of the decision row that is not one of those.
+  const runSpecific = /(At|Ms|Revision|Id|Hash|Key|Slot|Digest)$/;
+  const decided = (value: Record<string, unknown>) => Object.fromEntries(Object.entries(JSON.parse(JSON.stringify(value)))
+    .filter(([key]) => !runSpecific.test(key)));
+  for (const row of METADATA_ROWS.slice(0, 2)) {
+    let reference: unknown;
+    // A working delivery at the five levels, then each failing delivery at the five levels: the call site reads no
+    // delivery result, so the settle is the same and the same entry is handed to the logger.
+    for (const logDelivery of ["ok", ...DIAGNOSTIC_LOG_SPY_FAILING_DELIVERIES] as const) {
+      for (const level of ["trace", "debug", "info", "warn", "error"] as const) {
+        const name = `${row.name} at ${level} with delivery ${logDelivery}`;
+        const h = inFlightMetadata("shadow", { logLevel: level, logDelivery });
+        t.after(() => h.runtime.cancelAll("disposed"));
+        h.schedule();
+        await tick();
+        row.drive(h);
+        await tick();
+        const business = { trace: decided(h.trace), decisions: h.decisions.map((decision) => decided(decision.metadata)),
+          steps: h.steps.map((step) => step[2]), commits: h.commits, stateUpdates: h.stateUpdates.length,
+          company: h.manager.getState().interviewSessionContext?.targetCompany?.value, requests: h.requests.length };
+        reference ??= business;
+        assert.deepEqual(business, reference, name);
+        assert.deepEqual([business.trace.meetingMetadataInferenceDisposition, business.trace.meetingMetadataInferenceProviderOutcomeStatus,
+          business.decisions.length, business.company], [row.trace[0], row.trace[1], 1, "Google"], name);
+        const order = ["error", "warn", "info", "debug", "trace"];
+        const handedOver = h.diagnosticLog.entries();
+        assert.deepEqual(handedOver.map((entry) => [entry.level, withoutDurations(entry.data!)]),
+          order.indexOf(row.level) <= order.indexOf(level) ? [[row.level, row.data]] : [], name);
+        const counters = h.diagnosticLog.snapshot();
+        assert.deepEqual([counters.undeliveredEntries, counters.internalErrors, counters.queued, counters.inFlight],
+          [logDelivery === "ok" ? 0 : handedOver.length, 0, 0, false], name);
+      }
+    }
+  }
 });

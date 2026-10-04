@@ -72,6 +72,7 @@ test("PA1 Fast caches with no publication; timely valid Intelligent including un
     h.clock.advance(1200); h.calls.get("intelligent")!.resolve(result(primary)); await flush();
     const chosen = await promise;
     assert.equal(chosen.selectedProviderTier, "intelligent");
+    assert.equal(chosen.selectionReason, "intelligent-valid");
     assert.equal(chosen.parsed.ok && "decision" in chosen.parsed.value && chosen.parsed.value.decision, primary);
     assert.equal(published, 1);
     assert.equal(h.events.filter(e => e.event === "selected").length, 1);
@@ -86,6 +87,8 @@ test("PA2 invalid primary uses cached Fast early; pending primary uses Fast at c
     else h.clock.advance(4000);
     const chosen = await promise;
     assert.equal(chosen.selectedProviderTier, "fast");
+    // The same tier and the same valid result, for two different triggers.
+    assert.equal(chosen.selectionReason, invalid ? "intelligent-invalid-fast-valid" : "candidate-deadline-expired");
     assert.equal(h.clock.now(), invalid ? 700 : 4000);
     assert.equal(h.calls.get("intelligent")!.input.signal.aborted, true);
   }
@@ -97,6 +100,7 @@ test("PA2 deadline excludes candidate at4000 but admits3999; both unavailable st
     h.clock.advance(at); h.calls.get("intelligent")!.resolve(result()); await flush();
     const chosen = await promise;
     assert.equal(chosen.selectedProviderTier, at === 3999 ? "intelligent" : undefined);
+    assert.equal(chosen.selectionReason, at === 3999 ? "intelligent-valid" : "candidate-deadline-expired");
     assert.equal(chosen.parsed.ok, at === 3999);
   }
 });
@@ -118,7 +122,11 @@ test("PA3 client failure surfaces without Fast semantic fallback; internal failu
     failure.providerOutcome = { status: "failed", failureClass } as any;
     h.calls.get("intelligent")!.resolve(failure);
     if (failureClass === "unexpected") await assert.rejects(promise, /Internal Relation/);
-    else { const chosen = await promise; assert.equal(chosen.selectedProviderTier, "intelligent"); assert.equal(chosen.parsed.ok, false); }
+    else {
+      const chosen = await promise; assert.equal(chosen.selectedProviderTier, "intelligent"); assert.equal(chosen.parsed.ok, false);
+      // A selected tier is not a usable candidate: the reason says why the stage ended.
+      assert.equal(chosen.selectionReason, "client-error");
+    }
   }
 });
 
@@ -135,6 +143,7 @@ test("PA4 admission queue consumes stage budget; expired queued candidate never 
   h.clock.advance(4000); const chosen = await promise;
   blockers.forEach(release => release()); await flush(); h.clock.advance(4001); await flush();
   assert.equal(chosen.parsed.ok, false); assert.equal(h.calls.size, 0);
+  assert.equal(chosen.selectionReason, "candidate-deadline-expired");
 });
 
 test("PA4 queued candidate receives remaining time, and physical admissions keep existing cap", async () => {
@@ -145,7 +154,9 @@ test("PA4 queued candidate receives remaining time, and physical admissions keep
   h.clock.advance(1000); releases[0](); await flush(); h.clock.advance(1000); await flush();
   assert.equal(h.calls.get("fast")!.input.timeoutMs, 3000);
   assert.ok(h.events.filter(e => e.admission).every(e => e.admission!.activeCountAtAdmission <= 3));
-  h.calls.get("intelligent")!.resolve(result()); await promise; releases.slice(1).forEach(r => r());
+  h.calls.get("intelligent")!.resolve(result());
+  assert.equal((await promise).selectionReason, "intelligent-valid");
+  releases.slice(1).forEach(r => r());
 });
 
 test("PA4 admission at deadline before timer delivery still selects already cached Fast", async () => {
@@ -164,6 +175,7 @@ test("PA4 admission at deadline before timer delivery still selects already cach
   await flush();
   const chosen = await promise;
   assert.equal(chosen.selectedProviderTier, "fast");
+  assert.equal(chosen.selectionReason, "candidate-deadline-expired");
   assert.equal(chosen.selectedCandidateCompletedAt, 500);
   assert.equal(h.calls.has("intelligent"), false);
   assert.equal(h.controller.signal.aborted, false);
@@ -188,6 +200,7 @@ test("ST183-1 D1 the deadline timer is registered with the time remaining at reg
   h.clock.advance(4000);
   const chosen = await promise;
   assert.equal(chosen.selectedProviderTier, "fast");
+  assert.equal(chosen.selectionReason, "candidate-deadline-expired");
   assert.equal(chosen.selectedCandidateCompletedAt, 500);
   assert.equal(h.clock.now(), 4000, "selected at the deadline, not after it");
 });
@@ -205,6 +218,7 @@ test("ST183-1 D1 a deadline that passes during setup is registered with a zero d
   await flush(); h.clock.advance(4004); await flush();
   const chosen = await promise;
   assert.equal(chosen.parseDisposition, "candidate-deadline-expired");
+  assert.equal(chosen.selectionReason, "candidate-deadline-expired");
   assert.equal(h.calls.size, 0, "no candidate is dispatched after the deadline");
 });
 
@@ -236,6 +250,8 @@ for (const tier of ["intelligent", "fast"] as const) for (const [name, pauseAfte
     h.clock.advance(Math.max(h.clock.time, 4000));
     const chosen = await promise;
     assert.equal(chosen.selectedProviderTier, tier);
+    // A valid Intelligent ends the stage itself; a cached Fast is selected by the deadline timer.
+    assert.equal(chosen.selectionReason, tier === "intelligent" ? "intelligent-valid" : "candidate-deadline-expired");
     assert.equal(chosen.parsed.ok && "decision" in chosen.parsed.value && chosen.parsed.value.decision, "independent");
     assert.equal(chosen.selectedCandidateCompletedAt, 3999, "recorded completion time is the time the callback began");
     assert.ok(chosen.selectedCandidateCompletedAt! <= chosen.stageDeadlineAt, "the consumer's cutoff keeps the selection");
@@ -259,6 +275,7 @@ test("ST183-5 P1 a completion whose callback begins at the deadline is refused w
   const chosen = await promise;
   assert.equal(chosen.selectedProviderTier, undefined);
   assert.equal(chosen.parseDisposition, "candidate-deadline-expired");
+  assert.equal(chosen.selectionReason, "candidate-deadline-expired");
   assert.deepEqual(h.events.filter(e => e.event === "completed" && e.result).map(e => [e.providerTier, e.at]), [["intelligent", 4000]]);
 });
 
@@ -284,6 +301,7 @@ test("ST183-4 ST183-7 a failing observation sink cannot leave the selection unse
       h.clock.advance(4000);
       const chosen = await promise;
       assert.equal(chosen.selectedProviderTier, "fast", failing);
+      assert.equal(chosen.selectionReason, "candidate-deadline-expired", failing);
       assert.equal(chosen.selectedCandidateCompletedAt, 500, failing);
       assert.equal(h.calls.get("intelligent")!.input.signal.aborted, true, failing);
       await flush();
@@ -304,7 +322,9 @@ test("ST183-4 a working observation sink reports nothing", async () => {
     const promise = h.run(); h.clock.advance(0); await flush();
     h.clock.advance(500); h.calls.get("fast")!.resolve(result()); await flush();
     h.clock.advance(4000);
-    assert.equal((await promise).selectedProviderTier, "fast");
+    const chosen = await promise;
+    assert.equal(chosen.selectedProviderTier, "fast");
+    assert.equal(chosen.selectionReason, "candidate-deadline-expired");
     assert.deepEqual(warnings, []);
   });
 });
@@ -335,6 +355,7 @@ test("ST183-5 a candidate returning after the stage ended never rewrites the sel
   const chosen = await promise;
   h.clock.advance(4050); late.get("intelligent")!(result("related")); await flush();
   assert.equal(chosen.selectedProviderTier, "fast");
+  assert.equal(chosen.selectionReason, "candidate-deadline-expired", "the late answer does not rewrite the reason either");
   assert.equal(chosen.parsed.ok && "decision" in chosen.parsed.value && chosen.parsed.value.decision, "independent");
   assert.equal(h.events.filter(e => e.event === "selected").length, 1);
 });
@@ -371,6 +392,7 @@ for (const [lateTier, cachedFast, processedAt] of [
     assert.equal(chosen.parsed.ok && "decision" in chosen.parsed.value && chosen.parsed.value.decision,
       cachedFast ? "independent" : false, "the late answer is not the selection");
     assert.equal(chosen.parseDisposition, cachedFast ? "valid-json" : "candidate-deadline-expired");
+    assert.equal(chosen.selectionReason, "candidate-deadline-expired", "ended by a completion that arrived at or after the deadline");
     assert.equal(chosen.stageDeadlineAt, 4000);
     // The late completion is observed as evidence, and never selected.
     assert.deepEqual(h.events.filter(e => e.event === "completed" && e.result).map(e => [e.providerTier, e.at]),
@@ -395,6 +417,7 @@ test("ST183-4 ST183-6 a selector entered at or after its deadline ends the stage
     assert.equal(settled, true, "settled without any timer being delivered");
     const chosen = await promise;
     assert.equal(chosen.parseDisposition, "candidate-deadline-expired");
+    assert.equal(chosen.selectionReason, "candidate-deadline-expired");
     assert.equal(chosen.selectedProviderTier, undefined);
     assert.equal(chosen.completedAt, enteredAt);
     assert.equal(h.calls.size, 0, "no candidate is dispatched");
@@ -409,7 +432,226 @@ test("ST183-5 only a valid cached Fast is selected at the deadline; an invalid o
   const chosen = await promise;
   assert.equal(chosen.parsed.ok, false);
   assert.equal(chosen.selectedProviderTier, undefined);
+  // The recorded parse reason is the cached candidate's; the deadline is named by the reason.
+  assert.equal(chosen.parseDisposition, "malformed-json");
+  assert.equal(chosen.selectionReason, "candidate-deadline-expired");
   assert.equal(chosen.selectedCandidateCompletedAt, undefined);
   assert.equal(h.events.some(e => e.event === "selected"), false);
   assert.equal(h.calls.get("intelligent")!.input.signal.aborted, true);
+});
+
+// ---------------------------------------------------------------------------
+// Task 178 LG3. The selection reason is the branch that ended the stage. It is
+// passed as an argument where the selector already decides, so it can be read
+// next to a selected tier that does not say why it was selected. Each row drives
+// one of those branches through the real selector, the real admission
+// coordinator and real route resolution; only the physical request and the
+// clock are substituted. Next to the reason, every row states the facts the
+// reason must not change: the selected tier, the parse result and disposition,
+// the completion time, the stage deadline, the physical calls with their
+// timeouts and aborted signals, the selector's timer registrations and the
+// ordered observation list.
+// ---------------------------------------------------------------------------
+
+type Lg3Harness = ReturnType<typeof harness> & { registrations: number[]; start: () => ReturnType<ReturnType<typeof harness>["run"]> };
+function lg3Harness(): Lg3Harness {
+  const h = harness();
+  const registrations: number[] = [];
+  // The selector's own clock: what it registers is recorded, the admission coordinator's timers are not.
+  const selectorClock: RuntimeInferenceAdmissionClock = { now: () => h.clock.now(), cancel: h.clock.cancel,
+    schedule: (fn, ms) => { registrations.push(ms); return h.clock.schedule(fn, ms); } };
+  return Object.assign(h, { registrations, start: () => h.run(selectorClock) });
+}
+function failed(failureClass: "authentication" | "configuration" | "unexpected" | undefined,
+  providerDisposition: TaskRelationSplitShadowRequestResult["providerDisposition"] = "completed-with-content") {
+  const failure = result("invalid");
+  failure.providerDisposition = providerDisposition;
+  if (failureClass) failure.providerOutcome = { status: "failed", failureClass } as any;
+  return failure;
+}
+// Three busy slots of one tier, so that a candidate of that tier waits for admission.
+async function occupy(h: Lg3Harness, tier: "intelligent" | "fast") {
+  const releases: Array<() => void> = [];
+  for (let index = 0; index < 3; index++) void h.admission.run({ operationId: `block-${tier}-${index}`, lane: "critical", providerTier: tier,
+    signal: new AbortController().signal, execute: () => new Promise<void>(resolve => releases.push(resolve)) });
+  h.clock.advance(0); await flush();
+  return releases;
+}
+interface Lg3Facts {
+  reason: string | null; tier: string | null; parsedOk: boolean; parseDisposition: string; providerDisposition: string;
+  selectedCandidateCompletedAt: number | null; stageDeadlineAt: number;
+  // [model, per-call timeout, aborted signal], in dispatch order.
+  calls: Array<[string, number, boolean]>;
+  // The delays the selector registered with its clock.
+  registrations: number[];
+  // "tier:event@time", in the order the observations were made.
+  events: string[];
+}
+// Both candidates queued and admitted at once: a slot of each tier is free.
+const STARTED = ["intelligent:queued@0", "intelligent:admitted@0", "fast:queued@0", "fast:admitted@0"];
+const BOTH_ABORTED: Lg3Facts["calls"] = [["intelligent", 4000, true], ["fast", 4000, true]];
+const cacheFast = async (h: Lg3Harness, at: number, decision: Parameters<typeof result>[0] = "independent") => {
+  h.clock.advance(at); h.calls.get("fast")!.resolve(result(decision)); await flush();
+};
+
+interface Lg3Row {
+  name: string;
+  // Before the selector starts: the clock or the admission slots.
+  before?: (h: Lg3Harness) => Promise<Array<() => void> | void>;
+  after: (h: Lg3Harness, releases: Array<() => void>) => Promise<void>;
+  expected: Lg3Facts;
+}
+const LG3_ROWS: Lg3Row[] = [
+  { name: "entered at its deadline, before any candidate is queued",
+    before: async (h) => { h.clock.time = 4000; },
+    after: async () => {},
+    expected: { reason: "candidate-deadline-expired", tier: null, parsedOk: false, parseDisposition: "candidate-deadline-expired",
+      providerDisposition: "provider-error-content", selectedCandidateCompletedAt: null, stageDeadlineAt: 4000, calls: [], registrations: [],
+      events: ["intelligent:cancelled@4000", "fast:cancelled@4000"] } },
+  { name: "deadline timer with a valid Fast cached and Intelligent silent",
+    after: async (h) => { h.clock.advance(0); await flush(); await cacheFast(h, 500); h.clock.advance(4000); },
+    expected: { reason: "candidate-deadline-expired", tier: "fast", parsedOk: true, parseDisposition: "valid-json",
+      providerDisposition: "completed-with-content", selectedCandidateCompletedAt: 500, stageDeadlineAt: 4000, calls: BOTH_ABORTED, registrations: [4000],
+      events: [...STARTED, "fast:completed@500", "fast:selected@4000", "intelligent:cancelled@4000", "intelligent:completed@4000"] } },
+  { name: "deadline timer with nothing cached",
+    after: async (h) => { h.clock.advance(0); await flush(); h.clock.advance(4000); },
+    expected: { reason: "candidate-deadline-expired", tier: null, parsedOk: false, parseDisposition: "candidate-deadline-expired",
+      providerDisposition: "provider-error-content", selectedCandidateCompletedAt: null, stageDeadlineAt: 4000, calls: BOTH_ABORTED, registrations: [4000],
+      events: [...STARTED, "intelligent:cancelled@4000", "fast:cancelled@4000", "intelligent:completed@4000", "fast:completed@4000"] } },
+  // The case the recorded parse reason hides: an invalid Intelligent is cached, Fast never answers, and the stage ends at its deadline.
+  { name: "deadline timer with an invalid Intelligent cached and Fast silent until the deadline",
+    after: async (h) => { h.clock.advance(0); await flush(); h.clock.advance(700); h.calls.get("intelligent")!.resolve(result("invalid")); await flush(); h.clock.advance(4000); },
+    expected: { reason: "candidate-deadline-expired", tier: null, parsedOk: false, parseDisposition: "malformed-json",
+      providerDisposition: "completed-with-content", selectedCandidateCompletedAt: null, stageDeadlineAt: 4000, calls: BOTH_ABORTED, registrations: [4000],
+      events: [...STARTED, "intelligent:completed@700", "fast:cancelled@4000", "fast:completed@4000"] } },
+  { name: "deadline timer with an invalid Fast cached and Intelligent silent",
+    after: async (h) => { h.clock.advance(0); await flush(); await cacheFast(h, 500, "invalid"); h.clock.advance(4000); },
+    expected: { reason: "candidate-deadline-expired", tier: null, parsedOk: false, parseDisposition: "malformed-json",
+      providerDisposition: "completed-with-content", selectedCandidateCompletedAt: null, stageDeadlineAt: 4000, calls: BOTH_ABORTED, registrations: [4000],
+      events: [...STARTED, "fast:completed@500", "intelligent:cancelled@4000", "intelligent:completed@4000"] } },
+  { name: "admission granted at the deadline with a valid Fast cached",
+    before: (h) => occupy(h, "intelligent"),
+    after: async (h, releases) => {
+      h.clock.advance(0); await flush(); await cacheFast(h, 500);
+      // The slot is granted at the deadline, before the selector's own deadline timer is delivered.
+      const deadlineTimer = [...h.clock.timers].find(([, timer]) => timer.at === 4000)![0];
+      h.clock.time = 4000; releases[0]!(); await flush();
+      for (const [id, timer] of [...h.clock.timers]) if (id !== deadlineTimer && timer.at <= 4000) { h.clock.timers.delete(id); timer.fn(); }
+      await flush(); releases.slice(1).forEach(release => release());
+    },
+    expected: { reason: "candidate-deadline-expired", tier: "fast", parsedOk: true, parseDisposition: "valid-json",
+      providerDisposition: "completed-with-content", selectedCandidateCompletedAt: 500, stageDeadlineAt: 4000, calls: [["fast", 4000, true]], registrations: [4000],
+      events: ["intelligent:queued@0", "fast:queued@0", "fast:admitted@0", "fast:completed@500", "intelligent:admitted@4000", "fast:selected@4000", "intelligent:cancelled@4000", "intelligent:completed@4000"] } },
+  { name: "admission granted at the deadline with nothing cached",
+    before: (h) => occupy(h, "intelligent"),
+    after: async (h, releases) => {
+      h.clock.advance(0); await flush();
+      const deadlineTimer = [...h.clock.timers].find(([, timer]) => timer.at === 4000)![0];
+      h.clock.time = 4000; releases[0]!(); await flush();
+      for (const [id, timer] of [...h.clock.timers]) if (id !== deadlineTimer && timer.at <= 4000) { h.clock.timers.delete(id); timer.fn(); }
+      await flush(); releases.slice(1).forEach(release => release());
+    },
+    expected: { reason: "candidate-deadline-expired", tier: null, parsedOk: false, parseDisposition: "candidate-deadline-expired",
+      providerDisposition: "provider-error-content", selectedCandidateCompletedAt: null, stageDeadlineAt: 4000, calls: [["fast", 4000, true]], registrations: [4000],
+      events: ["intelligent:queued@0", "fast:queued@0", "fast:admitted@0", "intelligent:admitted@4000", "intelligent:cancelled@4000", "fast:cancelled@4000", "intelligent:completed@4000", "fast:completed@4000"] } },
+  { name: "completion processed at the deadline with a valid Fast cached",
+    after: async (h) => { h.clock.advance(0); await flush(); await cacheFast(h, 500);
+      h.clock.advance(3999); await flush(); h.clock.time = 4000; h.calls.get("intelligent")!.resolve(result("related")); await flush(); },
+    expected: { reason: "candidate-deadline-expired", tier: "fast", parsedOk: true, parseDisposition: "valid-json",
+      providerDisposition: "completed-with-content", selectedCandidateCompletedAt: 500, stageDeadlineAt: 4000, calls: BOTH_ABORTED, registrations: [4000],
+      events: [...STARTED, "fast:completed@500", "intelligent:completed@4000", "fast:selected@4000"] } },
+  { name: "completion processed after the deadline with nothing cached",
+    after: async (h) => { h.clock.advance(0); await flush(); h.clock.advance(3999); await flush(); h.clock.time = 4050;
+      h.calls.get("fast")!.resolve(result("related")); await flush(); },
+    expected: { reason: "candidate-deadline-expired", tier: null, parsedOk: false, parseDisposition: "candidate-deadline-expired",
+      providerDisposition: "provider-error-content", selectedCandidateCompletedAt: null, stageDeadlineAt: 4000, calls: BOTH_ABORTED, registrations: [4000],
+      events: [...STARTED, "fast:completed@4050", "intelligent:cancelled@4050", "intelligent:completed@4050"] } },
+  { name: "Intelligent authentication failure after a valid Fast was cached",
+    after: async (h) => { h.clock.advance(0); await flush(); await cacheFast(h, 500);
+      h.clock.advance(700); h.calls.get("intelligent")!.resolve(failed("authentication")); await flush(); },
+    expected: { reason: "client-error", tier: "intelligent", parsedOk: false, parseDisposition: "malformed-json",
+      providerDisposition: "completed-with-content", selectedCandidateCompletedAt: 700, stageDeadlineAt: 4000, calls: BOTH_ABORTED, registrations: [4000],
+      events: [...STARTED, "fast:completed@500", "intelligent:completed@700", "intelligent:selected@700"] } },
+  // A selected Fast tier that is not a usable candidate: the tier alone would read as an expected switch.
+  { name: "Fast configuration failure while Intelligent is pending",
+    after: async (h) => { h.clock.advance(0); await flush(); h.clock.advance(300); h.calls.get("fast")!.resolve(failed("configuration")); await flush(); },
+    expected: { reason: "client-error", tier: "fast", parsedOk: false, parseDisposition: "malformed-json",
+      providerDisposition: "completed-with-content", selectedCandidateCompletedAt: 300, stageDeadlineAt: 4000, calls: BOTH_ABORTED, registrations: [4000],
+      events: [...STARTED, "fast:completed@300", "fast:selected@300", "intelligent:cancelled@300", "intelligent:completed@300"] } },
+  { name: "Intelligent answers with the provider's authentication error content",
+    after: async (h) => { h.clock.advance(0); await flush(); h.clock.advance(300); h.calls.get("intelligent")!.resolve(failed(undefined, "provider-auth-error")); await flush(); },
+    expected: { reason: "client-error", tier: "intelligent", parsedOk: false, parseDisposition: "malformed-json",
+      providerDisposition: "provider-auth-error", selectedCandidateCompletedAt: 300, stageDeadlineAt: 4000, calls: BOTH_ABORTED, registrations: [4000],
+      events: [...STARTED, "intelligent:completed@300", "intelligent:selected@300", "fast:cancelled@300", "fast:completed@300"] } },
+  { name: "Intelligent valid while Fast is pending",
+    after: async (h) => { h.clock.advance(0); await flush(); h.clock.advance(1200); h.calls.get("intelligent")!.resolve(result("related")); await flush(); },
+    expected: { reason: "intelligent-valid", tier: "intelligent", parsedOk: true, parseDisposition: "valid-json",
+      providerDisposition: "completed-with-content", selectedCandidateCompletedAt: 1200, stageDeadlineAt: 4000, calls: BOTH_ABORTED, registrations: [4000],
+      events: [...STARTED, "intelligent:completed@1200", "intelligent:selected@1200", "fast:cancelled@1200", "fast:completed@1200"] } },
+  // A parse-valid "unclear" is a model result, not a failure: it wins over a cached Fast like any valid Intelligent.
+  { name: "Intelligent parse-valid unclear after a valid Fast was cached",
+    after: async (h) => { h.clock.advance(0); await flush(); await cacheFast(h, 600);
+      h.clock.advance(1200); h.calls.get("intelligent")!.resolve(result("unclear")); await flush(); },
+    expected: { reason: "intelligent-valid", tier: "intelligent", parsedOk: true, parseDisposition: "valid-json",
+      providerDisposition: "completed-with-content", selectedCandidateCompletedAt: 1200, stageDeadlineAt: 4000, calls: BOTH_ABORTED, registrations: [4000],
+      events: [...STARTED, "fast:completed@600", "intelligent:completed@1200", "intelligent:selected@1200"] } },
+  { name: "Intelligent invalid after a valid Fast was cached",
+    after: async (h) => { h.clock.advance(0); await flush(); await cacheFast(h, 500);
+      h.clock.advance(700); h.calls.get("intelligent")!.resolve(result("invalid")); await flush(); },
+    expected: { reason: "intelligent-invalid-fast-valid", tier: "fast", parsedOk: true, parseDisposition: "valid-json",
+      providerDisposition: "completed-with-content", selectedCandidateCompletedAt: 500, stageDeadlineAt: 4000, calls: BOTH_ABORTED, registrations: [4000],
+      events: [...STARTED, "fast:completed@500", "intelligent:completed@700", "fast:selected@700"] } },
+  { name: "Fast valid after an invalid Intelligent was cached",
+    after: async (h) => { h.clock.advance(0); await flush(); h.clock.advance(300); h.calls.get("intelligent")!.resolve(result("invalid")); await flush();
+      await cacheFast(h, 900); },
+    expected: { reason: "intelligent-invalid-fast-valid", tier: "fast", parsedOk: true, parseDisposition: "valid-json",
+      providerDisposition: "completed-with-content", selectedCandidateCompletedAt: 900, stageDeadlineAt: 4000, calls: BOTH_ABORTED, registrations: [4000],
+      events: [...STARTED, "intelligent:completed@300", "fast:completed@900", "fast:selected@900"] } },
+  { name: "both candidates ended with invalid output",
+    after: async (h) => { h.clock.advance(0); await flush(); await cacheFast(h, 500, "invalid");
+      h.clock.advance(700); h.calls.get("intelligent")!.resolve(result("invalid")); await flush(); },
+    expected: { reason: "candidates-ended-unusable", tier: null, parsedOk: false, parseDisposition: "malformed-json",
+      providerDisposition: "completed-with-content", selectedCandidateCompletedAt: null, stageDeadlineAt: 4000, calls: BOTH_ABORTED, registrations: [4000],
+      events: [...STARTED, "fast:completed@500", "intelligent:completed@700"] } },
+];
+
+for (const row of LG3_ROWS) {
+  test(`LG3 selection reason: ${row.name}`, async () => {
+    const h = lg3Harness();
+    const releases = (await row.before?.(h)) ?? [];
+    const promise = h.start();
+    await row.after(h, releases);
+    const chosen = await promise;
+    await flush();
+    const actual: Lg3Facts = { reason: chosen.selectionReason ?? null, tier: chosen.selectedProviderTier ?? null, parsedOk: chosen.parsed.ok,
+      parseDisposition: chosen.parseDisposition, providerDisposition: chosen.providerDisposition,
+      selectedCandidateCompletedAt: chosen.selectedCandidateCompletedAt ?? null, stageDeadlineAt: chosen.stageDeadlineAt,
+      calls: [...h.calls].map(([model, call]) => [model, call.input.timeoutMs, call.input.signal.aborted]),
+      registrations: h.registrations, events: h.events.map(e => `${e.providerTier}:${e.event}@${e.at}`) };
+    assert.deepEqual(actual, row.expected);
+  });
+}
+
+// The controls: a cancelled stage and an internal failure reject. There is no
+// selection, so nothing can carry a reason for them.
+test("LG3 control: a cancelled stage and an internal failure reject without a selection, with or without a cached valid Fast", async () => {
+  for (const cachedFast of [false, true]) {
+    for (const end of ["source cancellation", "internal failure"] as const) {
+      const h = lg3Harness();
+      const outcome: { resolved?: unknown; rejected?: Error } = {};
+      const promise = h.start().then(chosen => { outcome.resolved = chosen; }, (error: Error) => { outcome.rejected = error; });
+      h.clock.advance(0); await flush();
+      if (cachedFast) await cacheFast(h, 500);
+      if (end === "source cancellation") h.controller.abort();
+      else h.calls.get("intelligent")!.resolve(failed("unexpected"));
+      await flush(); await promise;
+      const label = `${end}, cached Fast=${cachedFast}`;
+      assert.equal(outcome.resolved, undefined, label);
+      assert.equal(outcome.rejected?.name, end === "source cancellation" ? "AbortError" : "Error", label);
+      assert.equal("selectionReason" in (outcome.rejected ?? {}), false, label);
+      assert.equal(h.events.some(e => e.event === "selected"), false, label);
+      assert.deepEqual([...h.calls].map(([model, call]) => [model, call.input.timeoutMs, call.input.signal.aborted]), BOTH_ABORTED, label);
+      assert.deepEqual(h.registrations, [4000], label);
+    }
+  }
 });

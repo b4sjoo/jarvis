@@ -2,7 +2,7 @@ import type { AIResponseExecutionIdentityInput } from "../functions/ai-response-
 import type { RuntimeInferenceModelRouteResolution } from "./meeting-model-route.js";
 import type { RuntimeInferenceLane, RuntimeInferenceProviderTier } from "./runtime-inference.js";
 import type { RuntimeInferenceAdmissionClock, RuntimeInferenceProviderAdmissionCoordinator, RuntimeInferenceSharedAdmissionReceipt } from "./runtime-inference-provider-admission.js";
-import type { requestTaskRelationSplitShadow, TaskRelationSplitShadowRequestResult } from "./task-relation-split-shadow-request.js";
+import type { requestTaskRelationSplitShadow, TaskRelationCandidateSelectionReason, TaskRelationSplitShadowRequestResult } from "./task-relation-split-shadow-request.js";
 import type { TaskRelationAffinityRequest, TaskRelationCanonicalShadowRequest } from "./task-relation-split-shadow.js";
 
 export interface TaskRelationCandidateObservation {
@@ -23,6 +23,7 @@ export interface TaskRelationCandidateObservation {
 export interface TaskRelationCandidateSelection extends TaskRelationSplitShadowRequestResult {
   selectedProviderTier?: RuntimeInferenceProviderTier;
   stageDeadlineAt: number;
+  selectionReason: TaskRelationCandidateSelectionReason;
 }
 
 const CLOCK: RuntimeInferenceAdmissionClock = {
@@ -79,7 +80,8 @@ export function requestTaskRelationProviderCandidates(input: {
     };
     const fail = (error: unknown) => { if (!closed) { close(); reject(error); } };
     const cancel = () => fail(abortError());
-    const finish = (tier?: RuntimeInferenceProviderTier) => {
+    // The reason is an argument only: each call site names the branch it is in.
+    const finish = (tier: RuntimeInferenceProviderTier | undefined, selectionReason: TaskRelationCandidateSelectionReason) => {
       if (closed) return;
       if (input.signal.aborted) { cancel(); return; }
       const result = tier ? outcomes[tier] : outcomes.intelligent ?? outcomes.fast;
@@ -89,13 +91,13 @@ export function requestTaskRelationProviderCandidates(input: {
         rawOutput: "", parsed: { ok: false as const, reason: "candidate-deadline-expired", errorKind: "provider" as const, evidenceSpansValid: false as const },
         providerDisposition: "provider-error-content" as const, parseDisposition: "candidate-deadline-expired", completedAt: clock.now(),
       }), selectedProviderTier: tier, selectedCandidateCompletedAt: tier ? completedAt[tier] : undefined,
-        stageDeadlineAt: input.deadlineAt });
+        stageDeadlineAt: input.deadlineAt, selectionReason });
     };
     if (input.signal.aborted) { cancel(); return; }
-    if (queuedAt >= input.deadlineAt) { finish(); return; }
+    if (queuedAt >= input.deadlineAt) { finish(undefined, "candidate-deadline-expired"); return; }
     input.signal.addEventListener("abort", cancel, { once: true });
     // The deadline is absolute: time already spent before this registration is not regained.
-    timer = clock.schedule(() => finish(outcomes.fast?.parsed.ok ? "fast" : undefined),
+    timer = clock.schedule(() => finish(outcomes.fast?.parsed.ok ? "fast" : undefined, "candidate-deadline-expired"),
       Math.max(0, input.deadlineAt - clock.now()));
     for (const tier of ["intelligent", "fast"] as const) {
       const route = input.routes[tier];
@@ -108,7 +110,7 @@ export function requestTaskRelationProviderCandidates(input: {
           const remaining = input.deadlineAt - clock.now();
           if (closed || input.signal.aborted) throw abortError();
           if (remaining <= 0) {
-            finish(outcomes.fast?.parsed.ok ? "fast" : undefined);
+            finish(outcomes.fast?.parsed.ok ? "fast" : undefined, "candidate-deadline-expired");
             throw abortError();
           }
           return request({ request: input.request, provider: route.provider, selectedProvider: route.selectedProvider,
@@ -128,7 +130,7 @@ export function requestTaskRelationProviderCandidates(input: {
         if (closed) return;
         if (input.signal.aborted) { cancel(); return; }
         if (at >= input.deadlineAt) {
-          finish(outcomes.fast?.parsed.ok ? "fast" : undefined);
+          finish(outcomes.fast?.parsed.ok ? "fast" : undefined, "candidate-deadline-expired");
           return;
         }
         const failure = result.providerOutcome?.failureClass;
@@ -136,11 +138,11 @@ export function requestTaskRelationProviderCandidates(input: {
         outcomes[tier] = result;
         completedAt[tier] = at;
         if (failure === "authentication" || failure === "configuration" || result.providerDisposition === "provider-auth-error") {
-          finish(tier); return;
+          finish(tier, "client-error"); return;
         }
-        if (outcomes.intelligent?.parsed.ok) { finish("intelligent"); return; }
-        if (ended.has("intelligent") && outcomes.fast?.parsed.ok) { finish("fast"); return; }
-        if (ended.size === 2) finish();
+        if (outcomes.intelligent?.parsed.ok) { finish("intelligent", "intelligent-valid"); return; }
+        if (ended.has("intelligent") && outcomes.fast?.parsed.ok) { finish("fast", "intelligent-invalid-fast-valid"); return; }
+        if (ended.size === 2) finish(undefined, "candidates-ended-unusable");
       }, error => {
         ended.add(tier);
         observe(tier, "completed", { error: error instanceof Error ? error.message : String(error) });
