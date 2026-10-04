@@ -289,6 +289,10 @@ import {
   type TaskRelationSplitShadowRequestResult,
 } from "@/lib/meeting/task-relation-split-shadow-request";
 import { requestTaskRelationProviderCandidates } from "@/lib/meeting/task-relation-provider-candidates";
+import {
+  RuntimeCriticalEventStream,
+  type RuntimeCriticalEventInput,
+} from "@/lib/meeting/runtime-critical-event";
 import type { TaskRelationAdjudicationRequest } from "@/lib/meeting/task-relation-adjudication";
 import {
   AdvisorEngine,
@@ -1081,6 +1085,22 @@ function prepareGenerationDerivedTaskRuntimeTransition(input: {
   };
 }
 
+// Task 178A. The sole task writer's own result, handed to a read-only observer
+// right after the writer returned. It cannot change or veto that result.
+type TaskRuntimeWriterObserver = (
+  result: {
+    authorized: boolean;
+    mutationApplied: boolean;
+    reason: string;
+    state: {
+      revision: number;
+      parent?: { id: string };
+      lastMutation?: { id: string; appliedAt: number };
+    };
+  },
+  mutation: { id?: string; transition: string }
+) => void;
+
 function submitTaskRuntimeTransition(
   manager: MeetingContextManager,
   input: {
@@ -1094,11 +1114,13 @@ function submitTaskRuntimeTransition(
     expectedRevision?: number;
     recentParentToRestore?: string;
     sourceOwnerCorrection?: ReturnType<EffectiveQuestionSourceLedger["prepareOwnerCorrection"]>;
-  }
+  },
+  observeWriter?: TaskRuntimeWriterObserver
 ) {
   const { operationId, ...transition } = input;
+  const mutationId = operationId ?? createMeetingId("task_runtime_transition");
   const result = manager.commitTaskRuntimeTransition({
-    id: operationId ?? createMeetingId("task_runtime_transition"),
+    id: mutationId,
     expectedRevision:
       input.expectedRevision ?? manager.getTaskRuntimeState().revision,
     ...transition,
@@ -1110,6 +1132,7 @@ function submitTaskRuntimeTransition(
       rejectionReason: result.reason,
     });
   }
+  observeWriter?.(result, { id: mutationId, transition: input.transition });
   return result;
 }
 
@@ -1123,6 +1146,7 @@ function commitSourceOwnedTransitionWithManager(input: {
   currentRuntimeEpoch: number;
   operationId?: string;
   reason: string;
+  observeWriter?: TaskRuntimeWriterObserver;
 }): SourceOwnedDurableTransitionReceipt {
   const runtimeBefore = input.manager.getTaskRuntimeState();
   return commitSourceOwnedTransitionToRuntime({
@@ -1154,7 +1178,7 @@ function commitSourceOwnedTransitionWithManager(input: {
             ? null
             : committedRuntimeBefore.screenAttachment,
         parent: sourceResult.task ?? null,
-      });
+      }, input.observeWriter);
       return { runtimeResult, runtimeTransition };
     },
   });
@@ -1174,6 +1198,7 @@ function commitPlannedTaskRuntimeTransition(input: {
   screenAfter?: ActiveScreenTask | null;
   deadlineDelta?: MeetingTaskDeadlineDelta;
   operationId: string;
+  observeWriter?: TaskRuntimeWriterObserver;
 }) {
   const before = input.currentContext.taskRuntime;
   const runtimeTransition = input.planInput.explicitTaskMutationCommand.kind;
@@ -1213,6 +1238,9 @@ function commitPlannedTaskRuntimeTransition(input: {
   const runtimeResult = ready
     ? input.manager.commitPreparedTaskRuntimeTransition(prepared)
     : undefined;
+  if (runtimeResult) {
+    input.observeWriter?.(runtimeResult, { id: input.operationId, transition: runtimeTransition });
+  }
   const authorized = Boolean(runtimeResult?.authorized && runtimeResult.mutationApplied);
   const reason = !preMutationAuthorization.authorized ? `pre-mutation:${preMutationAuthorization.reason}`
     : !prepared.result.authorized || !prepared.result.mutationApplied ? prepared.result.reason
@@ -1264,10 +1292,12 @@ function submitTaskRuntimeClear(
     scope: "all" | "parent" | "screen";
     reason: string;
     expectedRevision?: number;
-  }
+  },
+  observeWriter?: TaskRuntimeWriterObserver
 ) {
+  const mutationId = createMeetingId("task_runtime_clear");
   const result = manager.clearTaskRuntime({
-    id: createMeetingId("task_runtime_clear"),
+    id: mutationId,
     expectedRevision:
       input.expectedRevision ?? manager.getTaskRuntimeState().revision,
     ...input,
@@ -1279,6 +1309,7 @@ function submitTaskRuntimeClear(
       rejectionReason: result.reason,
     });
   }
+  observeWriter?.(result, { id: mutationId, transition: `clear-${input.scope}` });
   return result;
 }
 
@@ -2871,6 +2902,182 @@ export function useMeetingAssistant() {
     })
   );
   const evaluationSessionId = contextManagerRef.current.getState().sessionId;
+  // Task 178A: bounded read-only stream of confirmed critical facts. It is
+  // bound where a runtime session id comes into being. Nothing in the runtime
+  // reads it, awaits it or lets it approve a result.
+  const runtimeCriticalEventStreamRef =
+    useRef<RuntimeCriticalEventStream | null>(null);
+  if (runtimeCriticalEventStreamRef.current === null) {
+    runtimeCriticalEventStreamRef.current = new RuntimeCriticalEventStream();
+    runtimeCriticalEventStreamRef.current.bind(evaluationSessionId);
+  }
+  // Advanced by the unmount cleanup, so a Stop that the cleanup started does
+  // not end subscriptions of a later mount.
+  const runtimeCriticalEventMountRef = useRef(0);
+  // The session and epoch each manual action was first recorded in. Its later
+  // stages are facts of that session, also when they are recorded after an
+  // await during which the session changed. Bounded, oldest first.
+  const manualActionCriticalOriginRef = useRef(
+    new Map<string, { runtimeSessionId: string; runtimeEpoch: number }>()
+  );
+  const emitRuntimeCriticalEvent = useCallback(
+    (input: RuntimeCriticalEventInput) => {
+      const stream = runtimeCriticalEventStreamRef.current;
+      if (!stream) return;
+      // Nothing in this function is a business statement, so the one try holds
+      // all of it: no failure of the event layer or of the Recording call can
+      // reach the producer. The existing Recording owner saves the event with
+      // the generation that is writable now; a failure only makes that saved
+      // evidence incomplete.
+      try {
+        const event = stream.emit(input);
+        if (!event) return;
+        stream.noteRecording(
+          sessionRecordingManagerRef.current?.recordRuntimeCriticalEvent(event) ??
+            "not-recording"
+        );
+      } catch (error) {
+        stream.noteRecordingFailure(error);
+      }
+    },
+    []
+  );
+  const observeTaskRuntimeWriter = useCallback(
+    (identity: {
+      runtimeSessionId: string | null | undefined;
+      runtimeEpoch?: number | null;
+      traceId?: string | null;
+      generationLeaseId?: string | null;
+      logicalQuestionUnitId?: string | null;
+      logicalQuestionRevision?: number | null;
+    }): TaskRuntimeWriterObserver =>
+      (result, mutation) => {
+        if (result.authorized && result.mutationApplied) {
+          emitRuntimeCriticalEvent({
+            fact: "lifecycle-committed",
+            stage: "task-writer-committed",
+            purpose: "formal",
+            runtimeSessionId: identity.runtimeSessionId,
+            runtimeEpoch: identity.runtimeEpoch,
+            occurredAt: result.state.lastMutation?.appliedAt,
+            refs: {
+              receiptId: result.state.lastMutation?.id ?? mutation.id,
+              taskRuntimeRevision: result.state.revision,
+              transition: mutation.transition,
+              taskId: result.state.parent?.id,
+              traceId: identity.traceId,
+              generationLeaseId: identity.generationLeaseId,
+              logicalQuestionUnitId: identity.logicalQuestionUnitId,
+              logicalQuestionRevision: identity.logicalQuestionRevision,
+            },
+          });
+          return;
+        }
+        // An authorized result with no mutation preserved the task: no fact.
+        if (result.authorized) return;
+        emitRuntimeCriticalEvent({
+          fact: "terminal",
+          stage: "task-writer-rejected",
+          purpose: "formal",
+          runtimeSessionId: identity.runtimeSessionId,
+          runtimeEpoch: identity.runtimeEpoch,
+          terminal: {
+            object: "lifecycle-transition",
+            disposition: "rejected",
+            reason: result.reason,
+          },
+          refs: {
+            receiptId: mutation.id,
+            taskRuntimeRevision: result.state.revision,
+            transition: mutation.transition,
+            traceId: identity.traceId,
+            generationLeaseId: identity.generationLeaseId,
+            logicalQuestionUnitId: identity.logicalQuestionUnitId,
+            logicalQuestionRevision: identity.logicalQuestionRevision,
+          },
+        });
+      },
+    [emitRuntimeCriticalEvent]
+  );
+  // Every assignment of the session's current settlement announces the Type
+  // and the Relation it adopts, with the settlement id they share. The event
+  // layer remembers the settlement last adopted and the value last announced
+  // for each settlement: assigning that settlement again with that value says
+  // nothing. An assignment that changes its adopted Type or Relation (its
+  // effective view, a manual retype of its owner, there and back) says so each
+  // time, and so does one that adopts another settlement than the last one,
+  // under the stage that names the assignment.
+  const emitCurrentQuestionSettlementAdopted = useCallback(
+    (
+      settlement: CurrentQuestionSettlementDecision | undefined,
+      traceId: string | undefined,
+      stage:
+        | "settlement-adopted"
+        | "effective-settlement-adopted"
+        | "manual-retype-projection" = "settlement-adopted"
+    ) => {
+      if (!settlement) return;
+      const refs = {
+        settlementId: settlement.settlementId,
+        operationId: settlement.operationId,
+        logicalQuestionUnitId: settlement.logicalQuestionUnitId,
+        logicalQuestionRevision: settlement.revision,
+        sourceKind: settlement.sourceKind,
+        sourceTurnIds: settlement.sourceTurnIds,
+        sourceObservationIds: settlement.sourceObservationIds,
+        traceId,
+      };
+      emitRuntimeCriticalEvent({
+        fact: "type-settled",
+        stage,
+        purpose: "formal",
+        runtimeSessionId: settlement.sessionId,
+        runtimeEpoch: settlement.runtimeEpoch,
+        refs: {
+          ...refs,
+          questionType: settlement.questionType,
+          authoritySource: settlement.typeAuthoritySource,
+        },
+      });
+      emitRuntimeCriticalEvent({
+        fact: "relation-settled",
+        stage,
+        purpose: "formal",
+        runtimeSessionId: settlement.sessionId,
+        runtimeEpoch: settlement.runtimeEpoch,
+        refs: {
+          ...refs,
+          relation: settlement.relation,
+          authoritySource: settlement.relationAuthoritySource,
+        },
+      });
+    },
+    [emitRuntimeCriticalEvent]
+  );
+  const emitLogicalQuestionUnitCommitted = useCallback(
+    (
+      unit: LogicalQuestionUnit,
+      stage: "canonical-publish" | "speech-correction" | "speech-correction-reversal",
+      traceId: string | undefined
+    ) => {
+      emitRuntimeCriticalEvent({
+        fact: "lqu-committed",
+        stage,
+        purpose: "formal",
+        runtimeSessionId: unit.sessionId,
+        runtimeEpoch: unit.runtimeEpoch,
+        refs: {
+          logicalQuestionUnitId: unit.id,
+          logicalQuestionRevision: unit.revision,
+          turnId: unit.currentTurnId,
+          sourceTurnIds: unit.sourceTurnIds,
+          sourceKind: stage === "canonical-publish" ? "voice" : "manual",
+          traceId,
+        },
+      });
+    },
+    [emitRuntimeCriticalEvent]
+  );
   const evaluationReadSessionRef = useRef(evaluationSessionId);
   const evaluationLoadRef = useRef(0);
   const loadHumanEvaluationSession = useCallback(async (sessionId: string) => {
@@ -3544,18 +3751,81 @@ export function useMeetingAssistant() {
     }) => {
       const runtimeState = contextManagerRef.current.getState();
       if (input.action === "type-correction") console.info("[manual-runtime-action]", input);
-      return sessionRecordingManagerRef.current?.recordManualRuntimeAction(
-        createManualRuntimeActionEvent({
-          ...input,
-          runtimeSessionId: runtimeState.sessionId,
-          runtimeEpoch: runtimeEpochRef.current,
-          observedVisibleAnswerRevision:
-            input.observedVisibleAnswerRevision ??
-            visibleAnswerRevisionRef.current,
-        })
-      );
+      const manualAction = createManualRuntimeActionEvent({
+        ...input,
+        runtimeSessionId: runtimeState.sessionId,
+        runtimeEpoch: runtimeEpochRef.current,
+        observedVisibleAnswerRevision:
+          input.observedVisibleAnswerRevision ??
+          visibleAnswerRevisionRef.current,
+      });
+      const recorded =
+        sessionRecordingManagerRef.current?.recordManualRuntimeAction(manualAction);
+      // The action's own identity is the session and epoch of its first
+      // record. A stage recorded after an await (the terminal of a regenerate
+      // or a Force Advise) keeps it, so it never joins a later session.
+      const origins = manualActionCriticalOriginRef.current;
+      let origin = origins.get(manualAction.actionId);
+      if (!origin) {
+        origin = {
+          runtimeSessionId: manualAction.runtimeSessionId,
+          runtimeEpoch: manualAction.runtimeEpoch,
+        };
+        origins.set(manualAction.actionId, origin);
+        // At most 64 actions are remembered; the oldest is forgotten first.
+        if (origins.size > 64) {
+          const oldest = origins.keys().next().value;
+          if (oldest !== undefined) origins.delete(oldest);
+        }
+      }
+      // A request is neither an acceptance nor a terminal and announces nothing.
+      if (manualAction.stage === "accepted") {
+        emitRuntimeCriticalEvent({
+          fact: "input-accepted",
+          stage: "manual-action-accepted",
+          purpose: "formal",
+          runtimeSessionId: origin.runtimeSessionId,
+          runtimeEpoch: origin.runtimeEpoch,
+          occurredAt: manualAction.occurredAt,
+          refs: {
+            manualActionId: manualAction.actionId,
+            manualAction: manualAction.action,
+            sourceKind: "manual",
+            traceId: manualAction.traceId,
+            logicalQuestionUnitId: manualAction.observedLogicalQuestionUnitId,
+            logicalQuestionRevision:
+              manualAction.observedLogicalQuestionUnitRevision,
+            taskId: manualAction.observedTaskId,
+          },
+        });
+      } else if (manualAction.stage === "terminal") {
+        emitRuntimeCriticalEvent({
+          fact: "terminal",
+          stage: "manual-action-terminal",
+          purpose: "formal",
+          runtimeSessionId: origin.runtimeSessionId,
+          runtimeEpoch: origin.runtimeEpoch,
+          occurredAt: manualAction.occurredAt,
+          terminal: {
+            object: "manual-action",
+            disposition: manualAction.terminalDisposition ?? "unspecified",
+            reason: manualAction.reason,
+          },
+          refs: {
+            manualActionId: manualAction.actionId,
+            manualAction: manualAction.action,
+            sourceKind: "manual",
+            traceId: manualAction.traceId,
+            logicalQuestionUnitId: manualAction.observedLogicalQuestionUnitId,
+            logicalQuestionRevision:
+              manualAction.observedLogicalQuestionUnitRevision,
+            taskId: manualAction.observedTaskId,
+          },
+        });
+      }
+      return recorded;
     },
-    []
+    [emitRuntimeCriticalEvent]
   );
   const codingSolutionManifestCacheRef = useRef(
     new Map<string, CodingSolutionManifest>()
@@ -4376,6 +4646,55 @@ export function useMeetingAssistant() {
       : validateWhiteboardRenderCandidate({ whiteboard: input.whiteboard }).then(finish);
   }, []);
 
+  // Task 178A. Facts confirmed by one staged generation-derived commit. It is
+  // called only after the coordinator returned committed and never from its
+  // callbacks, so a rolled-back install announces nothing.
+  const announceStagedGenerationCommit = useCallback(
+    (input: {
+      lease: AnswerGenerationLease;
+      stable: StableAnswerRevision;
+      committedArtifacts: readonly AnswerArtifactSection[];
+      transitionKind?: string;
+      transitionWriterResult?: Parameters<TaskRuntimeWriterObserver>[0];
+    }) => {
+      const traceId = input.stable.suggestion.sourceTraceId;
+      if (input.transitionKind && input.transitionWriterResult) {
+        observeTaskRuntimeWriter({
+          runtimeSessionId: input.lease.sessionId,
+          runtimeEpoch: input.lease.runtimeEpoch,
+          traceId,
+          generationLeaseId: input.lease.id,
+          logicalQuestionUnitId: input.stable.logicalQuestionUnitId,
+          logicalQuestionRevision: input.stable.logicalQuestionRevision,
+        })(input.transitionWriterResult, { transition: input.transitionKind });
+      }
+      // The lease owner authorized exactly the sections this candidate changed.
+      for (const artifact of input.committedArtifacts) {
+        if (artifact === "answer") continue;
+        emitRuntimeCriticalEvent({
+          fact: "artifact-committed",
+          stage: "section-revision-changed",
+          purpose: "formal",
+          runtimeSessionId: input.lease.sessionId,
+          runtimeEpoch: input.lease.runtimeEpoch,
+          occurredAt: input.stable.committedAt,
+          refs: {
+            artifact,
+            artifactRevision: input.stable.sections[artifact].revision,
+            stableRevision: input.stable.revision,
+            suggestionId: input.stable.suggestion.id,
+            generationLeaseId: input.lease.id,
+            taskId: input.stable.taskId,
+            logicalQuestionUnitId: input.stable.logicalQuestionUnitId,
+            logicalQuestionRevision: input.stable.logicalQuestionRevision,
+            traceId,
+          },
+        });
+      }
+    },
+    [emitRuntimeCriticalEvent, observeTaskRuntimeWriter]
+  );
+
   const commitDirectGenerationAnswer = useCallback((input: {
     lease: AnswerGenerationLease;
     leaseAuthorization: ReturnType<typeof authorizeAnswerGenerationLease>;
@@ -4389,6 +4708,7 @@ export function useMeetingAssistant() {
     onTaskMutation?: (installed: boolean) => void;
   }) => {
     let publication: PreparedStableAnswerPublication | undefined;
+    let transitionWriterResult: Parameters<TaskRuntimeWriterObserver>[0] | undefined;
     const result = generationDerivedCommitCoordinatorRef.current.commitStaged({
       lease: input.lease, leaseAuthorization: input.leaseAuthorization,
       expectedTaskRuntimeRevision: input.expectedTaskRuntimeRevision,
@@ -4400,6 +4720,7 @@ export function useMeetingAssistant() {
         prepare: () => prepareGenerationDerivedTaskRuntimeCommit(contextManagerRef.current, input.transition!, input.authorizedArtifacts),
         install: prepared => {
           const committed = contextManagerRef.current.commitPreparedTaskRuntimeTransition(prepared);
+          transitionWriterResult = committed;
           if (committed.authorized) input.onTaskMutation?.(true);
           return committed;
         },
@@ -4417,13 +4738,46 @@ export function useMeetingAssistant() {
         rollback: rollbackPreparedStableAnswerPublication,
       },
     });
+    if (result.committed) {
+      announceStagedGenerationCommit({
+        lease: input.lease,
+        stable: input.candidate,
+        committedArtifacts:
+          input.leaseAuthorization.authorizationBasis === "candidate-mutations"
+            ? input.leaseAuthorization.checkedArtifacts
+            : [],
+        transitionKind: input.transition?.transition,
+        transitionWriterResult,
+      });
+    }
     return { result, publication };
-  }, [prepareStableAnswerPublication, installPreparedStableAnswerPublication, rollbackPreparedStableAnswerPublication]);
+  }, [announceStagedGenerationCommit, prepareStableAnswerPublication, installPreparedStableAnswerPublication, rollbackPreparedStableAnswerPublication]);
 
   const finalizeStableAnswerPublication = useCallback(
     (prepared: PreparedStableAnswerPublication) => {
       clearPendingAnswerCommitTimer();
       const { stable, options, pending } = prepared;
+      // The staged commit already returned committed. This says nothing about
+      // display: a pinned or closed panel still commits, and shows nothing.
+      emitRuntimeCriticalEvent({
+        fact: "stable-answer-committed",
+        stage: options.artifactOnly
+          ? "artifact-only-publication"
+          : "stable-publication",
+        purpose: "formal",
+        runtimeSessionId: stable.sessionId,
+        runtimeEpoch: stable.runtimeEpoch,
+        occurredAt: stable.committedAt,
+        refs: {
+          stableRevision: stable.revision,
+          suggestionId: stable.suggestion.id,
+          settlementId: stable.settlementId,
+          taskId: stable.taskId,
+          logicalQuestionUnitId: stable.logicalQuestionUnitId,
+          logicalQuestionRevision: stable.logicalQuestionRevision,
+          traceId: stable.suggestion.sourceTraceId,
+        },
+      });
       manualAdviseDisplayRef.current.complete({
         target: { sessionId: stable.sessionId ?? contextManagerRef.current.getState().sessionId,
           logicalQuestionUnitId: stable.logicalQuestionUnitId ?? undefined,
@@ -4614,6 +4968,34 @@ export function useMeetingAssistant() {
         visibleAnswerRevision: visibleAnswerRevisionRef.current,
       });
       const entry = generationResultLedgerRef.current.getEntry(lease.id);
+      if (entry?.terminalization) {
+        // The ledger's own first terminal for this lease. This projection runs
+        // again for an already terminal lease; the event layer keeps the first.
+        emitRuntimeCriticalEvent({
+          fact: "terminal",
+          stage: "generation-result",
+          purpose: "formal",
+          runtimeSessionId: lease.sessionId,
+          runtimeEpoch: lease.runtimeEpoch,
+          occurredAt: entry.terminalization.terminalizedAt,
+          terminal: {
+            object: "generation",
+            disposition: entry.terminalization.disposition,
+            reason: entry.terminalization.reason,
+          },
+          refs: {
+            generationLeaseId: lease.id,
+            taskId: lease.taskId,
+            logicalQuestionUnitId: lease.logicalQuestionUnitId,
+            logicalQuestionRevision: lease.logicalQuestionRevision,
+            stableRevision:
+              entry.terminalization.disposition === "committed"
+                ? entry.visibleAnswerRevision
+                : undefined,
+            traceId: traceId ?? entry.traceId,
+          },
+        });
+      }
       if (entry && ["rejected", "failed", "timed-out", "aborted", "cancelled", "superseded"].includes(entry.commitDisposition)) {
         revokeIncompleteAdvisePin(traceId ?? entry.traceId, entry.commitReason);
       }
@@ -4953,6 +5335,7 @@ export function useMeetingAssistant() {
       { resetSections: pending.resetSections }
     );
     let pendingPublication: PreparedStableAnswerPublication | undefined;
+    let pendingTransitionWriterResult: Parameters<TaskRuntimeWriterObserver>[0] | undefined;
     const generationCommit =
       generationDerivedCommitCoordinatorRef.current.commitStaged({
         lease: pending.lease,
@@ -4981,10 +5364,14 @@ export function useMeetingAssistant() {
                   preparedPendingTransition.transition!,
                   pending.authorizedArtifacts
                 ),
-              install: (prepared) =>
-                contextManagerRef.current.commitPreparedTaskRuntimeTransition(
-                  prepared
-                ),
+              install: (prepared) => {
+                const committed =
+                  contextManagerRef.current.commitPreparedTaskRuntimeTransition(
+                    prepared
+                  );
+                pendingTransitionWriterResult = committed;
+                return committed;
+              },
               rollback: (prepared) =>
                 contextManagerRef.current.rollbackPreparedTaskRuntimeTransition(
                   prepared
@@ -5012,6 +5399,15 @@ export function useMeetingAssistant() {
           rollback: rollbackPreparedStableAnswerPublication,
         },
       });
+    if (generationCommit.committed) {
+      announceStagedGenerationCommit({
+        lease: pending.lease,
+        stable,
+        committedArtifacts: pendingMutationDelta.candidateMutatedArtifacts,
+        transitionKind: preparedPendingTransition.transition?.transition,
+        transitionWriterResult: pendingTransitionWriterResult,
+      });
+    }
     if (generationCommit.committed && pendingPublication) {
       finalizeStableAnswerPublication(pendingPublication);
     }
@@ -5119,6 +5515,7 @@ export function useMeetingAssistant() {
     });
     return "committed" as const;
   }, [
+    announceStagedGenerationCommit,
     finalizeStableAnswerPublication,
     installPreparedStableAnswerPublication,
     prepareStableAnswerPublication,
@@ -6676,6 +7073,9 @@ export function useMeetingAssistant() {
 
       });
       const contextState = contextManagerRef.current.getState();
+      // The only place the runtime session id changes. Old-session terminals
+      // from the epoch advance above were emitted before this rebind.
+      runtimeCriticalEventStreamRef.current?.bind(contextState.sessionId);
       const nextStatus: MeetingAssistantStatus =
         runtimeActiveRef.current ? "listening" : "idle";
 
@@ -9275,8 +9675,8 @@ export function useMeetingAssistant() {
           ...activeScreenTask,
           updatedAt: now,
         };
-        const activeInterviewTask =
-          contextManagerRef.current.getState().taskRuntime.parent;
+        const runtimeStateAtUpdate = contextManagerRef.current.getState();
+        const activeInterviewTask = runtimeStateAtUpdate.taskRuntime.parent;
         const updatedInterviewTask =
           activeInterviewTask?.source === "screen"
             ? {
@@ -9295,7 +9695,9 @@ export function useMeetingAssistant() {
           },
           screenAttachment: updatedScreenTask,
           parent: updatedInterviewTask,
-        });
+        }, observeTaskRuntimeWriter({
+          runtimeSessionId: runtimeStateAtUpdate.sessionId,
+        }));
         const contextState = contextManagerRef.current.getState();
         setState((previous) => ({
           ...previous,
@@ -9996,7 +10398,7 @@ export function useMeetingAssistant() {
     submitTaskRuntimeClear(contextManagerRef.current, {
       scope: "all",
       reason: "active-task-cleared",
-    });
+    }, observeTaskRuntimeWriter({ runtimeSessionId: currentRuntime.sessionId }));
     latestForceAdviseTargetRef.current = undefined;
     sessionRecordingManagerRef.current?.recordCaptureLifecycle({
       stage: "active-task-publication-state-cleared",
@@ -10042,6 +10444,7 @@ export function useMeetingAssistant() {
     void microphoneVadDisposeRef.current();
     microphoneSpeakingRef.current = false;
     const shutdownAtInvocation = shutdownRequestedRef.current;
+    const criticalEventMountAtStop = runtimeCriticalEventMountRef.current;
     const unresolvedManualRecovery = nativeAudioManualRecoveryRef.current;
     if (unresolvedManualRecovery) {
       const stoppedAt = Date.now();
@@ -10182,15 +10585,29 @@ export function useMeetingAssistant() {
         invalidateAudioProcessingSession();
         cancelActiveAdvisorJob("meeting-assistant-stopped");
         nativeAudioManualRecoveryRef.current = null;
+        // The writer's own result is kept and announced just below, with the
+        // session id this callback reads once after the Stop clears.
+        const stopClear: { observed?: Parameters<TaskRuntimeWriterObserver> } = {};
         submitTaskRuntimeClear(contextManagerRef.current, {
           scope: "all",
           reason: "meeting-assistant-stopped",
-        });
+        }, (...observed) => { stopClear.observed = observed; });
         contextManagerRef.current.clearInterviewSessionContext();
         clearPendingAnswerCommitTimer();
         pendingAnswerRevisionRef.current = null;
         answerDeliveryProgressRef.current = null;
         const contextState = contextManagerRef.current.getState();
+        if (stopClear.observed) {
+          observeTaskRuntimeWriter({
+            runtimeSessionId: contextState.sessionId,
+          })(...stopClear.observed);
+        }
+        // Stop ends the subscriptions of the stopped run, after the cancel
+        // terminals and the Stop clear above. The runtime session id is the
+        // same until the next reset, so its later facts stay accepted.
+        if (criticalEventMountAtStop === runtimeCriticalEventMountRef.current) {
+          runtimeCriticalEventStreamRef.current?.closeSubscriptions("meeting-assistant-stopped");
+        }
 
         const terminalMemoryUsageFlush = await flushMemoryContextUsage();
         if (terminalMemoryUsageFlush) {
@@ -11966,6 +12383,7 @@ export function useMeetingAssistant() {
       ) {
         currentQuestionSettlementRef.current =
           currentQuestionSettlement;
+        emitCurrentQuestionSettlementAdopted(currentQuestionSettlement, traceId);
         const currentManualCorrectionTarget =
           latestManualCorrectionTargetRef.current;
         if (
@@ -12022,6 +12440,15 @@ export function useMeetingAssistant() {
         return;
       }
       currentQuestionSettlementRef.current = currentQuestionSettlement;
+      emitCurrentQuestionSettlementAdopted(
+        currentQuestionSettlement,
+        traceId,
+        // By now the run's own settlement was replaced by its effective view.
+        currentQuestionSettlement ===
+          effectiveAdvisorSettlementView.effectiveSettlement
+          ? "effective-settlement-adopted"
+          : "settlement-adopted"
+      );
       if (settledExecutionPlan) {
         settledAdvisorExecutionPlanRef.current = settledExecutionPlan;
       }
@@ -12551,7 +12978,13 @@ export function useMeetingAssistant() {
               expectedRevision: contextState.taskRuntime.revision,
               screenAttachment: contextState.taskRuntime.screenAttachment,
               parent: updatedInterviewTask,
-            })
+            }, observeTaskRuntimeWriter({
+              runtimeSessionId: effectiveRuntimeCommitToken.expectedSessionId,
+              runtimeEpoch: effectiveRuntimeCommitToken.runtimeEpoch,
+              traceId,
+              logicalQuestionUnitId: advisorJob.logicalQuestionUnit?.id,
+              logicalQuestionRevision: advisorJob.logicalQuestionUnit?.revision,
+            }))
           : undefined;
         committedPhaseTransition = updatedInterviewTask
           ? detectCommittedBranchPhaseTransition({
@@ -12778,7 +13211,13 @@ export function useMeetingAssistant() {
                 ? null
                 : contextStateBeforeBoundary.taskRuntime.screenAttachment,
             parent: boundaryParent,
-          });
+          }, observeTaskRuntimeWriter({
+            runtimeSessionId: effectiveRuntimeCommitToken.expectedSessionId,
+            runtimeEpoch: effectiveRuntimeCommitToken.runtimeEpoch,
+            traceId,
+            logicalQuestionUnitId: advisorJob.logicalQuestionUnit?.id,
+            logicalQuestionRevision: advisorJob.logicalQuestionUnit?.revision,
+          }));
           const boundaryContext =
             buildEffectiveAdvisorBasePromptContext(
               advisorJob.logicalQuestionUnit
@@ -12905,6 +13344,13 @@ export function useMeetingAssistant() {
             currentRuntimeEpoch: runtimeEpochRef.current,
             operationId: currentQuestionSettlement?.operationId,
             reason: "source-owned-transition-committed",
+            observeWriter: observeTaskRuntimeWriter({
+              runtimeSessionId: effectiveRuntimeCommitToken.expectedSessionId,
+              runtimeEpoch: effectiveRuntimeCommitToken.runtimeEpoch,
+              traceId,
+              logicalQuestionUnitId: advisorJob.logicalQuestionUnit?.id,
+              logicalQuestionRevision: advisorJob.logicalQuestionUnit?.revision,
+            }),
           });
         const sourceTransitionDurablySatisfied =
           sourceOwnedTransitionDurablySatisfied(
@@ -13064,6 +13510,7 @@ export function useMeetingAssistant() {
       ) {
         currentQuestionSettlementRef.current =
           effectiveAdvisorSettlementView.effectiveSettlement;
+        emitCurrentQuestionSettlementAdopted(effectiveAdvisorSettlementView.effectiveSettlement, traceId, "effective-settlement-adopted");
       }
     }
     if (
@@ -13784,6 +14231,24 @@ export function useMeetingAssistant() {
           }
         : undefined,
     });
+    emitRuntimeCriticalEvent({
+      fact: "generation-admitted",
+      stage: "ledger-entry-created",
+      purpose: "formal",
+      runtimeSessionId: answerGenerationLease.sessionId,
+      runtimeEpoch: answerGenerationLease.runtimeEpoch,
+      occurredAt: answerGenerationLease.startedAt,
+      refs: {
+        generationLeaseId: answerGenerationLease.id,
+        advisorJobId: advisorJob.id,
+        // The Advisor job's own source: live turn, Force Advise, regenerate...
+        operationKind: advisorJob.source,
+        taskId: answerGenerationLease.taskId,
+        logicalQuestionUnitId: answerGenerationLease.logicalQuestionUnitId,
+        logicalQuestionRevision: answerGenerationLease.logicalQuestionRevision,
+        traceId,
+      },
+    });
     activeAdvisorGenerationLeaseRef.current = {
       advisorJobId: advisorJob.id,
       lease: answerGenerationLease,
@@ -14149,7 +14614,13 @@ export function useMeetingAssistant() {
         screenAttachment:
           projectBindingContextBefore.taskRuntime.screenAttachment,
         parent: projectBindingCommitResult.task ?? null,
-      });
+      }, observeTaskRuntimeWriter({
+        runtimeSessionId: effectiveRuntimeCommitToken.expectedSessionId,
+        runtimeEpoch: effectiveRuntimeCommitToken.runtimeEpoch,
+        traceId,
+        logicalQuestionUnitId: advisorJob.logicalQuestionUnit?.id,
+        logicalQuestionRevision: advisorJob.logicalQuestionUnit?.revision,
+      }));
       if (bindingRuntimeCommit.authorized && bindingRuntimeCommit.mutationApplied && projectBindingCommitResult.invalidateProjectState) {
         recentAdvisorContinuityRef.current = clearBoundedGeneratedSummaries(recentAdvisorContinuityRef.current);
       }
@@ -14789,6 +15260,26 @@ export function useMeetingAssistant() {
                 });
                 const modelRequestStartedAt = Date.now();
                 advisorModelRequestStartedAt = modelRequestStartedAt;
+                // Logical request start, immediately before transport dispatch.
+                // No physical attempt exists yet, so none is named.
+                emitRuntimeCriticalEvent({
+                  fact: "provider-request-started",
+                  stage: "request-start",
+                  purpose: "formal",
+                  runtimeSessionId: advisorModelExecutionIdentity.sessionId,
+                  runtimeEpoch: advisorModelExecutionIdentity.runtimeEpoch,
+                  occurredAt: modelRequestStartedAt,
+                  refs: {
+                    requestId,
+                    operationKind: "main-advisor",
+                    executionPlanId: advisorModelExecutionIdentity.executionPlanId,
+                    generationLeaseId: answerGenerationLease?.id,
+                    advisorJobId: advisorJob.id,
+                    logicalQuestionUnitId: answerGenerationLease?.logicalQuestionUnitId,
+                    logicalQuestionRevision: answerGenerationLease?.logicalQuestionRevision,
+                    traceId,
+                  },
+                });
                 advisorModelPromptText = formatTraceModelInput(
                   input.systemPrompt,
                   input.userMessage
@@ -14898,6 +15389,31 @@ export function useMeetingAssistant() {
                 });
               },
               onTerminal: (outcome) => {
+                // The provider attempt's own terminal. It is not the answer's
+                // and not the step's.
+                emitRuntimeCriticalEvent({
+                  fact: "terminal",
+                  stage: outcome.final ? "provider-attempt-final" : "provider-attempt",
+                  purpose: "formal",
+                  runtimeSessionId: outcome.sessionId,
+                  runtimeEpoch: outcome.runtimeEpoch,
+                  occurredAt: outcome.finishedAt,
+                  terminal: {
+                    object: "provider-request",
+                    disposition: outcome.status,
+                    reason: outcome.failureClass,
+                  },
+                  refs: {
+                    requestId: outcome.requestId,
+                    attemptId: outcome.attemptId,
+                    attemptNumber: outcome.attemptNumber,
+                    operationKind: "main-advisor",
+                    executionPlanId: outcome.executionPlanId,
+                    generationLeaseId: answerGenerationLease?.id,
+                    advisorJobId: advisorJob.id,
+                    traceId,
+                  },
+                });
                 traceStoreRef.current.updateMetadata(traceId, {
                   ...formatModelGenerationTerminalForTrace(outcome),
                   providerOutcomeStatus: outcome.status,
@@ -16990,6 +17506,7 @@ export function useMeetingAssistant() {
       intentDecision: AdvisorTurnIntentDecision;
     }) => {
       logicalQuestionUnitRef.current = logicalQuestionUnit;
+      emitLogicalQuestionUnitCommitted(logicalQuestionUnit, "canonical-publish", traceId);
       const logicalQuestionLease =
         createLogicalQuestionUnitLease(logicalQuestionUnit);
       const questionLineage = createCanonicalLogicalQuestionLineage({
@@ -19911,7 +20428,12 @@ export function useMeetingAssistant() {
         deadlineAt: number,
         lane: "critical" | "evaluation",
         prefix: string
-      ) => requestTaskRelationProviderCandidates({
+      ) => {
+        // Task 178A. The tier of each admitted physical candidate, and the
+        // candidates whose request really started. Observation only.
+        const admittedCandidateTiers = new Map<string, string>();
+        const startedCandidateRequestIds = new Set<string>();
+        return requestTaskRelationProviderCandidates({
         request: job.request, operationId: job.operationId, routes,
         admission: runtimeInferenceProviderAdmissionRef.current!, lane, deadlineAt, signal,
         executionIdentity: {
@@ -19921,6 +20443,43 @@ export function useMeetingAssistant() {
           logicalQuestionRevision: job.lease.identity.logicalQuestionUnitRevision,
         },
         onObservation: (event) => {
+          // Admission is not a request: the admitted candidate still has to
+          // reach its request below. Only a candidate whose request started
+          // has a provider-request terminal; the purpose is the schedule's own.
+          if (event.event === "admitted") {
+            admittedCandidateTiers.set(event.requestId, event.providerTier);
+          } else if (
+            (event.event === "completed" || event.event === "cancelled") &&
+            startedCandidateRequestIds.has(event.requestId)
+          ) {
+            emitRuntimeCriticalEvent({
+              fact: "terminal",
+              stage: "candidate-terminal",
+              purpose: runtimeReleaseRequested ? "formal" : "observation",
+              runtimeSessionId: job.sessionId,
+              runtimeEpoch: job.lease.identity.runtimeEpoch,
+              occurredAt: event.at,
+              terminal: {
+                object: "provider-request",
+                disposition:
+                  event.event === "cancelled"
+                    ? "cancelled"
+                    : event.result?.providerOutcome?.status ??
+                      (event.error ? "failed" : "completed"),
+                reason: event.result?.providerOutcome?.failureClass,
+              },
+              refs: {
+                requestId: event.requestId,
+                operationId: event.operationId,
+                operationKind: job.operationKind,
+                providerTier: event.providerTier,
+                logicalQuestionUnitId: job.lease.identity.logicalQuestionUnitId,
+                logicalQuestionRevision:
+                  job.lease.identity.logicalQuestionUnitRevision,
+                traceId,
+              },
+            });
+          }
           const { result, ...observation } = event;
           const metadata = {
             ...observation,
@@ -19952,7 +20511,35 @@ export function useMeetingAssistant() {
             traceStoreRef.current.recordOutput(traceId, `${prefix} ${event.providerTier} candidate output`, result.rawOutput, metadata);
           }
         },
-      }, { request: requestTaskRelationSplitShadow });
+      }, {
+        // The one start point shared by every Relation stage, formal and
+        // observation alike: the admitted candidate's execution calls its
+        // request here, immediately before transport dispatch. A candidate that
+        // was closed, aborted or past its deadline after admission never does.
+        request: (candidate) => {
+          const requestId = candidate.executionIdentity?.requestId;
+          if (requestId) startedCandidateRequestIds.add(requestId);
+          emitRuntimeCriticalEvent({
+            fact: "provider-request-started",
+            stage: "request-start",
+            purpose: runtimeReleaseRequested ? "formal" : "observation",
+            runtimeSessionId: job.sessionId,
+            runtimeEpoch: job.lease.identity.runtimeEpoch,
+            refs: {
+              requestId,
+              operationId: job.operationId,
+              operationKind: job.operationKind,
+              providerTier: requestId ? admittedCandidateTiers.get(requestId) : undefined,
+              logicalQuestionUnitId: job.lease.identity.logicalQuestionUnitId,
+              logicalQuestionRevision:
+                job.lease.identity.logicalQuestionUnitRevision,
+              traceId,
+            },
+          });
+          return requestTaskRelationSplitShadow(candidate);
+        },
+      });
+      };
       // The operation runtime invokes these callbacks with no promise chain to
       // carry a throw. From onStarted or execute it would strand the active job
       // and every later operation on that runtime; from onSettled it would strand
@@ -22800,6 +23387,23 @@ export function useMeetingAssistant() {
         traceId,
         ...ingressMetadata,
       });
+      emitRuntimeCriticalEvent({
+        fact: "input-accepted",
+        stage: "canonical-turn-ingress-admitted",
+        purpose: "formal",
+        runtimeSessionId: ingressMetadata.canonicalTurnIngressSessionId,
+        runtimeEpoch: ingressMetadata.canonicalTurnIngressRuntimeEpoch,
+        occurredAt: ingressMetadata.canonicalTurnIngressEnteredAt,
+        refs: {
+          traceId,
+          turnId: turn.id,
+          speaker: turn.speaker,
+          sourceKind: "voice",
+          transport,
+          scenarioRunId,
+          scenarioStepId,
+        },
+      });
       if (shutdownRequestedRef.current) {
         if (transport === "accepted-stt") {
           appendTranscriptTurnForTrace(turn, traceId, segment, {
@@ -24134,6 +24738,9 @@ export function useMeetingAssistant() {
     cancelActiveAdvisorJob("scenario-runner-stopped");
     screenAnalysisAbortRef.current?.abort();
     screenAnalysisAbortRef.current = null;
+    // The run's subscriptions end here. The terminals of the work cancelled
+    // above arrive later and are still facts of this session until the reset.
+    runtimeCriticalEventStreamRef.current?.closeSubscriptions("scenario-runner-stopped");
     await stopSessionRecording("scenario-runner-stopped");
     await resetMeetingRuntimeForNewSession("scenario-runner-stopped");
     setState((previous) => ({
@@ -25636,6 +26243,20 @@ export function useMeetingAssistant() {
         screenOperationId,
         trace.id
       );
+      emitRuntimeCriticalEvent({
+        fact: "input-accepted",
+        stage: "screen-operation-claimed",
+        purpose: "formal",
+        runtimeSessionId: screenRuntimeToken.expectedSessionId,
+        runtimeEpoch: screenRuntimeToken.runtimeEpoch,
+        refs: {
+          traceId: trace.id,
+          operationId: screenOperationId,
+          operationKind: "screen-operation",
+          sourceKind: "screen",
+          transport: latePreflightRepair ? "late-preflight-replay" : "capture",
+        },
+      });
       if (screenOperationClaim.supersedesTraceId) {
         traceStoreRef.current.updateMetadata(
           screenOperationClaim.supersedesTraceId,
@@ -25677,6 +26298,10 @@ export function useMeetingAssistant() {
         AnswerArtifactSection[] = [];
       let screenLatestUsefulAnswerMutationAuthorized = false;
       let screenTerminalError: string | null | undefined;
+      // Task 178A. How this flow ended, read by its release terminal only:
+      // "completed" is set by the flow's last statement, "error" by an exit
+      // that ends with an error which the terminal error above does not hold.
+      let screenFlowEnd: "completed" | "error" | undefined;
       let pendingLatePreflightRepair:
         | LateScreenPreflightRepairRequest
         | undefined;
@@ -25890,6 +26515,32 @@ export function useMeetingAssistant() {
           return false;
         }
         screenTerminalError ??= null;
+        // The Screen operation's own authorization boundary rejected it.
+        emitRuntimeCriticalEvent({
+          fact: "terminal",
+          stage: "screen-operation-authorization",
+          purpose: "formal",
+          runtimeSessionId: screenRuntimeToken.expectedSessionId,
+          runtimeEpoch: screenRuntimeToken.runtimeEpoch,
+          terminal: {
+            object: "screen-operation",
+            disposition:
+              !decision.authorized && decision.reason === "pipeline-owner-mismatch"
+                ? "superseded"
+                : "stale-rejected",
+            reason: decision.authorized
+              ? (!boundRecoveryStillCurrent
+                  ? "source-linkage-bound-source-revoked"
+                  : leaseAuthorization?.reason ?? "screen-generation-lease-stale")
+              : decision.reason,
+          },
+          refs: {
+            operationId: screenOperationId,
+            operationKind: "screen-operation",
+            generationLeaseId: screenGenerationLease?.id,
+            traceId: trace.id,
+          },
+        });
 
         recordScreenQuestionTypeOutcome({
           stage: screenModelCompletedAt ? "model-complete" : "release",
@@ -26281,6 +26932,7 @@ export function useMeetingAssistant() {
             status: runtimeActiveRef.current ? "listening" : idleReturnStatus,
             error: MISSING_AI_MESSAGE,
           }));
+          screenFlowEnd = "error";
           return;
         }
 
@@ -26295,6 +26947,7 @@ export function useMeetingAssistant() {
             status: runtimeActiveRef.current ? "listening" : idleReturnStatus,
             error: MISSING_VISION_MESSAGE,
           }));
+          screenFlowEnd = "error";
           return;
         }
 
@@ -28077,6 +28730,11 @@ export function useMeetingAssistant() {
               operationId:
                 committedScreenQuestionSettlement?.operationId,
               reason: "screen-source-transition-committed",
+              observeWriter: observeTaskRuntimeWriter({
+                runtimeSessionId: screenRuntimeToken.expectedSessionId,
+                runtimeEpoch: screenRuntimeToken.runtimeEpoch,
+                traceId: trace.id,
+              }),
             });
           const screenTransitionCommitted =
             sourceOwnedTransitionDurablySatisfied(
@@ -28193,6 +28851,7 @@ export function useMeetingAssistant() {
         ) {
           currentQuestionSettlementRef.current =
             screenCurrentQuestionSettlement;
+          emitCurrentQuestionSettlementAdopted(screenCurrentQuestionSettlement, trace.id);
           traceStoreRef.current.updateMetadata(trace.id, {
             ...formatCurrentQuestionSettlementForTrace(
               screenCurrentQuestionSettlement
@@ -28610,7 +29269,11 @@ export function useMeetingAssistant() {
             screenAttachment:
               screenExecutionContextState.taskRuntime.screenAttachment,
             parent: screenProjectBindingCommitResult.task ?? null,
-          });
+          }, observeTaskRuntimeWriter({
+            runtimeSessionId: screenRuntimeToken.expectedSessionId,
+            runtimeEpoch: screenRuntimeToken.runtimeEpoch,
+            traceId: trace.id,
+          }));
           screenRuntimeToken = rebaseRuntimeCommitToken({
             token: screenRuntimeToken,
             snapshot: readRuntimeCommitSnapshot(),
@@ -29014,6 +29677,24 @@ export function useMeetingAssistant() {
               }
             : undefined,
         });
+        emitRuntimeCriticalEvent({
+          fact: "generation-admitted",
+          stage: "ledger-entry-created",
+          purpose: "formal",
+          runtimeSessionId: screenGenerationLease.sessionId,
+          runtimeEpoch: screenGenerationLease.runtimeEpoch,
+          occurredAt: screenGenerationLease.startedAt,
+          refs: {
+            generationLeaseId: screenGenerationLease.id,
+            operationId: screenOperationId,
+            operationKind: "screen-operation",
+            sourceKind: "screen",
+            taskId: screenGenerationLease.taskId,
+            logicalQuestionUnitId: screenGenerationLease.logicalQuestionUnitId,
+            logicalQuestionRevision: screenGenerationLease.logicalQuestionRevision,
+            traceId: trace.id,
+          },
+        });
         publishGenerationResultProjection(
           screenGenerationLease,
           trace.id
@@ -29184,6 +29865,25 @@ export function useMeetingAssistant() {
               onRequest: (input) => {
                 const modelRequestStartedAt = Date.now();
                 screenModelRequestStartedAt = modelRequestStartedAt;
+                // Logical request start, immediately before transport dispatch.
+                emitRuntimeCriticalEvent({
+                  fact: "provider-request-started",
+                  stage: "request-start",
+                  purpose: "formal",
+                  runtimeSessionId: screenGenerationLease?.sessionId,
+                  runtimeEpoch: screenGenerationLease?.runtimeEpoch,
+                  occurredAt: modelRequestStartedAt,
+                  refs: {
+                    requestId: `screen-solve:${observation.id}`,
+                    operationKind: "screen-solver",
+                    operationId: screenOperationId,
+                    executionPlanId: screenExecutionPlan?.id,
+                    generationLeaseId: screenGenerationLease?.id,
+                    logicalQuestionUnitId: screenGenerationLease?.logicalQuestionUnitId,
+                    logicalQuestionRevision: screenGenerationLease?.logicalQuestionRevision,
+                    traceId: trace.id,
+                  },
+                });
                 screenModelPromptText = formatTraceModelInput(
                   input.systemPrompt,
                   input.userMessage
@@ -29258,6 +29958,31 @@ export function useMeetingAssistant() {
                 });
               },
               onTerminal: (outcome) => {
+                // The provider attempt's own terminal. It is not the answer's
+                // and not the Screen operation's.
+                emitRuntimeCriticalEvent({
+                  fact: "terminal",
+                  stage: outcome.final ? "provider-attempt-final" : "provider-attempt",
+                  purpose: "formal",
+                  runtimeSessionId: outcome.sessionId,
+                  runtimeEpoch: outcome.runtimeEpoch,
+                  occurredAt: outcome.finishedAt,
+                  terminal: {
+                    object: "provider-request",
+                    disposition: outcome.status,
+                    reason: outcome.failureClass,
+                  },
+                  refs: {
+                    requestId: outcome.requestId,
+                    attemptId: outcome.attemptId,
+                    attemptNumber: outcome.attemptNumber,
+                    operationKind: "screen-solver",
+                    operationId: screenOperationId,
+                    executionPlanId: outcome.executionPlanId,
+                    generationLeaseId: screenGenerationLease?.id,
+                    traceId: trace.id,
+                  },
+                });
                 traceStoreRef.current.updateMetadata(trace.id, {
                   ...formatModelGenerationTerminalForTrace(outcome),
                   providerOutcomeStatus: outcome.status,
@@ -30483,6 +31208,7 @@ export function useMeetingAssistant() {
         }
         traceStoreRef.current.finishStep(trace.id, uiStepId, "success");
         traceStoreRef.current.finishTrace(trace.id, "success");
+        screenFlowEnd = "completed";
       } catch (error) {
         if (pendingLatePreflightRepair) {
           screenTerminalError = null;
@@ -30663,7 +31389,72 @@ export function useMeetingAssistant() {
 
       } finally {
         finalizeOwnedScreenOperation();
-        screenOperationCoordinatorRef.current.release(screenOperationId);
+        const screenOperationReleased =
+          screenOperationCoordinatorRef.current.release(screenOperationId);
+        if (screenOperationReleased) {
+          // The operation left the slot it still owned. That is the operation
+          // ending, not a claim that its answer succeeded. With no reason the
+          // flow ran to its end; a reason says what this flow itself holds
+          // about how it ended instead (a capture that failed or never
+          // completed, an error or a cancellation after the capture).
+          emitRuntimeCriticalEvent({
+            fact: "terminal",
+            stage: "screen-operation-release",
+            purpose: "formal",
+            runtimeSessionId: screenRuntimeToken.expectedSessionId,
+            runtimeEpoch: screenRuntimeToken.runtimeEpoch,
+            terminal: {
+              object: "screen-operation",
+              disposition: "released",
+              reason:
+                screenFlowEnd === "completed"
+                  ? undefined
+                  : !screenCaptureSucceeded
+                    ? (typeof screenTerminalError === "string"
+                        ? "capture-failed"
+                        : "capture-not-completed")
+                    : typeof screenTerminalError === "string" ||
+                        screenFlowEnd === "error"
+                      ? "operation-error"
+                      : "cancelled",
+            },
+            refs: {
+              operationId: screenOperationId,
+              operationKind: "screen-operation",
+              generationLeaseId: screenGenerationLease?.id,
+              traceId: trace.id,
+            },
+          });
+        } else {
+          // A newer capture, Pause, Stop or Clear Task took the slot, and this
+          // flow ended without passing its own authorization boundary again
+          // (a Relation wait that came back cancelled). Its terminal is the
+          // flow's own authorization reading. The event layer keeps the first
+          // terminal of an operation, so one that a boundary already announced
+          // stays.
+          const screenExitAuthorization = readScreenAuthorization();
+          emitRuntimeCriticalEvent({
+            fact: "terminal",
+            stage: "screen-operation-exit",
+            purpose: "formal",
+            runtimeSessionId: screenRuntimeToken.expectedSessionId,
+            runtimeEpoch: screenRuntimeToken.runtimeEpoch,
+            terminal: {
+              object: "screen-operation",
+              disposition:
+                screenExitAuthorization.reason === "pipeline-owner-mismatch"
+                  ? "superseded"
+                  : "stale-rejected",
+              reason: screenExitAuthorization.reason,
+            },
+            refs: {
+              operationId: screenOperationId,
+              operationKind: "screen-operation",
+              generationLeaseId: screenGenerationLease?.id,
+              traceId: trace.id,
+            },
+          });
+        }
         const repair = pendingLatePreflightRepair;
         if (repair) {
           pendingLatePreflightRepair = undefined;
@@ -31808,6 +32599,13 @@ export function useMeetingAssistant() {
           planInput: correctionPlanInput,
           currentContext: contextState, currentLogicalQuestionUnit: correctionLogicalQuestionUnit,
           parentAfter, screenAfter: screenAfter ?? null, operationId: correctionTrace.id,
+          observeWriter: observeTaskRuntimeWriter({
+            runtimeSessionId: contextState.sessionId,
+            runtimeEpoch: correctionLogicalQuestionUnit.runtimeEpoch,
+            traceId: correctionTrace.id,
+            logicalQuestionUnitId: correctionLogicalQuestionUnit.id,
+            logicalQuestionRevision: correctionLogicalQuestionUnit.revision,
+          }),
         });
         correctionExecutionPlan = lifecycleCommit.plan;
         const lifecycleMetadata = {
@@ -31851,6 +32649,7 @@ export function useMeetingAssistant() {
         }
         if (!isSelectedHistoricalQuestion(correctionLogicalQuestionUnit.id)) {
           currentQuestionSettlementRef.current = correctionCurrentQuestionSettlement;
+          emitCurrentQuestionSettlementAdopted(correctionCurrentQuestionSettlement, correctionTrace.id);
           settledAdvisorExecutionPlanRef.current = correctionExecutionPlan;
         } else if (parentBefore?.id === parentAfter.id) {
           const current = currentQuestionSettlementRef.current;
@@ -31879,6 +32678,7 @@ export function useMeetingAssistant() {
               reasons: [...current.reasons, "current-question-inherits-manually-retyped-owner"],
             });
             currentQuestionSettlementRef.current = projected;
+            emitCurrentQuestionSettlementAdopted(projected, correctionTrace.id, "manual-retype-projection");
             const target = latestManualCorrectionTargetRef.current;
             if (target?.logicalQuestionUnit.id === current.logicalQuestionUnitId &&
                 target.logicalQuestionUnit.revision === current.revision) {
@@ -32745,7 +33545,7 @@ export function useMeetingAssistant() {
             reason: "disabled-preparation-context-cleared",
             screenAttachment: resetScreenTask ?? null,
             parent: resetParent ?? null,
-          });
+          }, observeTaskRuntimeWriter({ runtimeSessionId: contextState.sessionId }));
         }
         contextState = contextManagerRef.current.getState();
       }
@@ -33636,7 +34436,12 @@ export function useMeetingAssistant() {
                 screenAttachment:
                   meetingContext.taskRuntime.screenAttachment,
                 parent: updatedInterviewTask,
-              })
+              }, observeTaskRuntimeWriter({
+                runtimeSessionId: meetingContext.sessionId,
+                traceId: trace.id,
+                logicalQuestionUnitId: responseActionLogicalQuestionUnit?.id,
+                logicalQuestionRevision: responseActionLogicalQuestionUnit?.revision,
+              }))
             : undefined;
           if (
             !updatedInterviewTask ||
@@ -34710,6 +35515,7 @@ export function useMeetingAssistant() {
           ? createMeetingId("correction_owned_adjudication")
           : undefined;
       logicalQuestionUnitRef.current = application.logicalQuestionUnit;
+      emitLogicalQuestionUnitCommitted(application.logicalQuestionUnit, "speech-correction", trace.id);
       const previousLineage = currentQuestionLineageRef.current;
       const correctedLineage =
         previousLineage?.questionInstanceId ===
@@ -35420,6 +36226,13 @@ export function useMeetingAssistant() {
                   parentAfter: resettledParent,
                   screenAfter: resettledScreenTask ?? null,
                   operationId: repairTrace.id,
+                  observeWriter: observeTaskRuntimeWriter({
+                    runtimeSessionId: latestContext.sessionId,
+                    runtimeEpoch: application.logicalQuestionUnit.runtimeEpoch,
+                    traceId: repairTrace.id,
+                    logicalQuestionUnitId: application.logicalQuestionUnit.id,
+                    logicalQuestionRevision: application.logicalQuestionUnit.revision,
+                  }),
                 });
               const proposedExecutionPlan = lifecycleCommit.plan;
               if (lifecycleCommit.authorized) {
@@ -35492,6 +36305,7 @@ export function useMeetingAssistant() {
               } else {
                   currentQuestionSettlementRef.current =
                     settledCorrection;
+                  emitCurrentQuestionSettlementAdopted(settledCorrection, trace.id);
                   settledAdvisorExecutionPlanRef.current =
                     proposedExecutionPlan;
                   correctionSettlementOverride =
@@ -35886,6 +36700,7 @@ export function useMeetingAssistant() {
       settledAdvisorExecutionPlanRef.current = undefined;
       taskBoundaryCandidateRef.current = undefined;
       logicalQuestionUnitRef.current = reversal.logicalQuestionUnit;
+      emitLogicalQuestionUnitCommitted(reversal.logicalQuestionUnit, "speech-correction-reversal", trace.id);
 
       const reversedLineage = createCanonicalLogicalQuestionLineage({
         unit: reversal.logicalQuestionUnit,
@@ -36896,6 +37711,9 @@ export function useMeetingAssistant() {
   });
 
   useEffect(() => {
+    // A development remount runs this effect again after its cleanup released
+    // the stream: the session it is bound to accepts again.
+    runtimeCriticalEventStreamRef.current?.bind(contextManagerRef.current.getState().sessionId);
     return () => {
       void stopOnUnmountRef.current();
       responseOpportunityRuntimeRef.current?.cancelAll("disposed");
@@ -36915,6 +37733,8 @@ export function useMeetingAssistant() {
       factRiskReviewRuntimeRef.current?.clear();
       whiteboardSyntaxRepairRuntimeRef.current?.cancelAll("disposed");
       void semanticTaxonomyRuntimeRef.current?.dispose("meeting-hook-unmounted");
+      runtimeCriticalEventMountRef.current += 1;
+      runtimeCriticalEventStreamRef.current?.release("meeting-hook-unmounted");
     };
   }, []);
 
@@ -36974,6 +37794,25 @@ export function useMeetingAssistant() {
       });
     }
     const appliedAt = Date.now();
+    // The display acknowledgement itself. The event layer keeps the first one
+    // per generation, streaming or stable, whichever was applied first; a
+    // target with no content identity is not a fact.
+    emitRuntimeCriticalEvent({
+      fact: "first-visible-content",
+      stage: target.stableRevision !== undefined ? "stable" : "streaming",
+      purpose: "formal",
+      runtimeSessionId: target.sessionId,
+      occurredAt: appliedAt,
+      refs: {
+        generationId: target.generationId,
+        suggestionId: target.suggestionId,
+        stableRevision: target.stableRevision,
+        logicalQuestionUnitId: target.logicalQuestionUnitId,
+        logicalQuestionRevision: target.logicalQuestionRevision,
+        displaySurface: surface,
+        traceId: target.traceId,
+      },
+    });
     if (target.traceId && target.stableRevision !== undefined) {
       const trace = traceStoreRef.current.getTraces().find(candidate => candidate.id === target.traceId);
       if (trace && trace.metadata?.advisorOutputAppliedToDisplay !== true) {

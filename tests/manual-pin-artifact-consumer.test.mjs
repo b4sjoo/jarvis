@@ -37,6 +37,17 @@ function evaluate(text, context) {
 }
 function callback(name, context, ast = source) { return evaluate(`(${declaration(name, ast).initializer.arguments[0].getText(ast)})`, context); }
 
+// Task 178A: the shared helper builds the real critical event stream; the Hook's
+// own emit callbacks are extracted once and installed into each environment.
+const { createRuntimeCriticalEventHarness, RUNTIME_CRITICAL_EVENT_HOOK_CALLBACKS } =
+  await import(pathToFileURL(path.join(root, "tests/helpers/runtime-critical-events.js")));
+const criticalEventCallbackSources = Object.fromEntries(RUNTIME_CRITICAL_EVENT_HOOK_CALLBACKS.map((name) =>
+  [name, `(${declaration(name).initializer.arguments[0].getText(source)})`]));
+function installCriticalEvents(environment, context, sessionId) {
+  return createRuntimeCriticalEventHarness({ sessionId }).install(environment,
+    (name) => evaluate(criticalEventCallbackSources[name], context));
+}
+
 function bindQuestionReaders(env, context) {
   for (const name of ["readStableAnswerForQuestion", "isSelectedHistoricalQuestion", "isQuestionHiddenByPin"]) {
     env[name] = callback(name, context);
@@ -93,6 +104,7 @@ function screenStreamHarness({ pinPrevious = false, revokeDuringStream = false }
     revokeIncompleteAdvisePin:(id,reason)=>{revoked.push({id,reason});display.revokeIncomplete(id);},
   };
   const context = vm.createContext(env);
+  installCriticalEvents(env, context, "session");
   env.isQuestionHiddenByPin = callback("isQuestionHiddenByPin", context);
   env.readScreenAuthorization = evaluate(`(${local("readScreenAuthorization").initializer.getText(source)})`, context);
   const select = callback("selectAdviseDisplay", context);
@@ -189,8 +201,9 @@ function harness() {
     formatContextScopeResponseActionForTrace:()=>({}),
   };
   const context = vm.createContext(environment);
+  const criticalEvents = installCriticalEvents(environment, context, f.context.sessionId);
   bindQuestionReaders(environment, context);
-  return {f, snapshot, display, environment, context, calls, events};
+  return {f, snapshot, display, environment, context, calls, events, criticalEvents};
 }
 
 for (const action of ["regenerate", "enhance-context", "narrow-context", "regenerate-artifacts", "speakable"]) {
@@ -266,6 +279,8 @@ function reuseConsumer(env) {
   const statements=attempt.tryBlock.statements.slice(0,2);
   assert.match(statements[1].getText(source),/if \(!reusedArtifactCandidate\)/);
   const context=vm.createContext(env);
+  // An environment that already runs the real stream for its session keeps it.
+  env.criticalEvents ??= installCriticalEvents(env, context, "s");
   bindReuseAuthorization(env, context, run);
   env.readStableAnswerForQuestion = callback("readStableAnswerForQuestion", context);
   const base = find(run,n=>ts.isVariableDeclaration(n)&&n.name.getText(source)==="readPublicationBase");
@@ -333,6 +348,11 @@ test("AR-C1/4/5 real candidate source branch skips main Advisor once, then gener
   assert.equal(h.metadata.artifactCandidateSource,"reused");
   assert.equal(h.metadata.artifactReuseMainAdvisorCalled,false);
   assert.equal(result.advisorResponseCandidate,undefined,"no copied Provider attempts");
+  // Task 178A AE2: an Artifact reused without a model call has no Provider-start
+  // fact. The Advisor's only start producer is the request callback this branch
+  // never reaches (the static producer gate pins that site).
+  assert.deepEqual(h.env.criticalEvents.events().filter(event=>event.fact==="provider-request-started"),[]);
+  assert.equal(h.env.criticalEvents.stream.getStats().produced,0,"reuse itself announces nothing");
   await h.execute(); assert.equal(h.requests,1);
 });
 
@@ -430,6 +450,8 @@ function publicationHarness({ aRevision = 5, bRevision = 6 } = {}) {
     setState: update => { state = update(state); environment.state = state; },
   };
   const context = vm.createContext(environment);
+  const criticalEvents = installCriticalEvents(environment, context, "session-a");
+  environment.criticalEvents = criticalEvents;
   bindQuestionReaders(environment, context);
   for (const name of ["withLatestReliableSuggestion", "isCacheableReliableSuggestion"]) {
     const helper = find(source,n=>ts.isFunctionDeclaration(n)&&n.name?.text===name);
@@ -571,11 +593,25 @@ test("B-C7/9 actual reuse and final Artifact reducer read selected A-prime, then
   const selected = h.publish(h.aPrime, h.offer(h.aPrime)).stable;
   const consumer = selectedArtifactConsumer(h);
   const originalB = structuredClone(h.b);
+  const factsBefore = h.environment.criticalEvents.events().length;
   const result = await consumer.execute();
   assert.equal(consumer.requests, 0);
   assert.equal(result.reusedArtifactCandidate.suggestionId, h.aPrime.suggestion.id);
   assert.equal(h.environment.readPublicationBase(), selected);
+  // Task 178A AE2: the reuse itself is not a fact and starts no request.
+  assert.equal(h.environment.criticalEvents.events().length, factsBefore);
   const published = consumer.finish(result);
+  // Task 178A AE1/AE2: the whole reuse path in one run. The real reuse branch
+  // (no model call), the real artifact-only reducer and the real publication
+  // give one Stable Answer fact with the artifact-only stage and no Provider fact.
+  const reuseFacts = JSON.parse(JSON.stringify(h.environment.criticalEvents.events().slice(factsBefore)));
+  assert.deepEqual(reuseFacts.map(event => [event.fact, event.stage, event.runtimeSessionId, event.refs.suggestionId,
+    event.refs.stableRevision, event.refs.logicalQuestionUnitId]),
+    [["stable-answer-committed", "artifact-only-publication", "session-a", "artifact-A", published.revision,
+      h.aPrime.logicalQuestionUnitId]]);
+  assert.equal(h.environment.criticalEvents.events().some(event => event.fact === "provider-request-started" ||
+    event.terminal?.object === "provider-request"), false, "an Artifact reused without a model call has no Provider fact");
+  assert.equal(h.environment.criticalEvents.stream.getStats().staleSessionRejected, 0);
   assert.equal(h.display.selectedStable, published);
   assert.equal(h.environment.stableAnswerRevisionRef.current, h.b);
   assert.equal(h.render().stable, published);

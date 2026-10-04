@@ -56,6 +56,20 @@ const callbackSources = callbackNames.map((name) => {
   assert.ok(declaration.initializer && ts.isCallExpression(declaration.initializer));
   return declaration.initializer.arguments[0].getText(sourceFile);
 });
+// Task 178A: the shared helper builds the real critical event stream; the Hook's
+// own emit callbacks are extracted once, like every other callback here.
+const {
+  createRuntimeCriticalEventHarness,
+  normalizeRuntimeCriticalEvents,
+  RUNTIME_CRITICAL_EVENT_HOOK_CALLBACKS,
+} = await import(pathToFileURL(
+  path.join(root, ".tmp-tests/tests/helpers/runtime-critical-events.js")));
+const criticalEventCallbackSources = Object.fromEntries(
+  RUNTIME_CRITICAL_EVENT_HOOK_CALLBACKS.map((name) => [
+    name,
+    findNamedDeclaration(sourceFile, name).initializer.arguments[0].getText(sourceFile),
+  ])
+);
 // The Hook's own binding of the shared Ordered operation, so the harness runs
 // with exactly the dependencies production injects.
 const orderedOperationBindingSource = findNamedDeclaration(
@@ -521,6 +535,14 @@ function createHarness() {
     setState: (updater) => events.push({ ui: updater({}) }),
   };
   const context = vm.createContext(environment);
+  // Task 178A: the real stream on its own manual clock, so the exact timer
+  // assertions of this harness never see a delivery timer.
+  const criticalEvents = createRuntimeCriticalEventHarness({
+    sessionId: state.sessionId,
+    now: () => clock.now,
+  });
+  criticalEvents.install(environment, (name) =>
+    vm.runInContext(transpile(`(${criticalEventCallbackSources[name]})`), context));
   environment.resolveOrderedTaskRelationOperation = resolveOrderedTaskRelationWithinWindow;
   environment.resolveOrderedTaskRelationWithinWindow = vm.runInContext(
     transpile(`(${orderedOperationBindingSource})`),
@@ -539,6 +561,7 @@ function createHarness() {
     events,
     advisorCalls,
     environment,
+    criticalEvents,
     restore() {
       Date.now = realNow;
       globalThis.setTimeout = realSetTimeout;
@@ -1299,10 +1322,15 @@ test("does not let an old Screen terminal clear a newer operation", { concurrenc
         stateWrites += 1;
         ui = update(ui);
       },
+      ...screenExitFixture(harness, "old-screen-operation"),
     });
     const context = vm.createContext(harness.environment);
     harness.environment.finalizeOwnedScreenOperation = vm.runInContext(
       transpile(`(${finalizeOwnedScreenOperationSource})`),
+      context
+    );
+    harness.environment.readScreenAuthorization = vm.runInContext(
+      transpile(`(${readScreenAuthorizationSource})`),
       context
     );
     const runOldFinally = vm.runInContext(
@@ -1321,9 +1349,94 @@ test("does not let an old Screen terminal clear a newer operation", { concurrenc
       error: null,
     });
     assert.equal(coordinator.getActiveOperationId(), "new-screen-operation");
+    // Task 178A: the old operation ended without owning its slot. It is not
+    // released; its exit terminal carries its own authorization reading.
+    assert.deepEqual(screenOperationTerminals(harness), [["screen-operation-exit", "superseded", "pipeline-owner-mismatch",
+      "old-screen-operation", "old-screen-terminal-trace"]], "the superseded operation's own terminal");
   } finally {
     harness.restore();
   }
+});
+
+// Task 178A. What the Screen flow's finally block reads when the operation no
+// longer owns its slot: its own commit token and the real authorization reader.
+function screenExitFixture(harness, operationId) {
+  const snapshot = () => imports.buildRuntimeCommitSnapshot({
+    runtimeEpoch: harness.environment.runtimeEpochRef.current,
+    contextState: harness.environment.contextManagerRef.current.getState(),
+  });
+  return {
+    screenRuntimeToken: imports.createRuntimeCommitToken({ operationId, pipeline: "screen", snapshot: snapshot() }),
+    readRuntimeCommitSnapshot: snapshot,
+    screenGenerationLease: undefined,
+    screenCaptureSucceeded: true,
+    screenFlowEnd: undefined,
+  };
+}
+// The events live in the harness's vm realm; plain copies are compared.
+function screenOperationTerminals(harness) {
+  return JSON.parse(JSON.stringify(harness.criticalEvents.events()))
+    .filter((event) => event.fact === "terminal" && event.terminal.object === "screen-operation")
+    .map((event) => [event.stage, event.terminal.disposition, event.terminal.reason, event.refs.operationId, event.refs.traceId]);
+}
+
+test("AE2 a Screen flow that ends after it lost its slot announces its own exit terminal: stale-rejected after Pause, Stop or Clear Task invalidated the runtime work, and a terminal that a boundary already announced is kept", { concurrency: false }, () => {
+  const run = (arrange) => {
+    const harness = createHarness();
+    try {
+      const coordinator = new ScreenOperationCoordinator();
+      coordinator.claim("screen-operation");
+      Object.assign(harness.environment, {
+        screenOperationCoordinatorRef: { current: coordinator },
+        screenOperationId: "screen-operation",
+        analysisController: null,
+        screenAnalysisAbortRef: { current: null },
+        idleReturnStatus: "idle",
+        // The Relation wait came back cancelled: the flow set no error and returned.
+        screenTerminalError: null,
+        trace: { id: "screen-trace" },
+        pendingLatePreflightRepair: undefined,
+        ...screenExitFixture(harness, "screen-operation"),
+      });
+      const context = vm.createContext(harness.environment);
+      harness.environment.finalizeOwnedScreenOperation = vm.runInContext(
+        transpile(`(${finalizeOwnedScreenOperationSource})`), context);
+      harness.environment.readScreenAuthorization = vm.runInContext(
+        transpile(`(${readScreenAuthorizationSource})`), context);
+      const runFinally = vm.runInContext(transpile(`(() => ${captureScreenFinallySource})`), context);
+      arrange(harness, coordinator);
+      runFinally();
+      runFinally();
+      return { terminals: screenOperationTerminals(harness), stats: harness.criticalEvents.stream.getStats() };
+    } finally {
+      harness.restore();
+    }
+  };
+  // What invalidateRuntimeWork does for Pause, Stop and Clear Task: the epoch
+  // advances and the Screen slot is reset.
+  const invalidated = run((harness, coordinator) => {
+    harness.environment.runtimeEpochRef.current += 1;
+    coordinator.reset();
+  });
+  assert.deepEqual(invalidated.terminals, [["screen-operation-exit", "stale-rejected", "runtime-epoch-mismatch",
+    "screen-operation", "screen-trace"]], "invalidated during the wait");
+  assert.equal(invalidated.stats.duplicateSuppressed, 1, "one terminal per operation, however often the exit is read");
+  // The flow's own boundary rejected the operation first, with its own reason;
+  // the exit that follows does not replace that terminal.
+  const rejectedFirst = run((harness, coordinator) => {
+    harness.environment.emitRuntimeCriticalEvent({
+      fact: "terminal", stage: "screen-operation-authorization", purpose: "formal", runtimeSessionId: "session-a",
+      runtimeEpoch: 1, terminal: { object: "screen-operation", disposition: "stale-rejected", reason: "parent-revision-mismatch" },
+      refs: { operationId: "screen-operation", operationKind: "screen-operation", traceId: "screen-trace" },
+    });
+    coordinator.claim("newer-screen-operation");
+  });
+  assert.deepEqual(rejectedFirst.terminals, [["screen-operation-authorization", "stale-rejected", "parent-revision-mismatch",
+    "screen-operation", "screen-trace"]], "the first terminal is kept");
+  // The operation still owns its slot: the owner's release, cancelled after its capture.
+  const owned = run(() => undefined);
+  assert.deepEqual(owned.terminals, [["screen-operation-release", "released", "cancelled", "screen-operation", "screen-trace"]],
+    "an owner that was cancelled after its capture");
 });
 
 test("ends an owned Screen after post-model Preparation staleness", { concurrency: false }, () => {
@@ -1420,9 +1533,18 @@ test("ends an owned Screen after post-model Preparation staleness", { concurrenc
     runtimeActiveRef: { current: true },
     idleReturnStatus: "idle",
     screenTerminalError: undefined,
+    // The flow's own flags, read by the release terminal: the model had
+    // completed, so the capture had succeeded, and the flow did not run to its end.
+    screenCaptureSucceeded: true,
+    screenFlowEnd: undefined,
     pendingLatePreflightRepair: undefined,
+    sessionRecordingManagerRef: { current: undefined },
   };
   const context = vm.createContext(environment);
+  // Task 178A: the real stream and the real Hook emit callbacks.
+  const criticalEvents = createRuntimeCriticalEventHarness({ sessionId: contextState.sessionId });
+  criticalEvents.install(environment, (name) =>
+    vm.runInContext(transpile(`(${criticalEventCallbackSources[name]})`), context));
   environment.finalizeOwnedScreenOperation = vm.runInContext(
     transpile(`(${finalizeOwnedScreenOperationSource})`),
     context
@@ -1453,6 +1575,11 @@ test("ends an owned Screen after post-model Preparation staleness", { concurrenc
   assert.equal(ui.status, "listening");
   assert.equal(ui.partialSuggestion, "");
   assert.ok(terminalReasons.includes("preparation-context-revision-mismatch"));
+  // Task 178A: the boundary's terminal is the operation's terminal; the
+  // owner's release that follows in the finally block adds none.
+  assert.deepEqual(JSON.parse(JSON.stringify(criticalEvents.events())).filter((event) => event.fact === "terminal" &&
+    event.terminal.object === "screen-operation").map((event) => [event.stage, event.terminal.disposition, event.terminal.reason]),
+  [["screen-operation-authorization", "stale-rejected", "preparation-context-revision-mismatch"]], "one terminal");
 });
 
 test("terminalizes a stale explicit Type Correction intent before mutation", { concurrency: false }, async () => {
@@ -5786,3 +5913,480 @@ for (const entry of ["voice", "screen", "correction"]) {
     }
   });
 }
+
+// ===========================================================================
+// Task 178A (AE1, AE3, AE4, AE7): Relation provider candidates through the
+// Hook's real schedule, the real operation runtimes and the real admission
+// coordinator. Every event read below was emitted by that production code.
+// ===========================================================================
+
+const { awaitRuntimeCriticalFact, createFileBackedRecorder: aeCreateFileBackedRecorder } =
+  await import(pathToFileURL(path.join(root, ".tmp-tests/tests/helpers/runtime-critical-events.js")));
+const aeFormalStart = (unitId) => (event) => event.fact === "provider-request-started" &&
+  event.purpose === "formal" && event.refs.logicalQuestionUnitId === unitId;
+const aeProviderTerminal = (unitId) => (event) => event.fact === "terminal" &&
+  event.terminal.object === "provider-request" && event.refs.logicalQuestionUnitId === unitId;
+const aeRow = (event) => [event.fact, event.purpose, event.refs.operationKind, event.refs.providerTier,
+  event.terminal?.disposition ?? event.stage];
+
+test("AE1 Relation provider facts: each physical candidate whose request is really dispatched is one formal Provider-start fact, and its own completion or cancellation is its terminal", { concurrency: false }, async () => {
+  const h = st183Harness();
+  try {
+    const handle = scheduleEntry(h, "voice");
+    startVoiceFor(h, handle, logicalQuestionUnit);
+    assert.deepEqual(h.criticalEvents.events(), [], "scheduling a Relation operation starts no provider request yet");
+    h.clock.setTimeout(() => completeCandidate(candidate(h, "affinity", "intelligent"), { rawOutput: PARENT_INDEPENDENT }),
+      FORMAL_AFFINITY_AT);
+    h.clock.setTimeout(() => completeCandidate(candidate(h, "canonical", "intelligent"),
+      { rawOutput: canonicalOutput("new-parent") }), FORMAL_CANONICAL_AT);
+    await h.clock.advanceTo(FORMAL_CANONICAL_AT + 200);
+    expectEqual(finalRelation(h, "voice", {}), "new-parent", "the formal Relation itself");
+    const events = h.criticalEvents.events();
+    expectEqual(events.map(aeRow), [
+      ["provider-request-started", "formal", "task-relation-parent-affinity", "intelligent", "request-start"],
+      ["provider-request-started", "formal", "task-relation-parent-affinity", "fast", "request-start"],
+      ["terminal", "formal", "task-relation-parent-affinity", "intelligent", "completed"],
+      ["terminal", "formal", "task-relation-parent-affinity", "fast", "cancelled"],
+      ["provider-request-started", "formal", "task-relation-canonical-shadow", "intelligent", "request-start"],
+      ["provider-request-started", "formal", "task-relation-canonical-shadow", "fast", "request-start"],
+      ["terminal", "formal", "task-relation-canonical-shadow", "intelligent", "completed"],
+      ["terminal", "formal", "task-relation-canonical-shadow", "fast", "cancelled"],
+    ], "formal Relation provider facts");
+    // Exactly the physical requests that were really dispatched.
+    expectEqual(events.filter((event) => event.fact === "provider-request-started").length, h.executions.length,
+      "one start per dispatched request");
+    for (const event of events) {
+      expectEqual([event.runtimeSessionId, event.runtimeEpoch, event.refs.logicalQuestionUnitId,
+        event.refs.logicalQuestionRevision, event.refs.traceId],
+      ["session-a", 1, logicalQuestionUnit.id, logicalQuestionUnit.revision, "trace"], "the operation's own identity");
+      // The physical candidate and its logical operation, each by its own id.
+      const dispatched = h.executions.find((execution) =>
+        execution.request.operationKind === event.refs.operationKind && tierOf(execution) === event.refs.providerTier);
+      const requestId = dispatched.executionIdentity.requestId;
+      expectEqual([event.refs.requestId, event.omittedRefs, event.digestedRefs], [requestId, undefined, undefined], "candidate id");
+      expectEqual(requestId, `${event.refs.operationId}:${event.refs.providerTier}`, "the candidate of that operation");
+      expectEqual(JSON.stringify(event).includes(QUESTION), false, "no question text in an event");
+    }
+    // The start is the dispatch itself: produced at the time the request
+    // function was called, in dispatch order.
+    expectEqual(events.filter((event) => event.fact === "provider-request-started").map((event) =>
+      [event.refs.requestId, event.occurredAt]),
+    h.executions.map((execution) => [execution.executionIdentity.requestId, execution.dispatchedAt]), "start = dispatch");
+    // A provider terminal is the candidate's own: it is not the Relation
+    // settlement and not an answer.
+    expectEqual(events.some((event) => ["relation-settled", "type-settled", "stable-answer-committed"].includes(event.fact)),
+      false, "a provider terminal never stands for a settlement or an answer");
+    expectEqual(h.clock.timers.size, 0, "no timer left behind by event delivery");
+  } finally { h.restore(); }
+});
+
+// The same question unit and revision as a formal operation and, when Runtime
+// Cross-checks admits it, as an observation that is scheduled FIRST. Operation
+// ids are identical for both, so only the purpose tells them apart.
+async function aeRunSwitches({ debug, recording, crossChecks }) {
+  const h = st183Harness({ debug, crossChecks });
+  const recorder = recording ? await aeCreateFileBackedRecorder() : undefined;
+  try {
+    if (recorder) {
+      await recorder.start("session-a");
+      h.environment.sessionRecordingManagerRef.current = recorder.manager;
+    }
+    tagRequestLanes(h);
+    const lane = (name, stage, tier) => h.executions.filter((execution) => execution.lane === name &&
+      execution.request.operationKind.includes(stage) && tierOf(execution) === tier);
+    h.environment.scheduleTaskRelationAdjudication({
+      turn: { speaker: "them", text: QUESTION }, traceId: SAME_REVISION_TRACE, turnGateAction: "phase-control",
+      logicalQuestionUnit, lexical: { type: "coding" }, sourceKind: "voice", authorizeSourceOperation: sourceCurrent });
+    await h.clock.advanceTo(100);
+    const handle = scheduleEntry(h, "voice");
+    startVoiceFor(h, handle, logicalQuestionUnit);
+    const fromNow = (absolute) => absolute - 100;
+    h.clock.setTimeout(() => {
+      for (const execution of lane("evaluation", "canonical", "intelligent")) {
+        completeCandidate(execution, { rawOutput: canonicalOutput("followup-parent") });
+      }
+    }, fromNow(250));
+    h.clock.setTimeout(() => {
+      for (const execution of lane("critical", "affinity", "intelligent")) completeCandidate(execution, { rawOutput: PARENT_INDEPENDENT });
+    }, fromNow(100 + FORMAL_AFFINITY_AT));
+    h.clock.setTimeout(() => {
+      for (const execution of lane("critical", "canonical", "intelligent")) {
+        completeCandidate(execution, { rawOutput: canonicalOutput("new-parent") });
+      }
+    }, fromNow(100 + FORMAL_CANONICAL_AT));
+    await h.clock.advanceTo(100 + FORMAL_CANONICAL_AT + 200);
+    const events = h.criticalEvents.events();
+    let journal;
+    if (recorder) {
+      await recorder.stop();
+      journal = await recorder.files.readCriticalEventJournal(recorder.files.folders[0]);
+    }
+    return plain({
+      events,
+      formal: normalizeRuntimeCriticalEvents(events, { purpose: "formal" }),
+      formalTimes: events.filter((event) => event.purpose === "formal").map((event) => event.occurredAt - 10_000),
+      observation: events.filter((event) => event.purpose === "observation").map(aeRow),
+      business: { release: voiceRelease(h), requests: h.executions.filter((execution) => execution.lane === "critical")
+        .map((execution) => [execution.request.operationKind, tierOf(execution), execution.dispatchedAt - 10_000, execution.timeoutMs]) },
+      stats: h.criticalEvents.stream.getStats(),
+      journal,
+      timersLeft: h.clock.timers.size,
+    });
+  } finally {
+    h.restore();
+    await recorder?.cleanup();
+  }
+}
+
+test("AE3 Debug x Recording x Cross-checks: the eight combinations give the same formal facts in the same order at the same times; observation facts exist only with Cross-checks on, carry their purpose and never satisfy a formal barrier", { concurrency: false }, async () => {
+  const runs = [];
+  for (const switches of SWITCH_COMBINATIONS) runs.push({ switches, ...(await aeRunSwitches(switches)) });
+  const reference = runs[0];
+  expectEqual(reference.formal.map((event) => [event.fact, event.refs.operationKind, event.refs.providerTier,
+    event.terminal?.disposition ?? event.stage]), [
+    ["provider-request-started", "task-relation-parent-affinity", "intelligent", "request-start"],
+    ["provider-request-started", "task-relation-parent-affinity", "fast", "request-start"],
+    ["terminal", "task-relation-parent-affinity", "intelligent", "completed"],
+    ["terminal", "task-relation-parent-affinity", "fast", "cancelled"],
+    ["provider-request-started", "task-relation-canonical-shadow", "intelligent", "request-start"],
+    ["provider-request-started", "task-relation-canonical-shadow", "fast", "request-start"],
+    ["terminal", "task-relation-canonical-shadow", "intelligent", "completed"],
+    ["terminal", "task-relation-canonical-shadow", "fast", "cancelled"],
+  ], "formal facts with every switch off");
+  expectEqual(reference.business.release.settlement?.relation, "new-parent", "the formal result");
+  for (const run of runs) {
+    const name = JSON.stringify(run.switches);
+    assert.deepEqual(run.formal, reference.formal, `formal facts, relative order and normalized ids with ${name}`);
+    assert.deepEqual(run.formalTimes, reference.formalTimes, `formal availability times with ${name}`);
+    assert.deepEqual(run.business, reference.business, `formal requests and release with ${name}`);
+    expectEqual(run.timersLeft, 0, `timers left with ${name}`);
+    // Observation facts are present only when Cross-checks admitted the work.
+    expectEqual(run.observation.length > 0, run.switches.crossChecks, `observation facts with ${name}`);
+    if (run.switches.crossChecks) {
+      expectEqual(run.observation, [
+        ["provider-request-started", "observation", "task-relation-parent-affinity", "intelligent", "request-start"],
+        ["provider-request-started", "observation", "task-relation-parent-affinity", "fast", "request-start"],
+        // The formal schedule superseded the observation Affinity.
+        ["terminal", "observation", "task-relation-parent-affinity", "intelligent", "cancelled"],
+        ["terminal", "observation", "task-relation-parent-affinity", "fast", "cancelled"],
+        ["provider-request-started", "observation", "task-relation-canonical-shadow", "intelligent", "request-start"],
+        ["provider-request-started", "observation", "task-relation-canonical-shadow", "fast", "request-start"],
+        ["terminal", "observation", "task-relation-canonical-shadow", "intelligent", "completed"],
+        ["terminal", "observation", "task-relation-canonical-shadow", "fast", "cancelled"],
+      ], `observation facts with ${name}`);
+    }
+    // A formal barrier: "the Parent Affinity request of this question started".
+    // The observation of the same unit and revision started 100 ms earlier
+    // under the same operation kind; it must not satisfy the barrier.
+    const blind = run.events.find((event) => event.fact === "provider-request-started" &&
+      event.refs.operationKind === "task-relation-parent-affinity" && event.refs.logicalQuestionUnitId === logicalQuestionUnit.id);
+    const barrier = run.events.find((event) => aeFormalStart(logicalQuestionUnit.id)(event) &&
+      event.refs.operationKind === "task-relation-parent-affinity");
+    expectEqual([barrier.purpose, barrier.occurredAt - 10_000], ["formal", 100], `formal barrier with ${name}`);
+    expectEqual(blind.occurredAt - 10_000, run.switches.crossChecks ? 0 : 100,
+      `a purpose-blind match would fire on the observation with ${name}`);
+    // Recording saves the same facts it was handed, in order; off saves nothing.
+    expectEqual(run.journal?.status, run.switches.recording ? "ok" : undefined, `journal with ${name}`);
+    if (run.journal) {
+      expectEqual([run.journal.contiguous, run.journal.eventCount, run.journal.sessions[0].events.map((event) => event.eventId)],
+        [true, run.events.length, run.events.map((event) => event.eventId)], `saved order and identity with ${name}`);
+      expectEqual(run.stats.recording.accepted, run.events.length, `recorded count with ${name}`);
+    } else expectEqual(run.stats.recording["not-recording"], run.events.length, `not-recording count with ${name}`);
+  }
+});
+
+test("AE4 Relation isolation: with the interface idle, observed, failing by a throw or by a rejected promise, overflowing or unable to write, the formal requests, budgets, timers, trace and release are identical", { concurrency: false }, async () => {
+  const idle = (mode) => mode === "idle" || mode === "idle-again";
+  const run = async (mode) => {
+    const h = st183Harness();
+    const recorder = mode === "write-failure" ? await aeCreateFileBackedRecorder() : undefined;
+    try {
+      let thrown = 0;
+      if (idle(mode) || mode === "overflow-capacity-1") {
+        // The same real stream class: nobody subscribed, or a queue of one.
+        h.criticalEvents = createRuntimeCriticalEventHarness({ sessionId: "session-a", observe: !idle(mode),
+          now: () => h.clock.now, limits: idle(mode) ? undefined : { queueCapacity: 1 } });
+        Object.assign(h.environment, h.criticalEvents.hookRefs);
+      }
+      if (mode === "throwing-observer") {
+        h.criticalEvents.stream.subscribe(() => { thrown += 1; throw new Error("observer failure"); });
+      }
+      if (mode === "async-failing-observer") {
+        // An async observer: every delivery it is handed rejects.
+        h.criticalEvents.stream.subscribe(async () => { thrown += 1; throw new Error("async observer failure"); });
+      }
+      if (recorder) {
+        await recorder.start("session-a");
+        recorder.files.failWrite = (relativePath) => relativePath.startsWith("runtime-events/");
+        // Only the event sink is handed to the real, failing Recording owner;
+        // every other recorder call is the inert stand-in of an inactive one.
+        h.environment.sessionRecordingManagerRef.current = new Proxy({
+          getState: () => ({ active: false }),
+          recordRuntimeCriticalEvent: (event) => recorder.manager.recordRuntimeCriticalEvent(event),
+        }, { get: (target, key) => target[key] ?? (() => undefined) });
+      }
+      const handle = scheduleEntry(h, "voice");
+      startVoiceFor(h, handle, logicalQuestionUnit);
+      h.clock.setTimeout(() => completeCandidate(candidate(h, "affinity", "intelligent"), { rawOutput: PARENT_INDEPENDENT }),
+        FORMAL_AFFINITY_AT);
+      h.clock.setTimeout(() => completeCandidate(candidate(h, "canonical", "intelligent"),
+        { rawOutput: canonicalOutput("new-parent") }), FORMAL_CANONICAL_AT);
+      await h.clock.advanceTo(FORMAL_CANONICAL_AT + 200);
+      h.criticalEvents.flush();
+      // A rejection handler is a microtask; a macrotask later every one has run.
+      await new Promise((resolve) => setImmediate(resolve));
+      let manifest;
+      if (recorder) {
+        await recorder.stop();
+        manifest = await recorder.files.readManifest(recorder.files.folders[0]);
+      }
+      return plain({
+        business: { release: voiceRelease(h), trace: h.metadata, timersLeft: h.clock.timers.size,
+          requests: h.executions.map((execution) => [execution.request.operationKind, tierOf(execution),
+            execution.dispatchedAt - 10_000, execution.timeoutMs, execution.signal.aborted]) },
+        stats: h.criticalEvents.stream.getStats(), thrown, delivered: h.criticalEvents.deliveries.map((delivery) => delivery.kind),
+        integrity: manifest?.recordingIntegrity,
+      });
+    } finally {
+      h.restore();
+      await recorder?.cleanup();
+    }
+  };
+  // The reference is the idle interface on this code: the real stream with
+  // nobody subscribed. It runs twice, which is the comparison's own noise floor.
+  const modes = ["idle", "idle-again", "observer", "throwing-observer", "async-failing-observer",
+    "overflow-capacity-1", "write-failure"];
+  const results = {};
+  for (const mode of modes) results[mode] = await run(mode);
+  const reference = results.idle;
+  expectEqual(reference.business.release.settlement?.relation, "new-parent", "the formal result");
+  expectEqual(reference.business.requests.length, 4, "the formal requests");
+  for (const mode of ["idle", "idle-again"]) {
+    expectEqual([results[mode].stats.produced, results[mode].stats.drainsScheduled, results[mode].stats.queuePeak],
+      [8, 0, 0], `${mode}: produced, never queued or scheduled`);
+  }
+  for (const mode of modes) {
+    assert.deepEqual(results[mode].business, reference.business, `${mode}: formal Relation`);
+  }
+  expectEqual(results.observer.delivered.length, 8, "observer deliveries");
+  expectEqual([results["throwing-observer"].thrown, results["throwing-observer"].stats.subscriberFailures,
+    results["throwing-observer"].delivered.length], [1, 1, 8], "a throwing observer is cut off; the other one is complete");
+  // An observer that fails by a rejected promise is cut off with one failure
+  // counted, whatever it was handed before its first rejection ran.
+  expectEqual([results["async-failing-observer"].thrown >= 1, results["async-failing-observer"].stats.subscriberFailures,
+    results["async-failing-observer"].stats.subscribers, results["async-failing-observer"].delivered.length],
+  [true, 1, 1, 8], "an async-failing observer is cut off; the other one is complete");
+  // A queue of one: the evidence is explicitly incomplete, the Relation untouched.
+  expectEqual([results["overflow-capacity-1"].stats.produced, results["overflow-capacity-1"].stats.overflowDropped > 0,
+    results["overflow-capacity-1"].delivered.includes("gap")], [8, true, true], "overflow is explicit");
+  // Every journal append failed: the Recording owner's own integrity says so.
+  expectEqual([results["write-failure"].stats.produced, results["write-failure"].stats.recording.accepted,
+    results["write-failure"].integrity.status, results["write-failure"].integrity.failedWriteCount],
+  [8, 8, "incomplete", 8], "write failure is the recording's own incomplete mark");
+});
+
+test("AE1/AE5 Relation ids of production length: every dispatched candidate's start and terminal carry the same bounded reference, apart from the other candidate and from the logical operation", { concurrency: false }, async () => {
+  const h = st183Harness({ child: true });
+  try {
+    // Identifiers shaped like the ones the Hook allocates in production.
+    const sessionId = "meeting_1791075101245_k3j9x2";
+    const unit = { ...logicalQuestionUnit, id: "logical_question_1791075101301_q8w2e1", sessionId };
+    h.environment.contextManagerRef.current.getState().sessionId = sessionId;
+    h.environment.logicalQuestionUnitRef.current = unit;
+    h.criticalEvents = createRuntimeCriticalEventHarness({ sessionId, now: () => h.clock.now });
+    Object.assign(h.environment, h.criticalEvents.hookRefs);
+    const handle = scheduleRelation(h, { sourceKind: "voice", unit });
+    assert.ok(handle);
+    await h.clock.advanceTo(200);
+    assert.ok(h.executions.length >= 2, "the candidates were really dispatched");
+    stop(h);
+    await h.clock.advanceTo(2 * STAGE_MS + 500);
+    const events = h.criticalEvents.events();
+    const started = events.filter((event) => event.fact === "provider-request-started");
+    expectEqual(started.length, h.executions.length, "one start per dispatched request");
+    // Starts are produced in dispatch order, so each start has its raw id.
+    const rawRequestIds = h.executions.map((execution) => execution.executionIdentity.requestId);
+    assert.ok(rawRequestIds.some((requestId) => requestId.length > 128) && rawRequestIds.some((requestId) => requestId.length <= 128),
+      `production-length candidate ids straddle the reference bound: ${rawRequestIds.map((requestId) => requestId.length)}`);
+    started.forEach((event, index) => {
+      const raw = rawRequestIds[index];
+      if (raw.length > 128) {
+        expectEqual([event.refs.requestId.length, event.refs.requestId.slice(0, 111), event.digestedRefs],
+          [128, raw.slice(0, 111), ["requestId"]], "a longer candidate id is carried as a bounded digest and named");
+      } else expectEqual([event.refs.requestId, event.digestedRefs], [raw, undefined], "a shorter one is carried as it is");
+    });
+    for (const event of events) {
+      expectEqual(event.omittedRefs, undefined, "no identity is dropped");
+      expectEqual([event.refs.requestId.length <= 128, event.refs.operationId.length <= 128], [true, true], "bounded");
+      expectEqual(JSON.stringify(event).length <= 2048, true, "within the payload bound");
+    }
+    // Start and terminal pair by identity; candidates and operations stay apart.
+    const terminals = events.filter((event) => event.fact === "terminal");
+    expectEqual(terminals.length, started.length, "every started candidate has its terminal");
+    expectEqual(terminals.map((event) => event.refs.requestId).sort(), started.map((event) => event.refs.requestId).sort(),
+      "each terminal names the request that started");
+    expectEqual(new Set(started.map((event) => event.refs.requestId)).size, started.length, "candidates are told apart");
+    for (const event of started) {
+      const siblings = started.filter((other) => other.refs.operationId === event.refs.operationId);
+      expectEqual(siblings.map((other) => other.refs.providerTier).sort(), ["fast", "intelligent"], "one operation, two candidates");
+      expectEqual(event.refs.requestId === event.refs.operationId, false, "candidate and operation are different references");
+    }
+    expectEqual(new Set(started.map((event) => event.refs.operationId)).size, started.length / 2, "operations are told apart");
+  } finally { h.restore(); }
+});
+
+test("AE7 a test-side observer waits for A's real formal Provider-start fact, then submits B through the production Relation entry; A ends by the real latest-wins terminal and commits nothing", { concurrency: false }, async () => {
+  const h = st183Harness();
+  try {
+    const current = { unit: logicalQuestionUnit };
+    const ownerOf = (unit) => () => (current.unit === unit ? sourceCurrent()
+      : { authorized: false, reason: "logical-question-revision-mismatch", mismatchedKey: "source" });
+    const timersBefore = h.clock.timers.size;
+    // Registered before A exists.
+    const startOfA = awaitRuntimeCriticalFact(h.criticalEvents.stream, {
+      matches: aeFormalStart(logicalQuestionUnit.id),
+      endsOn: aeProviderTerminal(logicalQuestionUnit.id),
+    });
+    expectEqual(h.clock.timers.size, timersBefore, "the observer registers no timer");
+    const handleA = scheduleRelation(h, { sourceKind: "screen", authorizeSourceOperation: ownerOf(logicalQuestionUnit) });
+    const waitA = watch(h, startScreenConsumer(h, handleA));
+    expectEqual(startOfA.settled(), false, "A is scheduled, its provider request has not started");
+    await h.clock.advanceTo(500);
+    const oldCandidates = [...h.executions];
+    expectEqual(oldCandidates.length, 2, "A's candidates were really dispatched");
+    // Delivery is its own macrotask: nothing was delivered inside A's stack.
+    expectEqual(startOfA.settled(), false, "not delivered inside the producer's stack");
+    h.criticalEvents.manualClock.runNext();
+    const reached = await startOfA.promise;
+    expectEqual([reached.status, reached.event.purpose, reached.event.refs.operationKind, reached.event.refs.logicalQuestionRevision],
+      ["matched", "formal", "task-relation-parent-affinity", logicalQuestionUnit.revision], "A's Provider-start fact");
+    // B, a newer revision, through the same production entry and its real guards.
+    const unitB = nextUnit();
+    current.unit = unitB;
+    const handleB = scheduleRelation(h, { sourceKind: "screen", unit: unitB, authorizeSourceOperation: ownerOf(unitB) });
+    const waitB = watch(h, startScreenConsumer(h, handleB));
+    await h.clock.advanceTo(1_000);
+    expectEqual(oldCandidates.every((execution) => execution.signal.aborted), true, "A's requests were aborted by B");
+    const newAffinity = candidates(h, "affinity").filter((execution) => !oldCandidates.includes(execution));
+    completeCandidate(newAffinity.find((execution) => tierOf(execution) === "fast"), { rawOutput: FAST_PARENT_INDEPENDENT });
+    await h.clock.advanceTo(500 + STAGE_MS + 100);
+    const consumedCanonical = candidates(h, "canonical").filter((execution) =>
+      execution.request.identity.logicalQuestionUnitRevision === unitB.revision && tierOf(execution) === "intelligent");
+    for (const execution of consumedCanonical) completeCandidate(execution, { rawOutput: canonicalOutput("unknown") });
+    await h.clock.advanceTo(500 + STAGE_MS + 300);
+    expectEqual([waitA.state, waitA.value?.terminalDisposition], ["resolved", "cancelled"], "A: superseded, commits nothing");
+    expectEqual([waitB.state, waitB.value?.terminalDisposition], ["resolved", "resolved"], "B: the latest owner resolves");
+    // The real latest-wins terminals, read from the stream.
+    const events = h.criticalEvents.events();
+    const ofRevision = (revision) => events.filter((event) => event.refs.logicalQuestionRevision === revision);
+    const factsOfA = ofRevision(logicalQuestionUnit.revision);
+    expectEqual(factsOfA.slice(0, 4).map(aeRow), [
+      ["provider-request-started", "formal", "task-relation-parent-affinity", "intelligent", "request-start"],
+      ["provider-request-started", "formal", "task-relation-parent-affinity", "fast", "request-start"],
+      ["terminal", "formal", "task-relation-parent-affinity", "intelligent", "cancelled"],
+      ["terminal", "formal", "task-relation-parent-affinity", "fast", "cancelled"],
+    ], "A's facts: started, then cancelled by the newer question");
+    // Whatever A's superseded operation still started, none of it completed.
+    expectEqual([factsOfA.filter((event) => event.fact === "terminal").every((event) => event.terminal.disposition === "cancelled"),
+      factsOfA.filter((event) => event.fact === "terminal").length,
+      factsOfA.filter((event) => event.fact === "provider-request-started").length],
+    [true, factsOfA.length / 2, factsOfA.length / 2], "every request of A ended cancelled");
+    const firstOfB = events.findIndex((event) => event.refs.logicalQuestionRevision === unitB.revision);
+    expectEqual(events[firstOfB].sequence > reached.event.sequence, true, "B started after A's Provider-start fact");
+    expectEqual(ofRevision(unitB.revision).filter((event) => event.fact === "terminal" && event.terminal.disposition === "completed").length >= 1,
+      true, "B's own candidates completed");
+    expectEqual(h.clock.timers.size, 0, "no timer left behind");
+  } finally { h.restore(); }
+});
+
+test("AE7 negatives: A cancelled while queued, A admitted and cancelled before its request is dispatched, A failing before any request, and a fact that never happens all end the observer explicitly, without a timer or an invented Provider fact", { concurrency: false }, async () => {
+  // Cancelled while still queued for admission: no request started, so there
+  // is neither a Provider-start fact nor a provider-request terminal. The
+  // session is then stopped and the observer ends on the stream's own marker.
+  const queued = st183Harness();
+  try {
+    saturateAdmission(queued);
+    const waiter = awaitRuntimeCriticalFact(queued.criticalEvents.stream, {
+      matches: aeFormalStart(logicalQuestionUnit.id), endsOn: aeProviderTerminal(logicalQuestionUnit.id) });
+    const handle = scheduleRelation(queued, { sourceKind: "screen" });
+    const wait = watch(queued, startScreenConsumer(queued, handle));
+    await queued.clock.advanceTo(500);
+    queued.criticalEvents.flush();
+    expectEqual(waiter.settled(), false, "queued behind admission: no start, no terminal yet");
+    const dispatchedBefore = queued.executions.length;
+    stop(queued);
+    await queued.clock.advanceTo(600);
+    queued.criticalEvents.flush();
+    expectEqual(queued.executions.length, dispatchedBefore, "the queued candidates were never dispatched");
+    expectEqual(queued.criticalEvents.events().filter((event) => event.refs.logicalQuestionUnitId === logicalQuestionUnit.id &&
+      (event.fact === "provider-request-started" || event.terminal?.object === "provider-request")), [],
+    "no Provider fact was invented for a request that never left the queue");
+    expectEqual(waiter.settled(), false, "nothing claims the fact happened or ended");
+    queued.criticalEvents.stream.closeSubscriptions("meeting-assistant-stopped");
+    queued.criticalEvents.flush();
+    expectEqual(await waiter.promise, { status: "closed", reason: "meeting-assistant-stopped", discarded: 0 }, "cancel before start");
+    await queued.clock.advanceTo(2 * STAGE_MS + 500);
+    expectEqual(wait.state !== "pending", true, "the consumer ended by its own exit");
+  } finally { queued.restore(); }
+
+  // Admitted, then cancelled in the same tick, before its execution reached the
+  // request: admission is not a request start.
+  const admitted = st183Harness();
+  try {
+    // The Hook's own Stop runs in the turn that admitted the first candidate,
+    // after the Hook's sink saw "admitted" and before the microtask that would
+    // have dispatched the request.
+    const selector = admitted.environment.requestTaskRelationProviderCandidates;
+    const seen = [];
+    admitted.environment.requestTaskRelationProviderCandidates = (input, dependencies) => selector({ ...input,
+      onObservation(observation) {
+        input.onObservation?.(observation);
+        seen.push(`${observation.event}:${observation.providerTier}`);
+        if (observation.event === "admitted" && !seen.includes("stopped")) { seen.push("stopped"); stop(admitted); }
+      } }, dependencies);
+    const handle = scheduleRelation(admitted, { sourceKind: "screen" });
+    const wait = watch(admitted, startScreenConsumer(admitted, handle));
+    await admitted.clock.advanceTo(2 * STAGE_MS + 500);
+    admitted.criticalEvents.flush();
+    expectEqual(seen.slice(0, 5), ["queued:intelligent", "admitted:intelligent", "stopped", "cancelled:intelligent", "cancelled:fast"],
+      "admitted, then stopped in the same turn; the selector reports both candidates cancelled");
+    const affinityRequests = admitted.executions.filter((execution) => execution.request.operationKind.includes("affinity"));
+    expectEqual(affinityRequests.length, 0, "the admitted Affinity candidate never dispatched a request");
+    const events = admitted.criticalEvents.events();
+    expectEqual(events.filter((event) => event.refs.operationKind === "task-relation-parent-affinity"), [],
+      "an admitted candidate that never dispatched has no start and no provider terminal");
+    // The harness Stop cancels runtimes only, so the next stage still ran: its
+    // candidates were really dispatched, and each has a start and a terminal.
+    const later = events.filter((event) => event.refs.operationKind !== "task-relation-parent-affinity");
+    expectEqual([later.filter((event) => event.fact === "provider-request-started").length,
+      later.filter((event) => event.terminal?.object === "provider-request").length],
+    [admitted.executions.length, admitted.executions.length], "only dispatched requests have Provider facts");
+    expectEqual(wait.state !== "pending", true, "the consumer ended by its own exit");
+  } finally { admitted.restore(); }
+
+  // Early failure: the provider route is missing, so no request ever starts.
+  // The session then stops; the observer ends on the stream's closed marker.
+  const failing = st183Harness({ runtime: { missingProviderTier: "intelligent" } });
+  try {
+    const timers = failing.clock.timers.size;
+    const waiter = awaitRuntimeCriticalFact(failing.criticalEvents.stream, {
+      matches: aeFormalStart(logicalQuestionUnit.id), endsOn: aeProviderTerminal(logicalQuestionUnit.id) });
+    const handle = scheduleRelation(failing, { sourceKind: "screen" });
+    const wait = watch(failing, startScreenConsumer(failing, handle));
+    await failing.clock.advanceTo(2 * STAGE_MS + 500);
+    failing.criticalEvents.flush();
+    expectEqual(failing.executions.length, 0, "no physical request was dispatched");
+    expectEqual(failing.criticalEvents.events(), [], "no Provider fact exists for a request that never started");
+    expectEqual(waiter.settled(), false, "the fact has not happened and nothing claims it did");
+    expectEqual(wait.state !== "pending", true, "the consumer ended by its own error exit");
+    // Stop, as the Hook does it: the subscriptions of the stopped run end.
+    failing.criticalEvents.stream.closeSubscriptions("meeting-assistant-stopped");
+    failing.criticalEvents.flush();
+    expectEqual(await waiter.promise, { status: "closed", reason: "meeting-assistant-stopped", discarded: 0 }, "never-happening fact");
+    expectEqual(failing.clock.timers.size, timers, "the observer added no timer");
+    // After unmount the stream is released: nothing can be waited on.
+    failing.criticalEvents.stream.release("meeting-hook-unmounted");
+    const late = awaitRuntimeCriticalFact(failing.criticalEvents.stream, { matches: () => true });
+    expectEqual(await late.promise, { status: "rejected", reason: "not-accepting" }, "released stream");
+  } finally { failing.restore(); }
+});

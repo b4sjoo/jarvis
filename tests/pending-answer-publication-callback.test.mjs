@@ -55,7 +55,16 @@ function findFunctionSource(name) {
   return declaration.getText(sourceFile);
 }
 
+// Task 178A: the shared helper builds the real critical event stream.
+const {
+  createRuntimeCriticalEventHarness,
+  RUNTIME_CRITICAL_EVENT_HOOK_CALLBACKS,
+} = await import(pathToFileURL(
+  path.join(compiledRoot, "tests/helpers/runtime-critical-events.js")));
 const callbackSources = {
+  // The Hook's own emit callbacks, lifted like every other callback here.
+  ...Object.fromEntries(RUNTIME_CRITICAL_EVENT_HOOK_CALLBACKS.map((name) =>
+    [name, findCallbackSource(name)])),
   observeGenerationCodingManifest: findCallbackSource("observeGenerationCodingManifest"),
   validateGeneratedWhiteboard: findCallbackSource("validateGeneratedWhiteboard"),
   readStableAnswerForQuestion: findCallbackSource("readStableAnswerForQuestion"),
@@ -367,6 +376,14 @@ function createHarness(options = {}) {
       },
     },
   };
+  // Task 178A: the real stream, bound to this harness's runtime session.
+  const criticalEvents = createRuntimeCriticalEventHarness({
+    sessionId: "session-a",
+    now: () => now,
+    limits: options.criticalEventLimits,
+    observe: options.criticalEventObserver,
+  });
+  Object.assign(environment, criticalEvents.hookRefs);
   const context = vm.createContext(environment);
   environment.emptyAdviseDisplay = vm.runInContext(
     transpile(`(${findCallbackSource("emptyAdviseDisplay")})()`), context
@@ -381,6 +398,7 @@ function createHarness(options = {}) {
     environment,
     refs,
     manager,
+    criticalEvents,
     setNow(value) { now = value; },
     evaluate(source, globals = {}) {
       Object.assign(environment, globals);
@@ -1041,4 +1059,1378 @@ test("rejects pending publication after its question or manual revision becomes 
       harness.restore();
     }
   }
+});
+
+// ===========================================================================
+// Task 178A: minimal critical runtime event contract.
+//
+// Every event read below was emitted by production Hook code that this harness
+// lifted and executed. No test calls the stream's emit or builds an event.
+// ===========================================================================
+
+const { readdirSync } = await import("node:fs");
+const { performance: aePerformance } = await import("node:perf_hooks");
+const { createManualRuntimeActionEvent } = await import(pathToFileURL(
+  path.join(compiledRoot, "src/lib/meeting/manual-runtime-action.js")));
+// The real manual-action ledger writer, in place of the harness collector.
+const aeUseRealManualActionLedger = (h) => {
+  h.environment.recordManualRuntimeAction = h.evaluate(
+    `(${findCallbackSource("recordManualRuntimeAction")})`, { createManualRuntimeActionEvent });
+};
+const {
+  createFileBackedRecorder,
+  describeRuntimeCriticalEventShape,
+  normalizeRuntimeCriticalEvents,
+} = await import(pathToFileURL(
+  path.join(compiledRoot, "tests/helpers/runtime-critical-events.js")));
+
+const AE_EMIT = "emitRuntimeCriticalEvent";
+const AE_HELPERS = [
+  "emitCurrentQuestionSettlementAdopted",
+  "emitLogicalQuestionUnitCommitted",
+  "announceStagedGenerationCommit",
+  "observeTaskRuntimeWriter",
+];
+
+function aeEnclosingPath(node, file) {
+  const names = [];
+  for (let current = node.parent; current; current = current.parent) {
+    if (ts.isVariableDeclaration(current) && ts.isIdentifier(current.name) && current.initializer &&
+      (ts.isArrowFunction(current.initializer) || ts.isFunctionExpression(current.initializer) ||
+        (ts.isCallExpression(current.initializer) &&
+          ["useCallback", "useMemo"].includes(current.initializer.expression.getText(file))))) {
+      names.unshift(current.name.text);
+    } else if (ts.isPropertyAssignment(current) &&
+      (ts.isArrowFunction(current.initializer) || ts.isFunctionExpression(current.initializer))) {
+      names.unshift(current.name.getText(file));
+    } else if (ts.isFunctionDeclaration(current) && current.name) {
+      names.unshift(current.name.text);
+    }
+  }
+  return names.filter((name) => name !== "useMeetingAssistant").join(">");
+}
+
+function aeCalls(file, names) {
+  const calls = [];
+  const visit = (node) => {
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && names.includes(node.expression.text)) {
+      calls.push(node);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  return calls;
+}
+
+const aeProperty = (objectLiteral, name, file) =>
+  objectLiteral.properties.find((property) => property.name?.getText(file) === name);
+
+// The fact-to-producer table: one row per emit call site in the Hook, as
+// "<fact>[:<terminal object>] @ <enclosing symbol>".
+const AE_PRODUCER_TABLE = [
+  "input-accepted @ processCanonicalTurnIngress",
+  "input-accepted @ captureScreenContext",
+  "input-accepted @ recordManualRuntimeAction",
+  "lqu-committed @ emitLogicalQuestionUnitCommitted",
+  "type-settled @ emitCurrentQuestionSettlementAdopted",
+  "relation-settled @ emitCurrentQuestionSettlementAdopted",
+  "lifecycle-committed @ observeTaskRuntimeWriter",
+  "generation-admitted @ runAdvisor",
+  "generation-admitted @ captureScreenContext",
+  "provider-request-started @ runAdvisor>onRequest",
+  "provider-request-started @ captureScreenContext>onRequest",
+  "provider-request-started @ scheduleTaskRelationSplitRuntime>runCandidates>request",
+  "stable-answer-committed @ finalizeStableAnswerPublication",
+  "artifact-committed @ announceStagedGenerationCommit",
+  "first-visible-content @ recordAdviseDisplayApplied",
+  "terminal:provider-request @ runAdvisor>onTerminal",
+  "terminal:provider-request @ captureScreenContext>onTerminal",
+  "terminal:provider-request @ scheduleTaskRelationSplitRuntime>runCandidates>onObservation",
+  "terminal:generation @ publishGenerationResultProjection",
+  "terminal:screen-operation @ captureScreenContext>rejectStaleScreenOperation",
+  // The flow's end: the owner's release, or its exit after it lost the slot.
+  "terminal:screen-operation @ captureScreenContext",
+  "terminal:screen-operation @ captureScreenContext",
+  "terminal:manual-action @ recordManualRuntimeAction",
+  "terminal:lifecycle-transition @ observeTaskRuntimeWriter",
+];
+// Where the owner confirmation points call the shared Hook producers.
+const AE_PRODUCER_CALL_SITES = [
+  "emitLogicalQuestionUnitCommitted @ publishCanonicalLogicalQuestionTarget",
+  "emitLogicalQuestionUnitCommitted @ submitSpeechCorrection",
+  "emitLogicalQuestionUnitCommitted @ deactivateSpeechCorrection",
+  "emitCurrentQuestionSettlementAdopted @ runAdvisor",
+  "emitCurrentQuestionSettlementAdopted @ runAdvisor",
+  "emitCurrentQuestionSettlementAdopted @ runAdvisor>commitDeferredResponseAuthorizedState",
+  "emitCurrentQuestionSettlementAdopted @ captureScreenContext",
+  "emitCurrentQuestionSettlementAdopted @ correctActiveQuestionType",
+  "emitCurrentQuestionSettlementAdopted @ correctActiveQuestionType",
+  "emitCurrentQuestionSettlementAdopted @ submitSpeechCorrection",
+  "announceStagedGenerationCommit @ commitDirectGenerationAnswer",
+  "announceStagedGenerationCommit @ tryCommitPendingAnswer",
+  "observeTaskRuntimeWriter @ announceStagedGenerationCommit",
+  "observeTaskRuntimeWriter @ setActiveScreenTaskTimeoutMinutes",
+  "observeTaskRuntimeWriter @ clearActiveTask",
+  "observeTaskRuntimeWriter @ stop",
+  "observeTaskRuntimeWriter @ runAdvisor",
+  "observeTaskRuntimeWriter @ runAdvisor",
+  "observeTaskRuntimeWriter @ runAdvisor",
+  "observeTaskRuntimeWriter @ runAdvisor",
+  "observeTaskRuntimeWriter @ captureScreenContext",
+  "observeTaskRuntimeWriter @ captureScreenContext",
+  "observeTaskRuntimeWriter @ correctActiveQuestionType",
+  "observeTaskRuntimeWriter @ setPreparationRuntimeCapabilities",
+  "observeTaskRuntimeWriter @ applyResponseAction",
+  "observeTaskRuntimeWriter @ submitSpeechCorrection",
+];
+
+test("AE1 static gate: every emit call site is in the fact-to-producer table, with a literal fact and its own purpose", () => {
+  const rows = aeCalls(sourceFile, [AE_EMIT]).map((call) => {
+    const input = call.arguments[0];
+    assert.ok(input && ts.isObjectLiteralExpression(input), "an emit takes one object literal");
+    const fact = aeProperty(input, "fact", sourceFile)?.initializer;
+    assert.ok(fact && ts.isStringLiteral(fact), "the fact is a string literal");
+    const purpose = aeProperty(input, "purpose", sourceFile)?.initializer.getText(sourceFile).replace(/\s+/g, " ");
+    const path = aeEnclosingPath(call, sourceFile);
+    // Only the shared Relation candidate point runs observation work, and it
+    // takes the purpose from the schedule's own entry.
+    assert.equal(purpose, path.startsWith("scheduleTaskRelationSplitRuntime")
+      ? 'runtimeReleaseRequested ? "formal" : "observation"' : '"formal"', path);
+    assert.ok(aeProperty(input, "runtimeSessionId", sourceFile), `${path}: the fact names its own session`);
+    const terminal = aeProperty(input, "terminal", sourceFile)?.initializer;
+    const object = terminal ? aeProperty(terminal, "object", sourceFile).initializer.text : undefined;
+    assert.equal(fact.text === "terminal", Boolean(object), path);
+    return `${fact.text}${object ? `:${object}` : ""} @ ${path}`;
+  });
+  assert.deepEqual([...rows].sort(), [...AE_PRODUCER_TABLE].sort());
+  assert.deepEqual(new Set(AE_PRODUCER_TABLE.map((row) => row.split(/[: ]/)[0])),
+    new Set(["input-accepted", "lqu-committed", "type-settled", "relation-settled", "lifecycle-committed",
+      "generation-admitted", "provider-request-started", "stable-answer-committed", "artifact-committed",
+      "first-visible-content", "terminal"]), "all eleven facts have a producer");
+
+  const sites = aeCalls(sourceFile, AE_HELPERS)
+    .map((call) => `${call.expression.text} @ ${aeEnclosingPath(call, sourceFile)}`);
+  assert.deepEqual([...sites].sort(), [...AE_PRODUCER_CALL_SITES].sort());
+
+  // The sole task writer is called in five Hook places; each hands the writer's
+  // own result to the observer or, for a staged install, announces only after
+  // the coordinator returned.
+  const writerCalls = [];
+  const visit = (node) => {
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) &&
+      ["commitTaskRuntimeTransition", "commitPreparedTaskRuntimeTransition", "clearTaskRuntime"]
+        .includes(node.expression.name.text)) writerCalls.push(aeEnclosingPath(node, sourceFile));
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  assert.deepEqual(writerCalls.sort(), [
+    "commitDirectGenerationAnswer>install", "commitPlannedTaskRuntimeTransition",
+    "submitTaskRuntimeClear", "submitTaskRuntimeTransition", "tryCommitPendingAnswer>install",
+  ]);
+  for (const adapter of ["submitTaskRuntimeTransition", "commitPlannedTaskRuntimeTransition", "submitTaskRuntimeClear"]) {
+    assert.match(findFunctionSource(adapter), /observeWriter\?\.\(\s*(result|runtimeResult),/, adapter);
+  }
+  for (const name of ["submitTaskRuntimeTransition", "submitTaskRuntimeClear"]) {
+    for (const call of aeCalls(sourceFile, [name])) {
+      assert.equal(call.arguments.length, 3, `${name} in ${aeEnclosingPath(call, sourceFile)} passes the observer`);
+    }
+  }
+  for (const name of ["commitSourceOwnedTransitionWithManager", "commitPlannedTaskRuntimeTransition"]) {
+    for (const call of aeCalls(sourceFile, [name])) {
+      assert.ok(aeProperty(call.arguments[0], "observeWriter", sourceFile),
+        `${name} in ${aeEnclosingPath(call, sourceFile)} passes the observer`);
+    }
+  }
+  // No emit inside a staged-commit callback.
+  for (const call of aeCalls(sourceFile, [AE_EMIT, ...AE_HELPERS])) {
+    assert.doesNotMatch(aeEnclosingPath(call, sourceFile), />(install|rollback|prepare)$/);
+  }
+
+  // Type settled and Relation settled, one rule for every source: each
+  // assignment of a settlement as the session's current settlement is followed
+  // at once by its announcement, with that same settlement.
+  const adoptions = [];
+  const visitAdoption = (node) => {
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+      node.left.getText(sourceFile) === "currentQuestionSettlementRef.current" &&
+      node.right.getText(sourceFile) !== "undefined") {
+      const statement = node.parent;
+      assert.ok(ts.isExpressionStatement(statement) && ts.isBlock(statement.parent));
+      const next = statement.parent.statements[statement.parent.statements.indexOf(statement) + 1];
+      const where = aeEnclosingPath(node, sourceFile);
+      assert.ok(next && ts.isExpressionStatement(next) && ts.isCallExpression(next.expression) &&
+        next.expression.expression.getText(sourceFile) === "emitCurrentQuestionSettlementAdopted",
+        `${where}: the adoption is announced by the next statement`);
+      assert.equal(next.expression.arguments[0].getText(sourceFile).replace(/\s+/g, ""),
+        node.right.getText(sourceFile).replace(/\s+/g, ""), `${where}: the announced settlement is the adopted one`);
+      adoptions.push(`${where} ${next.expression.arguments[2]?.getText(sourceFile).replace(/\s+/g, " ") ?? '"settlement-adopted"'}`);
+    }
+    ts.forEachChild(node, visitAdoption);
+  };
+  visitAdoption(sourceFile);
+  assert.deepEqual(adoptions.sort(), [
+    'captureScreenContext "settlement-adopted"',
+    'correctActiveQuestionType "manual-retype-projection"',
+    'correctActiveQuestionType "settlement-adopted"',
+    'runAdvisor "effective-settlement-adopted"',
+    'runAdvisor "settlement-adopted"',
+    // The deferred adoption names what it assigns: the run's effective view, once that replaced its own settlement.
+    'runAdvisor>commitDeferredResponseAuthorizedState currentQuestionSettlement === effectiveAdvisorSettlementView.effectiveSettlement ? "effective-settlement-adopted" : "settlement-adopted"',
+    'submitSpeechCorrection "settlement-adopted"',
+  ]);
+
+  // A manual action's facts carry the identity of its first record, never the
+  // session or epoch read when a later stage is recorded.
+  const manualRecorder = parse(findCallbackSource("recordManualRuntimeAction"));
+  for (const call of aeCalls(manualRecorder, [AE_EMIT])) {
+    const input = call.arguments[0];
+    assert.equal(aeProperty(input, "runtimeSessionId", manualRecorder).initializer.getText(manualRecorder), "origin.runtimeSessionId");
+    assert.equal(aeProperty(input, "runtimeEpoch", manualRecorder).initializer.getText(manualRecorder), "origin.runtimeEpoch");
+  }
+
+  // AE3: the shared producers and the emit function read no Debug, Cross-checks
+  // or Recording-enabled switch. Whether an event is saved is the Recording
+  // owner's own answer to the one synchronous call.
+  for (const name of [AE_EMIT, ...AE_HELPERS, "recordManualRuntimeAction", "recordAdviseDisplayApplied"]) {
+    const source = name === "recordAdviseDisplayApplied"
+      ? findCallbackSource(name).slice(0, findCallbackSource(name).indexOf("if (target.traceId && target.stableRevision"))
+      : findCallbackSource(name);
+    assert.doesNotMatch(source, /debugModeRef|runtimeCrossChecksEnabledRef|settings\.debugMode|sessionRecordingEnabled/, name);
+  }
+});
+
+test("AE1/AE4 static gate: the stream is written only by the Hook, and the runtime never reads it", () => {
+  // The Hook touches the stream to bind, close, release and emit. It never
+  // subscribes and never reads counters to decide anything.
+  const uses = [];
+  const visit = (node) => {
+    if (ts.isPropertyAccessExpression(node) && node.getText(sourceFile).replace(/\?/g, "")
+      .startsWith("runtimeCriticalEventStreamRef.current.")) {
+      uses.push(node.name.text);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  // bind: first render, the session reset and the effect's (re)mount.
+  // closeSubscriptions: Stop and the scenario-runner stop. release: unmount.
+  assert.deepEqual(uses.sort(), ["bind", "bind", "bind", "closeSubscriptions", "closeSubscriptions", "release"]);
+  const emitter = parse(findCallbackSource(AE_EMIT));
+  const streamMethods = [];
+  const visitEmitter = (node) => {
+    if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "stream") {
+      streamMethods.push(node.name.text);
+    }
+    ts.forEachChild(node, visitEmitter);
+  };
+  visitEmitter(emitter);
+  assert.deepEqual(streamMethods.sort(), ["emit", "noteRecording", "noteRecordingFailure"]);
+  assert.equal((hookSource.match(/recordRuntimeCriticalEvent\(/g) ?? []).length, 1,
+    "one synchronous Recording call, right after emit");
+  assert.equal(hookSource.includes(".subscribe(") && /runtimeCriticalEventStream[^\n]*subscribe/.test(hookSource), false);
+  assert.equal(/getStats\(/.test(hookSource), false);
+
+  // The leaf imports nothing, and only the Hook and the Recording owner import it.
+  const leaf = readFileSync(path.join(root, "src/lib/meeting/runtime-critical-event.ts"), "utf8");
+  assert.equal(/^\s*import\s/m.test(leaf), false, "the leaf module has no imports");
+  assert.doesNotMatch(leaf, /commitTaskRuntimeTransition|clearTaskRuntime|context-manager/);
+  const importers = readdirSync(path.join(root, "src"), { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => path.relative(root, path.join(entry.parentPath, entry.name)))
+    .filter((file) => readFileSync(path.join(root, file), "utf8").includes("runtime-critical-event"))
+    .sort();
+  assert.deepEqual(importers, [
+    "src/hooks/useMeetingAssistant.ts",
+    "src/lib/meeting/session-recording.ts",
+  ]);
+  const barrel = readFileSync(path.join(root, "src/lib/meeting/index.ts"), "utf8");
+  assert.doesNotMatch(barrel, /runtime-critical-event/, "no barrel export");
+});
+
+test("AE4 static gate: no emit is awaited, every emit is a bare statement whose value is not used, and the Hook's own producers are synchronous", () => {
+  const calls = aeCalls(sourceFile, [AE_EMIT, ...AE_HELPERS]);
+  assert.ok(calls.length >= AE_PRODUCER_TABLE.length + AE_PRODUCER_CALL_SITES.length);
+  for (const call of calls) {
+    const where = `${call.expression.text} in ${aeEnclosingPath(call, sourceFile)}`;
+    for (let current = call.parent; current && !ts.isFunctionLike(current); current = current.parent) {
+      assert.equal(ts.isAwaitExpression(current), false, `${where} is not awaited`);
+    }
+    if (call.expression.text !== "observeTaskRuntimeWriter") {
+      // The producer never branches on an emit: its value is discarded.
+      assert.ok(ts.isExpressionStatement(call.parent), `${where} is a bare statement`);
+      continue;
+    }
+    // The writer observer it returns is handed to a writer adapter, or called
+    // at once with the writer's own result. Nothing else reads it.
+    const handedOver = (ts.isCallExpression(call.parent) && call.parent.arguments.includes(call)) ||
+      (ts.isPropertyAssignment(call.parent) && call.parent.name.getText(sourceFile) === "observeWriter");
+    const calledAtOnce = ts.isCallExpression(call.parent) && call.parent.expression === call &&
+      ts.isExpressionStatement(call.parent.parent);
+    assert.ok(handedOver || calledAtOnce, `${where} is handed to the writer adapter or called as a bare statement`);
+  }
+  // The emit function and the shared producers neither await nor return a promise.
+  for (const name of [AE_EMIT, ...AE_HELPERS]) {
+    const producer = parse(`(${findCallbackSource(name)})`);
+    let asynchronous = false;
+    const visit = (node) => {
+      if (ts.isAwaitExpression(node) ||
+        (ts.isFunctionLike(node) && node.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword))) {
+        asynchronous = true;
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(producer);
+    assert.equal(asynchronous, false, `${name} is synchronous`);
+  }
+});
+
+// A candidate that changes Code and Complexity, committed through the real
+// direct commit owner (the same call Voice and Screen make).
+function aeArtifactCandidate(h, { id, code }) {
+  const parent = h.manager.getTaskRuntimeState().parent;
+  const content = `Answer: Use a deque for ${id}.\n\nCode:\n\`\`\`ts\n${code}\n\`\`\`\n\nComplexity: O(1)`;
+  const candidate = suggestion(id, content);
+  const generationLease = { ...lease(), id: `lease-${id}`, taskRevision: parent.revisions,
+    baseVisibleAnswerRevision: h.refs.visibleAnswerRevisionRef.current,
+    requestedArtifacts: ["answer", "code", "complexity"], startedAt: Date.now() };
+  const current = h.refs.stableAnswerRevisionRef.current;
+  const stable = commitStableAnswerRevision({
+    current, candidate, authorizedArtifacts: ["answer", "code", "complexity"], taskId: parent.id,
+    sectionOwner: { kind: "parent-mainline", parentId: parent.id },
+    logicalQuestionUnitId: "lqu-current", logicalQuestionRevision: 1, sessionId: "session-a", runtimeEpoch: 1,
+    questionSourceHash: "source-b", settlementId: "settlement-b", committedAt: Date.now(),
+  });
+  assert.ok(stable);
+  return { candidate, generationLease, stable,
+    mutated: imports.collectStableAnswerMutationDelta(current, stable).candidateMutatedArtifacts };
+}
+
+function aeCommitDirect(h, prepared, { transition } = {}) {
+  const authorizedArtifacts = ["answer", "code", "complexity"];
+  const leaseAuthorization = imports.authorizeAnswerGenerationLease(prepared.generationLease,
+    h.environment.readGenerationLeaseSnapshot({ lease: prepared.generationLease, authorizedArtifacts,
+      candidateMutatedArtifacts: prepared.mutated, logicalQuestionUnitId: "lqu-current", logicalQuestionRevision: 1 }));
+  const revision = h.manager.getTaskRuntimeState().revision;
+  const commit = h.environment.commitDirectGenerationAnswer({
+    lease: prepared.generationLease, leaseAuthorization,
+    expectedTaskRuntimeRevision: revision, currentTaskRuntimeRevision: revision,
+    candidateAccepted: true, candidate: prepared.stable, transition, authorizedArtifacts,
+    publicationOptions: { clearPrevious: false },
+  });
+  if (commit.result.committed) h.environment.finalizeStableAnswerPublication(commit.publication);
+  // As Voice and Screen do after their commit. The harness stubs this
+  // projection unless a test installs the real one.
+  h.environment.publishGenerationResultProjection(prepared.generationLease, prepared.candidate.sourceTraceId);
+  return commit.result;
+}
+
+const aeFacts = (h, purpose) => h.criticalEvents.facts(purpose);
+const aeEventsOf = (h, fact) => h.criticalEvents.events().filter((event) => event.fact === fact);
+
+test("AE1/AE2 Stable Answer and Artifact: announced only after the real staged commit, one Artifact fact per section whose revision changed", () => {
+  const h = createHarness({ now: 60_000 });
+  try {
+    assert.deepEqual(aeFacts(h), [], "building the harness and its fixtures emits nothing");
+    const first = aeArtifactCandidate(h, { id: "code-a", code: "return queue.shift();" });
+    assert.deepEqual(first.mutated, ["answer", "code", "complexity"]);
+    // Building a candidate revision is not a commit: the pure builders stay silent.
+    assert.deepEqual(aeFacts(h), []);
+    assert.equal(aeCommitDirect(h, first).committed, true);
+    assert.deepEqual(aeFacts(h), [
+      "artifact-committed:section-revision-changed",
+      "artifact-committed:section-revision-changed",
+      "stable-answer-committed:stable-publication",
+    ]);
+    const artifacts = aeEventsOf(h, "artifact-committed");
+    assert.deepEqual(artifacts.map((event) => [event.refs.artifact, event.refs.artifactRevision]),
+      [["code", 1], ["complexity", 1]]);
+    const stable = aeEventsOf(h, "stable-answer-committed")[0];
+    assert.equal(stable.runtimeSessionId, "session-a");
+    assert.equal(stable.runtimeEpoch, 1);
+    assert.equal(stable.occurredAt, first.stable.committedAt, "the owner's own commit time");
+    assert.deepEqual({ ...stable.refs }, {
+      traceId: "trace-code-a", logicalQuestionUnitId: "lqu-current", settlementId: "settlement-b",
+      taskId: "parent-a", suggestionId: "code-a", logicalQuestionRevision: 1, stableRevision: 2,
+    });
+    for (const event of h.criticalEvents.events()) {
+      assert.deepEqual(describeRuntimeCriticalEventShape(event), []);
+      assert.equal(event.purpose, "formal");
+      assert.equal(JSON.stringify(event).includes("deque"), false, "no Answer text travels in an event");
+      assert.equal(JSON.stringify(event).includes("queue.shift"), false, "no Code travels in an event");
+    }
+
+    // The same Code again: the Answer changes, the Artifact revision does not.
+    const second = aeArtifactCandidate(h, { id: "code-b", code: "return queue.shift();" });
+    assert.deepEqual(second.mutated, ["answer"]);
+    assert.equal(aeCommitDirect(h, second).committed, true);
+    assert.equal(aeEventsOf(h, "artifact-committed").length, 2, "no revision change, no Artifact fact");
+    assert.equal(aeEventsOf(h, "stable-answer-committed").length, 2);
+
+    // Only Code changes.
+    const third = aeArtifactCandidate(h, { id: "code-c", code: "return queue.pop();" });
+    assert.deepEqual(third.mutated, ["answer", "code"]);
+    assert.equal(aeCommitDirect(h, third).committed, true);
+    assert.deepEqual(aeEventsOf(h, "artifact-committed").slice(2)
+      .map((event) => [event.refs.artifact, event.refs.artifactRevision, event.refs.stableRevision]), [["code", 2, 4]]);
+    const sequences = h.criticalEvents.events().map((event) => event.sequence);
+    assert.deepEqual(sequences, sequences.map((_, index) => index + 1), "one monotonic sequence for the session");
+  } finally { h.restore(); }
+});
+
+test("AE1/AE2 Lifecycle through a staged commit: one fact from the writer's own receipt after the commit returned; a rolled-back install announces nothing", () => {
+  for (const failInstall of [false, true]) {
+    const h = createHarness({ now: 60_000 });
+    try {
+      h.evaluate(findFunctionSource("prepareGenerationDerivedTaskRuntimeCommit"));
+      const before = h.manager.getTaskRuntimeState();
+      const prepared = aeArtifactCandidate(h, { id: "code-a", code: "return 1;" });
+      if (failInstall) {
+        const original = h.environment.installPreparedStableAnswerPublication;
+        h.environment.installPreparedStableAnswerPublication = (publication) => {
+          original(publication);
+          // The task writer has already committed inside the staged install.
+          assert.equal(h.manager.getTaskRuntimeState().revision, before.revision + 1);
+          throw new Error("injected failure after real install");
+        };
+      }
+      const result = aeCommitDirect(h, prepared, { transition: {
+        transition: "update-parent-context", reason: "generation-derived-context",
+        expectedRevision: before.revision,
+        parent: { ...before.parent, supportedFactAnchors: ["generated-fact"],
+          revisions: before.parent.revisions + 1, updatedAt: 60_000 },
+      } });
+      assert.equal(result.committed, !failInstall);
+      if (failInstall) {
+        assert.deepEqual(h.manager.getTaskRuntimeState(), before, "the install was rolled back");
+        assert.deepEqual(aeFacts(h), [], "a rolled-back staged commit announces no Lifecycle, Artifact or Stable fact");
+        continue;
+      }
+      const after = h.manager.getTaskRuntimeState();
+      assert.deepEqual(aeFacts(h), [
+        "lifecycle-committed:task-writer-committed",
+        "artifact-committed:section-revision-changed",
+        "artifact-committed:section-revision-changed",
+        "stable-answer-committed:stable-publication",
+      ]);
+      const lifecycle = aeEventsOf(h, "lifecycle-committed")[0];
+      assert.equal(lifecycle.refs.receiptId, after.lastMutation.id, "the writer's receipt");
+      assert.equal(lifecycle.refs.taskRuntimeRevision, after.revision);
+      assert.equal(lifecycle.occurredAt, after.lastMutation.appliedAt);
+      assert.equal(lifecycle.refs.transition, "update-parent-context");
+      assert.equal(lifecycle.refs.generationLeaseId, "lease-code-a");
+      assert.equal(lifecycle.refs.taskId, "parent-a");
+    } finally { h.restore(); }
+  }
+});
+
+test("AE2 delivery lock: a queued answer is not a Stable Answer fact until its real release commits; a stale release emits no success", () => {
+  for (const stale of [false, true]) {
+    const h = createHarness({ now: 60_000 });
+    try {
+      const candidate = prepareOutputCandidate(h);
+      assert.ok(queueOutputCandidate(h, candidate));
+      assert.equal(h.environment.tryCommitPendingAnswer(), "waiting");
+      assert.deepEqual(aeFacts(h), [], "queued and waiting: nothing committed, nothing announced");
+      if (stale) h.refs.manualCorrectionRevisionRef.current += 1;
+      h.unlock(); h.setNow(80_000);
+      assert.equal(h.environment.tryCommitPendingAnswer(), stale ? "stale" : "committed");
+      assert.deepEqual(aeFacts(h), stale ? [] : ["stable-answer-committed:stable-publication"]);
+      assert.equal(aeEventsOf(h, "first-visible-content").length, 0, "a commit is not a display");
+    } finally { h.restore(); }
+  }
+});
+
+test("AE2 a pinned answer: the background commit is a Stable Answer fact and no visible fact; repeated ACKs of one target are one first-visible fact", () => {
+  const h = createHarness();
+  try {
+    h.environment.window = { requestAnimationFrame: () => 1, cancelAnimationFrame() {} };
+    aeUseRealManualActionLedger(h);
+    const select = () => h.environment.selectAdviseDisplay(imports.buildMeetingAnswerDisplayModel({
+      content: h.uiState.latestSuggestion.content, parsedAnswer: h.uiState.latestSuggestion.meetingAnswer }));
+    const a = select();
+    for (let ack = 0; ack < 3; ack += 1) h.environment.recordAdviseDisplayApplied(a.target, "normal-mode");
+    h.environment.recordAdviseDisplayApplied(a.target, "focus-mode", false);
+    assert.deepEqual(aeFacts(h), ["first-visible-content:stable"], "four ACKs, one first-visible fact");
+    const visibleA = aeEventsOf(h, "first-visible-content")[0];
+    assert.equal(visibleA.refs.suggestionId, "visible-a");
+    assert.equal(visibleA.refs.stableRevision, 1);
+    assert.equal(visibleA.refs.displaySurface, "normal-mode");
+    assert.equal("runtimeEpoch" in visibleA, false, "the display target carries no epoch, so none is invented");
+
+    h.environment.toggleAdvisePin({ actionId: "pin-A", uiSurface: "normal-mode", displayTarget: a.target });
+    // B commits in the background while A stays on screen.
+    h.refs.logicalQuestionUnitRef.current = { id: "lqu-B", revision: 1 };
+    const b = commitStableAnswerRevision({ current: h.refs.stableAnswerRevisionRef.current,
+      candidate: suggestion("B", "Answer: answer B"), authorizedArtifacts: ["answer"], taskId: "parent-a",
+      logicalQuestionUnitId: "lqu-B", logicalQuestionRevision: 1, sessionId: "session-a", runtimeEpoch: 1 });
+    const publication = h.environment.prepareStableAnswerPublication(b);
+    h.environment.installPreparedStableAnswerPublication(publication);
+    h.environment.finalizeStableAnswerPublication(publication);
+    assert.equal(select().stable.suggestion.id, "visible-a", "A is still the displayed answer");
+    // The UI keeps acknowledging what it shows: still A.
+    for (let ack = 0; ack < 3; ack += 1) h.environment.recordAdviseDisplayApplied(select().target, "normal-mode");
+    assert.deepEqual(aeFacts(h), [
+      "first-visible-content:stable",
+      "input-accepted:manual-action-accepted",
+      "terminal:manual-action:completed",
+      "stable-answer-committed:stable-publication",
+    ]);
+    assert.equal(aeEventsOf(h, "stable-answer-committed")[0].refs.suggestionId, "B");
+    assert.equal(aeEventsOf(h, "first-visible-content").some((event) => event.refs.suggestionId === "B"), false,
+      "the locked background answer has no visible fact");
+
+    // Unlock, render B, acknowledge it: now and only now B is visible.
+    h.environment.toggleAdvisePin({ actionId: "unlock-A", displayTarget: a.target });
+    const shown = select();
+    assert.equal(shown.stable.suggestion.id, "B");
+    h.environment.recordAdviseDisplayApplied(shown.target, "normal-mode");
+    h.environment.recordAdviseDisplayApplied(shown.target, "normal-mode");
+    const visible = aeEventsOf(h, "first-visible-content");
+    assert.deepEqual(visible.map((event) => event.refs.suggestionId), ["visible-a", "B"]);
+    // A display target from another session is refused by the event layer.
+    h.environment.recordAdviseDisplayApplied({ ...shown.target, sessionId: "session-old", stableRevision: 9 }, "normal-mode");
+    // An empty display shows no content.
+    h.environment.recordAdviseDisplayApplied({ sessionId: "session-a" }, "normal-mode");
+    assert.equal(aeEventsOf(h, "first-visible-content").length, 2);
+    const stats = h.criticalEvents.stream.getStats();
+    assert.equal(stats.staleSessionRejected, 1);
+    assert.equal(stats.missingIdentityRejected, 1);
+    assert.equal(stats.duplicateSuppressed, 7);
+    // A rejected manual action is a terminal and never an acceptance.
+    h.environment.toggleAdvisePin({ actionId: "stale-focus", uiSurface: "focus-mode", displayTarget: a.target });
+    const manual = h.criticalEvents.events().filter((event) => event.refs.manualActionId === "stale-focus");
+    assert.deepEqual(manual.map((event) => [event.fact, event.terminal?.disposition]), [["terminal", "rejected"]]);
+  } finally { h.restore(); }
+});
+
+test("AE2 manual release of a pending candidate (pin toggle and the Force Advise branch): a Stable Answer fact with no Generation and no Provider fact", () => {
+  // The Force Advise branch that releases an already generated pending candidate.
+  const forceAdvise = parse(findCallbackSource("forceAdviseLatestTurn"));
+  let releaseBranch;
+  const visit = (node) => {
+    if (ts.isIfStatement(node) && node.expression.getText(forceAdvise) === "pendingMatchesTarget") releaseBranch = node;
+    ts.forEachChild(node, visit);
+  };
+  visit(forceAdvise);
+  assert.ok(releaseBranch, "production Force Advise pending-release branch");
+  const block = releaseBranch.parent.statements;
+  const index = block.indexOf(releaseBranch);
+  const releaseSource = block.slice(index - 2, index + 1).map((statement) => statement.getText(forceAdvise)).join("\n");
+  assert.match(releaseSource, /const pendingCandidate = pendingAnswerRevisionRef\.current;/);
+
+  for (const entry of ["pin-toggle", "force-advise"]) {
+    const h = createHarness({ now: 60_000 });
+    try {
+      aeUseRealManualActionLedger(h);
+      const select = () => h.environment.selectAdviseDisplay(imports.buildMeetingAnswerDisplayModel({
+        content: h.uiState.latestSuggestion.content, parsedAnswer: h.uiState.latestSuggestion.meetingAnswer }));
+      const candidate = prepareOutputCandidate(h);
+      assert.ok(queueOutputCandidate(h, candidate));
+      assert.equal(h.environment.tryCommitPendingAnswer(), "waiting");
+      assert.deepEqual(aeFacts(h), []);
+      if (entry === "pin-toggle") {
+        h.environment.toggleAdvisePin({ actionId: "pin-A", uiSurface: "normal-mode", displayTarget: select().target });
+      } else {
+        h.environment.traceStoreRef.current.finishTrace = () => {};
+        h.environment.recordManualRuntimeAction({ actionId: "force-1", action: "force-advise", stage: "accepted",
+          traceId: "repair-trace", observedLogicalQuestionUnitId: "lqu-current", observedLogicalQuestionUnitRevision: 1 });
+        h.evaluate(`(() => { ${releaseSource} return "advisor-would-run"; })()`, {
+          target: { presentation: { targetId: "target-1" }, logicalQuestionUnit: { id: "lqu-current", revision: 1 } },
+          repairTrace: { id: "repair-trace" }, manualActionId: "force-1", forceAdviseEvaluationActionId: "evaluation-1",
+        });
+      }
+      assert.equal(h.refs.stableAnswerRevisionRef.current.suggestion.id, "visible-b", "the pending candidate was released");
+      const facts = aeFacts(h);
+      assert.deepEqual(facts, [
+        "input-accepted:manual-action-accepted",
+        "stable-answer-committed:stable-publication",
+        "terminal:manual-action:completed",
+      ]);
+      for (const absent of ["generation-admitted", "provider-request-started", "first-visible-content", "lifecycle-committed"]) {
+        assert.equal(facts.some((fact) => fact.startsWith(absent)), false, `${entry}: no ${absent}`);
+      }
+      const [accepted, , terminal] = h.criticalEvents.events();
+      assert.equal(accepted.refs.manualAction, entry === "pin-toggle" ? "toggle-advise-pin" : "force-advise");
+      assert.equal(accepted.refs.manualActionId, terminal.refs.manualActionId);
+      assert.equal(terminal.terminal.object, "manual-action");
+    } finally { h.restore(); }
+  }
+});
+
+test("AE2 one generation is first visible once: the streaming ACK is the first, and the stable ACK of the same generation that follows is not a second (real selector and ACK)", () => {
+  const h = createHarness({ now: 60_000 });
+  try {
+    h.environment.window = { requestAnimationFrame: () => 1, cancelAnimationFrame() {} };
+    // Generation E is admitted and its partial is the displayed stream.
+    const e = aeArtifactCandidate(h, { id: "request-E", code: "return stream;" });
+    h.generationResultLedger.begin({ lease: e.generationLease, traceId: "trace-request-E" });
+    h.refs.displayedStreamRef.current = { traceId: "trace-request-E", generationId: "request-E", leaseId: e.generationLease.id,
+      logicalQuestionUnitId: e.generationLease.logicalQuestionUnitId,
+      logicalQuestionRevision: e.generationLease.logicalQuestionRevision };
+    h.environment.state = { ...h.uiState, partialSuggestion: "Answer: partial E" };
+    const partial = imports.buildMeetingAnswerDisplayModel({ content: "Answer: partial E" });
+    const streaming = h.environment.selectAdviseDisplay(partial);
+    assert.equal(streaming.streaming, true);
+    assert.deepEqual([streaming.target.generationId, streaming.target.stableRevision], ["request-E", undefined]);
+    for (let ack = 0; ack < 3; ack += 1) h.environment.recordAdviseDisplayApplied(streaming.target, "normal-mode");
+    assert.deepEqual(aeFacts(h), ["first-visible-content:streaming"], "three streaming ACKs, one first-visible fact");
+
+    // E commits through the real direct commit; the selector now returns its
+    // stable target and the UI acknowledges it.
+    assert.equal(aeCommitDirect(h, e).committed, true);
+    const stable = h.environment.selectAdviseDisplay(imports.buildMeetingAnswerDisplayModel({
+      content: h.uiState.latestSuggestion.content, parsedAnswer: h.uiState.latestSuggestion.meetingAnswer }));
+    assert.equal(stable.streaming, false);
+    assert.deepEqual([stable.target.generationId, stable.target.suggestionId, stable.target.traceId],
+      ["request-E", "request-E", "trace-request-E"]);
+    assert.equal(typeof stable.target.stableRevision, "number");
+    for (let ack = 0; ack < 3; ack += 1) h.environment.recordAdviseDisplayApplied(stable.target, "normal-mode");
+    h.environment.recordAdviseDisplayApplied(stable.target, "focus-mode", false);
+    const visible = aeEventsOf(h, "first-visible-content");
+    assert.deepEqual(visible.map((event) => [event.stage, event.refs.generationId, event.refs.stableRevision]),
+      [["streaming", "request-E", undefined]], "the content of E was already on screen: no second first-visible fact");
+    assert.equal(aeEventsOf(h, "stable-answer-committed").length, 1, "the commit itself is its own fact");
+    const stats = h.criticalEvents.stream.getStats();
+    assert.equal(stats.duplicateSuppressed, 2 + 4, "every later ACK of E was suppressed as the same generation");
+
+    // F is never streamed: its first visible content is its stable answer.
+    const f = aeArtifactCandidate(h, { id: "request-F", code: "return stable;" });
+    assert.equal(aeCommitDirect(h, f).committed, true);
+    const shownF = h.environment.selectAdviseDisplay(imports.buildMeetingAnswerDisplayModel({
+      content: h.uiState.latestSuggestion.content, parsedAnswer: h.uiState.latestSuggestion.meetingAnswer }));
+    h.environment.recordAdviseDisplayApplied(shownF.target, "normal-mode");
+    h.environment.recordAdviseDisplayApplied(shownF.target, "normal-mode");
+    assert.deepEqual(aeEventsOf(h, "first-visible-content").map((event) => [event.stage, event.refs.generationId]),
+      [["streaming", "request-E"], ["stable", "request-F"]]);
+  } finally { h.restore(); }
+});
+
+test("AE1/AE2 an Artifact published without a model call (the reuse candidate, through the real artifact-only commit): Artifact facts, an artifact-only Stable Answer and the generation's own committed terminal, and no Provider fact", () => {
+  const h = createHarness({ now: 60_000 });
+  try {
+    h.environment.publishGenerationResultProjection = h.evaluate(
+      `(${findCallbackSource("publishGenerationResultProjection")})`,
+      { formatGenerationResultLedgerForTrace: () => ({}) });
+    const current = h.refs.stableAnswerRevisionRef.current;
+    const parent = h.manager.getTaskRuntimeState().parent;
+    // What the reuse branch builds: the visible answer with the reused Code and
+    // Complexity sections, reduced by the production artifact-only builder.
+    const content = `${current.suggestion.content}\n\nCode:\n\`\`\`ts\nreturn reused;\n\`\`\`\n\nComplexity: O(1)`;
+    const decision = stableAnswerModule.commitStableArtifactOnlyRevision({
+      current, revision: h.refs.visibleAnswerRevisionRef.current + 1,
+      candidate: suggestion("artifact-reuse", content), authorizedArtifacts: ["code", "complexity"],
+      expectedVisibleAnswerRevision: current.revision, expectedTaskId: current.taskId,
+      expectedLogicalQuestionUnitId: current.logicalQuestionUnitId,
+      expectedLogicalQuestionRevision: current.logicalQuestionRevision, expectedSettlementId: current.settlementId,
+      sectionOwner: { kind: "parent-mainline", parentId: parent.id }, committedAt: Date.now(),
+    });
+    assert.equal(decision.disposition, "committed", decision.reason);
+    assert.equal(decision.stable.sections.answer.revision, current.sections.answer.revision, "the Answer is not rewritten");
+    const generationLease = { ...lease(), id: "lease-artifact-reuse", taskRevision: parent.revisions,
+      baseVisibleAnswerRevision: h.refs.visibleAnswerRevisionRef.current,
+      requestedArtifacts: ["code", "complexity"], startedAt: Date.now() };
+    // The generation owner's own ledger entry for this lease.
+    h.generationResultLedger.begin({ lease: generationLease, traceId: "trace-artifact-reuse" });
+    const mutated = imports.collectStableAnswerMutationDelta(current, decision.stable).candidateMutatedArtifacts;
+    assert.deepEqual(mutated, ["code", "complexity"]);
+    const leaseAuthorization = imports.authorizeAnswerGenerationLease(generationLease,
+      h.environment.readGenerationLeaseSnapshot({ lease: generationLease, authorizedArtifacts: ["code", "complexity"],
+        candidateMutatedArtifacts: mutated, logicalQuestionUnitId: "lqu-current", logicalQuestionRevision: 1 }));
+    const revision = h.manager.getTaskRuntimeState().revision;
+    const commit = h.environment.commitDirectGenerationAnswer({
+      lease: generationLease, leaseAuthorization, expectedTaskRuntimeRevision: revision,
+      currentTaskRuntimeRevision: revision, candidateAccepted: true, candidate: decision.stable,
+      authorizedArtifacts: ["code", "complexity"], publicationOptions: { clearPrevious: false, artifactOnly: true },
+    });
+    assert.equal(commit.result.committed, true, commit.result.reason);
+    h.environment.finalizeStableAnswerPublication(commit.publication);
+    h.environment.publishGenerationResultProjection(generationLease, "trace-artifact-reuse");
+    assert.deepEqual(aeFacts(h), [
+      "artifact-committed:section-revision-changed",
+      "artifact-committed:section-revision-changed",
+      "stable-answer-committed:artifact-only-publication",
+      "terminal:generation:committed",
+    ]);
+    const events = h.criticalEvents.events();
+    assert.deepEqual(events.slice(0, 2).map((event) => [event.refs.artifact, event.refs.artifactRevision, event.refs.generationLeaseId]),
+      [["code", 1, "lease-artifact-reuse"], ["complexity", 1, "lease-artifact-reuse"]]);
+    const [, , stable, terminal] = events;
+    assert.deepEqual([stable.refs.suggestionId, stable.refs.stableRevision, stable.refs.traceId],
+      ["artifact-reuse", decision.stable.revision, "trace-artifact-reuse"]);
+    assert.deepEqual([terminal.refs.generationLeaseId, terminal.refs.stableRevision], ["lease-artifact-reuse", decision.stable.revision]);
+    assert.equal(events.some((event) => event.fact === "provider-request-started" ||
+      event.terminal?.object === "provider-request"), false, "no model was called, so no Provider fact exists");
+  } finally { h.restore(); }
+});
+
+test("AE3/AE5 a manual action's facts keep the session and epoch of its first record: a terminal recorded after the session changed is refused as stale, and one recorded in a later epoch keeps the action's own epoch", () => {
+  const h = createHarness({ now: 60_000 });
+  try {
+    aeUseRealManualActionLedger(h);
+    const record = h.environment.recordManualRuntimeAction;
+    const stream = h.criticalEvents.stream;
+    // Same session, later epoch: Clear, a response action or Stop advanced it
+    // while the action's own work was still awaited.
+    record({ actionId: "regen-1", action: "regenerate", stage: "requested" });
+    record({ actionId: "regen-1", action: "regenerate", stage: "accepted", traceId: "trace-regen-1" });
+    h.refs.runtimeEpochRef.current = 4;
+    record({ actionId: "regen-1", action: "regenerate", stage: "terminal", traceId: "trace-regen-1",
+      terminalDisposition: "cancelled", reason: "cancelled-by-runtime-boundary" });
+    const sameSession = h.criticalEvents.events();
+    assert.deepEqual(sameSession.map((event) => [event.fact, event.runtimeSessionId, event.runtimeEpoch]), [
+      ["input-accepted", "session-a", 1],
+      ["terminal", "session-a", 1],
+    ], "the terminal carries the epoch the action began in, not the epoch at record time");
+
+    // The action is accepted in session A, then the runtime session changes
+    // (the real context manager's reset and the Hook's rebind) before its
+    // awaited work returns and records the terminal.
+    record({ actionId: "regen-2", action: "regenerate", stage: "requested" });
+    record({ actionId: "regen-2", action: "regenerate", stage: "accepted", traceId: "trace-regen-2" });
+    h.manager.reset({ sessionId: "session-b" });
+    h.refs.runtimeEpochRef.current = 6;
+    stream.bind(h.manager.getState().sessionId);
+    const later = [];
+    assert.equal(stream.subscribe((delivery) => { later.push(delivery); }).runtimeSessionId, "session-b");
+    const before = stream.getStats();
+    record({ actionId: "regen-2", action: "regenerate", stage: "terminal", traceId: "trace-regen-2",
+      terminalDisposition: "cancelled", reason: "cancelled-by-runtime-boundary" });
+    // An action that begins in the new session is a fact of the new session.
+    record({ actionId: "clear-1", action: "clear-task", stage: "accepted" });
+    h.criticalEvents.flush();
+    const after = stream.getStats();
+    assert.equal(after.staleSessionRejected - before.staleSessionRejected, 1, "the old action's terminal was refused, with its own session");
+    assert.deepEqual(later.map((delivery) => delivery.kind === "event" &&
+      [delivery.event.sequence, delivery.event.fact, delivery.event.refs.manualActionId, delivery.event.runtimeSessionId, delivery.event.runtimeEpoch]),
+      [[1, "input-accepted", "clear-1", "session-b", 6]], "the new session's sequence starts with its own fact");
+    assert.equal(h.criticalEvents.events().some((event) => event.refs.manualActionId === "regen-2" && event.fact === "terminal"), false);
+    // One remembered origin per action, in the Hook's own bounded ref.
+    assert.deepEqual(JSON.parse(JSON.stringify([...h.criticalEvents.hookRefs.manualActionCriticalOriginRef.current.entries()])), [
+      ["regen-1", { runtimeSessionId: "session-a", runtimeEpoch: 1 }],
+      ["regen-2", { runtimeSessionId: "session-a", runtimeEpoch: 4 }],
+      ["clear-1", { runtimeSessionId: "session-b", runtimeEpoch: 6 }],
+    ]);
+    // The memory is bounded: the oldest action is forgotten first.
+    for (let index = 0; index < 100; index += 1) record({ actionId: `bulk-${index}`, action: "clear-task", stage: "requested" });
+    const remembered = h.criticalEvents.hookRefs.manualActionCriticalOriginRef.current;
+    assert.equal(remembered.size, 64);
+    assert.deepEqual([remembered.has("regen-1"), remembered.has("bulk-36"), remembered.has("bulk-99")], [false, true, true]);
+  } finally { h.restore(); }
+});
+
+test("AE5 a manual action's free-text reason (a trace error message) stays in the manual-action ledger and never enters the event; an owner code passes unchanged", () => {
+  const h = createHarness({ now: 60_000 });
+  try {
+    aeUseRealManualActionLedger(h);
+    const ledger = [];
+    h.environment.sessionRecordingManagerRef.current = {
+      recordManualRuntimeAction: (event) => { ledger.push(event); return true; },
+      recordRuntimeCriticalEvent: () => "not-recording",
+    };
+    const errorText = "Provider error: Incorrect API key provided: sk-proj-abc123";
+    h.environment.recordManualRuntimeAction({ actionId: "action-error", action: "regenerate", stage: "terminal",
+      terminalDisposition: "failed", reason: errorText });
+    h.environment.recordManualRuntimeAction({ actionId: "action-code", action: "regenerate", stage: "terminal",
+      terminalDisposition: "cancelled", reason: "cancelled-by-runtime-boundary" });
+    const [withText, withCode] = h.criticalEvents.events();
+    assert.deepEqual(JSON.parse(JSON.stringify(withText.terminal)), { object: "manual-action", disposition: "failed" });
+    assert.deepEqual([...withText.omittedRefs], ["terminal.reason"], "the refused reason is named");
+    assert.equal(JSON.stringify(withText).includes("sk-proj"), false);
+    assert.deepEqual(JSON.parse(JSON.stringify(withCode.terminal)),
+      { object: "manual-action", disposition: "cancelled", reason: "cancelled-by-runtime-boundary" });
+    assert.equal(withCode.omittedRefs, undefined);
+    // The owner's own ledger keeps the full text, as before.
+    assert.deepEqual(ledger.map((event) => event.reason), [errorText, "cancelled-by-runtime-boundary"]);
+  } finally { h.restore(); }
+});
+
+// What the product decided, independent of any observer.
+function aeBusinessProjection(h) {
+  return JSON.parse(JSON.stringify({
+    task: h.manager.getTaskRuntimeState(),
+    deadline: h.manager.getTaskDeadlineControl(),
+    stable: h.refs.stableAnswerRevisionRef.current,
+    visible: h.refs.visibleAnswerRevisionRef.current,
+    pending: h.refs.pendingAnswerRevisionRef.current,
+    continuity: h.refs.recentAdvisorContinuityRef.current,
+    ledger: h.generationResultLedger.listEntries().map(({ commitDurationMs, prepareDurationMs, installDurationMs, ...entry }) => entry),
+    ui: h.uiState,
+    uiUpdates: h.uiUpdates.length,
+    scheduledPendingCommits: h.scheduledPendingCommits,
+  }));
+}
+
+// One fixed formal input: a queued answer released after its lock, two direct
+// commits with Artifacts and a staged Lifecycle transition, a failing install,
+// and display acknowledgements.
+function aeRunFixedScenario(h) {
+  const errors = [];
+  h.environment.window = { requestAnimationFrame: () => 1, cancelAnimationFrame() {} };
+  h.evaluate(findFunctionSource("prepareGenerationDerivedTaskRuntimeCommit"));
+  const pending = prepareOutputCandidate(h);
+  queueOutputCandidate(h, pending);
+  errors.push(h.environment.tryCommitPendingAnswer());
+  h.unlock(); h.setNow(80_000);
+  errors.push(h.environment.tryCommitPendingAnswer());
+  const before = h.manager.getTaskRuntimeState();
+  const first = aeArtifactCandidate(h, { id: "code-a", code: "return 1;" });
+  errors.push(aeCommitDirect(h, first, { transition: {
+    transition: "update-parent-context", reason: "generation-derived-context", expectedRevision: before.revision,
+    parent: { ...before.parent, supportedFactAnchors: ["generated-fact"], revisions: before.parent.revisions + 1, updatedAt: 80_000 },
+  } }).reason);
+  h.setNow(90_000);
+  const original = h.environment.installPreparedStableAnswerPublication;
+  h.environment.installPreparedStableAnswerPublication = (publication) => {
+    original(publication);
+    throw new Error("injected failure after real install");
+  };
+  errors.push(aeCommitDirect(h, aeArtifactCandidate(h, { id: "code-failed", code: "return 2;" })).reason);
+  h.environment.installPreparedStableAnswerPublication = original;
+  // A stale lease is rejected by its own owner.
+  const staleCandidate = aeArtifactCandidate(h, { id: "code-stale", code: "return 3;" });
+  h.refs.responseActionRevisionRef.current += 1;
+  errors.push(aeCommitDirect(h, staleCandidate).reason);
+  h.refs.responseActionRevisionRef.current -= 1;
+  const shown = h.environment.selectAdviseDisplay(imports.buildMeetingAnswerDisplayModel({
+    content: h.uiState.latestSuggestion.content, parsedAnswer: h.uiState.latestSuggestion.meetingAnswer }));
+  for (let ack = 0; ack < 3; ack += 1) h.environment.recordAdviseDisplayApplied(shown.target, "normal-mode");
+  return errors;
+}
+
+test("AE4 semantic isolation: with the interface idle, observed, failing by a throw or by a rejected promise, overflowing or unable to write, the same input gives the same task, answer, artifact, ledger and error exits", async () => {
+  // An Error whose message is not a string and throws when it is converted.
+  const unreadable = () => Object.defineProperty(new Error("x"), "message",
+    { value: { toString() { throw new Error("conversion failed"); } } });
+  const recorderFor = async (mode) => {
+    if (!["recording", "write-failure"].includes(mode)) return undefined;
+    const recorder = await createFileBackedRecorder();
+    if (mode === "write-failure") recorder.files.failWrite = (relativePath) => relativePath.startsWith("runtime-events/");
+    return recorder;
+  };
+  // A rejection handler is a microtask; a macrotask later every one has run.
+  const settled = () => new Promise((resolve) => setImmediate(resolve));
+  const results = {};
+  // The reference is the idle interface on this code: nobody subscribed and
+  // Recording off. It runs twice, which is the comparison's own noise floor.
+  const modes = ["idle", "idle-again", "subscriber", "throwing-subscriber", "async-failing-subscriber",
+    "overflow-capacity-1", "recording", "write-failure", "recorder-throws",
+    "unreadable-failures", "stream-emit-throws", "stream-released"];
+  for (const mode of modes) {
+    const h = createHarness({ now: 60_000,
+      criticalEventObserver: !["idle", "idle-again"].includes(mode),
+      ...(mode === "overflow-capacity-1" ? { criticalEventLimits: { queueCapacity: 1 } } : {}) });
+    const recorder = await recorderFor(mode);
+    try {
+      if (recorder) {
+        await recorder.start("session-a");
+        h.environment.sessionRecordingManagerRef.current = recorder.manager;
+      }
+      if (mode === "recorder-throws") {
+        h.environment.sessionRecordingManagerRef.current = {
+          recordCaptureLifecycle() {},
+          recordRuntimeCriticalEvent() { throw new Error("recording owner failure"); },
+        };
+      }
+      if (mode === "stream-released") h.criticalEvents.stream.release("unmounted");
+      let thrown = 0;
+      if (mode === "throwing-subscriber") {
+        h.criticalEvents.stream.subscribe(() => { thrown += 1; throw new Error("observer failure"); });
+      }
+      if (mode === "async-failing-subscriber") {
+        // An async observer: every delivery it is handed rejects.
+        h.criticalEvents.stream.subscribe(async () => { thrown += 1; throw new Error("async observer failure"); });
+      }
+      if (mode === "unreadable-failures") {
+        // The Recording owner and an observer both fail with an error that cannot be described.
+        h.environment.sessionRecordingManagerRef.current = {
+          recordCaptureLifecycle() {},
+          recordRuntimeCriticalEvent() { throw unreadable(); },
+        };
+        h.criticalEvents.stream.subscribe(() => { thrown += 1; throw unreadable(); });
+      }
+      if (mode === "stream-emit-throws") {
+        // The event layer itself fails inside the Hook's emit function.
+        h.criticalEvents.stream.emit = () => { thrown += 1; throw unreadable(); };
+      }
+      const exits = aeRunFixedScenario(h);
+      h.criticalEvents.flush();
+      await settled();
+      const stats = h.criticalEvents.stream.getStats();
+      results[mode] = { business: aeBusinessProjection(h), exits, stats, thrown,
+        facts: h.criticalEvents.facts(), deliveries: h.criticalEvents.deliveries.map((delivery) => delivery.kind) };
+      if (recorder) {
+        await recorder.stop();
+        results[mode].manifest = await recorder.files.readManifest(recorder.files.folders[0]);
+        results[mode].journal = await recorder.files.readCriticalEventJournal(recorder.files.folders[0]);
+      }
+    } finally {
+      h.restore();
+      await recorder?.cleanup();
+    }
+  }
+  const reference = results.idle;
+  assert.deepEqual(reference.exits, ["waiting", "committed", "authorized",
+    "stable-answer-publication-install-exception", "response-action-revision-mismatch"],
+    "the scenario reaches a commit, a rolled-back install and a lease rejection");
+  assert.ok(reference.business.ledger.length >= 4 && reference.business.task && reference.business.stable,
+    "the projection that is compared holds the task, the answer and the ledger");
+  for (const mode of modes) {
+    assert.deepEqual(results[mode].business, reference.business, `${mode}: business projection`);
+    assert.deepEqual(results[mode].exits, reference.exits, `${mode}: original exits`);
+  }
+  const expectedFacts = [
+    "stable-answer-committed:stable-publication",
+    "lifecycle-committed:task-writer-committed",
+    "artifact-committed:section-revision-changed",
+    "artifact-committed:section-revision-changed",
+    "stable-answer-committed:stable-publication",
+    "first-visible-content:stable",
+  ];
+  assert.deepEqual(results.subscriber.facts, expectedFacts);
+  for (const idle of ["idle", "idle-again"]) {
+    assert.equal(results[idle].stats.produced, expectedFacts.length);
+    assert.equal(results[idle].stats.queuePeak, 0);
+    assert.equal(results[idle].stats.drainsScheduled, 0);
+  }
+  // A throwing observer: cut off after one delivery, the healthy one unaffected.
+  assert.equal(results["throwing-subscriber"].thrown, 1);
+  assert.equal(results["throwing-subscriber"].stats.subscriberFailures, 1);
+  assert.deepEqual(results["throwing-subscriber"].facts, expectedFacts);
+  // An observer that fails by a rejected promise: handed one batch, then cut
+  // off with one failure counted; the healthy one and the producers unaffected.
+  assert.equal(results["async-failing-subscriber"].thrown, expectedFacts.length, "one batch was handed over, never awaited");
+  assert.deepEqual([results["async-failing-subscriber"].stats.subscriberFailures, results["async-failing-subscriber"].stats.subscribers],
+    [1, 1]);
+  assert.deepEqual(results["async-failing-subscriber"].facts, expectedFacts);
+  // Overflow: the evidence is explicitly incomplete, the product untouched.
+  assert.deepEqual(results["overflow-capacity-1"].deliveries, ["event", "gap"]);
+  assert.equal(results["overflow-capacity-1"].stats.overflowDropped, expectedFacts.length - 1);
+  assert.equal(results["overflow-capacity-1"].stats.produced, expectedFacts.length);
+  // Recording on: every produced event is saved, in order.
+  assert.equal(results.recording.stats.recording.accepted, expectedFacts.length);
+  assert.equal(results.recording.journal.status, "ok");
+  assert.equal(results.recording.journal.contiguous, true);
+  assert.equal(results.recording.journal.eventCount, expectedFacts.length);
+  assert.equal(results.recording.manifest.recordingIntegrity.status, "complete");
+  // A write failure is the Recording owner's own incomplete mark; delivery is complete.
+  assert.deepEqual(results["write-failure"].facts, expectedFacts);
+  assert.equal(results["write-failure"].journal.status, "not-provided");
+  assert.equal(results["write-failure"].manifest.recordingIntegrity.status, "incomplete");
+  assert.equal(results["write-failure"].manifest.recordingIntegrity.failedWriteCount, expectedFacts.length);
+  assert.ok(results["write-failure"].manifest.recordingIntegrity.failedWrites
+    .every((failure) => failure.relativePath === "runtime-events/critical-events.v1.jsonl"));
+  // A Recording owner that throws synchronously is counted, bounded and isolated.
+  assert.equal(results["recorder-throws"].stats.recording.failed, expectedFacts.length);
+  assert.deepEqual(results["recorder-throws"].facts, expectedFacts);
+  assert.ok(results["recorder-throws"].stats.failureDetails.length <= 8);
+  // Failures that cannot even be described: still counted, bounded and isolated.
+  assert.equal(results["unreadable-failures"].thrown, 1, "the failing observer was cut off after one delivery");
+  assert.deepEqual([results["unreadable-failures"].stats.subscriberFailures, results["unreadable-failures"].stats.recording.failed],
+    [1, expectedFacts.length]);
+  assert.deepEqual(results["unreadable-failures"].facts, expectedFacts, "the healthy observer still received every fact");
+  assert.ok(results["unreadable-failures"].stats.failureDetails.every((detail) => detail.message === "unreadable failure"));
+  assert.deepEqual([results["unreadable-failures"].stats.failureDetails.length,
+    results["unreadable-failures"].stats.failureDetailsTruncated], [expectedFacts.length + 1, false]);
+  // A throw of the event layer itself stays inside the Hook's emit function.
+  assert.equal(results["stream-emit-throws"].thrown, expectedFacts.length + 2, "every emit call threw");
+  assert.deepEqual([results["stream-emit-throws"].stats.produced, results["stream-emit-throws"].facts], [0, []]);
+  // After release (unmount) producers still run; nothing is produced or delivered.
+  assert.equal(results["stream-released"].stats.produced, 0);
+  assert.equal(results["stream-released"].stats.lateAfterClose, expectedFacts.length + 2,
+    "every fact and both repeated ACKs were refused after release");
+  assert.deepEqual(results["stream-released"].deliveries, []);
+});
+
+test("AE6 Recording: the real writer saves and the real reader returns the same identity, order and terminal; off creates nothing; a late close and a new generation never receive an old event", async (t) => {
+  // Recording off: no recording is created, memory is still readable.
+  const off = createHarness({ now: 60_000 });
+  const idle = await createFileBackedRecorder();
+  try {
+    off.environment.sessionRecordingManagerRef.current = idle.manager;
+    aeRunFixedScenario(off);
+    assert.equal(off.criticalEvents.events().length, 6, "the observer read every fact from memory");
+    assert.equal(idle.files.startCalls, 0, "no recording was started by the event interface");
+    assert.deepEqual(idle.files.writes, []);
+    assert.equal(off.criticalEvents.stream.getStats().recording["not-recording"], 6);
+  } finally { off.restore(); await idle.cleanup(); }
+
+  const h = createHarness({ now: 60_000 });
+  const recorder = await createFileBackedRecorder();
+  try {
+    await recorder.start("session-a");
+    const firstFolder = recorder.files.folders[0];
+    h.environment.sessionRecordingManagerRef.current = recorder.manager;
+    aeUseRealManualActionLedger(h);
+    h.environment.publishGenerationResultProjection = h.evaluate(
+      `(${findCallbackSource("publishGenerationResultProjection")})`,
+      { formatGenerationResultLedgerForTrace: () => ({}) });
+    aeRunFixedScenario(h);
+    const shown = h.environment.selectAdviseDisplay(imports.buildMeetingAnswerDisplayModel({
+      content: h.uiState.latestSuggestion.content, parsedAnswer: h.uiState.latestSuggestion.meetingAnswer }));
+    h.environment.toggleAdvisePin({ actionId: "pin-recorded", uiSurface: "normal-mode", displayTarget: shown.target });
+    h.environment.recordManualRuntimeAction({ actionId: "owned-by-first", action: "force-advise", stage: "accepted",
+      traceId: "trace-owned-by-first", observedLogicalQuestionUnitId: "lqu-current", observedLogicalQuestionUnitRevision: 1 });
+    const produced = h.criticalEvents.events();
+    assert.ok(produced.length >= 10);
+
+    // Produced while the first generation is really closing: one aggregate
+    // write of the close is held, so the fact is produced in the closing phase.
+    const stream = h.criticalEvents.stream;
+    let releaseClose;
+    let enteredClosing;
+    const closing = new Promise((resolve) => { enteredClosing = resolve; });
+    recorder.files.blockWrite = (relativePath) => {
+      if (releaseClose || relativePath !== "metrics/session-summary.json") return undefined;
+      enteredClosing();
+      return new Promise((resolve) => { releaseClose = resolve; });
+    };
+    const stopping = recorder.manager.stop("test-stop");
+    await closing;
+    assert.equal(recorder.manager.getState().lifecycle, "closing");
+    const beforeClose = stream.getStats().recording;
+    h.setNow(95_000);
+    h.environment.toggleAdvisePin({ actionId: "during-close", displayTarget: shown.target });
+    assert.equal(stream.getStats().recording.accepted - beforeClose.accepted, 2,
+      "the closing generation took the acceptance and the terminal of this action");
+    releaseClose();
+    await stopping;
+    recorder.files.blockWrite = undefined;
+    // Then after it sealed and was released: nothing is recording.
+    const beforeSeal = stream.getStats().recording;
+    h.environment.toggleAdvisePin({ actionId: "after-close", displayTarget: shown.target });
+    const producedAfterSeal = h.criticalEvents.events().filter((event) => event.refs.manualActionId === "after-close").length;
+    assert.ok(producedAfterSeal > 0);
+    assert.equal(stream.getStats().recording["not-recording"] - beforeSeal["not-recording"], producedAfterSeal);
+    assert.equal(stream.getStats().recording.accepted, beforeSeal.accepted);
+    const first = await recorder.files.readCriticalEventJournal(firstFolder);
+    assert.equal(first.status, "ok");
+    assert.equal(first.sessions.length, 1);
+    const saved = first.sessions[0].events;
+    const inMemory = h.criticalEvents.events();
+    const savedIds = new Set(saved.map((event) => event.eventId));
+    // Identity, order and the original terminal are the ones produced.
+    assert.deepEqual(saved.map(({ recordingSessionId, recordingGenerationId, ...event }) => event),
+      inMemory.filter((event) => savedIds.has(event.eventId)).map((event) => JSON.parse(JSON.stringify(event))));
+    assert.deepEqual(saved.map((event) => event.sequence), saved.map((_, index) => index + 1));
+    assert.ok(saved.some((event) => event.terminal?.object === "manual-action" && event.terminal.disposition === "completed"));
+    assert.ok(saved.some((event) => event.terminal?.object === "generation" && event.terminal.disposition === "committed"));
+    assert.ok(saved.some((event) => event.terminal?.object === "generation" && event.terminal.disposition === "failed"));
+    const manifest = await recorder.files.readManifest(firstFolder);
+    assert.equal(new Set(saved.map((event) => event.recordingGenerationId)).size, 1);
+    assert.equal(saved[0].recordingGenerationId, manifest.recordingLifecycle.generationId);
+    assert.equal(saved[0].recordingSessionId, manifest.sessionId);
+    assert.equal(manifest.recordingIntegrity.status, "complete");
+    assert.equal(first.contiguous, true);
+    // The facts produced in the closing phase were saved by the generation
+    // being closed, through its existing late-write drain.
+    assert.deepEqual(saved.filter((event) => event.refs.manualActionId === "during-close").map((event) => event.fact),
+      ["input-accepted", "terminal"]);
+    t.diagnostic(JSON.stringify({ closingPhaseEvent: true, drainPasses: manifest.recordingLifecycle.drainPasses,
+      sessionSummaryWrites: recorder.files.writes.filter((write) => write.relativePath === "metrics/session-summary.json").length }));
+    // The event after the seal was produced and observed, and not recorded.
+    const afterClose = inMemory.filter((event) => event.refs.manualActionId === "after-close");
+    assert.ok(afterClose.length > 0);
+    assert.equal(afterClose.some((event) => savedIds.has(event.eventId)), false);
+    const timelineBefore = await recorder.files.readText(firstFolder, "timeline.jsonl");
+
+    // A manual action whose trace the first generation owns, accepted there.
+    const traced = { actionId: "owned-by-first", action: "force-advise", traceId: "trace-owned-by-first",
+      observedLogicalQuestionUnitId: "lqu-current", observedLogicalQuestionUnitRevision: 1 };
+
+    // A new generation in the same runtime session: only what is produced now.
+    h.setNow(100_000);
+    await recorder.start("session-a");
+    const secondFolder = recorder.files.folders[1];
+    assert.notEqual(secondFolder, firstFolder);
+    h.environment.toggleAdvisePin({ actionId: "second-generation", displayTarget: shown.target });
+    // Late facts of older work, produced by the real ledger callback while the
+    // second generation is writable: one whose trace the first generation
+    // owns, one whose own time is before the second generation began.
+    const beforeLate = stream.getStats().recording;
+    h.environment.recordManualRuntimeAction({ ...traced, stage: "terminal", terminalDisposition: "cancelled",
+      reason: "cancelled-by-runtime-boundary" });
+    h.environment.recordManualRuntimeAction({ actionId: "older-than-second", action: "clear-task", stage: "terminal",
+      terminalDisposition: "completed", reason: "active-task-cleared", occurredAt: 96_000 });
+    const afterLate = stream.getStats().recording;
+    assert.equal(afterLate["rejected-late"] - beforeLate["rejected-late"], 2,
+      "both were produced and observed in memory, and refused by the generation that does not own them");
+    assert.equal(afterLate.accepted, beforeLate.accepted);
+    assert.deepEqual(h.criticalEvents.events().filter((event) =>
+      ["owned-by-first", "older-than-second"].includes(event.refs.manualActionId)).map((event) =>
+      [event.refs.manualActionId, event.fact, event.terminal?.disposition]), [
+      ["owned-by-first", "input-accepted", undefined],
+      ["owned-by-first", "terminal", "cancelled"],
+      ["older-than-second", "terminal", "completed"],
+    ]);
+    await recorder.stop();
+    const second = await recorder.files.readCriticalEventJournal(secondFolder);
+    const secondManifest = await recorder.files.readManifest(secondFolder);
+    assert.ok(secondManifest.recordingLifecycle.rejectedLateWrites >= 2,
+      "the second generation counts the refused late writes in its own manifest");
+    assert.equal(second.status, "ok");
+    assert.deepEqual([...new Set(second.sessions[0].events.map((event) => event.refs.manualActionId))], ["second-generation"]);
+    assert.equal(second.contiguous, false, "the generation began mid-session: the hole before it is explicit");
+    assert.equal(second.sessions[0].gaps[0].firstMissingSequence, 1);
+    // The sealed recording was not rewritten by anything produced later.
+    assert.deepEqual(await recorder.files.readCriticalEventJournal(firstFolder), first);
+    assert.equal(await recorder.files.readText(firstFolder, "timeline.jsonl"), timelineBefore);
+    // Append-only writes to the journal; no human-evaluation or manifest field came from an event.
+    const journalWrites = recorder.files.criticalEventWrites();
+    assert.equal(journalWrites.every((write) => write.append && write.command === "write_meeting_session_recording_text"), true);
+    assert.equal(Object.keys(manifest).some((key) => /critical|runtimeEvent/i.test(key)), false);
+    const timeline = (timelineBefore ?? "").split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    assert.equal(timeline.some((entry) => /critical-event/.test(entry.kind)), false, "no timeline kind was added");
+  } finally { h.restore(); await recorder.cleanup(); }
+
+  // A generation whose close failed is sealed. It refuses the event as a late
+  // write, and the fact is still produced and observed in memory.
+  const sealed = createHarness({ now: 60_000 });
+  const failing = await createFileBackedRecorder();
+  try {
+    await failing.start("session-a");
+    sealed.environment.sessionRecordingManagerRef.current = failing.manager;
+    sealed.environment.window = { requestAnimationFrame: () => 1, cancelAnimationFrame() {} };
+    aeUseRealManualActionLedger(sealed);
+    const target = sealed.environment.selectAdviseDisplay(imports.buildMeetingAnswerDisplayModel({
+      content: sealed.uiState.latestSuggestion.content, parsedAnswer: sealed.uiState.latestSuggestion.meetingAnswer })).target;
+    let failManifest = true;
+    failing.files.failWrite = (relativePath) => failManifest && relativePath === "manifest.json";
+    await assert.rejects(failing.manager.stop("test-stop"), /manifest\.json/);
+    assert.equal(failing.manager.getState().lifecycle, "close-failed");
+    sealed.environment.toggleAdvisePin({ actionId: "after-failed-close", displayTarget: target });
+    const stats = sealed.criticalEvents.stream.getStats();
+    assert.deepEqual({ ...stats.recording }, { accepted: 0, "not-recording": 0, "rejected-late": 2, failed: 0 });
+    assert.deepEqual(sealed.criticalEvents.facts(), ["input-accepted:manual-action-accepted", "terminal:manual-action:completed"]);
+    assert.deepEqual(failing.files.criticalEventWrites(), [], "the sealed generation wrote no event line");
+    failManifest = false;
+    await failing.manager.stop("test-retry");
+    assert.equal((await failing.files.readCriticalEventJournal(failing.files.folders[0])).status, "not-provided");
+  } finally { sealed.restore(); await failing.cleanup(); }
+
+  // Zero rewrite: the Recording owner writes every other file the same number
+  // of times whether or not the Hook hands it events; the journal is the only
+  // addition. The run without events is this same code with the Hook's emit
+  // function replaced by one that does nothing. This holds for a recording
+  // with no fact in its closing phase: a fact accepted while closing is a late
+  // write, and the owner's existing drain then repeats its aggregate pass
+  // (reported above).
+  const writesByPath = async ({ emitDisabled = false } = {}) => {
+    const run = createHarness({ now: 60_000 });
+    if (emitDisabled) run.environment.emitRuntimeCriticalEvent = () => undefined;
+    const files = await createFileBackedRecorder();
+    try {
+      await files.start("session-a");
+      run.environment.sessionRecordingManagerRef.current = files.manager;
+      aeRunFixedScenario(run);
+      await files.stop();
+      const counts = {};
+      for (const write of files.files.writes) {
+        const key = `${write.append ? "append" : "write"} ${write.relativePath.replace(/[A-Za-z0-9_-]{20,}/g, "<id>")}`;
+        counts[key] = (counts[key] ?? 0) + 1;
+      }
+      return counts;
+    } finally { run.restore(); await files.cleanup(); }
+  };
+  const withEvents = await writesByPath();
+  const withoutEvents = await writesByPath({ emitDisabled: true });
+  const journalKey = "append runtime-events/critical-events.v1.jsonl";
+  assert.equal(withEvents[journalKey], 6);
+  assert.equal(withoutEvents[journalKey], undefined);
+  delete withEvents[journalKey];
+  assert.deepEqual(withEvents, withoutEvents, "no other recording file gained or lost a write");
+  assert.ok(Object.keys(withoutEvents).some((key) => key.includes("timeline.jsonl")));
+});
+
+test("AE8 cost: the same fixed steady and burst input with the Hook's emit function doing nothing, idle, observed and recorded (reported, never asserted as zero)", async (t) => {
+  const quantiles = (values) => {
+    const sorted = [...values].sort((a, b) => a - b);
+    const at = (q) => sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))] ?? 0;
+    return { count: sorted.length, p50: Math.round(at(0.5)), p95: Math.round(at(0.95)), max: Math.round(sorted.at(-1) ?? 0) };
+  };
+  // One formal input = one direct commit with Artifacts plus three display ACKs.
+  // "emit-disabled" is this same code with the Hook's emit function replaced by
+  // one that does nothing: the reference for what the interface adds.
+  const runInputs = async (variant, shape, inputs) => {
+    const h = createHarness({ now: 60_000, criticalEventObserver: ["with-observer", "with-recording"].includes(variant) });
+    const recorder = variant === "with-recording" ? await createFileBackedRecorder() : undefined;
+    try {
+      h.environment.window = { requestAnimationFrame: () => 1, cancelAnimationFrame() {} };
+      if (recorder) {
+        await recorder.start("session-a");
+        h.environment.sessionRecordingManagerRef.current = recorder.manager;
+      }
+      const stream = h.criticalEvents.stream;
+      const hookEmitNs = [], deliverBatchNs = [], deliverItemNs = [], inputNs = [];
+      if (variant === "emit-disabled") {
+        h.environment.emitRuntimeCriticalEvent = () => undefined;
+      } else {
+        // Test-side timing of the Hook's own emit function: the event layer's
+        // emit and the synchronous Recording call together, as every producer
+        // pays for it. The production path is unchanged.
+        const hookEmit = h.environment.emitRuntimeCriticalEvent;
+        h.environment.emitRuntimeCriticalEvent = (input) => {
+          const started = process.hrtime.bigint();
+          hookEmit(input);
+          hookEmitNs.push(Number(process.hrtime.bigint() - started));
+        };
+      }
+      const drain = () => {
+        while (h.criticalEvents.manualClock.pendingCount()) {
+          const before = stream.getStats().delivered;
+          const started = process.hrtime.bigint();
+          h.criticalEvents.manualClock.runNext();
+          const elapsed = Number(process.hrtime.bigint() - started);
+          const items = stream.getStats().delivered - before;
+          deliverBatchNs.push(elapsed);
+          if (items > 0) deliverItemNs.push(elapsed / items);
+        }
+      };
+      for (let index = 0; index < inputs; index += 1) {
+        h.setNow(60_000 + index * 10);
+        const started = aePerformance.now();
+        const prepared = aeArtifactCandidate(h, { id: `input-${index}`, code: `return ${index};` });
+        assert.equal(aeCommitDirect(h, prepared).committed, true);
+        const shown = h.environment.selectAdviseDisplay(imports.buildMeetingAnswerDisplayModel({
+          content: h.uiState.latestSuggestion.content, parsedAnswer: h.uiState.latestSuggestion.meetingAnswer }));
+        for (let ack = 0; ack < 3; ack += 1) h.environment.recordAdviseDisplayApplied(shown.target, "normal-mode");
+        inputNs.push((aePerformance.now() - started) * 1e6);
+        if (shape === "steady") drain();
+      }
+      drain();
+      const before = stream.getStats();
+      const business = aeBusinessProjection(h);
+      if (recorder) await recorder.stop();
+      stream.release("measurement finished");
+      const after = stream.getStats();
+      const journal = recorder?.files.criticalEventWrites() ?? [];
+      return {
+        business,
+        report: {
+          variant, shape, inputs, producedEvents: before.produced, deliveredItems: before.delivered,
+          overflowDropped: before.overflowDropped, gapMarkers: before.gapMarkers, queuePeak: before.queuePeak,
+          hookEmitNs: quantiles(hookEmitNs), deliverBatchNs: quantiles(deliverBatchNs), deliverItemNs: quantiles(deliverItemNs),
+          inputNs: quantiles(inputNs),
+          journalAppends: journal.length, journalBytes: journal.reduce((sum, write) => sum + write.bytes, 0),
+          otherRecordingWrites: recorder ? recorder.files.writes.length - journal.length : 0,
+          retainedAfterRelease: { queueDepth: after.queueDepth, subscribers: after.subscribers,
+            firstKeys: after.retainedFirstKeys, accepting: after.accepting },
+        },
+      };
+    } finally { h.restore(); await recorder?.cleanup(); }
+  };
+  for (const [shape, inputs] of [["steady", 40], ["burst", 120]]) {
+    const runs = {};
+    for (const variant of ["emit-disabled", "with-idle", "with-observer", "with-recording"]) {
+      runs[variant] = await runInputs(variant, shape, inputs);
+      const { report } = runs[variant];
+      // The difference of the per-input median from the run whose emit does nothing.
+      report.inputP50DeltaNs = report.inputNs.p50 - runs["emit-disabled"].report.inputNs.p50;
+      t.diagnostic(JSON.stringify(report));
+    }
+    const reference = runs["emit-disabled"];
+    assert.equal(reference.report.producedEvents, 0);
+    for (const variant of ["with-idle", "with-observer", "with-recording"]) {
+      assert.deepEqual(runs[variant].business, reference.business, `${shape}/${variant}: same product result`);
+      assert.equal(runs[variant].report.producedEvents, runs["with-idle"].report.producedEvents);
+      assert.deepEqual(runs[variant].report.retainedAfterRelease,
+        { queueDepth: 0, subscribers: 0, firstKeys: 0, accepting: false }, `${shape}/${variant}: nothing is retained after release`);
+    }
+    assert.equal(runs["with-idle"].report.queuePeak, 0, "no observer, nothing queued");
+    assert.equal(runs["with-recording"].report.journalAppends, runs["with-recording"].report.producedEvents,
+      "one appended line per produced event, no batching");
+    if (shape === "steady") {
+      assert.equal(runs["with-observer"].report.overflowDropped, 0);
+      assert.ok(runs["with-observer"].report.queuePeak <= 8);
+    } else {
+      // A burst that nobody drains reaches the bound and says so.
+      assert.ok(runs["with-observer"].report.queuePeak <= 257);
+      assert.equal(runs["with-observer"].report.producedEvents >
+        256 ? runs["with-observer"].report.gapMarkers >= 1 : true, true);
+    }
+  }
+
+  // The closing phase. A fact accepted while a generation closes is a late
+  // write for the Recording owner, whose existing drain then repeats its
+  // aggregate pass. What the interface adds is measured with an event alone:
+  // a manual action writes its own ledger line while closing whether or not
+  // the Hook's emit function does anything, so it is reported beside the run
+  // whose emit does nothing.
+  const closingCost = async (late, count = 0, { emitDisabled = false } = {}) => {
+    const h = createHarness({ now: 60_000 });
+    const recorder = await createFileBackedRecorder();
+    try {
+      h.environment.window = { requestAnimationFrame: () => 1, cancelAnimationFrame() {} };
+      aeUseRealManualActionLedger(h);
+      if (emitDisabled) h.environment.emitRuntimeCriticalEvent = () => undefined;
+      await recorder.start("session-a");
+      h.environment.sessionRecordingManagerRef.current = recorder.manager;
+      const target = h.environment.selectAdviseDisplay(imports.buildMeetingAnswerDisplayModel({
+        content: h.uiState.latestSuggestion.content, parsedAnswer: h.uiState.latestSuggestion.meetingAnswer })).target;
+      h.environment.toggleAdvisePin({ actionId: "before-close", displayTarget: target });
+      let release;
+      let entered;
+      const closing = new Promise((resolve) => { entered = resolve; });
+      recorder.files.blockWrite = (relativePath) => {
+        if (release || relativePath !== "metrics/session-summary.json") return undefined;
+        entered();
+        return new Promise((resolve) => { release = resolve; });
+      };
+      const stopping = recorder.manager.stop("test-stop");
+      await closing;
+      for (let index = 0; index < count; index += 1) {
+        if (late === "manual-action") {
+          h.environment.toggleAdvisePin({ actionId: `while-closing-${index}`, displayTarget: target });
+        }
+        // The event alone: the terminal of a request that Stop cancelled, handed
+        // to the Hook's own emit function as the provider terminal callback does.
+        if (late === "event-only") {
+          h.environment.emitRuntimeCriticalEvent({
+            fact: "terminal", stage: "provider-attempt-final", purpose: "formal",
+            runtimeSessionId: "session-a", runtimeEpoch: 1, occurredAt: Date.now(),
+            terminal: { object: "provider-request", disposition: "aborted" },
+            refs: { requestId: `request-${index}`, attemptId: `request-${index}:1`, attemptNumber: 1, operationKind: "main-advisor" },
+          });
+        }
+      }
+      release();
+      await stopping;
+      const manifest = await recorder.files.readManifest(recorder.files.folders[0]);
+      const writes = (relativePath) => recorder.files.writes.filter((write) => write.relativePath === relativePath).length;
+      return { late, count, emit: emitDisabled ? "disabled" : "real",
+        drainPasses: manifest.recordingLifecycle.drainPasses,
+        sessionSummaryWrites: writes("metrics/session-summary.json"),
+        nonAppendWrites: recorder.files.writes.filter((write) => !write.append).length,
+        journalAppends: recorder.files.criticalEventWrites().length,
+        integrity: manifest.recordingIntegrity.status };
+    } finally { h.restore(); await recorder.cleanup(); }
+  };
+  const closingPhase = {
+    quietClose: await closingCost("none"),
+    oneEvent: await closingCost("event-only", 1),
+    fiveEvents: await closingCost("event-only", 5),
+    manualWith: await closingCost("manual-action", 1),
+    quietEmitDisabled: await closingCost("none", 0, { emitDisabled: true }),
+    manualEmitDisabled: await closingCost("manual-action", 1, { emitDisabled: true }),
+  };
+  const { quietClose, oneEvent, fiveEvents, manualWith, quietEmitDisabled, manualEmitDisabled } = closingPhase;
+  t.diagnostic(JSON.stringify({ closingPhase }));
+  for (const run of Object.values(closingPhase)) assert.equal(run.integrity, "complete", JSON.stringify(run));
+  // The interface's own closing-phase cost: an event alone is a late write.
+  assert.equal(oneEvent.journalAppends, quietClose.journalAppends + 1, "the late event was saved");
+  assert.equal(fiveEvents.journalAppends, quietClose.journalAppends + 5);
+  assert.ok(oneEvent.drainPasses > quietClose.drainPasses && oneEvent.sessionSummaryWrites > quietClose.sessionSummaryWrites,
+    "an event in the closing phase repeats the owner's aggregate pass: the cost is real and is reported");
+  assert.deepEqual([fiveEvents.drainPasses, fiveEvents.sessionSummaryWrites, fiveEvents.nonAppendWrites],
+    [oneEvent.drainPasses, oneEvent.sessionSummaryWrites, oneEvent.nonAppendWrites],
+    "five events in the same window cost the same one extra pass as one");
+  // A manual action in the closing phase: its own ledger line is a late write
+  // when the emit function does nothing too, so the interface adds only its
+  // journal lines.
+  assert.equal(manualWith.journalAppends, quietClose.journalAppends + 2, "the action's two facts were saved");
+  assert.deepEqual([quietEmitDisabled.journalAppends, manualEmitDisabled.journalAppends], [0, 0]);
+  assert.deepEqual([manualWith.drainPasses, manualWith.sessionSummaryWrites, manualWith.nonAppendWrites],
+    [manualEmitDisabled.drainPasses, manualEmitDisabled.sessionSummaryWrites, manualEmitDisabled.nonAppendWrites],
+    "with a manual action the extra pass exists whether or not an event is emitted");
+  assert.deepEqual([quietClose.drainPasses, quietClose.sessionSummaryWrites, quietClose.nonAppendWrites],
+    [quietEmitDisabled.drainPasses, quietEmitDisabled.sessionSummaryWrites, quietEmitDisabled.nonAppendWrites],
+    "a close with nothing late is the same whether or not events were emitted");
 });

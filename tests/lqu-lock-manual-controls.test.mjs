@@ -52,6 +52,13 @@ function callback(name, context) {
   return evaluate(`(${callbackNode(name).getText(hook)})`, context);
 }
 
+// Task 178A: the shared helper builds the real critical event stream; the Hook's
+// own emit callbacks are extracted once.
+const { createRuntimeCriticalEventHarness, RUNTIME_CRITICAL_EVENT_HOOK_CALLBACKS } =
+  await import(pathToFileURL(path.join(output, "tests/helpers/runtime-critical-events.js")));
+const criticalEventCallbackSources = Object.fromEntries(RUNTIME_CRITICAL_EVENT_HOOK_CALLBACKS.map(name =>
+  [name, `(${callbackNode(name).getText(hook)})`]));
+
 // Reuse the existing source-owner fixture, including its complete evidence record.
 // These declarations provide data; all selection and authority checks remain production code.
 function sourceFixture() {
@@ -225,6 +232,8 @@ function harness({ activeChild = false, selectedChild = false, phase = "design_f
     logicalQuestionUnitId: unit.id,
   });
   const context = vm.createContext(environment);
+  const criticalEvents = createRuntimeCriticalEventHarness({ sessionId: f.unit.sessionId });
+  criticalEvents.install(environment, name => evaluate(criticalEventCallbackSources[name], context));
   environment.isManualRuntimeActionBusy = evaluate(`(${declaration("isManualRuntimeActionBusy").getText(hook)})`, context);
   environment.shortcutRejectionMessage = evaluate(`(${declaration("shortcutRejectionMessage").getText(hook)})`, context);
   environment.submitTaskRuntimeTransition = evaluate(`(${declaration("submitTaskRuntimeTransition").getText(hook)})`, context);
@@ -237,7 +246,7 @@ function harness({ activeChild = false, selectedChild = false, phase = "design_f
   const correctionContext = environment.readManualCorrectionContext(snapshot.target);
   const correctionInvocation = { correctionIntent: { kind: "independent" }, correctionTarget: correctionContext?.target };
   return { f, manager, ledger, selected, background, snapshot, selectedTarget, backgroundTarget, environment, context, correctionInvocation,
-    display, calls, events, writes, traces, finalizations, recordingEvents, get state() { return state; } };
+    display, calls, events, writes, traces, finalizations, recordingEvents, criticalEvents, get state() { return state; } };
 }
 
 // Execute the contiguous production Correction entry through target and lease
@@ -757,3 +766,78 @@ for (const authorized of [true, false]) {
     assert.equal(h.writes.length, 1, "post-writer control must not invoke another task mutation");
   });
 }
+
+// ===========================================================================
+// Task 178A (AE1, AE2): Lifecycle committed through a real manual entry and the
+// real sole task writer. The event is the writer's own receipt; a rejection is
+// the lifecycle object's terminal; a preserved result is no fact.
+// ===========================================================================
+
+test("AE1/AE2 Lifecycle: real Back commits once through the real writer and announces that receipt; a writer rejection is a rejected terminal and never a commit; a preserved result is silent", async () => {
+  const h = harness();
+  history(h);
+  assert.deepEqual(h.criticalEvents.events(), [], "seeding the fixture through the writer directly announces nothing");
+  await callback("applyResponseAction", h.context)("previous-phase", { displayTarget: h.snapshot.target });
+  assert.equal(h.writes.length, 1);
+  const committed = h.writes[0].result;
+  assert.equal(committed.mutationApplied, true);
+  assert.deepEqual(h.criticalEvents.facts(), ["lifecycle-committed:task-writer-committed"]);
+  const [event] = h.criticalEvents.events();
+  assert.equal(event.runtimeSessionId, h.f.unit.sessionId);
+  assert.equal(event.purpose, "formal");
+  assert.equal(event.refs.receiptId, committed.state.lastMutation.id, "the writer's receipt id");
+  assert.equal(event.refs.taskRuntimeRevision, committed.state.revision, "paired with the task-runtime revision");
+  assert.equal(event.occurredAt, committed.state.lastMutation.appliedAt);
+  assert.equal(event.refs.transition, "set-phase");
+  assert.equal(event.refs.taskId, committed.state.parent.id);
+  assert.equal(event.refs.logicalQuestionUnitId, h.f.unit.id);
+  assert.equal(event.refs.traceId, h.traces.at(-1).id);
+
+  // The same entry while another accepted source moves the task first: the
+  // real writer rejects the stale revision.
+  const rejecting = harness();
+  history(rejecting);
+  const wrapped = rejecting.manager.commitTaskRuntimeTransition;
+  let interfered = false;
+  rejecting.manager.commitTaskRuntimeTransition = input => {
+    if (!interfered) {
+      interfered = true;
+      const runtime = rejecting.manager.getState().taskRuntime;
+      assert.equal(wrapped({ id: "concurrent-source", transition: "update-parent-context", reason: "accepted-source",
+        expectedRevision: runtime.revision,
+        parent: { ...runtime.parent, supportedFactAnchors: ["new-source-fact"], revisions: runtime.parent.revisions + 1 },
+      }).mutationApplied, true);
+    }
+    return wrapped(input);
+  };
+  await callback("applyResponseAction", rejecting.context)("previous-phase", { displayTarget: rejecting.snapshot.target });
+  const rejection = rejecting.writes.at(-1);
+  assert.equal(rejection.result.authorized, false);
+  assert.equal(rejection.result.reason, "revision-mismatch");
+  assert.match(rejecting.state.error, /Back was not applied/);
+  assert.deepEqual(rejecting.criticalEvents.facts(), ["terminal:lifecycle-transition:rejected"]);
+  const [terminal] = rejecting.criticalEvents.events();
+  assert.equal(terminal.terminal.reason, "revision-mismatch", "the writer's own reason");
+  assert.equal(terminal.refs.receiptId, rejection.input.id, "the rejected mutation's id");
+  assert.equal(terminal.refs.taskRuntimeRevision, rejecting.manager.getState().taskRuntime.revision);
+  assert.equal(rejecting.criticalEvents.events().some(candidate => candidate.fact === "lifecycle-committed"), false,
+    "a rejection never announces a commit");
+
+  // The real Clear adapter and writer. With a task it commits a clear; with
+  // nothing left to clear the writer preserves, and a preserved result is silent.
+  const clearing = harness();
+  const submitClear = evaluate(`(${declaration("submitTaskRuntimeClear").getText(hook)})`, clearing.context);
+  const observe = () => clearing.environment.observeTaskRuntimeWriter({ runtimeSessionId: clearing.f.unit.sessionId });
+  const cleared = submitClear(clearing.manager, { scope: "all", reason: "active-task-cleared" }, observe());
+  assert.equal(cleared.mutationApplied, true);
+  const preserved = submitClear(clearing.manager, { scope: "all", reason: "meeting-assistant-stopped" }, observe());
+  assert.equal(preserved.authorized, true);
+  assert.equal(preserved.mutationApplied, false);
+  assert.equal(preserved.reason, "preserved");
+  const clearEvents = clearing.criticalEvents.events();
+  assert.deepEqual(clearEvents.map(candidate => [candidate.fact, candidate.refs.transition, candidate.refs.taskRuntimeRevision]),
+    [["lifecycle-committed", "clear-all", cleared.state.revision]]);
+  assert.equal(clearEvents[0].refs.receiptId, cleared.state.lastMutation.id);
+  assert.equal(clearEvents[0].refs.taskId, undefined, "no parent remains to reference");
+  assert.equal("runtimeEpoch" in clearEvents[0], false, "a manual clear holds no epoch token, so none is invented");
+});

@@ -19,6 +19,21 @@ export function productionPlannedCommit(overrides: Record<string, unknown> = {})
   return script.runInNewContext({ ...tasks, ...plans, ...overrides }) as (input: any) => any;
 }
 
+// A Hook-level useCallback, lifted from the same parsed source and evaluated
+// against the given environment (Task 178A: the Hook's own emit callbacks).
+export function productionHookCallback(name: string, environment: Record<string, unknown>) {
+  let found: ts.VariableDeclaration | undefined;
+  const visit = (node: ts.Node) => {
+    if (!found && ts.isVariableDeclaration(node) && node.name.getText(source) === name) found = node;
+    if (!found) ts.forEachChild(node, visit);
+  };
+  visit(source);
+  assert.ok(found?.initializer && ts.isCallExpression(found.initializer), `production callback ${name}`);
+  return vm.runInNewContext(ts.transpileModule(`(${found.initializer.arguments[0]!.getText(source)})`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
+  }).outputText, environment);
+}
+
 // Frozen Plan fixtures exercise the actual Hook orchestration and sole manager
 // writer. Only the already-tested Plan compiler is substituted in these cases.
 export function createTestPlannedTransition(input: {
@@ -38,6 +53,8 @@ export function commitTestPlannedTransition(input: {
   currentTaskRuntimeRevision: number;
   currentActiveInterviewTask?: ActiveInterviewParent;
   currentActiveScreenTask?: ActiveScreenTask;
+  // The Hook's read-only writer observer, as its two production callers pass it.
+  observeWriter?: unknown;
 }) {
   const manager = new MeetingContextManager();
   manager.reset({ sessionId: input.currentSessionId });
@@ -60,6 +77,7 @@ export function commitTestPlannedTransition(input: {
     parentAfter: input.transaction.proposedActiveInterviewTask,
     screenAfter: input.transaction.proposedActiveScreenTask,
     operationId: "test-command", planInput: { settlement, explicitTaskMutationCommand: plan.taskMutationPolicy },
+    observeWriter: input.observeWriter,
   });
   const final = manager.getTaskRuntimeState();
   const before = input.currentActiveInterviewTask;

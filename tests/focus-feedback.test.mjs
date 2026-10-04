@@ -53,6 +53,12 @@ function evaluate(code, env) {
   } }).outputText, env);
 }
 const hookCallback = (name, env) => evaluate(`(${variable(hook, name).initializer.arguments[0].getText(hook)})`, env);
+// Task 178A: the shared helper builds the real critical event stream; the Hook's
+// own emit callbacks are extracted once.
+const { createRuntimeCriticalEventHarness, RUNTIME_CRITICAL_EVENT_HOOK_CALLBACKS } =
+  await import(pathToFileURL(path.resolve(output, "tests/helpers/runtime-critical-events.js")));
+const criticalEventCallbackSources = Object.fromEntries(RUNTIME_CRITICAL_EVENT_HOOK_CALLBACKS.map(name =>
+  [name, `(${variable(hook, name).initializer.arguments[0].getText(hook)})`]));
 const recorderCreation = one(hook, node => ts.isNewExpression(node) && node.expression.getText(hook) === "SessionRecordingManager", "recorder constructor");
 const publisherCreation = one(main, node => ts.isCallExpression(node) && node.expression.getText(main) === "createMeetingFocusPublisher", "publisher constructor");
 const observeSource = publisherCreation.arguments[0].properties.find(node => node.name?.getText(main) === "observe").initializer.getText(main);
@@ -118,6 +124,8 @@ async function harness(t, replacement = false) {
     currentQuestionTrace: undefined, activeTaskKind: undefined, whiteboardArtifactDisplay: { viewKey: "background" },
     formatClarifyingSelectionMessage: () => undefined, getActiveMeetingTaskFocusSummary: () => undefined,
   };
+  const criticalEvents = createRuntimeCriticalEventHarness({ sessionId: "session" });
+  criticalEvents.install(env, name => evaluate(criticalEventCallbackSources[name], env));
   const select = hookCallback("selectAdviseDisplay", env);
   env.readProjectChoiceContext = hookCallback("readProjectChoiceContext", env);
   env.meeting.readProjectChoicePresentation = hookCallback("readProjectChoicePresentation", env);
@@ -194,7 +202,7 @@ async function harness(t, replacement = false) {
   await publisher.start(); await open("answer"); await open("controls");
   t.after(async () => { publisher.dispose(); for (const consumer of consumers.values()) consumer.dispose(); await recorder.stop(); });
   pendingRender = true;
-  return { env, display, recorder, received, sent, actions, writes, stateChanges, published, applied, drain, open,
+  return { env, display, recorder, received, sent, actions, writes, stateChanges, published, applied, drain, open, criticalEvents,
     rerender() { pendingRender = true; },
     async update(change) { change(env); pendingRender = true; await drain(); },
   };

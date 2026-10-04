@@ -13,6 +13,7 @@ import { commitStableAnswerRevision, type StableAnswerRevision } from "../src/li
 import { parseMeetingAnswer } from "../src/lib/meeting/meeting-answer.js";
 import { createMeetingFocusDisplayModel } from "../src/lib/meeting/focus-display.js";
 import { EMPTY_MEETING_FOCUS_SNAPSHOT } from "../src/lib/meeting/focus-window.js";
+import { createRuntimeCriticalEventHarness, RUNTIME_CRITICAL_EVENT_HOOK_CALLBACKS } from "./helpers/runtime-critical-events.js";
 
 const require = createRequire(path.resolve("package.json"));
 const bundle = buildSync({ entryPoints:["src/lib/meeting/fact-risk-review.ts"], bundle:true,
@@ -177,6 +178,12 @@ function hookNode(name: string): ts.Node {
 const hookCode = (name: string) => ts.transpileModule(`(${hookNode(name).getText(hookAst)})`, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText;
 
+// Task 178A: the Hook's own emit callbacks, extracted once. The event stream is
+// not a Debug, Recording or Cross-checks switch; the environment still holds none.
+const criticalEventCallbackCode = Object.fromEntries(
+  RUNTIME_CRITICAL_EVENT_HOOK_CALLBACKS.map((name) => [name, hookCode(name)])
+) as Record<string, string>;
+
 async function displayApplied(mode: "enforcement" | "shadow") {
   const { runtime, events } = setup();
   const committed = stable();
@@ -216,6 +223,8 @@ async function displayApplied(mode: "enforcement" | "shadow") {
     },
   });
   context.formatTraceModelInput = vm.runInContext(hookCode("formatTraceModelInput"), context);
+  createRuntimeCriticalEventHarness({ sessionId: "session" }).install(context,
+    (name) => vm.runInContext(criticalEventCallbackCode[name], context));
   const recordAdviseDisplayApplied = vm.runInContext(hookCode("recordAdviseDisplayApplied"), context);
   runtime.retain([answer]);
   recordAdviseDisplayApplied(target, "normal-mode");

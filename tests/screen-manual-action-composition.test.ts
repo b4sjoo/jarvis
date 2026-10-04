@@ -73,6 +73,11 @@ import {
   resolveResponseOpportunityRefreshAuthority,
 } from "../src/lib/meeting/response-opportunity-generation-gate.js";
 
+import {
+  createRuntimeCriticalEventHarness,
+  RUNTIME_CRITICAL_EVENT_HOOK_CALLBACKS,
+} from "./helpers/runtime-critical-events.js";
+
 const hook = ts.createSourceFile("hook.ts", readFileSync("src/hooks/useMeetingAssistant.ts", "utf8"), ts.ScriptTarget.Latest, true);
 function declaration(name: string): ts.FunctionDeclaration | ts.VariableDeclaration {
   let found: ts.FunctionDeclaration | ts.VariableDeclaration | undefined;
@@ -89,13 +94,23 @@ function evaluate(source: string, environment: Record<string, unknown>) {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
   }).outputText, environment);
 }
+// Task 178A: the shared helper builds the real critical event stream; the Hook's
+// own emit callbacks are extracted once.
+const criticalEventCallbackSources = Object.fromEntries(
+  RUNTIME_CRITICAL_EVENT_HOOK_CALLBACKS.map((name) => {
+    const node = declaration(name) as ts.VariableDeclaration;
+    return [name, `(${(node.initializer as ts.CallExpression).arguments[0].getText(hook)})`];
+  })
+) as Record<string, string>;
 function selectSource(input: Record<string, unknown>) {
   const exported = (responseTargets as Record<string, unknown>).resolveResponseActionLogicalQuestionUnit;
   if (typeof exported === "function") return exported(input);
   return evaluate(`(${declaration("resolveResponseActionLogicalQuestionUnit").getText(hook)})`, {})(input);
 }
 
-function screenFixture() {
+// The real Screen transition candidate, the real reducer behind a minimal
+// writer, and the Hook's real source-owned adapters.
+function screenTransitionFixture() {
   const packet = resolveManualScreenSourcePacket({ screenObservationId: "screen-origin", screenPreflightQuestion: "Solve Longest Substring Without Repeating Characters." });
   const unit = buildManualScreenLogicalQuestionUnit({ packet, sessionId: "session", runtimeEpoch: 3, createdAt: 100 })!;
   const provisional = createProvisionalCurrentQuestion({ logicalQuestionUnit: unit, sourceKind: "screen", sourceObservationIds: ["screen-origin"] });
@@ -130,12 +145,19 @@ function screenFixture() {
       return result;
     },
   };
-  const runtimeEnvironment: Record<string, unknown> = { commitSourceOwnedTransitionToRuntime, resolveSourceOwnedRuntimeTransition, createMeetingId: () => "initial-transition" };
+  const runtimeEnvironment: Record<string, unknown> = { commitSourceOwnedTransitionToRuntime, resolveSourceOwnedRuntimeTransition, createMeetingId: () => "initial-transition", console: { warn: () => undefined } };
   runtimeEnvironment.submitTaskRuntimeTransition = evaluate(`(${declaration("submitTaskRuntimeTransition").getText(hook)})`, runtimeEnvironment);
   const commit = evaluate(`(${declaration("commitSourceOwnedTransitionWithManager").getText(hook)})`, runtimeEnvironment);
+  return { unit, settlement, playbook, candidate, manager, commit, runtimeEnvironment,
+    creates: () => creates, runtime: () => runtime, setRuntime: (next: MeetingTaskRuntimeState) => { runtime = next; } };
+}
+
+function screenFixture() {
+  const { unit, settlement, playbook, candidate, manager, commit, creates, runtime: readRuntime } = screenTransitionFixture();
   const receipt = commit({ manager, candidate, expectedTaskRuntimeRevision: 0, currentSessionId: "session", currentRuntimeEpoch: 3, reason: "screen-source-transition-committed" });
   assert.equal(receipt.runtimeResult.authorized, true);
-  assert.equal(creates, 1);
+  assert.equal(creates(), 1);
+  const runtime = readRuntime();
   const parent = manager.getTaskRuntimeState().parent!;
   assert.ok(parent);
   const task = buildActiveMeetingTask({ parent, runtimeRevision: 1 })!;
@@ -365,6 +387,8 @@ function actionHarness(f = screenFixture()) {
     buildAdvisorJob: (options: any) => ({ ...options, traceId: environment.traceStoreRef.current.startTrace("screen", {}).id }),
     activateAdvisorJob: () => true,
   };
+  const criticalEvents = createRuntimeCriticalEventHarness({ sessionId: "session" });
+  criticalEvents.install(environment, (name) => evaluate(criticalEventCallbackSources[name], environment));
   for (const name of ["isManualRuntimeActionBusy", "submitTaskRuntimeTransition"]) {
     environment[name] = evaluate(`(${declaration(name).getText(hook)})`, environment);
   }
@@ -445,7 +469,7 @@ function actionHarness(f = screenFixture()) {
     const node = declaration(name) as ts.VariableDeclaration;
     return evaluate(`(${(node.initializer as ts.CallExpression).arguments[0].getText(hook)})`, environment);
   };
-  return { f, context, events, plans, observations, traces, runtimeCommands, stableRef, continuityRef, currentRef, apply: callback("applyResponseAction"), regenerate: callback("regenerateSuggestion"), environment };
+  return { f, context, events, plans, observations, traces, runtimeCommands, stableRef, continuityRef, currentRef, apply: callback("applyResponseAction"), regenerate: callback("regenerateSuggestion"), environment, criticalEvents };
 }
 
 // Keep the real callback/factory and executor admission in one test path. Only
@@ -1132,4 +1156,73 @@ test("MR4 real Next caller stops a terminal Coding parent before Advisor without
     assert.equal(h.traces.length, before.traces);
     assert.equal(h.observations.length, before.observations);
   }
+});
+
+// ===========================================================================
+// Task 178A (AE1, AE2): a source-owned transition through the Hook's real
+// adapters and the real reducer. A settlement exists in every case below; a
+// Lifecycle fact exists only when the writer returned an applied mutation.
+// ===========================================================================
+
+test("AE1/AE2 source-owned transition: committed announces the writer's receipt; a transition rejected before the writer announces nothing; a writer rejection is a rejected terminal", () => {
+  const run = (arrange: (fixture: ReturnType<typeof screenTransitionFixture>) => Record<string, unknown> = () => ({})) => {
+    const fixture = screenTransitionFixture();
+    assert.equal(fixture.settlement.relation, "new-parent", "the settlement is computed in every case");
+    const criticalEvents = createRuntimeCriticalEventHarness({ sessionId: "session" });
+    fixture.runtimeEnvironment.sessionRecordingManagerRef = { current: undefined };
+    criticalEvents.install(fixture.runtimeEnvironment, (name) =>
+      evaluate(criticalEventCallbackSources[name], fixture.runtimeEnvironment));
+    const observeTaskRuntimeWriter = fixture.runtimeEnvironment.observeTaskRuntimeWriter as
+      (identity: Record<string, unknown>) => unknown;
+    const overrides = arrange(fixture);
+    const receipt = fixture.commit({
+      manager: fixture.manager, candidate: fixture.candidate, expectedTaskRuntimeRevision: 0,
+      currentSessionId: "session", currentRuntimeEpoch: 3, reason: "screen-source-transition-committed",
+      observeWriter: observeTaskRuntimeWriter({ runtimeSessionId: "session", runtimeEpoch: 3, traceId: "screen-trace" }),
+      ...overrides,
+    });
+    return { fixture, receipt, criticalEvents };
+  };
+
+  const committed = run();
+  assert.equal(committed.receipt.runtimeResult.mutationApplied, true);
+  assert.deepEqual(committed.criticalEvents.facts(), ["lifecycle-committed:task-writer-committed"]);
+  const [event] = committed.criticalEvents.events();
+  const state = committed.fixture.runtime();
+  assert.equal(event!.refs.receiptId, state.lastMutation!.id);
+  assert.equal(event!.refs.taskRuntimeRevision, 1);
+  assert.equal(event!.refs.transition, "create-parent");
+  assert.equal(event!.refs.taskId, state.parent!.id);
+  assert.equal(event!.refs.traceId, "screen-trace");
+  assert.equal(event!.runtimeEpoch, 3);
+  assert.equal(event!.occurredAt, state.lastMutation!.appliedAt);
+
+  // The source preparation rejects a stale task revision and another epoch
+  // before the writer is ever called: settlement without lifecycle.
+  for (const overrides of [{ expectedTaskRuntimeRevision: 7 }, { currentRuntimeEpoch: 4 }]) {
+    const rejected = run(() => overrides);
+    assert.equal(rejected.receipt.runtimeResult, undefined, "the writer was not called");
+    assert.equal(rejected.fixture.creates(), 0);
+    assert.deepEqual(rejected.criticalEvents.events(), [], JSON.stringify(overrides));
+  }
+
+  // The writer itself rejects: its revision moved after the adapter read it.
+  const writerRejected = run((fixture) => {
+    const read = fixture.manager.getTaskRuntimeState;
+    let reads = 0;
+    fixture.manager.getTaskRuntimeState = () => {
+      const value = read();
+      if (reads++ === 0) fixture.setRuntime({ revision: 1 });
+      return value;
+    };
+    return {};
+  });
+  assert.equal(writerRejected.receipt.runtimeResult.authorized, false);
+  assert.equal(writerRejected.fixture.creates(), 0);
+  assert.deepEqual(writerRejected.criticalEvents.facts(), ["terminal:lifecycle-transition:rejected"]);
+  const [terminal] = writerRejected.criticalEvents.events();
+  assert.equal(terminal!.terminal?.reason, "revision-mismatch");
+  assert.equal(terminal!.refs.transition, "create-parent");
+  assert.equal(terminal!.refs.taskRuntimeRevision, 1);
+  assert.ok(terminal!.refs.receiptId, "the rejected mutation is identified");
 });

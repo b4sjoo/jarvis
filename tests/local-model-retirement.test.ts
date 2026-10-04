@@ -22,6 +22,10 @@ import * as runtimeInference from "../src/lib/meeting/runtime-inference.js";
 import { hashTaxonomySourceTurnIds } from "../src/lib/meeting/taxonomy-adjudication.js";
 import { createScreenPreflightDeadlineArbiter } from "../src/lib/meeting/screen-preflight-deadline.js";
 import { createMeetingId } from "../src/lib/meeting/meeting-id.js";
+import {
+  createRuntimeCriticalEventHarness,
+  RUNTIME_CRITICAL_EVENT_HOOK_CALLBACKS,
+} from "./helpers/runtime-critical-events.js";
 
 const hook = ts.createSourceFile("hook.ts", readFileSync("src/hooks/useMeetingAssistant.ts", "utf8"), ts.ScriptTarget.Latest, true);
 const ui = ts.createSourceFile("meeting.tsx", readFileSync("src/pages/app/components/meeting/index.tsx", "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -67,6 +71,11 @@ function evaluate(node: ts.Node, source: ts.SourceFile, globals: Record<string, 
   }).outputText;
   return vm.runInContext(code, globals);
 }
+
+// Task 178A: the Hook's own emit callbacks, extracted once.
+const criticalEventCallbackNodes = Object.fromEntries(
+  RUNTIME_CRITICAL_EVENT_HOOK_CALLBACKS.map((name) => [name, callback(name)])
+) as Record<string, ts.Node>;
 
 function load(source: ts.SourceFile, globals: Record<string, any>, names: string[]) {
   for (const name of names) globals[name] = evaluate(expression(source, name), source, globals);
@@ -310,12 +319,15 @@ function entryHarness(old = {}) {
   globals.rawZeroInputEpisodeRef.current = new RawZeroInputEpisode();
   globals.handledNativeTerminalKeysRef.current = new Set();
   globals.contextManagerRef.current = { getState: () => ({ sessionId: "session", transcriptTurns: [], screenObservations: [] }) };
+  // Task 178A: the real stream and the real Hook emit callbacks.
+  const criticalEvents = createRuntimeCriticalEventHarness({ sessionId: "session" });
+  criticalEvents.install(globals, (name) => evaluate(criticalEventCallbackNodes[name], hook, globals));
   load(hook, globals, ["MISSING_STT_MESSAGE", "MISSING_AI_MESSAGE", "MISSING_VISION_MESSAGE"]);
   for (const name of ["startCapture", "start", "resume", "captureScreenContext"]) {
     globals[name] = evaluate(callback(name), hook, globals);
   }
   globals.setupWarnings = evaluate(callback("setupWarnings"), hook, globals);
-  return { globals, calls };
+  return { globals, calls, criticalEvents };
 }
 
 test("L115-D4 actual Meeting Start/Resume accept current providers regardless of retired keys", async () => {
@@ -396,6 +408,8 @@ function screenHarness(old = {}) {
     },
   });
   g.contextManagerRef.current = manager;
+  // Task 178A: the stream follows the runtime session of this real manager.
+  h.criticalEvents.bind(manager.getState().sessionId).observe();
   g.traceStoreRef.current = traces;
   g.screenOperationCoordinatorRef.current = new ScreenOperationCoordinator();
   g.awaitingVisualEvidenceRecoveryRef.current = new Map();
@@ -422,6 +436,13 @@ test("L115-D4 actual Screen captures only on request and retains missing AI/visi
       assert.equal("privacyMode" in trace.metadata!, false);
       assert.equal("screenContextEnabled" in trace.metadata!, false);
       assert.equal(h.globals.screenOperationCoordinatorRef.current.getActiveOperationId(), null);
+      // Task 178A: a missing provider ends the operation with an error after
+      // its capture. Its release says so; it is not a flow that ran to its end.
+      const facts = plain(h.criticalEvents.events()).map((event: any) => [event.fact, event.stage, event.terminal]);
+      assert.deepEqual(facts, [
+        ["input-accepted", "screen-operation-claimed", undefined],
+        ["terminal", "screen-operation-release", { object: "screen-operation", disposition: "released", reason: "operation-error" }],
+      ]);
     }
   }
 });

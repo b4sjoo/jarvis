@@ -49,6 +49,13 @@ const callbackNames = [
   "waitForRuntimeRegressionTraceTerminal",
 ];
 const callbackSources = callbackNames.map(callback);
+// Task 178A: the Hook's own emit callbacks, extracted once.
+const criticalEventCallbackNames = [
+  "emitRuntimeCriticalEvent", "observeTaskRuntimeWriter", "emitCurrentQuestionSettlementAdopted",
+  "emitLogicalQuestionUnitCommitted", "announceStagedGenerationCommit",
+];
+const criticalEventCallbackSources = Object.fromEntries(
+  criticalEventCallbackNames.map((name) => [name, callback(name)]));
 const helperSource = find(file, (node) =>
   ts.isFunctionDeclaration(node) && node.name?.text === "toObservedAdvisorAction"
 ).getText(file) + "\n" + find(file, (node) =>
@@ -88,6 +95,8 @@ for (const name of [
 ]) {
   exports.push(`export * from "@/lib/meeting/${name}";`);
 }
+// Task 178A: the shared helper that builds the real critical event stream.
+exports.push(`export * from "./tests/helpers/runtime-critical-events";`);
 const bundle = await esbuild.build({
   stdin: { contents: exports.join("\n"), loader: "ts", resolveDir: root },
   bundle: true,
@@ -250,6 +259,15 @@ function createHarness() {
       return result.promise;
     },
   });
+  // Task 178A: the real stream, bound to this harness session, and the real
+  // Hook emit callbacks. Delivery runs on a manual clock, not on the fake timers.
+  const criticalEvents = pure.createRuntimeCriticalEventHarness({
+    sessionId: state.sessionId,
+    now: () => clock.now,
+  });
+  assert.deepEqual([...pure.RUNTIME_CRITICAL_EVENT_HOOK_CALLBACKS], criticalEventCallbackNames);
+  criticalEvents.install(environment, (name) =>
+    vm.runInContext(transpile(`(${criticalEventCallbackSources[name]})`), context));
   callbackNames.forEach((name, index) => {
     environment[name] = vm.runInContext(transpile(`(${callbackSources[index]})`), context);
   });
@@ -321,7 +339,7 @@ function createHarness() {
     };
   }
 
-  return { environment, pure, state, clock, runtime, start, candidate, settle, modelResult, products, metadata, finished, advisorCalls, providerCalls, settlements, scheduled, replaySteps };
+  return { environment, pure, state, clock, runtime, start, candidate, settle, modelResult, products, metadata, finished, advisorCalls, providerCalls, settlements, scheduled, replaySteps, criticalEvents };
 }
 
 function bufferedTurn(h, id, text) {
@@ -943,3 +961,97 @@ for (const kind of ["response-opportunity-inference", "question-type-adjudicatio
     assert.deepEqual(settledAuthority, [undefined]);
   });
 }
+
+// ===========================================================================
+// Task 178A (AE1, AE2): Voice and Runner entries through the real canonical
+// ingress, the real Response Opportunity runtime and the real LQU publication.
+// Every event read here was emitted by the lifted production callbacks.
+// ===========================================================================
+
+const aeCompleteAsk = "Design a service for customer reviews and rewards.";
+// The stream lives in this harness's vm realm; compare plain copies.
+const aePlain = (value) => JSON.parse(JSON.stringify(value));
+const aeFacts = (h) => aePlain(h.criticalEvents.facts());
+const aeEvents = (h) => aePlain(h.criticalEvents.events());
+
+test("AE1 Runner manual text: accepted at the canonical ingress with run and step provenance; the LQU fact follows the real publication and names the same question", async () => {
+  const h = createHarness();
+  const { result, traceId } = await injectReplay(h, aeCompleteAsk);
+  assert.deepEqual(aeFacts(h), ["input-accepted:canonical-turn-ingress-admitted"]);
+  const [accepted] = aeEvents(h);
+  assert.equal(accepted.runtimeSessionId, "session-a");
+  assert.equal(accepted.runtimeEpoch, 2);
+  assert.equal(accepted.purpose, "formal");
+  assert.equal(accepted.occurredAt, h.metadata.get(traceId).canonicalTurnIngressEnteredAt, "the ingress's own time");
+  assert.deepEqual({ ...accepted.refs }, {
+    traceId, sourceKind: "voice", transport: "manual-text", speaker: "them",
+    turnId: h.metadata.get(traceId).canonicalTurnIngressTurnId, scenarioRunId: "run-a", scenarioStepId: "step-1",
+  });
+  // Acceptance is not an LQU: the unit is provisional until its release.
+  assert.equal(h.environment.logicalQuestionUnitRef.current, null);
+  assert.equal(h.scheduled.length, 1);
+  h.settle(h.scheduled[0], h.modelResult(h.scheduled[0].job));
+  await h.clock.flush();
+  const unit = h.environment.logicalQuestionUnitRef.current;
+  assert.ok(unit, "the real release published the canonical unit");
+  assert.deepEqual(aeFacts(h), [
+    "input-accepted:canonical-turn-ingress-admitted",
+    "lqu-committed:canonical-publish",
+  ]);
+  const committed = aeEvents(h)[1];
+  assert.deepEqual({ ...committed.refs }, {
+    traceId, sourceKind: "voice", turnId: unit.currentTurnId,
+    logicalQuestionUnitId: unit.id, logicalQuestionRevision: unit.revision,
+    sourceTurnIds: [...unit.sourceTurnIds],
+  });
+  assert.equal(committed.refs.turnId, accepted.refs.turnId, "the commit names the accepted turn");
+  assert.equal(committed.runtimeEpoch, unit.runtimeEpoch, "stamped from the unit itself");
+  assert.deepEqual([accepted.sequence, committed.sequence], [1, 2]);
+  assert.equal(JSON.stringify(aeEvents(h)).includes("customer reviews"), false,
+    "no transcript text travels in an event");
+  h.environment.traceStoreRef.current.finishTrace(traceId, "success");
+  await h.clock.advance(100);
+  assert.equal(await result, true);
+  // The step terminal changes nothing: no LQU or acceptance is announced twice.
+  assert.equal(aeEvents(h).length, 2);
+  h.runtime.cancelAll();
+});
+
+test("AE2 a provisional LQU that is suppressed: the input was accepted and no LQU fact exists", async () => {
+  const h = createHarness();
+  const { result } = await injectReplay(h, aeCompleteAsk);
+  h.settle(h.scheduled[0], h.modelResult(h.scheduled[0].job, "no-output-request"));
+  await h.clock.advance(100);
+  assert.equal(await result, true);
+  assert.equal(h.replaySteps.at(-1).terminalDisposition, "suppressed");
+  assert.equal(h.environment.logicalQuestionUnitRef.current, null);
+  assert.deepEqual(aeFacts(h), ["input-accepted:canonical-turn-ingress-admitted"]);
+  assert.equal(h.criticalEvents.stream.getStats().produced, 1);
+  h.runtime.cancelAll();
+});
+
+test("AE1/AE2 accepted STT: one acceptance per turn at the ingress, also for a buffered fragment; its later release is not a second acceptance", async () => {
+  const h = createHarness();
+  const complete = bufferedTurn(h, "1", aeCompleteAsk);
+  await h.environment.processCanonicalTurnIngress({ turn: complete.turn, segment: complete.segment });
+  const fragment = bufferedTurn(h, "2", replayBufferedText);
+  await h.environment.processCanonicalTurnIngress({ turn: fragment.turn, segment: fragment.segment });
+  assert.ok(h.environment.pendingSentenceCompletionRef.current, "the fragment is held by the sentence buffer");
+  assert.deepEqual(aeFacts(h), [
+    "input-accepted:canonical-turn-ingress-admitted",
+    "input-accepted:canonical-turn-ingress-admitted",
+  ]);
+  const accepted = aeEvents(h);
+  assert.deepEqual(accepted.map((event) => [event.refs.transport, event.refs.turnId, event.refs.traceId]), [
+    ["accepted-stt", complete.turn.id, complete.traceId],
+    ["accepted-stt", fragment.turn.id, fragment.traceId],
+  ]);
+  assert.equal(accepted.every((event) => event.refs.scenarioRunId === undefined), true,
+    "no Runner provenance is invented for a native turn");
+  // The buffer times out and re-enters the post-buffer path without the ingress.
+  await h.clock.advance(3250);
+  assert.equal(aeEvents(h).filter((event) => event.fact === "input-accepted").length, 2);
+  // Both turns are provisional until their own release: still no LQU fact.
+  assert.equal(aeEvents(h).some((event) => event.fact === "lqu-committed"), false);
+  h.runtime.cancelAll();
+});

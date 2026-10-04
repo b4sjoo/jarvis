@@ -7,6 +7,10 @@ import {
   createAnswerGenerationLease,
   formatAnswerGenerationLeaseForTrace,
 } from "../src/lib/meeting/answer-generation-lease.js";
+import {
+  createRuntimeCriticalEventHarness,
+  RUNTIME_CRITICAL_EVENT_HOOK_CALLBACKS,
+} from "./helpers/runtime-critical-events.js";
 
 const hookPath = "src/hooks/useMeetingAssistant.ts";
 const source = ts.createSourceFile(
@@ -34,6 +38,19 @@ function declaration(name: string): ts.VariableDeclaration {
   assert.equal(matches.length, 1, name);
   return matches[0] as ts.VariableDeclaration;
 }
+
+// Task 178A: the Hook's own emit callbacks, extracted once.
+const criticalEventCallbackSources = Object.fromEntries(
+  RUNTIME_CRITICAL_EVENT_HOOK_CALLBACKS.map((name) => {
+    const initializer = declaration(name).initializer as ts.CallExpression;
+    return [
+      name,
+      ts.transpileModule(`return (${initializer.arguments[0].getText(source)});`, {
+        compilerOptions: { target: ts.ScriptTarget.ES2022 },
+      }).outputText,
+    ];
+  })
+) as Record<string, string>;
 
 function productionGuard(name: string, env: Record<string, unknown>): (stage: string) => boolean {
   const initializer = declaration(name).initializer;
@@ -187,7 +204,18 @@ function fixture(kind: "voice" | "screen") {
     screenResponseCandidate: undefined,
     screenTerminalError: null,
     recordScreenQuestionTypeOutcome: () => {},
+    // The Screen operation's own token, read by its terminal producer.
+    screenOperationId: "screen-a",
+    screenRuntimeToken: {
+      expectedSessionId: current.sessionId,
+      runtimeEpoch: current.runtimeEpoch,
+    },
+    sessionRecordingManagerRef: { current: undefined },
   };
+  // Task 178A: the real stream and the real Hook emit callbacks.
+  const criticalEvents = createRuntimeCriticalEventHarness({ sessionId: current.sessionId });
+  criticalEvents.install(env, (name) =>
+    Function(...Object.keys(env), criticalEventCallbackSources[name])(...Object.values(env)));
   const guard = productionGuard(
     kind === "voice" ? "rejectStaleCommit" : "rejectStaleScreenOperation",
     env
@@ -199,6 +227,7 @@ function fixture(kind: "voice" | "screen") {
     terminal,
     recovery,
     guard,
+    criticalEvents,
     authorizationCalls: () => authorizationCalls,
   };
 }

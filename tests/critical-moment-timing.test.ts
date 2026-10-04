@@ -10,6 +10,7 @@ import { createMeetingId } from "../src/lib/meeting/meeting-id.js";
 import { SessionRecordingManager } from "../src/lib/meeting/session-recording.js";
 import { buildSessionLongitudinalEvaluationReport } from "../scripts/lib/session-longitudinal-evaluation.js";
 import type { MeetingAssistantSettings, MeetingTrace, TranscriptTurn } from "../src/lib/meeting/types.js";
+import { createRuntimeCriticalEventHarness, RUNTIME_CRITICAL_EVENT_HOOK_CALLBACKS } from "./helpers/runtime-critical-events.js";
 
 const hook = ts.createSourceFile("hook.ts", readFileSync("src/hooks/useMeetingAssistant.ts", "utf8"), ts.ScriptTarget.Latest, true);
 const ui = ts.createSourceFile("ui.tsx", readFileSync("src/pages/app/components/meeting/index.tsx", "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -25,6 +26,12 @@ function callback(name: string, context: vm.Context) {
   const node = find(hook, n => ts.isVariableDeclaration(n) && n.name.getText(hook) === name) as ts.VariableDeclaration;
   return run(`(${(node.initializer as ts.CallExpression).arguments[0].getText(hook)})`, context);
 }
+
+// Task 178A: the Hook's own emit callbacks, extracted once.
+const criticalEventCallbackSources = Object.fromEntries(RUNTIME_CRITICAL_EVENT_HOOK_CALLBACKS.map((name) => {
+  const node = find(hook, n => ts.isVariableDeclaration(n) && n.name.getText(hook) === name) as ts.VariableDeclaration;
+  return [name, `(${(node.initializer as ts.CallExpression).arguments[0].getText(hook)})`];
+})) as Record<string, string>;
 
 async function harness() {
   const writes = new Map<string, string>();
@@ -58,6 +65,8 @@ async function harness() {
     shutdownRequestedRef: { current: false }, state: { settings: { personalEvidenceGuardrailMode: "off" } },
   };
   const context = vm.createContext(env);
+  const criticalEvents = createRuntimeCriticalEventHarness({ sessionId: "session" });
+  criticalEvents.install(env, (name) => run(criticalEventCallbackSources[name], context));
   for (const name of ["updateCriticalMomentEvaluation", "readCriticalMomentTimingCandidates", "confirmCriticalMomentTiming", "recordAdviseDisplayApplied"]) env[name] = callback(name, context);
   const transcription = ts.createSourceFile("stt.ts", readFileSync("src/lib/meeting/transcription.service.ts", "utf8"), ts.ScriptTarget.Latest, true);
   const transcribeNode = find(transcription, n => ts.isFunctionDeclaration(n) && n.name?.text === "transcribeMeetingAudio");

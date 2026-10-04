@@ -11,6 +11,9 @@ import { authorizeNativeAudioLifecycleEvent, buildNativeAudioLifecycleTraceMetad
 import { assertShutdownQueueDrained, createNativeStopTerminalWait, createAcceptedTraceTerminalWait, stopShutdownEvaluationCapture } from "../src/lib/meeting/shutdown-drain.js";
 import { ApplicationShutdownCoordinator, connectApplicationShutdownOwner, requestApplicationShutdown, type ShutdownTransport, type ApplicationShutdownOwner } from "../src/lib/app-shutdown.js";
 import type { MeetingAssistantSettings, MeetingAudioStatus } from "../src/lib/meeting/types.js";
+import { createRuntimeCriticalEventHarness, RUNTIME_CRITICAL_EVENT_HOOK_CALLBACKS } from "./helpers/runtime-critical-events.js";
+import { MeetingContextManager } from "../src/lib/meeting/context-manager.js";
+import { createMeetingId } from "../src/lib/meeting/meeting-id.js";
 
 // Same AST/VM technique as session-recording-orchestration: execute the production Hook
 // callbacks with real capture coordinator, trace store and 127 manager, stubbing only I/O/UI.
@@ -20,7 +23,9 @@ const names = ["stop", "stopNativeMeetingCapture", "stopSessionRecording", "drai
   "readArtifactReuseInputs",
   "abandonSessionRecording",
   "recordCompletedTracesForSession",
-  "startCapture", "startRuntimeRegressionRun", "startSessionRecording", "captureScreenContext", "runAdvisor", "enqueueMicrophoneSpeech"];
+  "startCapture", "startRuntimeRegressionRun", "startSessionRecording", "captureScreenContext", "runAdvisor", "enqueueMicrophoneSpeech",
+  // Task 178A: the real Hook emit callbacks run in this environment too.
+  ...RUNTIME_CRITICAL_EVENT_HOOK_CALLBACKS];
 const nodes = new Map<string, ts.Node>();
 function visit(node: ts.Node) {
   if (ts.isVariableDeclaration(node) && node.name.getText(source) === "publishDisplay" && node.initializer && ts.isArrowFunction(node.initializer)) nodes.set("publishDisplay", node.initializer);
@@ -28,6 +33,10 @@ function visit(node: ts.Node) {
     assert.ok(node.initializer && ts.isCallExpression(node.initializer));
     nodes.set(node.name.getText(source), node.initializer.arguments[0]!);
   }
+  // Task 178A: the anonymous unmount effect and the Stop clear's real adapter.
+  if (ts.isArrowFunction(node) && ts.isCallExpression(node.parent) && node.parent.expression.getText(source) === "useEffect" &&
+    node.body.getText(source).includes("stopOnUnmountRef.current()")) nodes.set("unmountEffect", node);
+  if (ts.isFunctionDeclaration(node) && node.name?.text === "submitTaskRuntimeClear") nodes.set("realSubmitTaskRuntimeClear", node);
   if (ts.isCallExpression(node)) {
     if (node.expression.getText(source) === "useApplicationShutdown") nodes.set("shutdownOwner", node.arguments[0]!);
     if (node.expression.getText(source) === "listen" && node.arguments[0]?.getText(source) === '"native-audio-lifecycle"') nodes.set("onLifecycle", node.arguments[1]!);
@@ -95,6 +104,9 @@ async function harness(owner: "meeting" | "system" = "meeting") {
     collect(node);
   }
   const noop = () => undefined;
+  // Task 178A: the real stream, bound to this harness's runtime session.
+  const criticalEvents = createRuntimeCriticalEventHarness({ sessionId: "meeting-A" });
+  Object.assign(globals, criticalEvents.hookRefs);
   // What application shutdown cancels, in order: [runtime ref, reason].
   const runtimeCancels: Array<[string, unknown]> = [];
   for (const name of ["responseOpportunityRuntimeRef", "responseOpportunityGenerationGateRef", "meetingMetadataInferenceRuntimeRef",
@@ -212,7 +224,7 @@ async function harness(owner: "meeting" | "system" = "meeting") {
   const coordinator = new ApplicationShutdownCoordinator(globals.shutdownOwner as ApplicationShutdownOwner, transport);
   await connectApplicationShutdownOwner(coordinator, transport, (error) => errors.push(error));
   return {
-    globals, calls, nativeCommands, files, recording, traces, nativeReply, nativeEntered, queue, errors, runtimeCancels,
+    globals, calls, nativeCommands, files, recording, traces, nativeReply, nativeEntered, queue, errors, runtimeCancels, criticalEvents,
     getStatus: () => ({ ...status }),
     setStatusRead: (read: typeof readStatus) => { readStatus = read; },
     replaceCapture: (captureSessionId: string | null, captureGeneration: number | null) => {
@@ -566,3 +578,172 @@ for (const action of ["stopSessionRecording", "abandonSessionRecording"] as cons
     });
   }
 }
+
+// ===========================================================================
+// Task 178A (AE5): the stream's lifecycle at the Hook's real Stop and at the
+// real unmount cleanup. The producer is the Stop clear itself, through the
+// real adapter and the real sole task writer.
+// ===========================================================================
+
+function withRealStopClear(h: Awaited<ReturnType<typeof harness>>) {
+  const manager = new MeetingContextManager();
+  manager.reset({ sessionId: "meeting-A" });
+  const seeded = manager.commitTaskRuntimeTransition({
+    id: "seed-parent", transition: "create-parent", reason: "fixture",
+    parent: { id: "parent-a", source: "voice", stableKind: "coding", topic: "Explain the queue invariant",
+      playbookPhase: "baseline_reasoning", phaseProgress: {}, supportedFactAnchors: [], revisions: 1,
+      createdAt: 1000, updatedAt: 1000 } as never,
+    deadlineDelta: { parent: { ownerId: "parent-a", deadline: Date.now() + 600_000 } },
+  });
+  assert.equal(seeded.mutationApplied, true);
+  h.globals.contextManagerRef.current = manager;
+  h.globals.createMeetingId = createMeetingId;
+  h.globals.submitTaskRuntimeClear = h.globals.realSubmitTaskRuntimeClear;
+  return manager;
+}
+
+const JOURNAL_PATH = "runtime-events/critical-events.v1.jsonl";
+const savedEvents = (h: Awaited<ReturnType<typeof harness>>) =>
+  h.files.filter((file) => file.args.relativePath === JOURNAL_PATH).map((file) => JSON.parse(String(file.args.payload)));
+function seedParent(manager: MeetingContextManager, id: string) {
+  assert.equal(manager.commitTaskRuntimeTransition({
+    id: `seed-${id}`, transition: "create-parent", reason: "fixture",
+    parent: { id, source: "voice", stableKind: "coding", topic: "Later", playbookPhase: "baseline_reasoning",
+      phaseProgress: {}, supportedFactAnchors: [], revisions: 1, createdAt: 2000, updatedAt: 2000 } as never,
+  }).mutationApplied, true);
+}
+
+test("AE5 real Stop: the stopped run's observer receives the Stop clear and one closed marker and nothing later; the session id is unchanged, so its later idle facts are still produced and a new observer receives them", async () => {
+  const h = await harness();
+  const manager = withRealStopClear(h);
+  const stream = h.criticalEvents.stream;
+  const normal = h.globals.stop();
+  await h.nativeEntered.promise;
+  assert.equal(stream.getStats().subscribers, 1, "Stop has not reached its reset yet");
+  h.nativeReply.resolve(); h.queue.resolve(); await settle();
+  await normal;
+  assert.equal(manager.getTaskRuntimeState().parent, undefined, "the real writer cleared the task");
+  const stopped = stream.getStats();
+  assert.equal(stopped.accepting, true, "the runtime session did not end with Stop");
+  assert.equal(stopped.boundSessionId, "meeting-A", "Stop does not change the runtime session");
+  h.criticalEvents.flush();
+  assert.deepEqual(h.criticalEvents.deliveries.map((delivery) => delivery.kind), ["event", "closed"]);
+  const [cleared, closed] = h.criticalEvents.deliveries;
+  assert.ok(cleared?.kind === "event");
+  assert.deepEqual([cleared.event.fact, cleared.event.refs.transition, cleared.event.refs.taskRuntimeRevision],
+    ["lifecycle-committed", "clear-all", manager.getTaskRuntimeState().revision]);
+  assert.equal(cleared.event.refs.receiptId, manager.getTaskRuntimeState().lastMutation?.id);
+  assert.equal(cleared.event.runtimeSessionId, "meeting-A");
+  assert.deepEqual(closed, { kind: "closed", schemaVersion: 1, runtimeSessionId: "meeting-A",
+    reason: "meeting-assistant-stopped", lastSequence: 1, discarded: 0 });
+  assert.equal(stream.getStats().subscribers, 0, "the stopped run's observer was released");
+  // The Stop clear was recorded by the recording that Stop then sealed.
+  assert.deepEqual(savedEvents(h).map((event) => event.eventId), [cleared.event.eventId]);
+
+  // The same session keeps running idle after Stop (a Screen capture, a manual
+  // action). A new observer can subscribe, and the idle fact is produced with
+  // the session's next sequence. The stopped run's observer sees none of it.
+  const later: unknown[] = [];
+  const subscription = stream.subscribe((delivery) => { later.push(delivery); });
+  assert.deepEqual([subscription.accepted, subscription.runtimeSessionId], [true, "meeting-A"]);
+  seedParent(manager, "parent-b");
+  const late = h.globals.submitTaskRuntimeClear(manager, { scope: "all", reason: "active-task-cleared" },
+    h.globals.observeTaskRuntimeWriter({ runtimeSessionId: "meeting-A" }));
+  assert.equal(late.mutationApplied, true);
+  h.criticalEvents.flush();
+  const after = stream.getStats();
+  assert.deepEqual([after.lateAfterClose, after.lastSequence, after.produced], [0, 2, 2]);
+  assert.equal(h.criticalEvents.deliveries.length, 2, "nothing reaches the stopped run's observer after its closed marker");
+  assert.deepEqual(later.map((delivery: any) => [delivery.kind, delivery.event?.sequence, delivery.event?.refs.transition]),
+    [["event", 2, "clear-all"]]);
+  // Recording was sealed by Stop: the idle fact is in memory only, and says so.
+  assert.equal(after.recording["not-recording"], 1);
+  assert.equal(savedEvents(h).length, 1);
+});
+
+test("AE6 a fact produced after Stop ended the subscriptions and before the recording sealed is saved by the generation Stop is closing, with the session's next sequence", async () => {
+  const h = await harness();
+  const manager = withRealStopClear(h);
+  const stream = h.criticalEvents.stream;
+  // Stop's first await after it ended the subscriptions is held open.
+  const reached = deferred();
+  const release = deferred();
+  h.globals.flushMemoryContextUsage = async () => { reached.resolve(); await release.promise; return { success: true }; };
+  const normal = h.globals.stop();
+  await h.nativeEntered.promise;
+  h.nativeReply.resolve(); h.queue.resolve();
+  await reached.promise;
+  // The subscriptions of the stopped run have ended; the recording is still open.
+  assert.equal(h.recording.getState().active, true);
+  // The terminal of work that Stop cancelled arrives now: a real writer result
+  // through the real adapter and the Hook's own observer.
+  seedParent(manager, "parent-late");
+  const rejected = h.globals.submitTaskRuntimeClear(manager,
+    { scope: "all", reason: "late-terminal-of-stopped-work", expectedRevision: manager.getTaskRuntimeState().revision - 1 },
+    h.globals.observeTaskRuntimeWriter({ runtimeSessionId: "meeting-A", traceId: "trace-of-stopped-work" }));
+  assert.equal(rejected.authorized, false, "the writer's own rejection");
+  assert.equal(stream.getStats().recording.accepted, 2, "the closing recording took the Stop clear and the late terminal");
+  release.resolve();
+  await normal;
+  h.criticalEvents.flush();
+  assert.deepEqual(h.criticalEvents.deliveries.map((delivery) => delivery.kind), ["event", "closed"],
+    "the stopped run's observer ended at its closed marker");
+  const saved = savedEvents(h);
+  assert.deepEqual(saved.map((event) => [event.sequence, event.fact, event.terminal?.object, event.terminal?.disposition]), [
+    [1, "lifecycle-committed", undefined, undefined],
+    [2, "terminal", "lifecycle-transition", "rejected"],
+  ]);
+  assert.equal(new Set(saved.map((event) => event.recordingGenerationId)).size, 1, "one generation, the one Stop closed");
+  const manifest = JSON.parse(String(h.files.filter((file) => file.args.relativePath === "manifest.json").at(-1)!.args.payload));
+  assert.equal(manifest.status, "stopped");
+  assert.equal(manifest.recordingIntegrity.status, "complete");
+  assert.equal(saved[0].recordingGenerationId, manifest.recordingLifecycle.generationId);
+  assert.deepEqual([stream.getStats().lateAfterClose, stream.getStats().lastSequence], [0, 2]);
+});
+
+test("AE5 real unmount cleanup: the stream is released at once, its queue, timer and observers are gone, and a fact produced afterwards reaches nobody; a development remount accepts the same session again and the unmounted Stop does not end the new observer", async () => {
+  const h = await harness();
+  const manager = withRealStopClear(h);
+  const stream = h.criticalEvents.stream;
+  const realStop = h.globals.stop;
+  let stopCalls = 0;
+  let unmountStop: Promise<unknown> | undefined;
+  h.globals.stopOnUnmountRef = { current: () => { stopCalls += 1; unmountStop = realStop(); return unmountStop; } };
+  h.globals.semanticTaxonomyRuntimeRef.current.dispose = () => undefined;
+  // A fact is still queued for delivery when the Hook unmounts.
+  h.globals.submitTaskRuntimeClear(manager, { scope: "all", reason: "active-task-cleared" },
+    h.globals.observeTaskRuntimeWriter({ runtimeSessionId: "meeting-A" }));
+  assert.equal(stream.getStats().queueDepth, 1);
+  assert.equal(h.criticalEvents.manualClock?.pendingCount(), 1);
+  const cleanup = h.globals.unmountEffect();
+  assert.equal(typeof cleanup, "function");
+  assert.equal(stream.getStats().accepting, true, "mounting leaves a bound stream accepting");
+  cleanup();
+  assert.equal(stopCalls, 1, "the unmount still asks for Stop first");
+  const released = stream.getStats();
+  assert.deepEqual([released.accepting, released.queueDepth, released.subscribers, released.discardedUndelivered],
+    [false, 0, 0, 1]);
+  assert.equal(h.criticalEvents.manualClock?.pendingCount(), 0, "the delivery timer was cancelled");
+  h.criticalEvents.flush();
+  assert.deepEqual(h.criticalEvents.deliveries, [], "nothing is delivered after unmount");
+  assert.equal(h.runtimeCancels.length > 0, true, "the runtimes were disposed as before");
+  // After the unmount nothing is accepted and nothing can be observed.
+  assert.equal(stream.subscribe(() => undefined).reason, "not-accepting");
+
+  // A development remount runs the same effect again while the Stop that the
+  // cleanup started is still in flight.
+  const remountCleanup = h.globals.unmountEffect();
+  assert.equal(stream.getStats().accepting, true, "the remounted Hook's session accepts again");
+  const remounted: unknown[] = [];
+  assert.equal(stream.subscribe((delivery) => { remounted.push(delivery); }).accepted, true);
+  // The earlier mount's Stop still has a task to clear when it gets there.
+  seedParent(manager, "parent-after-remount");
+  await h.nativeEntered.promise;
+  h.nativeReply.resolve(); h.queue.resolve(); await settle();
+  await unmountStop;
+  h.criticalEvents.flush();
+  // The unmounted Stop's own clear is a fact of the session; it ends no subscription of the new mount.
+  assert.deepEqual(remounted.map((delivery: any) => [delivery.kind, delivery.event?.refs.transition]), [["event", "clear-all"]]);
+  assert.equal(stream.getStats().subscribers, 1, "the remounted observer was not closed by the earlier mount's Stop");
+  assert.equal(typeof remountCleanup, "function");
+});

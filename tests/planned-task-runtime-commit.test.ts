@@ -22,7 +22,9 @@ import {
 import {
   createTestPlannedTransition,
   commitTestPlannedTransition,
+  productionHookCallback,
 } from "./helpers/planned-task-runtime-commit.js";
+import { createRuntimeCriticalEventHarness } from "./helpers/runtime-critical-events.js";
 import { normalizeCanonicalQuestionType } from "../src/lib/meeting/task-taxonomy.js";
 import {
   evaluateTaskSettlementTupleCompatibilityV2,
@@ -612,4 +614,66 @@ test("rejects a retype that retains an incompatible whiteboard", () => {
 
   assert.equal(reduction.authorized, false);
   assert.equal(reduction.reason, "incompatible-artifact-retained");
+});
+
+// ===========================================================================
+// Task 178A (AE1, AE2): Lifecycle committed through the planned adapter that
+// Type correction and Speech correction use, with the real sole task writer.
+// ===========================================================================
+
+test("AE1/AE2 planned lifecycle: a committed correction announces the writer's receipt once; a Plan that is rejected before the writer announces nothing", () => {
+  const run = (currentParent: ActiveInterviewParent, expectedParent = currentParent) => {
+    const afterParent = parent("coding", {
+      topic: "Implement Merge Sort",
+      playbook: playbook(),
+      playbookPhase: "implementation_validation",
+      phaseProgress: { implementation_validation: true },
+      whiteboardArtifact: undefined,
+      sourceQuestionUnitId: "question-a",
+      sourceQuestionRevision: 2,
+      settlementId: "settlement-correction",
+      revisions: 4,
+    });
+    const criticalEvents = createRuntimeCriticalEventHarness({ sessionId: "session-a" });
+    const environment: Record<string, unknown> = { sessionRecordingManagerRef: { current: undefined } };
+    criticalEvents.install(environment, (name) => productionHookCallback(name, environment));
+    const observe = environment.observeTaskRuntimeWriter as (identity: Record<string, unknown>) => unknown;
+    const reduction = commitTestPlannedTransition({
+      transaction: createTestPlannedTransition({
+        plan: correctionPlan({ before: meetingTask(expectedParent), after: meetingTask(afterParent) }),
+        manualCorrectionRevision: 1,
+        proposedActiveInterviewTask: afterParent,
+      }),
+      currentSessionId: "session-a",
+      currentRuntimeEpoch: 4,
+      currentLogicalQuestionUnitId: "question-a",
+      currentLogicalQuestionRevision: 2,
+      currentManualCorrectionRevision: 1,
+      currentTaskRuntimeRevision: 3,
+      currentActiveInterviewTask: currentParent,
+      observeWriter: observe({ runtimeSessionId: "session-a", runtimeEpoch: 4, traceId: "correction-trace",
+        logicalQuestionUnitId: "question-a", logicalQuestionRevision: 2 }),
+    });
+    return { reduction, criticalEvents };
+  };
+
+  const committed = run(parent("general-system-design"));
+  assert.equal(committed.reduction.authorized, true);
+  assert.deepEqual(committed.criticalEvents.facts(), ["lifecycle-committed:task-writer-committed"]);
+  const [event] = committed.criticalEvents.events();
+  assert.equal(event!.refs.receiptId, "test-command", "the planned operation's own receipt");
+  assert.equal(event!.refs.taskRuntimeRevision, committed.reduction.runtimeResult.state.revision);
+  assert.equal(event!.refs.transition, committed.reduction.runtimeTransition);
+  assert.equal(event!.refs.taskId, committed.reduction.parentAfterId);
+  assert.deepEqual([event!.runtimeEpoch, event!.refs.traceId, event!.refs.logicalQuestionUnitId,
+    event!.refs.logicalQuestionRevision], [4, "correction-trace", "question-a", 2]);
+  assert.equal(event!.occurredAt, committed.reduction.runtimeResult.state.lastMutation.appliedAt);
+
+  // The Plan expects a parent revision the task no longer has: the adapter
+  // never calls the writer, so there is neither a commit nor a writer terminal.
+  const rejected = run(parent("general-system-design", { revisions: 4 }), parent("general-system-design"));
+  assert.equal(rejected.reduction.authorized, false);
+  assert.equal(rejected.reduction.reason, "pre-mutation:expected-parent-revision-mismatch");
+  assert.equal(rejected.reduction.runtimeResult, undefined);
+  assert.deepEqual(rejected.criticalEvents.events(), []);
 });

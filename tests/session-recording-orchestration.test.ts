@@ -36,6 +36,9 @@ import { createProvisionalCurrentQuestion } from "../src/lib/meeting/current-que
 import { compileSettledAdvisorPromptContext } from "../src/lib/meeting/settled-advisor-context.js";
 import { buildAdvisorUserMessage } from "../src/lib/meeting/advisor-prompt.js";
 import { authorizeRuntimeCommit, buildRuntimeCommitSnapshot, createRuntimeCommitToken } from "../src/lib/meeting/runtime-commit-authorization.js";
+import { createRuntimeCriticalEventHarness, RUNTIME_CRITICAL_EVENT_HOOK_CALLBACKS } from "./helpers/runtime-critical-events.js";
+import { createManualRuntimeActionEvent } from "../src/lib/meeting/manual-runtime-action.js";
+import { parseRuntimeCriticalEventJournal, RUNTIME_CRITICAL_EVENT_JOURNAL_PATH } from "../src/lib/meeting/runtime-critical-event.js";
 
 // Execute the production callbacks, as in the existing publication callback
 // tests. The reset, epoch boundary, pin loader and both managers remain real.
@@ -53,9 +56,12 @@ const callbacks = [
   "startSessionRecording",
   "stopSessionRecording",
 ];
+// Task 178A: the Hook's emit callbacks and the manual-action ledger writer, a
+// real producer that needs no model. Absent from an older baseline source.
+const criticalEventCallbacks = [...RUNTIME_CRITICAL_EVENT_HOOK_CALLBACKS, "recordManualRuntimeAction"];
 const nodes = new Map<string, ts.Node>();
 function visit(node: ts.Node) {
-  if (ts.isVariableDeclaration(node) && callbacks.includes(node.name.getText(parsed))) {
+  if (ts.isVariableDeclaration(node) && [...callbacks, ...criticalEventCallbacks].includes(node.name.getText(parsed))) {
     assert.ok(node.initializer && ts.isCallExpression(node.initializer));
     nodes.set(node.name.getText(parsed), node.initializer.arguments[0]!);
   }
@@ -127,7 +133,11 @@ function harness() {
     collect(node);
   }
   const preparation = createNeutralPreparationRuntimeContext({ meetingSessionId: context.getState().sessionId, preparationContextRevision: 4 });
+  // Task 178A: the real stream, bound to the runtime session as the Hook binds
+  // it at mount. The auto-stubbed Map above must not stand in for it.
+  const criticalEvents = createRuntimeCriticalEventHarness({ sessionId: context.getState().sessionId });
   Object.assign(globals, {
+    ...criticalEvents.hookRefs,
     console, Promise, Date, JSON, Map, Set, Error,
     createMeetingId, createInterviewSessionContextFromBrief,
     createNeutralPreparationRuntimeContext, loadPreparationRuntimeContext,
@@ -170,9 +180,11 @@ function harness() {
   globals.codingSolutionManifestCacheRef.current.set("original", "code artifact");
   globals.generationResultLedgerRef.current.set("original", "whiteboard artifact");
   const screenController = globals.screenAnalysisAbortRef.current as AbortController;
+  Object.assign(globals, { createManualRuntimeActionEvent, visibleAnswerRevisionRef: { current: 0 } });
   const sandbox = vm.createContext(globals);
-  for (const name of callbacks) {
+  for (const name of [...callbacks, ...criticalEventCallbacks]) {
     const node = nodes.get(name);
+    if (!node && criticalEventCallbacks.includes(name)) continue;
     assert.ok(node, name);
     const code = ts.transpileModule(`globalThis.${name} = ${node.getText(parsed)};`, {
       compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.None },
@@ -180,7 +192,7 @@ function harness() {
     vm.runInContext(code, sandbox);
   }
   return {
-    manager, context, unit, calls, cancellations, states, globals, screenController,
+    manager, context, unit, calls, cancellations, states, globals, screenController, criticalEvents,
     ui: () => ui,
     setIo: (next: typeof io) => { io = next; },
     setSelection: (next: typeof selection) => { selection = next; },
@@ -449,4 +461,117 @@ test("RC1/RC3: Hook strict close rejects, retained inactive owner leaves ongoing
   const stopped = await h.stop();
   assert.equal(stopped.lifecycle, "idle");
   assert.equal(h.ui().latestSuggestion, suggestion);
+});
+
+// ===========================================================================
+// Task 178A (AE3, AE5, AE6): the stream follows the runtime session through the
+// Hook's real reset and the real Recording start and stop. The producer here
+// is the Hook's real manual-action ledger writer.
+// ===========================================================================
+
+function journalWrites(h: ReturnType<typeof harness>) {
+  return h.calls.filter((call) => call.args.relativePath === RUNTIME_CRITICAL_EVENT_JOURNAL_PATH);
+}
+// The recorder enqueues synchronously; its existing write queue performs the I/O.
+const queuedWrites = () => new Promise<void>((resolve) => setImmediate(resolve));
+function manualTerminal(h: ReturnType<typeof harness>, actionId: string) {
+  h.globals.recordManualRuntimeAction({ actionId, action: "clear-task", stage: "terminal",
+    terminalDisposition: "completed", reason: "active-task-cleared" });
+}
+
+test("AE5/AE6 a Recording start resets the runtime and rebinds the stream in the same commit: the old session's observer ends with one closed marker, the new session starts at sequence 1 and is saved with its recording generation; Recording off saves nothing", async () => {
+  const h = harness();
+  const stream = h.criticalEvents.stream;
+  const oldSession = h.context.getState().sessionId;
+  assert.equal(stream.getStats().boundSessionId, oldSession);
+  manualTerminal(h, "before-recording");
+  assert.equal(h.criticalEvents.events().length, 1);
+  assert.equal(journalWrites(h).length, 0, "Recording is off: nothing is written and no recording is started");
+  assert.equal(h.calls.length, 0);
+  assert.equal(stream.getStats().recording["not-recording"], 1);
+
+  assert.ok((await h.start())?.active, h.ui().error);
+  const newSession = h.context.getState().sessionId;
+  assert.notEqual(newSession, oldSession);
+  const bound = stream.getStats();
+  assert.equal(bound.boundSessionId, newSession, "bound where the runtime session id changed");
+  assert.equal(bound.lastSequence, 0, "the new session's sequence starts over");
+  h.criticalEvents.flush();
+  // The old session's observer: its own fact, then closed. Nothing afterwards.
+  assert.deepEqual(h.criticalEvents.deliveries.map((delivery) => delivery.kind), ["event", "closed"]);
+  assert.deepEqual(h.criticalEvents.deliveries[1], { kind: "closed", schemaVersion: 1,
+    runtimeSessionId: oldSession, reason: "session-rebound", lastSequence: 1, discarded: 0 });
+  assert.equal(stream.getStats().subscribers, 0, "the old session's subscription was released");
+  // The event of before the recording was not back-filled into it.
+  assert.equal(journalWrites(h).length, 0);
+
+  const observed: string[] = [];
+  const subscription = stream.subscribe((delivery) => {
+    observed.push(delivery.kind === "event" ? `${delivery.event.runtimeSessionId}#${delivery.event.sequence}` : delivery.kind);
+  });
+  assert.equal(subscription.runtimeSessionId, newSession);
+  manualTerminal(h, "recorded-1");
+  manualTerminal(h, "recorded-2");
+  // Accepted synchronously where the fact was produced; nothing was awaited.
+  assert.equal(stream.getStats().recording.accepted, 2);
+  await queuedWrites();
+  const recorded = journalWrites(h);
+  assert.equal(recorded.length, 2, "one appended line per event through the existing write queue");
+  assert.equal(recorded.every((call) => call.command === "write_meeting_session_recording_text" && call.args.append === true), true);
+  const state = h.manager.getState();
+  const journal = parseRuntimeCriticalEventJournal(recorded.map((call) => call.args.payload).join(""));
+  assert.ok(journal.status === "ok");
+  assert.equal(journal.contiguous, true);
+  assert.deepEqual(journal.sessions.map((session) => [session.runtimeSessionId, session.firstSequence, session.lastSequence]),
+    [[newSession, 1, 2]]);
+  assert.deepEqual(journal.sessions[0]!.events.map((event) => [event.refs.manualActionId, event.terminal?.disposition]),
+    [["recorded-1", "completed"], ["recorded-2", "completed"]]);
+  assert.equal(journal.sessions[0]!.events.every((event) => event.recordingSessionId === state.sessionId), true);
+  assert.equal(new Set(journal.sessions[0]!.events.map((event) => event.recordingGenerationId)).size, 1);
+  // The recording's own counters and timeline were not touched by the events.
+  const eventCountBefore = h.manager.getState().eventCount;
+  manualTerminal(h, "recorded-3");
+  assert.equal(h.manager.getState().eventCount - eventCountBefore, 1,
+    "only the manual-action ledger's own timeline event counts; the critical event adds none");
+
+  // Stopping the Recording does not stop the runtime: events stay in memory.
+  await h.stop();
+  manualTerminal(h, "after-recording");
+  await queuedWrites();
+  assert.equal(journalWrites(h).length, 3, "nothing is written after the recording stopped");
+  h.criticalEvents.flush();
+  assert.deepEqual(observed, [`${newSession}#1`, `${newSession}#2`, `${newSession}#3`, `${newSession}#4`]);
+  assert.equal(stream.getStats().recording.accepted, 3);
+  const manifest = JSON.parse(h.calls.filter((call) => call.args.relativePath === "manifest.json").at(-1)!.args.payload);
+  assert.deepEqual(manifest.runtimeMeetingSessionIds, [newSession], "the runtime-session id set is the recording's own");
+  assert.equal(manifest.recordingIntegrity.status, "complete");
+});
+
+test("AE5 real reset: an in-flight observer of the old session cannot be reached by the new session, a fact of the old session that was still queued is not handed over after the reset, and a late old-session fact is refused instead of renumbered", () => {
+  const h = harness();
+  const stream = h.criticalEvents.stream;
+  const oldSession = h.context.getState().sessionId;
+  manualTerminal(h, "old-1");
+  manualTerminal(h, "old-2");
+  // The first fact is delivered while its session is the current one. The
+  // second is still queued when the real reset changes the session.
+  assert.deepEqual(h.criticalEvents.events().map((event) => event.refs.manualActionId), ["old-1", "old-2"]);
+  manualTerminal(h, "old-3");
+  h.globals.resetMeetingRuntimeForNewSession("meeting-assistant-started");
+  const newSession = h.context.getState().sessionId;
+  assert.notEqual(newSession, oldSession);
+  // A fact whose own token still names the old session, arriving late.
+  h.globals.emitLogicalQuestionUnitCommitted(h.unit, "canonical-publish", "late-trace");
+  manualTerminal(h, "new-1");
+  h.criticalEvents.flush();
+  assert.deepEqual(h.criticalEvents.deliveries.map((delivery) =>
+    delivery.kind === "event" ? delivery.event.refs.manualActionId : delivery.kind), ["old-1", "old-2", "closed"]);
+  // One closed marker, with the reason and the fact that was not handed over.
+  assert.deepEqual(h.criticalEvents.deliveries.at(-1), { kind: "closed", schemaVersion: 1,
+    runtimeSessionId: oldSession, reason: "session-rebound", lastSequence: 3, discarded: 1 });
+  const stats = stream.getStats();
+  assert.equal(stats.discardedUndelivered, 1);
+  assert.equal(stats.staleSessionRejected, 1);
+  assert.equal(stats.lastSequence, 1, "the late old fact did not take a sequence of the new session");
+  assert.equal(stats.boundSessionId, newSession);
 });

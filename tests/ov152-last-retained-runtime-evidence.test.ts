@@ -55,6 +55,7 @@ import type {
   MeetingTrace,
 } from "../src/lib/meeting/types.js";
 import { readRecordedTraceSummaries } from "../scripts/lib/session-aggregate-evidence.js";
+import { createRuntimeCriticalEventHarness } from "./helpers/runtime-critical-events.js";
 import {
   buildSessionLongitudinalEvaluationReport,
   evaluateLongitudinalSessionEvidenceScope,
@@ -266,6 +267,13 @@ function createRuntime() {
     },
   };
   const useCallback = <T,>(callback: T) => callback;
+  // Task 178A: the real stream and the real Hook emit callbacks. Every
+  // evaluation below spreads refs, so the lifted Hook code reaches them.
+  const criticalEvents = createRuntimeCriticalEventHarness({
+    sessionId: world.sessionId,
+  });
+  criticalEvents.install(refs as Record<string, unknown>, (name) =>
+    evaluate(`return (${hookCallback(name)});`, { ...refs }));
   const readRuntimeCommitSnapshot = evaluate<() => RuntimeCommitSnapshot>(
     `return (${hookCallback("readRuntimeCommitSnapshot")});`,
     { ...refs, buildRuntimeCommitSnapshot }
@@ -354,6 +362,7 @@ function createRuntime() {
     ledger,
     screens,
     refs,
+    criticalEvents,
     lifecycleEvents,
     displayed,
     readRuntimeCommitSnapshot,
@@ -3391,4 +3400,95 @@ test("OV152-6 fixed traces: the byte delta is exactly the three groups and the w
   assert.equal(disk.writes.filter((write) => write.relativePath === "metrics/trace-summaries.jsonl").length, recorded.length);
   await manager.stop("ov152");
   t.diagnostic(JSON.stringify({ fixedTraceSummaryBytes: rows }));
+});
+
+// ===========================================================================
+// Task 178A (AE1, AE2): explicit terminals of the generation result and of the
+// Screen operation, from their own owners. The Hook's real projection writer,
+// terminalizer and Screen authorization guard run against the real ledger and
+// the real Screen operation coordinator; no event is built by this test.
+// ===========================================================================
+
+test("AE1/AE2 generation terminal: a started or pending lease has none; the ledger's first terminal is announced once with its own disposition", () => {
+  const runtime = createRuntime();
+  const events = () => runtime.criticalEvents.events();
+  const voice = startVoiceAttempt(runtime, "job-a", { lease: true });
+  assert.ok(voice.lease);
+  assert.deepEqual(events(), [], "a started lease is not a terminal");
+  runtime.markGenerationPending(voice.lease, voice.trace.id);
+  assert.deepEqual(events(), [], "a pending answer is not a terminal");
+  const commit = runtime.commitGeneration(voice.lease, voice.trace.id);
+  assert.equal(commit.committed, true);
+  assert.deepEqual(runtime.criticalEvents.facts(), ["terminal:generation:committed"]);
+  const [committed] = events();
+  assert.equal(committed.stage, "generation-result");
+  assert.equal(committed.terminal?.reason, "authorized");
+  assert.equal(committed.runtimeSessionId, voice.lease.sessionId);
+  assert.equal(committed.runtimeEpoch, voice.lease.runtimeEpoch);
+  assert.deepEqual({ ...committed.refs }, {
+    traceId: voice.trace.id, logicalQuestionUnitId: "question-a", taskId: "parent-a",
+    generationLeaseId: voice.lease.id, logicalQuestionRevision: 1,
+    stableRevision: runtime.world.visibleAnswerRevision,
+  });
+  assert.equal(committed.occurredAt, runtime.ledger.getEntry(voice.lease.id)?.terminalization?.terminalizedAt);
+  // The projection runs again for a terminal lease, and a later terminalize
+  // cannot replace the first terminal: neither is a second fact.
+  runtime.publishGenerationResultProjection(voice.lease, voice.trace.id);
+  runtime.terminalizeGenerationLease({ lease: voice.lease, disposition: "superseded",
+    reason: "late", source: "test", authority: "test", traceId: voice.trace.id });
+  assert.equal(events().length, 1);
+
+  // A rejected candidate is the generation's own rejected terminal, never a commit.
+  const second = startVoiceAttempt(runtime, "job-b", { lease: true });
+  assert.ok(second.lease);
+  const rejected = runtime.commitGeneration(second.lease, second.trace.id, { candidateAccepted: false });
+  assert.equal(rejected.committed, false);
+  // A superseded generation carries the owner's reason.
+  const third = startVoiceAttempt(runtime, "job-c", { lease: true });
+  assert.ok(third.lease);
+  runtime.terminalizeGenerationLease({ lease: third.lease, disposition: "superseded",
+    reason: "newer-logical-question", source: "advisor-job", authority: "latest-wins", traceId: third.trace.id });
+  assert.deepEqual(events().slice(1).map((event) =>
+    [event.terminal?.object, event.terminal?.disposition, event.refs.generationLeaseId, event.refs.stableRevision]), [
+    ["generation", "rejected", second.lease.id, undefined],
+    ["generation", "superseded", third.lease.id, undefined],
+  ]);
+  assert.equal(events()[2]!.terminal?.reason, "newer-logical-question");
+  assert.equal(events().every((event) => event.fact === "terminal" && event.purpose === "formal"), true,
+    "a generation terminal is not a Stable Answer fact and not a visible fact");
+  const sequences = events().map((event) => event.sequence);
+  assert.deepEqual(sequences, [1, 2, 3]);
+});
+
+test("AE1/AE2 Screen operation terminal: a passing guard emits nothing; a stale or superseded operation is announced once by its own authorization boundary, before its generation terminal", () => {
+  const stale = createRuntime();
+  const operation = admitScreenOperation(stale, "screen-stale");
+  assert.equal(operation.rejectStaleScreenOperation("pre-visible-commit"), false);
+  assert.deepEqual(stale.criticalEvents.events(), [], "an authorized operation has no terminal");
+  stale.world.runtimeEpoch += 1;
+  assert.equal(operation.rejectStaleScreenOperation("error-boundary"), true);
+  assert.equal(operation.rejectStaleScreenOperation("error-boundary"), true);
+  assert.deepEqual(stale.criticalEvents.facts(), [
+    "terminal:screen-operation:stale-rejected",
+    "terminal:generation:rejected",
+  ]);
+  const [screenTerminal, generationTerminal] = stale.criticalEvents.events();
+  assert.equal(screenTerminal!.terminal?.reason, "runtime-epoch-mismatch");
+  assert.equal(screenTerminal!.refs.operationId, "screen-stale");
+  assert.equal(screenTerminal!.refs.traceId, operation.trace.id);
+  assert.equal(screenTerminal!.refs.generationLeaseId, operation.screenGenerationLease?.id);
+  // The operation's own epoch, not the epoch that made it stale.
+  assert.equal(screenTerminal!.runtimeEpoch, 1);
+  assert.equal(stale.world.runtimeEpoch, 2);
+  assert.equal(generationTerminal!.runtimeEpoch, 1);
+  assert.equal(generationTerminal!.refs.generationLeaseId, operation.screenGenerationLease?.id);
+
+  const superseded = createRuntime();
+  const older = admitScreenOperation(superseded, "screen-older");
+  const newer = admitScreenOperation(superseded, "screen-newer");
+  assert.equal(newer.rejectStaleScreenOperation("pre-visible-commit"), false);
+  assert.equal(older.rejectStaleScreenOperation("post-model"), true);
+  const terminals = superseded.criticalEvents.events().filter((event) => event.terminal?.object === "screen-operation");
+  assert.deepEqual(terminals.map((event) => [event.refs.operationId, event.terminal?.disposition, event.terminal?.reason]),
+    [["screen-older", "superseded", "pipeline-owner-mismatch"]]);
 });

@@ -41,6 +41,7 @@ import {
   buildHumanEvaluationAttemptEvidenceIndexV2,
 } from "../src/lib/meeting/human-evaluation-attempt-projection.js";
 import { MeetingTraceStore } from "../src/lib/meeting/trace.js";
+import { createRuntimeCriticalEventHarness, RUNTIME_CRITICAL_EVENT_HOOK_CALLBACKS } from "./helpers/runtime-critical-events.js";
 
 import type { LogicalQuestionUnit } from "../src/lib/meeting/logical-question-unit.js";
 import type { MeetingAssistantSettings } from "../src/lib/meeting/types.js";
@@ -364,6 +365,12 @@ async function harness(options: { mode?: Mode; child?: boolean; source?: string;
     }, delay);
     environment[name] = { current: runtime };
   }
+  // Task 178A: the schedule calls the Hook's own emit callback at each real
+  // request start and candidate terminal. It runs here against the real stream,
+  // with nobody subscribed, and the real recorder of this harness.
+  const criticalEvents = createRuntimeCriticalEventHarness({ sessionId: state.sessionId, observe: false });
+  criticalEvents.install(environment, (name) => compile(`(${declaration(hookSource, name, true)})`, environment));
+  assert.deepEqual(RUNTIME_CRITICAL_EVENT_HOOK_CALLBACKS.filter((name) => typeof environment[name] !== "function"), []);
   const schedule = compile(`(${declaration(options.source ?? hookSource, "scheduleTaskRelationSplitRuntime", true)})`, environment);
   const request = buildTaskRelationAdjudicationRequest({ logicalQuestionUnit: unit, activeMeetingTask: state.activeMeetingTask });
   const handle = schedule({ traceId: "trace", taskId: "task-a", request, runtimeReleaseRequested: options.runtimeReleaseRequested ?? true,
@@ -371,6 +378,7 @@ async function harness(options: { mode?: Mode; child?: boolean; source?: string;
   await clock.startPending();
   return {
     root, disk, clock, trace, state, metadata, effects, refreshed, callbackMs, serializationMs, executions, physicalExecutions, admissionReceipts, environment, handle,
+    criticalEvents,
     async affinities(fault: Fault = "success") {
       if (fault === "cancel") {
         environment.taskRelationChildAffinityRuntimeRef.current.cancelAll("fixture-cancel");

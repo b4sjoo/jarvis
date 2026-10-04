@@ -71,6 +71,11 @@ import type {
   RuntimeRegressionStepEventV1,
 } from "./runtime-regression.js";
 import type { ManualRuntimeActionEventV1 } from "./manual-runtime-action.js";
+import {
+  RUNTIME_CRITICAL_EVENT_JOURNAL_PATH,
+  type RuntimeCriticalEventRecordingDisposition,
+  type RuntimeCriticalEventV1,
+} from "./runtime-critical-event.js";
 import type {
   RuntimeCommitAuthorizationReason,
   RuntimeCommitPipeline,
@@ -1807,6 +1812,37 @@ export class SessionRecordingManager {
       event.observedTaskId
     );
     return true;
+  }
+
+  // Task 178A. Called synchronously where the fact is produced, so the event
+  // is bound to the generation that is writable at that moment. One appended
+  // line through the existing write queue; no timeline event and no manifest
+  // field. A late or closed generation refuses it like any other late write.
+  // Trace ownership is only read here: an event never claims a trace for a
+  // generation, so the recorded runtime-session set is unchanged.
+  // "accepted" means the write queue took the line, not that it is on disk: a
+  // failed append is reported by this recording's own integrity block.
+  recordRuntimeCriticalEvent(
+    event: RuntimeCriticalEventV1
+  ): RuntimeCriticalEventRecordingDisposition {
+    if (!this.activeSession) return "not-recording";
+    const session = this.getWritableSession({ startedAt: event.occurredAt });
+    if (!session) return "rejected-late";
+    const traceOwner = event.refs.traceId
+      ? this.traceGenerationOwners.get(event.refs.traceId)
+      : undefined;
+    if (traceOwner !== undefined && traceOwner !== session.generationId) {
+      session.rejectedLateWrites += 1;
+      return "rejected-late";
+    }
+    const accepted = this.enqueue(session, () =>
+      this.appendJsonl(session, RUNTIME_CRITICAL_EVENT_JOURNAL_PATH, {
+        ...event,
+        recordingSessionId: session.sessionId,
+        recordingGenerationId: session.generationId,
+      })
+    );
+    return accepted ? "accepted" : "rejected-late";
   }
 
   async stop(reason = "manual") {

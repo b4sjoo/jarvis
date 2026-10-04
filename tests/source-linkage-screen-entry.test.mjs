@@ -7,6 +7,8 @@ import vm from "node:vm";
 import ts from "typescript";
 
 const output = process.env.JARVIS_SOURCE_LINKAGE_TEST_OUT_DIR ?? ".tmp-tests";
+// Task 178A: the shared helper that builds the real critical event stream.
+const { createRuntimeCriticalEventHarness, RUNTIME_CRITICAL_EVENT_HOOK_CALLBACKS } = await import(pathToFileURL(path.resolve(output, "tests/helpers/runtime-critical-events.js")));
 const source = ts.createSourceFile("hook.ts", readFileSync("src/hooks/useMeetingAssistant.ts", "utf8"), ts.ScriptTarget.Latest, true);
 function find(node, predicate) {
   let found;
@@ -22,6 +24,9 @@ const declaration = (name, root = source) => find(root, (node) =>
   (ts.isVariableDeclaration(node) || ts.isFunctionDeclaration(node)) && node.name?.getText(source) === name);
 const callback = (name) => declaration(name).initializer.arguments[0];
 const capture = callback("captureScreenContext");
+// Task 178A: the Hook's own emit callbacks, extracted once.
+const criticalEventCallbackSources = Object.fromEntries(RUNTIME_CRITICAL_EVENT_HOOK_CALLBACKS.map((name) =>
+  [name, `(${callback(name).getText(source)})`]));
 const evaluate = (text, env) => vm.runInNewContext(ts.transpileModule(text, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
 }).outputText, env);
@@ -199,11 +204,14 @@ function harness(options = {}) {
   env.clearPendingAnswerCommitTimer = () => {};
   env.answerDeliveryProgressRef = { current: undefined };
   env.toAnswerDeliveryPresentation = () => ({});
+  // Task 178A: the real stream and the real Hook emit callbacks.
+  const criticalEvents = createRuntimeCriticalEventHarness({ sessionId: context.sessionId });
+  criticalEvents.install(env, (name) => evaluate(criticalEventCallbackSources[name], env));
   const adapter = evaluate(`(${requestAdapter.getText(requestSource).replace(/^export /, "")})`, env);
   env.requestSourceLinkageAdjudication = (input) => { calls.push(input); return adapter(input); };
   env.scheduleSourceLinkageAdjudication = evaluate(`(${callback("scheduleSourceLinkageAdjudication").getText(source)})`, env);
   const run = evaluate(`(${captureText})`, env);
-  const h = { env, context, fact, facts, traces, calls, packets, settlements, unit, observation, run, runtime, providerCalls, admissions, recordedOutputs };
+  const h = { env, context, fact, facts, traces, calls, packets, settlements, unit, observation, run, runtime, providerCalls, admissions, recordedOutputs, criticalEvents };
   for (const name of ["normalizeParentQuestionType", "normalizeInterviewParentKind", "readMemoryQuestionType", "isTaskSwitchTranscript", "decideScreenTaskRelation"]) {
     env[name] = evaluate(`(${declaration(name).getText(source)})`, env);
   }
@@ -580,4 +588,113 @@ test("SL-C5 an original candidate must remain current at final visible consume",
   await h.run();
   assert.equal(h.settlements.length, 0);
   assert.equal(h.traces[0].metadata.sourceLinkageBoundSourceStillCurrent, false);
+});
+
+// ===========================================================================
+// Task 178A (AE1, AE2): the Screen entry through the real captureScreenContext.
+// The event stream lives in the harness's vm realm; plain copies are compared.
+// ===========================================================================
+const aePlain = (value) => JSON.parse(JSON.stringify(value));
+const aeFacts = (h) => aePlain(h.criticalEvents.facts());
+const aeEvents = (h) => aePlain(h.criticalEvents.events());
+
+test("AE1 Screen entry: accepted where the real source operation is claimed, with the operation's own identity and no Voice turn or LQU fact", async () => {
+  const h = harness();
+  await h.run();
+  const events = aeEvents(h);
+  const accepted = events.filter((event) => event.fact === "input-accepted");
+  assert.equal(accepted.length, 1);
+  assert.equal(accepted[0].stage, "screen-operation-claimed");
+  assert.equal(accepted[0].sequence, 1, "the acceptance is the first fact of the operation");
+  assert.equal(accepted[0].runtimeSessionId, "session");
+  assert.equal(accepted[0].runtimeEpoch, 4, "stamped from the operation's own commit token");
+  assert.deepEqual(accepted[0].refs, {
+    traceId: h.traces[0].id, operationId: h.traces[0].metadata.screenOperationId,
+    operationKind: "screen-operation", sourceKind: "screen", transport: "capture",
+  });
+  // The bound Voice question is a candidate of this operation, not a commit of it.
+  assert.equal(events.some((event) => event.fact === "lqu-committed"), false, "Screen never commits a session LQU");
+  assert.equal(events.some((event) => event.refs.turnId !== undefined), false, "no Voice turn is forged");
+  assert.equal(JSON.stringify(events).includes("lines 35"), false, "no question text travels in an event");
+  // The operation ended as the owner of its slot: its own explicit terminal.
+  const terminal = events.filter((event) => event.fact === "terminal");
+  assert.deepEqual(terminal.map((event) => [event.terminal.object, event.terminal.disposition, event.refs.operationId]),
+    [["screen-operation", "released", accepted[0].refs.operationId]]);
+  // This harness returns from the flow at its packet consumer, before the
+  // flow's last statement. Only a flow that ran to its end ends with no reason.
+  assert.deepEqual(terminal[0].terminal, { object: "screen-operation", disposition: "released", reason: "cancelled" },
+    "a flow that left after its capture without an error and without reaching its end");
+});
+
+test("AE2 Screen entry: a capture that fails, a capture that is aborted, an error after the capture and a cancellation after the capture each end the operation with its own reason; none of them is the terminal of a completed operation", async () => {
+  const ended = async (arrange) => {
+    const h = harness();
+    arrange(h);
+    let thrown;
+    await h.run().catch((error) => { thrown = error; });
+    assert.equal(thrown, undefined, "the Screen entry handles its own failure");
+    const events = aeEvents(h);
+    const terminals = events.filter((event) => event.fact === "terminal");
+    assert.equal(terminals.length, 1, JSON.stringify(aeFacts(h)));
+    assert.equal(terminals[0].refs.operationId, events.find((event) => event.fact === "input-accepted").refs.operationId);
+    return { h, facts: aeFacts(h), terminal: terminals[0].terminal, trace: h.traces[0] };
+  };
+  // The capture command fails: accepted, then released with the failure named. No other fact.
+  const failed = await ended((h) => { h.env.captureScreenObservation = async () => { throw new Error("capture command failed"); }; });
+  assert.deepEqual(failed.terminal, { object: "screen-operation", disposition: "released", reason: "capture-failed" });
+  assert.equal(failed.facts.length, 2, JSON.stringify(failed.facts));
+  assert.deepEqual([failed.trace.status, failed.trace.error?.message], ["error", "capture command failed"],
+    "the owner's own error exit is unchanged");
+  assert.equal(failed.h.packets.length, 0);
+  assert.equal(JSON.stringify(aeEvents(failed.h)).includes("capture command failed"), false, "the message stays out of the event");
+  // The capture is aborted before it returns: no observation, and no error to show.
+  const aborted = await ended((h) => { h.env.captureScreenObservation = async () => {
+    throw Object.assign(new Error("aborted"), { name: "AbortError" }); }; });
+  assert.deepEqual(aborted.terminal, { object: "screen-operation", disposition: "released", reason: "capture-not-completed" });
+  assert.equal(aborted.facts.length, 2);
+  assert.equal(aborted.trace.status, "cancelled");
+  // The capture succeeded and the operation then failed in its own flow.
+  const later = await ended((h) => { h.env.contextManagerRef.current.addScreenObservation = () => { throw new Error("observation store failed"); }; });
+  assert.deepEqual(later.terminal, { object: "screen-operation", disposition: "released", reason: "operation-error" });
+  assert.deepEqual([later.trace.status, later.trace.error?.message], ["error", "observation store failed"]);
+  // The capture succeeded and the flow was then cancelled (an abort, as Pause
+  // delivers it to a request in flight): no error to show, and not a completed flow.
+  const cancelled = await ended((h) => { h.env.contextManagerRef.current.addScreenObservation = () => {
+    throw Object.assign(new Error("aborted"), { name: "AbortError" }); }; });
+  assert.deepEqual(cancelled.terminal, { object: "screen-operation", disposition: "released", reason: "cancelled" });
+  assert.equal(cancelled.trace.status, "cancelled");
+  assert.equal(cancelled.h.env.state?.error ?? null, null, "a cancellation shows no error");
+});
+
+test("AE2 Screen entry: a shutdown return reaches no claim and emits nothing; a superseded operation ends with its own superseded terminal and never a release", async () => {
+  const stopped = harness();
+  stopped.env.shutdownRequestedRef.current = true;
+  await stopped.run();
+  assert.equal(stopped.traces.length, 0);
+  assert.deepEqual(aeFacts(stopped), []);
+
+  // The first operation is inside its source-linkage model call when a newer
+  // real entry claims the slot (the SL-C3 arrangement).
+  let release;
+  let started;
+  const startedPromise = new Promise((resolve) => { started = resolve; });
+  const blocked = new Promise((resolve) => { release = resolve; });
+  const h = harness({ duringModel: async (running) => {
+    if (running.calls.length === 1) { started(); await blocked; }
+  } });
+  const old = h.run();
+  await startedPromise;
+  h.observation.id = "screen-newer";
+  const newerRun = h.run();
+  release();
+  await Promise.all([old, newerRun]);
+  const events = aeEvents(h);
+  const accepted = events.filter((event) => event.fact === "input-accepted");
+  assert.equal(accepted.length, 2, "each real entry is accepted once");
+  const [older, newer] = accepted.map((event) => event.refs.operationId);
+  assert.notEqual(older, newer);
+  const terminals = events.filter((event) => event.fact === "terminal" && event.terminal.object === "screen-operation");
+  assert.deepEqual(terminals.map((event) => [event.refs.operationId, event.terminal.disposition]).sort(),
+    [[newer, "released"], [older, "superseded"]].sort());
+  assert.equal(h.packets.length, 1, "only the newer operation reached its consumer");
 });
