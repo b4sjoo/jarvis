@@ -33,12 +33,9 @@
 //
 // The last part is about a level change during a session. In the matrix the level is stored before
 // the Hook mounts and one turn runs, so no setting is written while a session is under way. A
-// change of the level is a settings write: the settings object is replaced, and what the Hook
-// derives from that object is refreshed, as for every other setting. The last part runs two turns
-// with one action between them and holds a level change to that: it must do what another settings
-// write does, and selecting the saved level again, which writes nothing, must do what no action does.
-// It does not say that a settings write is neutral for the second turn. In this Hook it is not,
-// whichever setting is written, and the diagnostic line of that part prints what was observed.
+// change of the level is a settings write. GG178 compares each such write to no action, including
+// the actual second Provider prompt (only generated identity/time noise is normalized). Reference
+// content and source travel together; refreshing a React closure cannot decide their presence.
 // A recording that is running when the level changes keeps the level it started with: its settings
 // file is written once, at the start, and the change adds no recording write.
 //
@@ -220,6 +217,8 @@ async function runSession(t, bundle, browser, { debug, recording, crossChecks, l
         // The Advisor request of the project selection, when the session had that second turn: its generated guidance block.
         selected: s63.requests.filter(request => request.selectedFactPromptChecked)
           .map(request => (/<generated_guidance>([\s\S]*?)<\/generated_guidance>/.exec(request.user.replace(/\\n/g, '\n')) ?? [])[1]?.trim() ?? null),
+        selectedRequests: s63.requests.filter(request => request.selectedFactPromptChecked)
+          .map(request => ({ system: request.system, user: request.user, images: request.imageUrls.length })),
         deliveries: window.__lgDeliveries,
         files: [...s63.writes.entries()],
         binaries: [...s63.binaryWrites.keys()],
@@ -315,8 +314,9 @@ async function levelChangeBetweenTwoTurns(t, bundle, browser) {
     return { left, right, leaves: left.shaped.size, maskedLeaves };
   };
 
-  // A level change against another settings write.
-  const changed = await same('another settings write', 'level change');
+  // GG178: the baseline has no intervening action, not a second settings write.
+  const changed = await same('no action', 'level change');
+  const sameValue = await same('no action', 'another settings write');
   assert.deepEqual([changed.left.applies, changed.right.applies], [['info'], ['info', 'debug']], 'the level change is applied; the other write sends nothing');
   // At info these two turns log one entry: the warning of this host's trace metrics read, at mount. The turns
   // themselves have no warning and no error. After the change to debug, the second turn's debug entries are sent, at
@@ -351,14 +351,24 @@ async function levelChangeBetweenTwoTurns(t, bundle, browser) {
   assert.deepEqual(recordingWrites(changed.right), recordingWrites(reselected.left),
     'a running recording keeps the level it started with; the change adds no recording write');
 
-  // For the record, not asserted either way: a settings write between two turns is not neutral for the second
-  // Advisor request in this Hook, whichever setting is written. The level change above is held to that same effect.
   const present = guidance => guidance !== null && guidance !== 'No generated guidance.';
+  const promptInput = requests => JSON.stringify(requests.map(request => ({ ...request,
+    system: scrub(request.system),
+    // This source identity includes the newly allocated Screen operation ID.
+    user: scrub(request.user).replace(/question_source_[a-z0-9]+/g, 'question_source_<id>'),
+  })));
+  for (const run of [changed.left, changed.right, sameValue.left, sameValue.right, reselected.left, reselected.right]) {
+    assert.ok(present(run.guidance), 'GG178: the actual authorized reference is present without a settings refresh');
+    const actual = promptInput(run.raw.selectedRequests), expected = promptInput(changed.left.raw.selectedRequests);
+    const difference = [...actual].findIndex((char, index) => char !== expected[index]);
+    assert.ok(actual === expected,
+      `GG178 Provider input differs at ${difference}: ${actual.slice(difference - 60, difference + 160)} vs ${expected.slice(difference - 60, difference + 160)}`);
+  }
   t.diagnostic(`LG2 two turns: recording writes with a level change ${JSON.stringify(recordingWrites(changed.right))}, with no action ${JSON.stringify(recordingWrites(reselected.left))}; ` +
-    `level change == another settings write over ${changed.leaves} leaves (${changed.maskedLeaves} masked as noise); ` +
+    `level change == no action over ${changed.leaves} leaves (${changed.maskedLeaves} masked as noise); ` +
     `saved level again == no action over ${reselected.leaves} leaves (${reselected.maskedLeaves} masked). ` +
     `Generated guidance in the second Advisor request: no action=${present(reselected.left.guidance)}, saved level again=${present(reselected.right.guidance)}, ` +
-    `another settings write=${present(changed.left.guidance)}, level change=${present(changed.right.guidance)}`);
+    `another settings write=${present(sameValue.right.guidance)}, level change=${present(changed.right.guidance)}`);
 }
 
 // ---- LG8: the cost of the scripted turns ----
@@ -614,7 +624,7 @@ test('LG2 the log level changes no formal result, 178A fact, recording write, di
       });
     }
     if (!only || only.includes('two-turns')) {
-      await t.test('LG2 a level change between two turns does what another settings write does, and the saved level selected again does what no action does',
+      await t.test('GG178 dynamic settings preserve the actual second Provider input against no action',
         child => levelChangeBetweenTwoTurns(child, bundle, browser));
     }
     if (!only || only.includes('lg8')) {

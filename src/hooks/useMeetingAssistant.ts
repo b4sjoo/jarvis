@@ -2361,7 +2361,7 @@ interface RunAdvisorOptions {
   force?: boolean;
   mode?: AdvisorRequestMode;
   responseAction?: MeetingResponseActionMode;
-  currentSuggestion?: string;
+  currentSuggestion?: Readonly<Pick<AdvisorSuggestion, "content" | "sourceTraceId">>;
   clarifyingFeedback?: ClarifyingQuestionFeedback;
   explicitProjectSelection?: ExplicitProjectSelection;
   traceId?: string;
@@ -2382,6 +2382,12 @@ interface RunAdvisorOptions {
   runtimeTypeAdjudicationOutputAuthority?: RuntimeTypeAdjudicationOutputAuthority;
   settledExecutionPlanOverride?: SettledAdvisorExecutionPlan;
   artifactRegenerationTarget?: ArtifactRegenerationTarget;
+}
+
+function captureAdvisorReferenceSuggestion(
+  suggestion?: Pick<AdvisorSuggestion, "content" | "sourceTraceId">
+): RunAdvisorOptions["currentSuggestion"] {
+  return suggestion ? { content: suggestion.content, sourceTraceId: suggestion.sourceTraceId } : undefined;
 }
 
 interface PendingAdvisorGenerationSupersession {
@@ -11958,7 +11964,7 @@ export function useMeetingAssistant() {
         advisorJob.logicalQuestionUnit?.normalizedText.trim()
     );
 
-    if (force && !hasContext && !options.currentSuggestion?.trim()) {
+    if (force && !hasContext && !options.currentSuggestion?.content.trim()) {
       updateForceAdviseTargetForAdvisorOutcome({
         advisorJob,
         status: "failed",
@@ -12328,7 +12334,7 @@ export function useMeetingAssistant() {
               ? routedAdvisorTaskSignals.query
               : buildExplicitActionAdvisorTaskQuery(
                   semanticPromptContext,
-                  options.currentSuggestion,
+                  options.currentSuggestion?.content,
                   options.clarifyingFeedback
                 ),
             taskRelation: advisorTaskMutationDecision.relation,
@@ -12511,12 +12517,11 @@ export function useMeetingAssistant() {
             promptContext.taskRuntime.parent?.supportedFactAnchors,
         generatedGuidance:
           !transientPersonalStatusDecision &&
-          options.currentSuggestion?.trim() &&
-          state.latestSuggestion?.sourceTraceId
+          options.currentSuggestion?.content.trim() &&
+          options.currentSuggestion.sourceTraceId
             ? {
-                text: options.currentSuggestion,
-                sourceTraceId:
-                  state.latestSuggestion.sourceTraceId,
+                text: options.currentSuggestion.content,
+                sourceTraceId: options.currentSuggestion.sourceTraceId,
               }
             : undefined,
         generatedContinuity: generatedContinuityEvidence,
@@ -15399,7 +15404,7 @@ export function useMeetingAssistant() {
       ? composePhaseNavigationPromptContext({
           action: options.responseAction,
           promptContext: effectiveBaseAdvisorModelPromptContext,
-          currentSuggestion: options.currentSuggestion,
+          currentSuggestion: options.currentSuggestion?.content,
         })
       : undefined;
     const advisorModelPromptContext = {
@@ -15416,7 +15421,7 @@ export function useMeetingAssistant() {
     };
     const advisorModelCurrentSuggestion = phaseNavigationPrompt
       ? phaseNavigationPrompt.currentSuggestion
-      : options.currentSuggestion;
+      : options.currentSuggestion?.content;
     const phaseNavigationPromptMetadata = phaseNavigationPrompt
       ? formatPhaseNavigationPromptMetricsForTrace(
           phaseNavigationPrompt.metrics
@@ -15594,7 +15599,7 @@ export function useMeetingAssistant() {
           artifactReuseMainAdvisorCalled: false,
         });
         if (reusedArtifactCandidate) {
-          const base = parseMeetingAnswer(options.currentSuggestion ?? "", { expectedProfile: advisorAnswerProfile });
+          const base = parseMeetingAnswer(options.currentSuggestion?.content ?? "", { expectedProfile: advisorAnswerProfile });
           finalContent = serializeMeetingAnswer({ ...base, sections: { ...base.sections,
             ...Object.fromEntries(options.artifactRegenerationTarget.artifactFamilies.map((family) =>
               [family, reusedArtifactCandidate!.sections[family]])) } });
@@ -15985,7 +15990,7 @@ export function useMeetingAssistant() {
       if (mode === "response-action") {
         finalContent = preserveCodingResponseActionSections(
           finalContent,
-          options.currentSuggestion
+          options.currentSuggestion?.content
         );
       }
 
@@ -34127,7 +34132,7 @@ export function useMeetingAssistant() {
     }
     const advisorJob = buildAdvisorJob({
       mode: "regenerate",
-      currentSuggestion: actionStableAnswer?.suggestion.content,
+      currentSuggestion: captureAdvisorReferenceSuggestion(actionStableAnswer?.suggestion),
       advisorJobSource: "regenerate",
       taskMutationAuthority: "preserve-parent",
       questionLineage: resolveSuggestionQuestionLineage({ suggestion: actionStableAnswer?.suggestion,
@@ -34814,6 +34819,9 @@ export function useMeetingAssistant() {
       const displayed = manualAdviseDisplayRef.current.capture(invocation.displayTarget);
       const actionStableAnswer = displayed?.stable ??
         (!invocation.displayTarget && !manualAdviseDisplayRef.current.current ? stableAnswerRevisionRef.current : null);
+      const currentSuggestion = displayed?.streaming
+        ? { content: displayed.sections.parsedAnswer.rawContent, sourceTraceId: displayed.target.traceId }
+        : captureAdvisorReferenceSuggestion(state.latestSuggestion ?? actionStableAnswer?.suggestion);
       const phaseUsesDisplayedQuestion = Boolean(manualAdviseDisplayRef.current.locked || invocation.displayTarget) &&
         (responseAction === "previous-phase" || responseAction === "next-phase");
       const manualAction =
@@ -35003,7 +35011,7 @@ export function useMeetingAssistant() {
           force: true,
           mode: "response-action",
           responseAction,
-          currentSuggestion: actionStableAnswer?.suggestion.content,
+          currentSuggestion: captureAdvisorReferenceSuggestion(actionStableAnswer?.suggestion),
           traceId: trace.id,
           taskMutationAuthority: "output-only-current-branch",
           questionLineage: resolveSuggestionQuestionLineage({ suggestion: actionStableAnswer?.suggestion,
@@ -35382,7 +35390,7 @@ export function useMeetingAssistant() {
             force: true,
             mode: "response-action",
             responseAction,
-            currentSuggestion: phaseUsesDisplayedQuestion ? actionStableAnswer?.suggestion.content : currentSuggestionText,
+            currentSuggestion: phaseUsesDisplayedQuestion ? captureAdvisorReferenceSuggestion(actionStableAnswer?.suggestion) : currentSuggestion,
             traceId: trace.id,
             advisorJobSource: "response-action",
             taskMutationAuthority: "preserve-parent",
@@ -35605,7 +35613,7 @@ export function useMeetingAssistant() {
           mode: "response-action",
           responseAction,
           advisorJobSource: "response-action",
-          currentSuggestion: actionStableAnswer?.suggestion.content,
+          currentSuggestion: captureAdvisorReferenceSuggestion(actionStableAnswer?.suggestion),
           traceId: responseActionTrace.id,
           taskMutationAuthority: "preserve-parent",
           questionLineage:
@@ -35669,7 +35677,7 @@ export function useMeetingAssistant() {
         force: true,
         mode: "response-action",
         responseAction,
-        currentSuggestion: genericVisibleTarget || phaseUsesDisplayedQuestion ? actionStableAnswer?.suggestion.content : currentSuggestionText,
+        currentSuggestion: genericVisibleTarget || phaseUsesDisplayedQuestion ? captureAdvisorReferenceSuggestion(actionStableAnswer?.suggestion) : currentSuggestion,
         traceId: genericActionTrace.id,
         advisorJobSource: "response-action",
         taskMutationAuthority: "preserve-parent",
@@ -35791,7 +35799,10 @@ export function useMeetingAssistant() {
       await runAdvisor({
         force: true,
         mode: hasActiveScreenTask ? "screen-anchored" : "clarifying-answer",
-        currentSuggestion: currentSuggestionText,
+        currentSuggestion: displayed?.streaming
+          ? { content: displayed.sections.parsedAnswer.rawContent, sourceTraceId: displayed.target.traceId }
+          : captureAdvisorReferenceSuggestion(displayed?.stable?.suggestion ??
+              (!manualAdviseDisplayRef.current.current ? stableAnswerRevisionRef.current?.suggestion : undefined)),
         advisorJobSource: "clarifying-answer",
         taskMutationAuthority: "preserve-parent",
         logicalQuestionUnit: projectChoice?.logicalQuestionUnit,
@@ -35856,7 +35867,6 @@ export function useMeetingAssistant() {
       };
     },
     [
-      currentSuggestionText,
       flushPendingSentenceCompletion,
       refreshRecordedCompletedTrace,
       readProjectChoiceContext,

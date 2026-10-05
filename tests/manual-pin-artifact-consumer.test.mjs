@@ -35,7 +35,13 @@ function declaration(name, ast = source) { return find(ast, n => ts.isVariableDe
 function evaluate(text, context) {
   return vm.runInContext(ts.transpileModule(text, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText, context);
 }
-function callback(name, context, ast = source) { return evaluate(`(${declaration(name, ast).initializer.arguments[0].getText(ast)})`, context); }
+function callback(name, context, ast = source) {
+  if (!context.captureAdvisorReferenceSuggestion) {
+    const capture = find(source, n => ts.isFunctionDeclaration(n) && n.name?.text === "captureAdvisorReferenceSuggestion");
+    context.captureAdvisorReferenceSuggestion = evaluate(`(${capture.getText(source)})`, context);
+  }
+  return evaluate(`(${declaration(name, ast).initializer.arguments[0].getText(ast)})`, context);
+}
 
 // Task 178A: the shared helper builds the real critical event stream; the Hook's
 // own emit callbacks are extracted once and installed into each environment.
@@ -187,6 +193,7 @@ function harness() {
     contextManagerRef: {current:{clearExpiredActiveMeetingTask(){},getState:()=>f.context}},
     logicalQuestionUnitRef:{current:{...f.unit,id:"hidden-B-unit"}}, effectiveQuestionSourceLedgerRef:{current:{list:()=>f.records}},
     runtimeEpochRef:{current:3}, currentSuggestionText:b.suggestion.content,
+    currentSuggestion:{content:b.suggestion.content,sourceTraceId:"trace-B"},
     state:{status:"listening"}, createMeetingId:()=>`action-${events.length}`,
     recordManualRuntimeAction:event=>events.push(event), isManualRuntimeActionBusy:()=>false,
     setState(){}, flushPendingSentenceCompletion(){}, activateAdvisorJob:()=>true,
@@ -222,7 +229,8 @@ for (const action of ["regenerate", "enhance-context", "narrow-context", "regene
     assert.equal(h.calls.length,1);
     const request=h.calls[0].advisorJob ?? h.calls[0];
     assert.equal(request.logicalQuestionUnit.id,"question-voice");
-    assert.equal(request.currentSuggestion,h.f.stable.suggestion.content);
+    assert.equal(request.currentSuggestion.content,h.f.stable.suggestion.content);
+    assert.equal(request.currentSuggestion.sourceTraceId,"trace-A");
     assert.equal(request.currentQuestionSettlementOverride.settlementId,"settlement-voice");
     for(const event of h.events) {
       assert.equal(event.observedVisibleAnswerRevision,5);
@@ -257,7 +265,7 @@ function reuseHarness(whiteboard = false) {
   let requests=0;
   const metadata={};
   const env={...modules,Date,structuredClone,
-    options:{artifactRegenerationTarget:target,currentSuggestion:stable.suggestion.content},
+    options:{artifactRegenerationTarget:target,currentSuggestion:{content:stable.suggestion.content,sourceTraceId:stable.suggestion.sourceTraceId}},
     manualAdviseDisplayRef:{current:new modules.ManualAdviseDisplay()},
     unpublishedArtifactSlotRef:{current:slot},stableAnswerRevisionRef:{current:stable}, readArtifactReuseInputs:()=>inputs,
     validateWhiteboardRenderCandidate:async()=>({valid:true}),
@@ -549,7 +557,7 @@ function selectedArtifactConsumer(h, stable = h.display.selectedStable, generate
   const env = h.environment, target = h.resolve(stable);
   let requests = 0;
   Object.assign(env, {
-    options: { artifactRegenerationTarget: target, currentSuggestion: stable.suggestion.content,
+    options: { artifactRegenerationTarget: target, currentSuggestion: {content:stable.suggestion.content,sourceTraceId:stable.suggestion.sourceTraceId},
       responseAction: "regenerate-artifacts" }, questionForAction: h.f.unit,
     validateWhiteboardRenderCandidate: async () => ({ valid: true }),
     traceId: "artifact-A", requestId: "artifact-A", advisorAnswerProfile: undefined,

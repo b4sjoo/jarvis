@@ -49,6 +49,7 @@ function callbackNode(name) {
 }
 
 function callback(name, context) {
+  context.captureAdvisorReferenceSuggestion = evaluate(`(${declaration("captureAdvisorReferenceSuggestion").getText(hook)})`, context);
   return evaluate(`(${callbackNode(name).getText(hook)})`, context);
 }
 
@@ -492,7 +493,8 @@ test("B controls: actual Next sends selected A source and answer, never latest B
   assert.equal(h.calls.length, 1);
   assert.equal(h.calls[0].logicalQuestionUnit.id, h.f.unit.id);
   assert.equal(h.calls[0].questionLineage.questionInstanceId, `lqu:${h.f.unit.id}`);
-  assert.equal(h.calls[0].currentSuggestion, h.selected.suggestion.content);
+  assert.equal(h.calls[0].currentSuggestion.content, h.selected.suggestion.content);
+  assert.equal(h.calls[0].currentSuggestion.sourceTraceId, h.selected.suggestion.sourceTraceId);
   assert.equal(h.calls[0].taskMutationAuthority, "preserve-parent");
   assert.equal(h.writes.length, 0, "Next's generation/phase transaction belongs to runAdvisor, outside this ingress proof");
   assert.equal(h.environment.latestManualCorrectionTargetRef.current, h.backgroundTarget);
@@ -514,7 +516,8 @@ test("B controls: actual Next round-trip restores A's branch history target with
   assert.equal(h.calls[0].manualPhaseTargetOverride, "follow_up");
   assert.equal(h.calls[0].logicalQuestionUnit.id, h.f.unit.id);
   assert.equal(h.calls[0].questionLineage.questionInstanceId, `lqu:${h.f.unit.id}`);
-  assert.equal(h.calls[0].currentSuggestion, h.selected.suggestion.content);
+  assert.equal(h.calls[0].currentSuggestion.content, h.selected.suggestion.content);
+  assert.equal(h.calls[0].currentSuggestion.sourceTraceId, h.selected.suggestion.sourceTraceId);
   assert.equal(h.writes.length, 0);
 });
 

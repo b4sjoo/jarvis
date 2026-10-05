@@ -389,7 +389,7 @@ function actionHarness(f = screenFixture()) {
   };
   const criticalEvents = createRuntimeCriticalEventHarness({ sessionId: "session" });
   criticalEvents.install(environment, (name) => evaluate(criticalEventCallbackSources[name], environment));
-  for (const name of ["isManualRuntimeActionBusy", "submitTaskRuntimeTransition"]) {
+  for (const name of ["isManualRuntimeActionBusy", "submitTaskRuntimeTransition", "captureAdvisorReferenceSuggestion"]) {
     environment[name] = evaluate(`(${declaration(name).getText(hook)})`, environment);
   }
   environment.runAdvisor = async (options: any) => {
@@ -1024,6 +1024,9 @@ test(`real Regenerate callback ${sourceKind === "voice" ? "accepts exact current
   };
   environment.isManualRuntimeActionBusy = evaluate(
     `(${declaration("isManualRuntimeActionBusy").getText(hook)})`, {}
+  );
+  environment.captureAdvisorReferenceSuggestion = evaluate(
+    `(${declaration("captureAdvisorReferenceSuggestion").getText(hook)})`, {}
   );
   const node = declaration("regenerateSuggestion") as ts.VariableDeclaration;
   const regenerate = evaluate(
