@@ -81,6 +81,7 @@ function harness() {
   });
   const context = vm.createContext({
     Date, Promise, structuredClone, createMeetingId, createAdvisorTriggerJob, decideRefreshAuthority,
+    state: {},
     manualAdviseDisplayRef: { current: new ManualAdviseDisplay() },
     stableAnswerRevisionRef: { current: null },
     artifactReuseSettingsRef: { current: { useMemory: false } },
@@ -105,6 +106,12 @@ function harness() {
     logicalQuestionUnitRef: { current: undefined },
     recordManualRuntimeAction: () => {},
   });
+  const reference = file.statements.find((node): node is ts.FunctionDeclaration =>
+    ts.isFunctionDeclaration(node) && node.name?.text === "captureAdvisorReferenceSuggestion");
+  assert.ok(reference);
+  vm.runInContext(ts.transpileModule(`globalThis.captureAdvisorReferenceSuggestion = ${reference.getText(file)};`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.None },
+  }).outputText, context);
   const reuseInputReader = callback("readArtifactReuseInputs");
   vm.runInContext(ts.transpileModule(`globalThis.readArtifactReuseInputs = ${reuseInputReader.getText(file)};`, {
     compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.None },

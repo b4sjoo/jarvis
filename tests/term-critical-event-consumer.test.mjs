@@ -52,10 +52,7 @@ async function collect(page) {
 const manual = rows => rows.filter(row => row.refs.manualAction === "term-correction" || row.refs.manualAction === "stop-term-replacement");
 const terminals = rows => manual(rows).filter(row => row.fact === "terminal");
 
-test("AET actual Term entry points emit original outcomes without changing their business effects", { timeout: 300000, skip: browserTestSkip }, async t => {
-  const bundle = await browserBundle([plugin()]);
-  const browser = await playwright.chromium.launch({ headless: true, executablePath: process.env.JARVIS_CHROMIUM_EXECUTABLE });
-  try {
+async function verifyOutcomes(t, bundle, browser) {
     await t.test("AET1 invalid, future-only, stop and duplicate stop have distinct action terminals", async child => {
       const { page, context, failures } = await mount(child, bundle, browser);
       try {
@@ -194,13 +191,20 @@ test("AET actual Term entry points emit original outcomes without changing their
         assert.equal(terminals((await collect(page)).events).length, 0);
       } finally { await context.close(); }
     });
-  } finally { await browser.close(); }
-});
+}
 
 async function isolatedCorrection(t, bundle, browser, settings, recording, fault = "none") {
   // Runner startup requires Debug; switch to the measured mode only after the source exists.
   const { page, context, failures } = await mount(t, bundle, browser, { ...settings, debugMode: true }, true);
   try {
+    const settleDisplayedReview = () => page.waitForFunction(() => {
+      const displayed = window.__s63.observed.adviseDisplay;
+      const review = window.__s63.observed.factRiskReview;
+      return !displayed.streaming && displayed.stable && (!displayed.stable.suggestion.factRiskReviewInput ||
+        (review && review.status !== "pending" && review.reason !== "not-started"));
+    }, undefined, { timeout: 10000 });
+    // Keep an earlier answer's background review out of the correction race in this equivalence test.
+    await settleDisplayedReview();
     await page.evaluate(debug => window.__s63.meeting.setDebugMode(debug), settings.debugMode);
     await page.waitForFunction(debug => window.__s63.meeting.settings.debugMode === debug, settings.debugMode);
     if (!recording) {
@@ -223,7 +227,7 @@ async function isolatedCorrection(t, bundle, browser, settings, recording, fault
       }
     }, fault);
     await page.evaluate(() => window.__s63.meeting.submitSpeechCorrection("responsibility not contribution"));
-    await page.waitForTimeout(500);
+    await settleDisplayedReview();
     const result = await page.evaluate(() => {
       const host = window.__s63, meeting = host.meeting, unit = window.__aet.lqu.current;
       const rule = meeting.speechCorrections[0];
@@ -245,13 +249,10 @@ async function isolatedCorrection(t, bundle, browser, settings, recording, fault
   } finally { await context.close(); }
 }
 
-test("AET4/5 original business path, switches and Procedure survive observation changes", { timeout: 300000, skip: browserTestSkip }, async t => {
-  const current = await browserBundle([plugin()]);
+async function verifyIsolation(t, current, browser) {
   // Acceptance can opt into a frozen parent; ordinary tests do not require Git history.
   const before = process.env.AET_BASELINE ? await browserBundle([plugin(process.env.AET_BASELINE)]) : current;
   t.diagnostic(`AET comparison baseline=${process.env.AET_BASELINE ?? "current repeated run"}`);
-  const browser = await playwright.chromium.launch({ headless: true, executablePath: process.env.JARVIS_CHROMIUM_EXECUTABLE });
-  try {
     for (const debugMode of [false, true]) for (const runtimeCrossChecksEnabled of [false, true]) for (const recording of [false, true]) {
       await t.test(`AET4 debug=${debugMode} crossChecks=${runtimeCrossChecksEnabled} recording=${recording}`, async child => {
         const settings = { debugMode, runtimeCrossChecksEnabled };
@@ -286,5 +287,14 @@ test("AET4/5 original business path, switches and Procedure survive observation 
         if (fault === "observer-throw") assert.ok(result.stats.subscriberFailures > 0);
       });
     }
+}
+
+test("AET real Term outcomes and observation isolation", { timeout: 600000, skip: browserTestSkip }, async t => {
+  const bundle = await browserBundle([plugin()]);
+  // One top-level launch/skip boundary follows the existing browser-discovery contract.
+  const browser = await playwright.chromium.launch({ headless: true, executablePath: process.env.JARVIS_CHROMIUM_EXECUTABLE });
+  try {
+    await t.test("AET outcomes", child => verifyOutcomes(child, bundle, browser));
+    await t.test("AET4/5 original-path comparison", child => verifyIsolation(child, bundle, browser));
   } finally { await browser.close(); }
 });

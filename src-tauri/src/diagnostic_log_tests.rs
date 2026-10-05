@@ -6,10 +6,10 @@
 //! wait is the app's five minutes, except in the two tests that are about an
 //! idle writer, which give it 5 ms. The two tests that
 //! call the command itself also reach the process-wide sink, which is never
-//! started in the test process; they hold `ProcessWideCommand`. A subscriber is
-//! only ever installed as the default of the calling test thread: the
-//! process-wide subscriber belongs to the app's startup and is never installed
-//! in the test process.
+//! started in the shared test process; they hold `ProcessWideCommand`. Other
+//! subscriber tests use a thread-local default. The process-wide subscriber
+//! belongs to the app's startup. The public-start probe
+//! installs it only in a dedicated child process, never in the shared test runner.
 
 use super::*;
 use serde_json::json;
@@ -3231,6 +3231,50 @@ fn events_in(directory: &Path) -> Vec<String> {
                 .collect::<Vec<_>>()
         })
         .collect()
+}
+
+#[test]
+fn lg_public_start_installs_global_subscriber_and_flushes_at_exit() {
+    const CHILD_ROOT: &str = "JARVIS_LG_PUBLIC_START_TEST_ROOT";
+    if let Some(root) = std::env::var_os(CHILD_ROOT) {
+        start(Some(PathBuf::from(root)));
+        let receipt = write_diagnostic_log(
+            "trace".to_string(),
+            Some(json!([entry("info", "public-start-frontend-probe")])),
+        )
+        .unwrap();
+        assert_eq!(receipt.sink.state, DiagnosticLogSinkState::Ready);
+        // Exercise the production global subscriber, without any audio command or device.
+        tracing::warn!(target: "jarvis_lib::speaker::commands", "public-start-native-probe");
+        flush_at_exit();
+        assert_eq!(
+            process_sink().receive("trace", None).unwrap().sink.unsaved_at_exit,
+            0
+        );
+        return;
+    }
+
+    let files = TestSink::new("public-start");
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "diagnostic_log::tests::lg_public_start_installs_global_subscriber_and_flushes_at_exit",
+            "--nocapture",
+        ])
+        .env(CHILD_ROOT, &files.root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let lines = files.file_lines();
+    assert_eq!(lines.len(), 2);
+    assert!(lines.iter().any(|line| line["event"] == "public-start-frontend-probe"));
+    assert!(lines.iter().any(|line| line["source"] == "native.speaker.commands"
+        && line["message"] == "public-start-native-probe"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("public-start-native-probe"));
 }
 
 // Every run that writes an entry adds a segment. Short runs must not push out
