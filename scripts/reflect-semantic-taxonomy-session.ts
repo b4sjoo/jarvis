@@ -58,6 +58,7 @@ async function main() {
     );
     await writeDerivedEvaluationProvenance({
       producer: "reflect-semantic-taxonomy-session",
+      producerVersion: `semantic-taxonomy-reflection/v${report.version}`,
       command: "taxonomy:semantic:reflect",
       sessionDirectories: [sessionDirectory],
       outputDirectory,

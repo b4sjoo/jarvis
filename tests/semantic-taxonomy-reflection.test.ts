@@ -5,6 +5,59 @@ import {
   renderSemanticTaxonomyReflectionMarkdown,
 } from "../scripts/lib/semantic-taxonomy-reflection.js";
 
+for (const [name, values, blocked, known] of [
+  ["true", [true, true], 2, 2],
+  ["false", [false, false], 0, 2],
+  ["missing", [undefined, undefined], null, 0],
+  ["mixed", [true, false, undefined], 1, 2],
+  ["invalid", [null, "false", 0, 1, {}], null, 0],
+  ["empty", [], null, 0],
+] as const) {
+  test(`SR168 ${name}: optional evidence, coverage and JSON/Markdown agree`, () => {
+    const decisions = values.map((value, index) => ({
+      recordedAt: index, sessionId: "s", traceId: `trace-${index}`,
+      metadata: { taxonomySemanticParentMutationBlocked: value },
+    }));
+    const before = JSON.stringify(decisions);
+    const report = buildSemanticTaxonomyReflectionReport({ decisions, evaluations: [] });
+    assert.equal(report.version, 3);
+    assert.equal(report.metrics.parentMutationBlocked, blocked);
+    assert.equal(report.metrics.parentMutationBlockedKnown, known);
+    assert.equal(report.metrics.parentMutationBlockedMissing, values.length - known);
+    assert.equal(report.metrics.parentMutationBlockedKnown + report.metrics.parentMutationBlockedMissing, report.metrics.decisions);
+    const json = JSON.parse(JSON.stringify(report));
+    for (let i = 0; i < values.length; i++) {
+      assert.equal(Object.hasOwn(json.rows[i], "parentMutationBlocked"), typeof values[i] === "boolean");
+      assert.equal(report.rows[i].parentMutationBlocked, typeof values[i] === "boolean" ? values[i] : undefined);
+    }
+    const markdown = renderSemanticTaxonomyReflectionMarkdown(report);
+    assert.match(markdown, /Version: 3/);
+    assert.ok(markdown.includes(`Parent mutation blocked: ${blocked ?? "not-recorded"} (recorded ${known}/${values.length}; missing ${values.length - known})`));
+    if (name === "missing" || name === "invalid") {
+      assert.ok(markdown.includes("| not-recorded | unlabeled |"));
+      assert.equal(markdown.includes("| no | unlabeled |"), false);
+    }
+    assert.equal(JSON.stringify(decisions), before, "source evidence is not mutated");
+  });
+}
+
+test("SR168 keeps the newest valid observation within one grouped decision, never across sessions", () => {
+  const record = (sessionId: string, recordedAt: number, value?: unknown) => ({
+    sessionId, recordedAt, traceId: `trace-${recordedAt}`,
+    metadata: { semanticTaxonomyTurnId: "same-turn", taxonomySemanticParentMutationBlocked: value },
+  });
+  const report = buildSemanticTaxonomyReflectionReport({ decisions: [
+    record("a", 5, "false"), record("a", 2, false), record("a", 1, true), record("a", 3),
+    record("a", 3), record("b", 7),
+  ], evaluations: [] });
+  assert.equal(report.rows.length, 2);
+  assert.equal(report.rows[0].parentMutationBlocked, false);
+  assert.equal(report.rows[1].parentMutationBlocked, undefined);
+  assert.equal(report.metrics.parentMutationBlocked, 0);
+  assert.equal(report.metrics.parentMutationBlockedKnown, 1);
+  assert.equal(report.metrics.parentMutationBlockedMissing, 1);
+});
+
 test("joins late semantic evidence to HITL labels and reports rescue quality", () => {
   const report = buildSemanticTaxonomyReflectionReport({
     decisions: [

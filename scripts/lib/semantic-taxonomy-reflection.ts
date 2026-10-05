@@ -4,6 +4,8 @@ import {
   type CanonicalQuestionType,
 } from "../../src/lib/meeting/task-taxonomy.js";
 
+export const SEMANTIC_TAXONOMY_REFLECTION_VERSION = 3 as const;
+
 export interface SemanticTaxonomyRecordedDecision {
   recordedAt: number;
   sessionId?: string;
@@ -69,7 +71,7 @@ export interface SemanticTaxonomyReflectionRow {
   effectiveType: CanonicalQuestionType;
   wouldRescue: boolean;
   rescueApplied: boolean;
-  parentMutationBlocked: boolean;
+  parentMutationBlocked?: boolean;
   enforcementReason?: string;
   embeddingStatus?: string;
   embeddingDurationMs?: number;
@@ -112,7 +114,7 @@ export interface SemanticTaxonomyTrajectoryRow {
 }
 
 export interface SemanticTaxonomyReflectionReport {
-  version: 2;
+  version: typeof SEMANTIC_TAXONOMY_REFLECTION_VERSION;
   generatedAt: number;
   sessions: string[];
   metrics: {
@@ -127,7 +129,9 @@ export interface SemanticTaxonomyReflectionReport {
     rescuePrecision: number | null;
     rescueRecall: number | null;
     correctionAfterRescue: number;
-    parentMutationBlocked: number;
+    parentMutationBlocked: number | null;
+    parentMutationBlockedKnown: number;
+    parentMutationBlockedMissing: number;
     embeddingStatus: Record<string, number>;
     cacheHitRate: number | null;
     embeddingLatency: {
@@ -224,9 +228,12 @@ export function buildSemanticTaxonomyReflectionReport({
     .map((row) => row.embeddingDurationMs)
     .filter((value): value is number => typeof value === "number");
   const trajectoryRows = buildTrajectoryRows(rows, evaluations, runtimeTraces);
+  const parentMutationBlockedKnown = rows.filter(
+    (row) => row.parentMutationBlocked !== undefined
+  ).length;
 
   return {
-    version: 2,
+    version: SEMANTIC_TAXONOMY_REFLECTION_VERSION,
     generatedAt: Date.now(),
     sessions: unique(rows.map((row) => row.sessionId).filter(isString)),
     metrics: {
@@ -248,8 +255,11 @@ export function buildSemanticTaxonomyReflectionReport({
       ),
       correctionAfterRescue: rows.filter((row) => row.correctionAfterRescue)
         .length,
-      parentMutationBlocked: rows.filter((row) => row.parentMutationBlocked)
-        .length,
+      parentMutationBlocked: parentMutationBlockedKnown
+        ? rows.filter((row) => row.parentMutationBlocked === true).length
+        : null,
+      parentMutationBlockedKnown,
+      parentMutationBlockedMissing: rows.length - parentMutationBlockedKnown,
       embeddingStatus: countStrings(
         rows.map((row) => row.embeddingStatus ?? "unknown")
       ),
@@ -299,6 +309,7 @@ export function renderSemanticTaxonomyReflectionMarkdown(
   const lines = [
     "# Semantic Taxonomy Reflection",
     "",
+    `Version: ${report.version}`,
     `Generated: ${new Date(report.generatedAt).toISOString()}`,
     `Sessions: ${report.sessions.join(", ") || "-"}`,
     "",
@@ -310,7 +321,7 @@ export function renderSemanticTaxonomyReflectionMarkdown(
     `- Would rescue / applied: ${report.metrics.wouldRescue} / ${report.metrics.rescueApplied}`,
     `- Rescue precision / recall: ${percent(report.metrics.rescuePrecision)} / ${percent(report.metrics.rescueRecall)}`,
     `- Correction after rescue: ${report.metrics.correctionAfterRescue}`,
-    `- Parent mutation blocked: ${report.metrics.parentMutationBlocked}`,
+    `- Parent mutation blocked: ${report.metrics.parentMutationBlocked ?? "not-recorded"} (recorded ${report.metrics.parentMutationBlockedKnown}/${report.metrics.decisions}; missing ${report.metrics.parentMutationBlockedMissing})`,
     `- Trajectory questions / labeled: ${report.metrics.trajectory.questions} / ${report.metrics.trajectory.labeled}`,
     `- Classification correct but mutation lost: ${report.metrics.trajectory.classificationCorrectButMutationLost}`,
     `- Late parent missing question context: ${report.metrics.trajectory.lateParentMissingQuestionContext}`,
@@ -323,7 +334,7 @@ export function renderSemanticTaxonomyReflectionMarkdown(
     "|---|---|---|---|---|---|---|---|---|",
     ...report.rows.map(
       (row) =>
-        `| ${escapeCell(row.turnId ?? row.key)} | ${row.lexicalType} | ${row.semanticCandidateType ?? "-"} | ${formatSemanticTopCandidate(row)} | ${row.effectiveType} | ${row.rescueApplied ? "applied" : row.wouldRescue ? "would" : "-"} | ${row.parentMutationBlocked ? "yes" : "no"} | ${row.expectedType ? `${row.labelOutcome}:${row.expectedType}` : "unlabeled"} | ${row.embeddingDurationMs?.toFixed(1) ?? "-"}ms |`
+        `| ${escapeCell(row.turnId ?? row.key)} | ${row.lexicalType} | ${row.semanticCandidateType ?? "-"} | ${formatSemanticTopCandidate(row)} | ${row.effectiveType} | ${row.rescueApplied ? "applied" : row.wouldRescue ? "would" : "-"} | ${row.parentMutationBlocked === undefined ? "not-recorded" : row.parentMutationBlocked ? "yes" : "no"} | ${row.expectedType ? `${row.labelOutcome}:${row.expectedType}` : "unlabeled"} | ${row.embeddingDurationMs?.toFixed(1) ?? "-"}ms |`
     ),
     "",
     "## Question Trajectory",
@@ -438,7 +449,7 @@ function buildReflectionRow(
     effectiveType,
     wouldRescue: readBoolean(metadata, "taxonomyHybridWouldRescue"),
     rescueApplied,
-    parentMutationBlocked: readBoolean(
+    parentMutationBlocked: readOptionalBoolean(
       metadata,
       "taxonomySemanticParentMutationBlocked"
     ),

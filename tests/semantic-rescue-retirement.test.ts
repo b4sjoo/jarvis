@@ -287,7 +287,7 @@ test("168-C1 real observer, Advisor record and readers give the pre-retirement v
       // The retired keys read as absent for new recordings.
       assert.equal(row.mode, undefined);
       assert.equal(row.enforcementReason, undefined);
-      assert.equal(row.parentMutationBlocked, false);
+      assert.equal(row.parentMutationBlocked, undefined);
 
       // Compact trace summary reader, in both orders the two trace writers can land.
       const advisorLast = compactSemanticSummary({ ...observerTraceMetadata, ...advised.metadata }).semanticTaxonomy;
@@ -413,12 +413,13 @@ test("168-C1 a real would-rescue observation stays a recorded comparison and nev
 
       // Evaluation discontinuity (recorded, not hidden): the build before this retirement also wrote
       // taxonomySemanticParentMutationBlocked=true for a current would-rescue comparison. The key is no
-      // longer written, so the unchanged reader reports false / 0 for new recordings. The would-rescue
-      // flag and the recommended Type above still carry the same information.
+      // longer written, so the reader preserves its absence. Would-rescue remains a different fact.
       assert.equal(row.mode, undefined);
       assert.equal(row.enforcementReason, undefined);
-      assert.equal(row.parentMutationBlocked, false);
-      assert.equal(report.metrics.parentMutationBlocked, 0);
+      assert.equal(row.parentMutationBlocked, undefined);
+      assert.equal(report.metrics.parentMutationBlocked, null);
+      assert.equal(report.metrics.parentMutationBlockedKnown, 0);
+      assert.equal(report.metrics.parentMutationBlockedMissing, 1);
       const preRetirement = reflect({ ...recordedMetadata, ...preRetirementAdvisorKeys(true) });
       assert.equal(preRetirement.rows[0]!.parentMutationBlocked, true);
       assert.equal(preRetirement.metrics.parentMutationBlocked, 1);
@@ -427,7 +428,7 @@ test("168-C1 a real would-rescue observation stays a recorded comparison and nev
       const { mode: _oldMode, enforcementReason: _oldReason, parentMutationBlocked: _oldBlocked, ...rowBefore } = preRetirement.rows[0]!;
       assert.deepEqual(rowNow, rowBefore);
       assert.deepEqual(
-        { ...report.metrics, parentMutationBlocked: 1 },
+        { ...report.metrics, parentMutationBlocked: 1, parentMutationBlockedKnown: 1, parentMutationBlockedMissing: 0 },
         preRetirement.metrics
       );
 
