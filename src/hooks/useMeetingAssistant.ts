@@ -22099,6 +22099,8 @@ export function useMeetingAssistant() {
         // and the stage selections that the operation's own stage settles put
         // in its handle before their terminals resolved. Nothing is read back
         // from the trace.
+        // error for an authorized formal operation whose client error prevents
+        // Advisor handoff, even when an earlier stage supplied usable evidence.
         // warn when all hold: a formal model operation; still authorized at
         // its end; no stage disposition is "available"; and the operation
         // recorded a client error or lost at least one stage. A stage is lost
@@ -22139,7 +22141,10 @@ export function useMeetingAssistant() {
             stageLost(stageSelections?.parentAffinity) ||
             stageLost(stageSelections?.canonical));
         logDiagnostic(
-          lostModelEvidence ? "warn" : "debug",
+          input.handle.releaseWindowRequested && input.handle.affinityOutcome &&
+          metadata.taskRelationOrderedResolutionOperationAuthorized === true &&
+          metadata.taskRelationOrderedResolutionClientError === true
+            ? "error" : lostModelEvidence ? "warn" : "debug",
           "meeting.relation",
           "formal-operation-settled",
           () => {

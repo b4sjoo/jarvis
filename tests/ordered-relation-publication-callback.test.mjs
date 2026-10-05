@@ -3329,8 +3329,8 @@ test("ST183-4 the Relation runtimes have no runtime-level admission queue in fro
 // millisecond before `endsAt` and over at `endsAt`.
 // The harness clock only moves when the test moves it and the consumers hold no
 // timer of their own, so nothing but the composition under test can end a wait.
-async function runConsumerWait({ entry, runtime, child, typeElapsedMs = 600, before, script = [], endsAt }) {
-  const h = st183Harness({ runtime, child });
+async function runConsumerWait({ entry, runtime, child, logLevel, typeElapsedMs = 600, before, script = [], endsAt }) {
+  const h = st183Harness({ runtime, child, logLevel });
   try {
     await before?.(h);
     const handle = scheduleEntry(h, entry);
@@ -6603,13 +6603,13 @@ const LG_FORMAL_ROWS = [
     business: { terminal: "resolved", stage: NULL_HYPOTHESIS, parent: "malformed-json", canonical: "malformed-json", requests: 4 },
     selections: [undefined, "candidates-ended-unusable", "candidates-ended-unusable"], tiers: [undefined, false, false],
     usable: [false, false, false] },
-  { name: "an authentication failure in the Affinity stage", level: "warn", lostAll: true, clientError: true,
+  { name: "an authentication failure in the Affinity stage", level: "error", lostAll: true, clientError: true,
     spec: () => ({ endsAt: 300, script: [[300, (h) => completeCandidate(candidate(h, "affinity", "fast"),
       { providerDisposition: "provider-auth-error", providerOutcome: lgFailedOutcome("authentication") })]] }),
     business: { terminal: "client-error", parent: "not-run-provider-auth-error", canonical: undefined, requests: 2 },
     // The selector ends the stage on the candidate that failed, so that tier is the selected one.
     selections: [undefined, "client-error", undefined], tiers: [undefined, true, undefined], usable: [false, false, false] },
-  { name: "an open provider circuit: no stage runs", level: "warn", lostAll: true, clientError: true,
+  { name: "an open provider circuit: no stage runs", level: "error", lostAll: true, clientError: true,
     spec: (startsAt) => ({ endsAt: startsAt, runtime: { circuitOpen: true } }),
     business: { terminal: "client-error", parent: "provider-circuit-open", canonical: undefined, requests: 0 },
     selections: [undefined, undefined, undefined], tiers: [undefined, undefined, undefined], usable: [false, false, false] },
@@ -6678,10 +6678,9 @@ for (const entry of ["voice", "screen"]) for (const row of LG_FORMAL_ROWS) {
       expectEqual(summary.data.waitMs, h.metadata.taskRelationOrderedResolutionWaitMs, "wait");
       // The entry holds no dispatch claim: the same summary is made with four requests dispatched and with none.
       expectEqual(Object.keys(summary.data).filter((key) => /dispatch|request/i.test(key)), [], "no dispatch field");
-      // The rule, read off the row: a warning exactly when no stage was usable and the operation recorded a client
-      // error or lost at least one stage. Nothing else of the row grades it.
-      expectEqual(row.level === "warn", !row.usable.some(Boolean) && (Boolean(row.clientError) || pairs.some(lgLost)), "the level follows the rule");
-      expectEqual(row.lostAll, row.level === "warn" ? true : undefined, "row definition");
+      expectEqual(row.level, row.clientError ? "error" : !row.usable.some(Boolean) && pairs.some(lgLost) ? "warn" : "debug",
+        "client error blocks handoff; evidence-only degradation is warn");
+      expectEqual(row.lostAll, row.level === "warn" || row.level === "error" ? true : undefined, "row definition");
       if (row.notGraded) expectEqual([notGraded(row.notGraded).entry, row.level], ["debug", "debug"], "listed as not graded");
     } finally { h.restore(); }
   });
@@ -6768,10 +6767,10 @@ for (const [type, child, source] of LG_TYPE_ROWS) {
   });
 }
 
-// A client error is a warning for every question type as well. With an open provider circuit no stage runs and no
-// stage has a selection: the operation's own client error makes the warning, whichever stage carries the decision
+// A client error is an error for every question type. With an open provider circuit no stage runs and no
+// stage has a selection: the operation's own client error makes the error summary, whichever stage carries the decision
 // that is then never applied.
-test("LG1 formal Relation with an open provider circuit: one warn summary for every current question type and Child combination, with the null hypothesis and with the runtime matrix; the operation ends as a client error each time", { concurrency: false }, async () => {
+test("LG1 formal Relation with an open provider circuit: one error summary for every current question type and Child combination; the operation ends as a client error each time", { concurrency: false }, async () => {
   const stages = [];
   for (const [type, child] of LG_TYPE_ROWS) {
     const h = st183Harness({ child, runtime: { circuitOpen: true } });
@@ -6784,7 +6783,7 @@ test("LG1 formal Relation with an open provider circuit: one warn summary for ev
       expectEqual([wait.state, wait.value?.terminalDisposition, h.executions.length, h.metadata.taskRelationOrderedResolutionClientError],
         ["resolved", "client-error", 0, true], `the operation, ${name}`);
       const entries = lgCheckEntries(h, name);
-      expectEqual(lgLines(h), ["warn formal-operation-settled"], `entries, ${name}`);
+      expectEqual(lgLines(h), ["error formal-operation-settled"], `entries, ${name}`);
       expectEqual([entries[0].data.clientError, entries[0].data.stage, lgSummarySelections(entries[0]), lgSelections(handle), lgUsable(entries[0])],
         [true, h.metadata.taskRelationOrderedResolutionStage, [null, null, null], [null, null, null], [false, false, false]], `summary, ${name}`);
       stages.push(entries[0].data.stage);
@@ -6794,11 +6793,38 @@ test("LG1 formal Relation with an open provider circuit: one warn summary for ev
   expectEqual([...new Set(stages)].sort(), ["runtime-matrix", NULL_HYPOTHESIS].sort(), "resolution stages seen");
 });
 
-// The ledger says what the entry does not: a client error is a warning here, not an error.
-test("LG1 formal Relation client error: the ledger lists as a known limit that it is a warning although Voice then shows a configuration error", () => {
+test("LG1 formal Relation client error: the ledger lists error while retaining warn for evidence loss", () => {
   const row = ledgerRowOf({ source: "meeting.relation", event: "formal-operation-settled" });
-  expectEqual([row.levels, row.knownLimits.some((limit) => /client error is warn/.test(limit))], [["warn", "debug"], true], "ledger row");
+  expectEqual(row.levels, ["error", "warn", "debug"], "ledger row");
 });
+
+for (const entry of ["voice", "screen", "correction"]) for (const failureClass of ["authentication", "configuration"]) {
+  test(`LG1 approved client-error severity: ${entry} ${failureClass}, both failure stages and five thresholds`, { concurrency: false }, async () => {
+    for (const stage of ["affinity", "canonical"]) for (const logLevel of DIAGNOSTIC_LOG_SPY_LEVELS) {
+      const fail = h => completeCandidate(candidate(h, stage, "fast"), {
+        providerDisposition: failureClass === "authentication" ? "provider-auth-error" : "provider-error-content",
+        providerOutcome: lgFailedOutcome(failureClass),
+      });
+      const run = await runConsumerWait({ entry, logLevel, endsAt: stage === "affinity" ? 700 : 900,
+        script: stage === "affinity" ? [[700, fail]] : [[700, lgIntelligentAffinity(FAST_PARENT_INDEPENDENT)], [900, fail]],
+      });
+      try {
+        if (entry === "correction") {
+          expectEqual([run.wait.state, run.wait.value.correctionRelationTerminal?.disposition], ["resolved", "client-error"],
+            "Correction retains its original client-error exit");
+          assert.ok(run.wait.value.error, "the original Correction exception remains visible");
+          expectEqual(run.h.executions.length, stage === "affinity" ? 2 : 4, "unchanged request count");
+        } else expectWaitOutcome(run, entry, { terminal: "client-error", requests: stage === "affinity" ? 2 : 4 });
+        const summaries = lgCheckEntries(run.h, `${entry}/${failureClass}/${stage}/${logLevel}`)
+          .filter(row => row.event === "formal-operation-settled");
+        expectEqual(summaries.map(row => row.level), ["error"], "one ERROR at every threshold, no duplicate WARN");
+        expectEqual(summaries[0].data.operationAuthorized, true, "current operation");
+        expectEqual(summaries[0].data.clientError, true, "typed client error, not text matching");
+        if (stage === "canonical") expectEqual(summaries[0].data.parentUsable, true, "earlier valid Affinity does not downgrade a blocked handoff");
+      } finally { run.h.restore(); }
+    }
+  });
+}
 
 // ---- LG1 controls: stages cancelled or superseded while the operation itself stays authorized ----
 
@@ -7211,7 +7237,7 @@ test("LG1 control: an operation that is not a formal model operation is debug ev
     const entries = lgCheckEntries(h, "not a formal model operation");
     expectEqual(entries.map((entry) => [entry.level, entry.event, entry.data.clientError, entry.data.operationAuthorized, lgUsable(entry)]),
       [["debug", "formal-operation-settled", true, true, [false, false, false]],
-        ["warn", "formal-operation-settled", true, true, [false, false, false]]], "entries, in order");
+        ["error", "formal-operation-settled", true, true, [false, false, false]]], "entries, in order");
   } finally { h.restore(); }
 });
 

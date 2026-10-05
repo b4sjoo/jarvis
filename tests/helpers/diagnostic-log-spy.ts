@@ -278,9 +278,9 @@ export const RECORDING_STOP_REASONS = ["manual", "meeting-assistant-stopped", "s
 
 export const DIAGNOSTIC_LOG_LEDGER: readonly DiagnosticLogLedgerRow[] = [
   { file: HOOK, owner: "resolveOrderedTaskRelationWithinWindow", source: "meeting.relation", event: "formal-operation-settled",
-    levels: ["warn", "debug"], refs: ["traceId"],
+    levels: ["error", "warn", "debug"], refs: ["traceId"],
     factSource: "typed values of this operation alone: the Ordered operation's single metadata write (operation authorized, client error, each stage disposition compared with 'available') and its own handle (a formal model operation, and stageSelections: per stage the selector's reason and whether it selected a tier, written by that operation's stage settles before their terminals resolved); nothing is read from the trace",
-    knownLimits: ["a provider client error is warn, although Voice then shows a configuration error and hands nothing to the Advisor",
+    knownLimits: ["a current formal provider client error is error because Advisor handoff is blocked; this does not change the operation result",
       "whether a request was dispatched is not in the entry: it stays in the 178A provider-request-started events and the recorded candidate rows"],
     data: { sourceKind: ["voice", "screen", "mixed"], operationAuthorized: "boolean", clientError: "boolean",
       stage: ["runtime-matrix", "canonical-relation", "source-topology-null-hypothesis"], reason: "code",
