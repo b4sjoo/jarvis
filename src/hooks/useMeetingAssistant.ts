@@ -35992,12 +35992,21 @@ export function useMeetingAssistant() {
   const submitSpeechCorrection = useCallback(
     async (input: string) => {
       flushPendingSentenceCompletion("emergency-correction");
+      const correctionEventOrigin = {
+        runtimeSessionId: contextManagerRef.current.getState().sessionId,
+        runtimeEpoch: runtimeEpochRef.current,
+      };
       const parsedCorrection = parseEmergencySpeechCorrection(input);
       if (!parsedCorrection) {
         setState((previous) => ({
           ...previous,
           error: "Enter a short correction, for example: RAG not rec.",
         }));
+        emitRuntimeCriticalEvent({
+          ...correctionEventOrigin, purpose: "formal", fact: "terminal", stage: "manual-action-terminal",
+          terminal: { object: "manual-action", disposition: "rejected", reason: "invalid-term-correction" },
+          refs: { manualActionId: createMeetingId("term_action"), manualAction: "term-correction", sourceKind: "manual" },
+        });
         return;
       }
 
@@ -36092,6 +36101,15 @@ export function useMeetingAssistant() {
           term: parsedCorrection.term,
         }
       );
+      const correctionEventBase = {
+        ...correctionEventOrigin,
+        refs: {
+          manualActionId: parsedCorrection.id, manualAction: "term-correction", sourceKind: "manual",
+          traceId: trace.id, logicalQuestionUnitId: targetLogicalQuestionUnit?.id,
+          logicalQuestionRevision: targetLogicalQuestionUnit?.revision, taskId: contextState.activeMeetingTask?.id,
+        },
+      };
+      emitRuntimeCriticalEvent({ ...correctionEventBase, purpose: "formal", fact: "input-accepted", stage: "manual-action-accepted" });
 
       if (
         targetLogicalQuestionUnit &&
@@ -36121,6 +36139,10 @@ export function useMeetingAssistant() {
         );
         traceStoreRef.current.finishTrace(trace.id, "success");
         setState((previous) => ({ ...previous, error: null }));
+        emitRuntimeCriticalEvent({
+          ...correctionEventBase, purpose: "formal", fact: "terminal", stage: "current-question-overlay",
+          terminal: { object: "manual-action", disposition: "completed", reason: "already-applied" },
+        });
         return;
       }
 
@@ -36265,6 +36287,10 @@ export function useMeetingAssistant() {
           { correction: futureBias }
         );
         traceStoreRef.current.finishTrace(trace.id, "success");
+        emitRuntimeCriticalEvent({
+          ...correctionEventBase, purpose: "formal", fact: "terminal", stage: "future-speech-bias",
+          terminal: { object: "manual-action", disposition: "completed", reason: "future-rule-stored" },
+        });
         return;
       }
 
@@ -37410,9 +37436,18 @@ export function useMeetingAssistant() {
           contextState.activeMeetingTask?.id,
       });
       recordQuestionEvaluation(activeCorrection, repairTrace.id);
+      emitRuntimeCriticalEvent({
+        ...correctionEventBase, purpose: "formal", fact: "terminal", stage: activeCorrection.disposition,
+        refs: { ...correctionEventBase.refs, logicalQuestionUnitId: application.logicalQuestionUnit.id,
+          logicalQuestionRevision: application.logicalQuestionUnit.revision },
+        terminal: { object: "manual-action",
+          disposition: regenerationStatus === "succeeded" ? "completed" : regenerationStatus,
+          reason: authorization.authorized ? `regeneration-${regenerationStatus}` : authorization.reason },
+      });
     },
     [
       cancelActiveAdvisorJob,
+      emitRuntimeCriticalEvent,
       flushPendingSentenceCompletion,
       runAdvisor,
       settleAwaitingVisualEvidenceRecovery,
@@ -37423,10 +37458,22 @@ export function useMeetingAssistant() {
 
   const deactivateSpeechCorrection = useCallback(
     async (correctionId: string) => {
+      const deactivationEventOrigin = {
+        runtimeSessionId: contextManagerRef.current.getState().sessionId,
+        runtimeEpoch: runtimeEpochRef.current,
+        refs: { manualActionId: createMeetingId("term_deactivation"), manualAction: "stop-term-replacement", sourceKind: "manual" },
+      };
       const correction = speechCorrectionsRef.current.find(
         (candidate) => candidate.id === correctionId
       );
-      if (!correction || correction.deactivatedAt) return;
+      if (!correction || correction.deactivatedAt) {
+        emitRuntimeCriticalEvent({
+          ...deactivationEventOrigin, purpose: "formal", fact: "terminal", stage: "manual-action-terminal",
+          terminal: { object: "manual-action", disposition: "rejected",
+            reason: correction ? "correction-already-deactivated" : "correction-not-found" },
+        });
+        return;
+      }
 
       contextManagerRef.current.clearExpiredActiveMeetingTask();
       const contextState = contextManagerRef.current.getState();
@@ -37442,6 +37489,13 @@ export function useMeetingAssistant() {
         }
       );
       const deactivatedAt = Date.now();
+      const deactivationEventBase = {
+        ...deactivationEventOrigin,
+        refs: { ...deactivationEventOrigin.refs, traceId: trace.id,
+          logicalQuestionUnitId: currentLogicalQuestionUnit?.id,
+          logicalQuestionRevision: currentLogicalQuestionUnit?.revision, taskId: contextState.activeMeetingTask?.id },
+      };
+      emitRuntimeCriticalEvent({ ...deactivationEventBase, purpose: "formal", fact: "input-accepted", stage: "manual-action-accepted" });
       const reversal = currentLogicalQuestionUnit
         ? reverseActiveQuestionTermCorrection({
             correction,
@@ -37512,6 +37566,10 @@ export function useMeetingAssistant() {
           deactivationMetadata
         );
         traceStoreRef.current.finishTrace(trace.id, "success");
+        emitRuntimeCriticalEvent({
+          ...deactivationEventBase, purpose: "formal", fact: "terminal", stage: deactivatedCorrection.deactivationOutcome,
+          terminal: { object: "manual-action", disposition: "completed", reason: reversal.reason },
+        });
         return;
       }
 
@@ -37624,9 +37682,15 @@ export function useMeetingAssistant() {
         questionLineage: reversedLineage,
         logicalQuestionUnit: reversal.logicalQuestionUnit,
       });
+      emitRuntimeCriticalEvent({
+        ...deactivationEventBase, purpose: "formal", fact: "terminal", stage: deactivatedCorrection.deactivationOutcome,
+        refs: { ...deactivationEventBase.refs, logicalQuestionRevision: reversal.nextRevision },
+        terminal: { object: "manual-action", disposition: "completed", reason: reversal.reason },
+      });
     },
     [
       cancelActiveAdvisorJob,
+      emitRuntimeCriticalEvent,
       publishCanonicalLogicalQuestionTarget,
       scheduleAdvisorAfterQuestionTypeWindow,
       scheduleQuestionRuntime,

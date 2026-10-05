@@ -1152,6 +1152,15 @@ const AE_PRODUCER_TABLE = [
   "terminal:screen-operation @ captureScreenContext",
   "terminal:screen-operation @ captureScreenContext",
   "terminal:manual-action @ recordManualRuntimeAction",
+  "input-accepted @ submitSpeechCorrection",
+  "input-accepted @ deactivateSpeechCorrection",
+  "terminal:manual-action @ submitSpeechCorrection",
+  "terminal:manual-action @ submitSpeechCorrection",
+  "terminal:manual-action @ submitSpeechCorrection",
+  "terminal:manual-action @ submitSpeechCorrection",
+  "terminal:manual-action @ deactivateSpeechCorrection",
+  "terminal:manual-action @ deactivateSpeechCorrection",
+  "terminal:manual-action @ deactivateSpeechCorrection",
   "terminal:lifecycle-transition @ observeTaskRuntimeWriter",
 ];
 // Where the owner confirmation points call the shared Hook producers.
@@ -1185,6 +1194,29 @@ const AE_PRODUCER_CALL_SITES = [
 ];
 
 test("AE1 static gate: every emit call site is in the fact-to-producer table, with a literal fact and its own purpose", () => {
+  // A per-invocation const snapshot can provide identity through an object spread.
+  // Follow only local const object literals; arbitrary calls or mutable lookups do not qualify.
+  const identityProperty = (input, name, scope, seen = new Set()) => {
+    const direct = aeProperty(input, name, sourceFile);
+    if (direct) return direct;
+    for (const spread of input.properties.filter(ts.isSpreadAssignment)) {
+      if (!ts.isIdentifier(spread.expression) || seen.has(spread.expression.text)) continue;
+      const id = spread.expression.text;
+      seen.add(id);
+      let local;
+      const visit = node => {
+        if (ts.isVariableDeclaration(node) && node.name.getText(sourceFile) === id &&
+          ts.isVariableDeclarationList(node.parent) && (node.parent.flags & ts.NodeFlags.Const)) local = node;
+        ts.forEachChild(node, visit);
+      };
+      visit(scope);
+      if (local?.initializer && ts.isObjectLiteralExpression(local.initializer)) {
+        const found = identityProperty(local.initializer, name, scope, seen);
+        if (found) return found;
+      }
+    }
+    return undefined;
+  };
   const rows = aeCalls(sourceFile, [AE_EMIT]).map((call) => {
     const input = call.arguments[0];
     assert.ok(input && ts.isObjectLiteralExpression(input), "an emit takes one object literal");
@@ -1196,7 +1228,9 @@ test("AE1 static gate: every emit call site is in the fact-to-producer table, wi
     // takes the purpose from the schedule's own entry.
     assert.equal(purpose, path.startsWith("scheduleTaskRelationSplitRuntime")
       ? 'runtimeReleaseRequested ? "formal" : "observation"' : '"formal"', path);
-    assert.ok(aeProperty(input, "runtimeSessionId", sourceFile), `${path}: the fact names its own session`);
+    let scope = call.parent;
+    while (scope && !ts.isArrowFunction(scope) && !ts.isFunctionExpression(scope) && !ts.isFunctionDeclaration(scope)) scope = scope.parent;
+    assert.ok(identityProperty(input, "runtimeSessionId", scope), `${path}: the fact names its own session`);
     const terminal = aeProperty(input, "terminal", sourceFile)?.initializer;
     const object = terminal ? aeProperty(terminal, "object", sourceFile).initializer.text : undefined;
     assert.equal(fact.text === "terminal", Boolean(object), path);
