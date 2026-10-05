@@ -4751,20 +4751,21 @@ const ConfigurationsPanel = ({
 
             <div className="space-y-1.5 rounded-sm border border-border/60 p-2">
               <ConfigButtonGrid
-                label="Fact Risk Review"
+                label="Fact Guardrail & Review"
                 options={enforcementShadowModeOptions}
                 value={personalEvidenceGuardrailMode}
                 columns={2}
                 onChange={onPersonalEvidenceGuardrailModeChange}
               />
               <div className="text-[10px] text-muted-foreground">
-                Both modes send the review request for an eligible answer after
-                it is shown. Enforcement displays the risk notes with the
-                answer; Shadow only records them. The same mode also sets the
-                personal-fact guardrail, which can change the answer: in
-                Enforcement it can hold back streamed text and remove or
-                replace unsupported personal claims; in Shadow it leaves the
-                answer as generated and only records what it observed.
+                Both modes review eligible answers after display. Enforcement
+                shows risk notes; Shadow records them. The same mode controls
+                fact guardrails: for Behavioral and Project Deep Dive,
+                Enforcement buffers incomplete sentences and removes invalid
+                Supporting anchor IDs while retaining narrative text. For
+                personal logistics it may sanitize or replace unsupported
+                claims. Shadow leaves generated output unchanged. The review
+                itself never rewrites answers.
               </div>
             </div>
           </ConfigurationGroup>

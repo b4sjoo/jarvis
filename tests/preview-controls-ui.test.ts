@@ -341,7 +341,7 @@ function configurations(h: Harness) {
     assert.equal(switches.length, 1, "one switch in the Preview group");
     return switches[0]!;
   };
-  return { ...panel, groups, group, crossChecks, factRisk: () => panel.grid("Fact Risk Review") };
+  return { ...panel, groups, group, crossChecks, factRisk: () => panel.grid("Fact Guardrail & Review") };
 }
 function briefPanel(h: Harness) {
   const panel = renderPanel(h, "InterviewSessionBriefPanel");
@@ -363,10 +363,10 @@ function shown(h: Harness) {
 const CROSS_CHECKS_HELP = "Allows four extra record-only comparison runs: split Relation with Canonical, Whiteboard syntax repair, " +
   "Meeting Metadata against a company that is already set, and Semantic Type / Interviewer Intent. Formal Question Type, " +
   "Relation, answers and Fact Risk Review are not controlled by this switch. On adds model requests.";
-const FACT_RISK_HELP = "Both modes send the review request for an eligible answer after it is shown. Enforcement displays the " +
-  "risk notes with the answer; Shadow only records them. The same mode also sets the personal-fact guardrail, which can " +
-  "change the answer: in Enforcement it can hold back streamed text and remove or replace unsupported personal claims; " +
-  "in Shadow it leaves the answer as generated and only records what it observed.";
+const FACT_RISK_HELP = "Both modes review eligible answers after display. Enforcement shows risk notes; Shadow records them. " +
+  "The same mode controls fact guardrails: for Behavioral and Project Deep Dive, Enforcement buffers incomplete sentences " +
+  "and removes invalid Supporting anchor IDs while retaining narrative text. For personal logistics it may sanitize or " +
+  "replace unsupported claims. Shadow leaves generated output unchanged. The review itself never rewrites answers.";
 const METADATA_HELP = "Enforcement can set the company for this session from grounded opening evidence when none is set; " +
   "the Target company field above and the saved Brief are not edited. Shadow makes the same request and only records the " +
   "result. Neither mode changes a company that is already set. Saved as a Meeting setting; Clear does not reset it.";
@@ -392,7 +392,7 @@ test("PC1 Preview is a grouping with exactly two controls and no master switch",
   const buttons = c.of(h.globals.Button, preview.all);
   assert.equal(switches.length, 1);
   assert.equal(grids.length, 1);
-  assert.deepEqual(grids.map((node) => node.props.label), ["Fact Risk Review"]);
+  assert.deepEqual(grids.map((node) => node.props.label), ["Fact Guardrail & Review"]);
   assert.deepEqual(buttons.map((node) => text(node.children)), ["Enforcement", "Shadow"]);
   assert.deepEqual(c.of(h.globals.Button, nodes(grids[0]!.children)).length, 2, "both buttons belong to the selector");
   for (const other of ["select", "textarea", h.globals.MeetingModelOverrideConfig, h.globals.MeetingAudioSlider]) {
@@ -401,7 +401,7 @@ test("PC1 Preview is a grouping with exactly two controls and no master switch",
   assert.equal(preview.all.filter((node) => node.type === "input").length, 1, "the only input is the Cross-checks switch");
   const labels = preview.all.filter((node) => typeof node.props.className === "string" &&
     node.props.className.includes("uppercase")).map((node) => text(node.children));
-  assert.deepEqual(labels, ["Runtime Cross-checks", "Fact Risk Review"]);
+  assert.deepEqual(labels, ["Runtime Cross-checks", "Fact Guardrail & Review"]);
   assert.doesNotMatch(preview.text, /\bOff\b|Preview mode|Enable Preview/);
   assert.deepEqual(h.writes, [], "rendering writes nothing");
   assert.deepEqual(h.actions, []);
@@ -475,7 +475,7 @@ test("PC1 the Rescue entry and the two old switch rows are gone from Configurati
   // No Meeting Metadata control is left in Configurations.
   assert.equal(c.of(h.globals.ConfigButtonGrid).some((node) => node.props.label === "Meeting Metadata"), false);
   // "Log Level" is the selector Task 178 LG added to the Debug group.
-  assert.deepEqual(c.of(h.globals.ConfigButtonGrid).map((node) => node.props.label), ["Length", "Language", "Fact Risk Review", "Log Level"]);
+  assert.deepEqual(c.of(h.globals.ConfigButtonGrid).map((node) => node.props.label), ["Length", "Language", "Fact Guardrail & Review", "Log Level"]);
   const context = c.group("Context");
   const models = c.of(h.globals.MeetingModelOverrideConfig, context.all);
   assert.deepEqual(models.map((node) => node.props.label), ["Fast Runtime model"]);
@@ -691,7 +691,7 @@ test("PC1 labels and help text say what each control governs and promise no stop
   const preview = configurations(h).group("Preview");
   const lines = (all: Rendered[]) => all.filter((node) => node.type === "div" && node.children.every((child) => typeof child === "string"))
     .map((node) => text(node.children));
-  assert.deepEqual(lines(preview.all), ["Runtime Cross-checks", CROSS_CHECKS_HELP, "Fact Risk Review", FACT_RISK_HELP]);
+  assert.deepEqual(lines(preview.all), ["Runtime Cross-checks", CROSS_CHECKS_HELP, "Fact Guardrail & Review", FACT_RISK_HELP]);
   const b = briefPanel(h);
   const metadataRow = b.all.find((node) => node.type === "div" && node.children.some((child) =>
     typeof child !== "string" && child.type === h.globals.ConfigButtonGrid && child.props.label === "Meeting Metadata"));
@@ -701,11 +701,13 @@ test("PC1 labels and help text say what each control governs and promise no stop
   for (const help of [FACT_RISK_HELP, METADATA_HELP]) {
     assert.doesNotMatch(help, /no request|stops? (the |its )?request|does not (send|request)|turns? off|disabled?/i);
   }
-  assert.match(FACT_RISK_HELP, /Both modes send the review request/);
+  assert.match(FACT_RISK_HELP, /Both modes review eligible answers after display/);
   // The mode is named for more than the review: Enforcement can change the visible answer, Shadow does not.
-  assert.match(FACT_RISK_HELP, /also sets the personal-fact guardrail, which can change the answer/);
-  assert.match(FACT_RISK_HELP, /in Enforcement it can hold back streamed text and remove or replace unsupported personal claims/);
-  assert.match(FACT_RISK_HELP, /in Shadow it leaves the answer as generated and only records what it observed/);
+  assert.match(FACT_RISK_HELP, /same mode controls fact guardrails/);
+  assert.match(FACT_RISK_HELP, /removes invalid Supporting anchor IDs while retaining narrative text/);
+  assert.match(FACT_RISK_HELP, /For personal logistics it may sanitize or replace unsupported claims/);
+  assert.match(FACT_RISK_HELP, /Shadow leaves generated output unchanged/);
+  assert.match(FACT_RISK_HELP, /review itself never rewrites answers/);
   assert.match(METADATA_HELP, /Shadow makes the same request/);
   // The selector sits under the Brief's Target company input and says that it does not fill that input.
   assert.match(METADATA_HELP, /^Enforcement can set the company for this session from grounded opening evidence when none is set;/);
@@ -759,6 +761,8 @@ test("PC1 the Fact Risk Review help is true of the mode the selector writes: Enf
   assert.equal(enforcedStory.streamed.visibleContent, "Answer: We improved latency by 40%.", "the unfinished sentence is held");
   assert.equal(enforcedStory.committed.commitSource, "sanitized-model-output");
   assert.doesNotMatch(enforcedStory.committed.effectiveContent, /mem_old_project/);
+  assert.match(enforcedStory.committed.effectiveContent, /We improved latency by 40%\./,
+    "the shared mode removes an invalid citation but retains ordinary Behavioral narrative");
 
   // The user picks Shadow in the rendered selector.
   configurations(h).factRisk().click("Shadow");
@@ -921,7 +925,7 @@ test("PC7 the Cross-checks switch in the panel keeps a reusable Artifact matched
 
 test("PC7 the product settings behind the other two controls still invalidate a reusable Artifact", () => {
   const changes: Array<[string, (h: ReturnType<typeof reuseHarness>) => void]> = [
-    ["Fact Risk Review", (h) => configurations(h).factRisk().click("Shadow")],
+    ["Fact Guardrail & Review", (h) => configurations(h).factRisk().click("Shadow")],
     ["Meeting Metadata", (h) => briefPanel(h).metadata().click("Enforcement")],
     ["Debug Mode", (h) => {
       const debug = configurations(h).of(h.globals.Switch, configurations(h).group("Debug").all)

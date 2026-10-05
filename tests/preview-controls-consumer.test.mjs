@@ -218,7 +218,7 @@ const shown = page => page.evaluate(({ SETTINGS, BRIEF }) => {
     previewSwitches: preview ? [...preview.querySelectorAll('button[role="switch"]')].map(element => ({ checked: element.getAttribute('aria-checked'), disabled: element.disabled })) : [],
     previewButtons: preview ? [...preview.querySelectorAll('button:not([role="switch"])')].map(button => button.textContent.trim()) : [],
     previewOtherControls: preview ? preview.querySelectorAll('select,input,textarea').length : -1,
-    factRisk: selector(preview, 'Fact Risk Review'),
+    factRisk: selector(preview, 'Fact Guardrail & Review'),
     metadataInConfigurations: selector(configurations, 'Meeting Metadata').count,
     metadata: selector(brief, 'Meeting Metadata'),
     offNotes: [...brief.querySelectorAll('div')].map(own).filter(text => text.startsWith('Stored mode is Off')),
@@ -431,7 +431,7 @@ test('PC1 and PC7: Preview controls and the Meeting Metadata selector with the r
     });
 
     await scenario('PC1 Fact Risk Review writes exactly the existing guardrail mode, adds no key and reads back after a reload', {}, async (page, host) => {
-      const shadow = await act(page, () => option(page, '#configurations', 'Fact Risk Review', 'Shadow').click());
+      const shadow = await act(page, () => option(page, '#configurations', 'Fact Guardrail & Review', 'Shadow').click());
       assert.deepEqual(shadow, { moved: ['settings.personalEvidenceGuardrailMode: "enforcement" -> "shadow"'], nativeCalls: 0, requests: 0 });
       let view = await shown(page);
       assert.deepEqual(view.factRisk.selected, ['Shadow']);
@@ -440,7 +440,7 @@ test('PC1 and PC7: Preview controls and the Meeting Metadata selector with the r
       view = await shown(page);
       assert.deepEqual(view.factRisk.selected, ['Shadow']);
       assert.equal(view.settings.personalEvidenceGuardrailMode, 'shadow');
-      const enforcement = await act(page, () => option(page, '#configurations', 'Fact Risk Review', 'Enforcement').click());
+      const enforcement = await act(page, () => option(page, '#configurations', 'Fact Guardrail & Review', 'Enforcement').click());
       assert.deepEqual(enforcement.moved, ['settings.personalEvidenceGuardrailMode: "shadow" -> "enforcement"']);
       view = await shown(page);
       assert.deepEqual(view.factRisk.selected, ['Enforcement']);
@@ -519,7 +519,7 @@ test('PC1 and PC7: Preview controls and the Meeting Metadata selector with the r
 
       // Unrelated saves, one of them to the same owner object from the other panel.
       await act(page, () => crossChecksSwitch(page).click());
-      await act(page, () => option(page, '#configurations', 'Fact Risk Review', 'Shadow').click());
+      await act(page, () => option(page, '#configurations', 'Fact Guardrail & Review', 'Shadow').click());
       const models = page.locator('#configurations select');
       assert.equal(await models.count(), 2, 'the coding and Fast Runtime model selectors');
       const cleared = await act(page, () => models.nth(1).selectOption(''));
