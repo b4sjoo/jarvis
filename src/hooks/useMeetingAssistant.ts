@@ -37507,7 +37507,7 @@ export function useMeetingAssistant() {
             reversed: false as const,
             reason: "correction-not-applied-to-current-lqu" as const,
           };
-      const deactivatedCorrection: SpeechCorrection = {
+      const deactivatedCorrection = {
         ...correction,
         deactivatedAt,
         deactivationTraceId: trace.id,
@@ -37517,7 +37517,7 @@ export function useMeetingAssistant() {
         reversalLogicalQuestionUnitRevision: reversal.reversed
           ? reversal.nextRevision
           : undefined,
-      };
+      } satisfies SpeechCorrection;
       const nextCorrections = speechCorrectionsRef.current.map((candidate) =>
         candidate.id === correction.id ? deactivatedCorrection : candidate
       );
