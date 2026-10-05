@@ -4237,11 +4237,11 @@ export function useMeetingAssistant() {
       const next = result.projections;
       humanEvaluationProjectionsV2Ref.current = next;
       setHumanEvaluationProjectionsV2(next);
-      void humanEvaluationStore.saveObservation(result.projection).catch((error) => {
-        // Task 178 LG, M7. The error is the local evaluation store's.
+      void humanEvaluationStore.saveObservation(result.projection).catch(() => {
+        // Store initialization can parse legacy personal data; its error may quote that data.
         logDiagnostic("warn", "meeting.evaluation", "observed-projection-persist-failed", () => ({
           refs: { traceId: trace.id },
-          data: { projectionId: result.projection?.projectionId, cause: diagnosticLogCause(error) },
+          data: { projectionId: result.projection?.projectionId, cause: "evaluation-store-operation-failed" },
         }));
       });
       sessionRecordingManagerRef.current?.recordHumanEvaluationProjectionV2(
@@ -9551,10 +9551,10 @@ export function useMeetingAssistant() {
             save.error = `Evaluation not saved: ${String(error)}`;
             // Task 178 LG, M7. Error: the user's evaluation was not saved. The
             // whole reason stays in the persistence state the panel shows; the
-            // entry carries the bounded summary of the store's error as its cause.
+            // log uses a code because legacy import errors may quote personal data.
             logDiagnostic("error", "meeting.evaluation", "persistence-failed", () => ({
               refs: { runtimeSessionId: sessionId },
-              data: { eventId: event.eventId, cause: diagnosticLogCause(error) },
+              data: { eventId: event.eventId, cause: "evaluation-store-operation-failed" },
             }));
           } finally {
             save.running = false;

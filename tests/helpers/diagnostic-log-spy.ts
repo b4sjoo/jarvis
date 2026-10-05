@@ -196,6 +196,8 @@ export interface DiagnosticLogMigration {
 export interface DiagnosticLogCaughtError {
   // Whether the entry carries the bounded field `cause`, made from the caught value inside the lazy detail.
   cause: boolean;
+  // A fixed code when this catch can also receive errors that quote personal data.
+  safeCode?: string;
   // With a cause: what the caught error comes from, a native command or local persistence. Without one: why not.
   from: string;
   // The calls the catch guards, as its try block or its promise chain writes them (compared without whitespace).
@@ -468,9 +470,9 @@ export const DIAGNOSTIC_LOG_LEDGER: readonly DiagnosticLogLedgerRow[] = [
     migration: { id: "M6", test: MIGRATION_TEST, oldOutput: "console.info('[raw-zero-input]', JSON of the observation)",
       removedText: ["[raw-zero-input]"], levelBy: "the stage", kept: ["sessionRecordingManagerRef.current?.recordCaptureLifecycle(observation)"] } },
   { file: HOOK, owner: "commitHumanGroundTruthV2", source: "meeting.evaluation", event: "persistence-failed", levels: ["error"], refs: ["runtimeSessionId"],
-    factSource: "the catch of the evaluation commit: the evaluation was not saved", data: { eventId: "identifier", cause: "bounded-text" },
-    knownLimits: [CAUSE_LIMIT],
-    caught: { cause: true, from: "the local evaluation store (SQLite, through its native commands)", guards: ["humanEvaluationStore.commit(event, frozenObserved)"] },
+    factSource: "the catch of the evaluation commit: the evaluation was not saved", data: { eventId: "identifier", cause: ["evaluation-store-operation-failed"] },
+    knownLimits: ["the shared catch can receive legacy JSON errors quoting personal data; only a fixed code is logged, while the UI retains its original error"],
+    caught: { cause: true, safeCode: "evaluation-store-operation-failed", from: "the local evaluation store, including legacy JSON import and native SQLite", guards: ["humanEvaluationStore.commit(event, frozenObserved)"] },
     migration: { id: "M7", test: EVALUATION_TEST, oldOutput: "console.error('Evaluation persistence failed', { eventId, sessionId, error text })",
       removedText: ["Evaluation persistence failed"], kept: ["humanEvaluationStore.commit(event, frozenObserved)", "save.error and the persistence state of the panel"] } },
   { file: HOOK, owner: "commitHumanGroundTruthV2", source: "meeting.evaluation", event: "recording-closed-before-mirror", levels: ["warn"],
@@ -481,9 +483,9 @@ export const DIAGNOSTIC_LOG_LEDGER: readonly DiagnosticLogLedgerRow[] = [
       removedText: ["recording closed before mirror"], kept: ["humanEvaluationStore.commit(event, frozenObserved)", "no recorder call: the mirror is skipped as before"] } },
   { file: HOOK, owner: "refreshHumanEvaluationObservedProjectionForTrace", source: "meeting.evaluation", event: "observed-projection-persist-failed",
     levels: ["warn"], refs: ["traceId"], factSource: "the rejection branch of the observed projection save",
-    data: { projectionId: "identifier", cause: "bounded-text" },
-    knownLimits: [CAUSE_LIMIT],
-    caught: { cause: true, from: "the local evaluation store (SQLite, through its native commands)", guards: ["humanEvaluationStore.saveObservation(result.projection)"] },
+    data: { projectionId: "identifier", cause: ["evaluation-store-operation-failed"] },
+    knownLimits: ["legacy import errors can quote personal data; the shared catch logs a fixed code, not raw error text"],
+    caught: { cause: true, safeCode: "evaluation-store-operation-failed", from: "the local evaluation store, including legacy JSON import and native SQLite", guards: ["humanEvaluationStore.saveObservation(result.projection)"] },
     migration: { id: "M7", test: MIGRATION_TEST, oldOutput: "console.warn('Evaluation observed projection persistence failed', { projectionId, error text })",
       removedText: ["Evaluation observed projection persistence failed"],
       kept: ["humanEvaluationStore.saveObservation(result.projection)", "sessionRecordingManagerRef.current?.recordHumanEvaluationProjectionV2(result.projection)"] } },

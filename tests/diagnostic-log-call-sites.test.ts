@@ -249,14 +249,17 @@ test("LG the not-graded list names each case once and says what the log holds fo
   }
   // Known limits are stated on the rows they belong to.
   const limits = Object.fromEntries(DIAGNOSTIC_LOG_LEDGER.filter((row) => row.knownLimits).map((row) => [`${row.source} ${row.event}`, row.knownLimits!.length]));
-  // Decisions A8: nineteen catches of a native command or of local persistence carry the cause and state its limit; the two
-  // queued-segment catches carry none and state why (tests/diagnostic-log-migration.test.ts proves which and why).
+  // Seventeen source-reviewed catches retain bounded text; two evaluation catches use fixed codes.
+  // The two queued-segment catches carry no cause (the migration test proves the actual boundaries).
   const causeLimits = Object.fromEntries(DIAGNOSTIC_LOG_LEDGER.filter((row) => row.knownLimits?.includes(CAUSE_LIMIT)).map((row) => [`${row.source} ${row.event}`, 1]));
   const noCause = Object.fromEntries(DIAGNOSTIC_LOG_LEDGER.filter((row) => row.knownLimits?.includes(NO_CAUSE_ON_PROVIDER_PATH)).map((row) => [`${row.source} ${row.event}`, 1]));
-  assert.deepEqual([Object.keys(causeLimits).length, Object.keys(noCause).sort()], [19, ["meeting.audio-queue microphone-segment-failed", "meeting.audio-queue system-segment-failed"]]);
+  assert.deepEqual([Object.keys(causeLimits).length, Object.keys(noCause).sort()], [17, ["meeting.audio-queue microphone-segment-failed", "meeting.audio-queue system-segment-failed"]]);
+  assert.deepEqual(DIAGNOSTIC_LOG_LEDGER.filter(row => row.caught?.safeCode).map(row => `${row.source} ${row.event}`).sort(),
+    ["meeting.evaluation observed-projection-persist-failed", "meeting.evaluation persistence-failed"]);
   assert.deepEqual(limits, { "meeting.relation formal-operation-settled": 2, "meeting.question-type foreground-deadline-finalized": 1,
     "meeting.trace store-event": 2, "meeting.native-audio lifecycle-event": 1, "meeting.raw-zero-input probe-observed": 4,
     "meeting.manual-action type-correction-recorded": 1, ...causeLimits, ...noCause,
+    "meeting.evaluation observed-projection-persist-failed": 1, "meeting.evaluation persistence-failed": 1,
     // A second limit of their own: the retry that a changed payload supersedes, the refresh that repeats, and the step of the close.
     "meeting.trace-metrics persist-failed": 2, "meeting.stt-evaluation-capture refresh-failed": 2, "meeting.recording close-failed": 2 });
   assert.match(CAUSE_LIMIT, /cut at 160 UTF-16 code units/);

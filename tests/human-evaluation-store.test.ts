@@ -134,6 +134,41 @@ function commitHarness(level: (typeof DIAGNOSTIC_LOG_SPY_LEVELS)[number], delive
   return { diagnosticLog, native, recorder, options, control, writes, panel, env, commitOnce, recorded };
 }
 
+test("LG4 real legacy import errors can quote personal text; both real evaluation catches log only a safe code", async () => {
+  const h = commitHarness("trace");
+  const env = storeEnvironment();
+  const store = production(storeFile, "createHumanEvaluationStore", env)({
+    initialize: async () => {},
+    invoke: async () => null,
+    readLegacy: () => "Cedar private account note",
+  });
+  let parseError: unknown;
+  try { await store.initialize(); } catch (error) { parseError = error; }
+  assert.ok(String(parseError).includes("Cedar"), "the real JSON parser echoes the synthetic source");
+  const oldBoundary = createDiagnosticLogSpy({ threshold: "trace" });
+  oldBoundary.logDiagnostic("error", "meeting.evaluation", "persistence-failed", () => ({
+    data: { cause: oldBoundary.logger.diagnosticLogCause(parseError) },
+  }));
+  assert.ok(JSON.stringify(oldBoundary.entries()).includes("Cedar"), "truncation and secret-shape filtering do not remove ordinary personal prose");
+
+  h.env.humanEvaluationStore = store;
+  h.commitOnce();
+  for (let i = 0; i < 20 && h.panel.persistence.error === null; i++) await new Promise(resolve => setTimeout(resolve, 0));
+  assert.match(h.panel.persistence.error, /Cedar/, "original UI error and save failure are retained");
+  const projection = truth.deriveHumanEvaluationProjectionV2({ sessionId: "session-a", subject: turn, events: [] });
+  h.env.materializeHumanEvaluationAttemptProjectionV2 = () => ({ changed: true, projection, projections: [projection] });
+  const refresh = production("src/hooks/useMeetingAssistant.ts", "refreshHumanEvaluationObservedProjectionForTrace", h.env);
+  refresh({ id: "trace-a" }, []);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const entries = h.diagnosticLog.entries();
+  assert.deepEqual(entries.map(entry => [entry.event, entry.data?.cause]), [
+    ["persistence-failed", "evaluation-store-operation-failed"],
+    ["observed-projection-persist-failed", "evaluation-store-operation-failed"],
+  ]);
+  assert.equal(JSON.stringify(entries).includes("Cedar"), false);
+  assert.equal(h.env.humanGroundTruthEventsV2Ref.current.length, 0, "failed save is not published");
+});
+
 // The first commit fails while its recording is active. The retry succeeds after that recording has stopped and
 // another has started.
 async function hookCommitThenRetryAfterStop(level: (typeof DIAGNOSTIC_LOG_SPY_LEVELS)[number] = "trace", delivery?: DiagnosticLogSpyDelivery) {
@@ -202,9 +237,8 @@ test("LG7 evaluation commit: a save that fails is one error entry with its cause
     assert.equal(entry.refs!.runtimeSessionId, "session-a", "the runtime session the evaluation was made in");
   }
   assert.match(reference.entries[1]!.refs!.recordingSessionId!, /^session_recording_/);
-  // LG4 and A8: the failure text went to the panel state, as before; the entry has its bounded summary as the cause,
-  // and the path it names is in no other part of any entry.
-  assert.equal(reference.entries[0]!.data!.cause, `Error: ${STORE_FAILURE}`);
+  // LG4: the panel keeps its original error, but this shared store catch can also receive legacy JSON text.
+  assert.equal(reference.entries[0]!.data!.cause, "evaluation-store-operation-failed");
   assertPlantedOnlyInCause(reference.entries, "evaluation commit");
   assert.equal(JSON.stringify(reference.entries[1]).includes("fixture disk failure"), false);
   for (const level of DIAGNOSTIC_LOG_SPY_LEVELS) {
@@ -225,7 +259,7 @@ test("LG7 evaluation commit: a save that fails is one error entry with its cause
   const failedWithoutRecording = await hookCommitOnce("none", true);
   assert.deepEqual(failedWithoutRecording.entries.map(entry => [entry.level, `${entry.source} ${entry.event}`, entry.refs, entry.data]),
     [["error", "meeting.evaluation persistence-failed", { runtimeSessionId: "session-a" },
-      { eventId: failedWithoutRecording.eventId, cause: `Error: ${STORE_FAILURE}` }]]);
+      { eventId: failedWithoutRecording.eventId, cause: "evaluation-store-operation-failed" }]]);
   for (const entry of failedWithoutRecording.entries) assertEntryInLedger(entry);
   assert.match(failedWithoutRecording.observed.error, /^Evaluation not saved: Error: fixture disk failure/);
   assert.deepEqual([failedWithoutRecording.observed.events, failedWithoutRecording.observed.retryKept, failedWithoutRecording.observed.recorded], [0, 1, []]);

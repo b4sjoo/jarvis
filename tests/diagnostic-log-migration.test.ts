@@ -668,7 +668,7 @@ const observedProjection: Scenario = {
     await settle();
   },
   entries: [["warn", "meeting.evaluation observed-projection-persist-failed", { traceId: "voice_trace_7" },
-    { projectionId: "human_projection_v2_1a2b3c", cause: causeOfError(NATIVE_PATH_ERROR) }]],
+    { projectionId: "human_projection_v2_1a2b3c", cause: "evaluation-store-operation-failed" }]],
   sequence: [],
 };
 
@@ -1253,6 +1253,15 @@ test("LG7 and A8 the catches that no longer print the error they caught: each on
     assert.ok(row.caught.guards.length > 0, tag(row));
     for (const text of row.caught.guards) assert.ok(guarded.includes(compact(text)), `${tag(row)} guards ${text}`);
     if (row.caught.cause) {
+      if (row.caught.safeCode) {
+        assert.deepEqual(causeProperties(call), [JSON.stringify(row.caught.safeCode)], tag(row));
+        assert.deepEqual(row.data.cause, [row.caught.safeCode], tag(row));
+        assert.equal(collect(call, (node): node is ts.Identifier => ts.isIdentifier(node) &&
+          node.text === handler!.binding).length, 0, `${tag(row)} does not read the caught value`);
+        assert.deepEqual(providerPathOf(handler!.guard), [], tag(row));
+        withCause.push(tag(row));
+        continue;
+      }
       // The catch binds the error, and its one use inside the logger call is `cause: diagnosticLogCause(<error>)`, in
       // the function given as the detail: nothing is summarised for an entry that is filtered.
       assert.ok(handler!.binding, `${tag(row)} binds the error`);
@@ -1288,10 +1297,12 @@ test("LG7 and A8 the catches that no longer print the error they caught: each on
     "meeting.trace-metrics persist-failed"]);
   // The ledger rows with a caught error are these twenty-one, and no other row has a bounded text.
   assert.deepEqual(DIAGNOSTIC_LOG_LEDGER.filter((row) => row.caught).map(tag).sort(), [...withCause, ...withoutCause].sort());
-  assert.deepEqual(DIAGNOSTIC_LOG_LEDGER.filter((row) => Object.values(row.data).includes("bounded-text")).map(tag).sort(), withCause);
-  // The summary function is named in the Hook by its import and by those nineteen calls, and by no other source file
+  const rawCauseSites = DIAGNOSTIC_LOG_LEDGER.filter(row => row.caught?.cause && !row.caught.safeCode).map(tag).sort();
+  assert.deepEqual(DIAGNOSTIC_LOG_LEDGER.filter((row) => Object.values(row.data).includes("bounded-text")).map(tag).sort(), rawCauseSites);
+  assert.equal(rawCauseSites.length, 17);
+  // The summary function is named in the Hook by its import and those seventeen source-reviewed calls, and by no other source file
   // but the leaf that declares it: the trace store and the provider layer never summarise an error for the log.
-  assert.equal(collect(hook, (node): node is ts.Identifier => ts.isIdentifier(node) && node.text === "diagnosticLogCause").length, withCause.length + 1);
+  assert.equal(collect(hook, (node): node is ts.Identifier => ts.isIdentifier(node) && node.text === "diagnosticLogCause").length, rawCauseSites.length + 1);
   assert.deepEqual(srcFiles.filter((file) => file.startsWith("src/") && sourceOf(file).includes("diagnosticLogCause")).sort(),
     [HOOK, "src/lib/meeting/diagnostic-log.ts"]);
   // The two that rethrow do so under Quit, where the shutdown owner receives the error; the recording close rethrows
