@@ -197,7 +197,6 @@
       "write_diagnostic_log",
       "write_meeting_session_recording_base64",
       "write_meeting_session_recording_text",
-      "write_meeting_trace_log",
       "write_meeting_trace_metrics",
       "write_preparation_trace_log"
     ],
@@ -254,7 +253,6 @@
       "update_shortcuts",
       "validate_shortcut_key",
       "write_diagnostic_log",
-      "write_meeting_trace_log",
       "write_meeting_trace_metrics",
       "write_preparation_trace_log"
     ],

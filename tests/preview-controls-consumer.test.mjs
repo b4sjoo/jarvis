@@ -121,7 +121,7 @@ function installBoundaries() {
       // Tasks 145/183 NDI: a scenario may answer the diagnostics command itself. Otherwise it answers null, as before.
       if (name === 'set_native_stall_diagnostics' && pc.nativeStallDiagnostics) return pc.nativeStallDiagnostics(args);
       if (['preparation_extraction_initialize', 'memory_content_initialize', 'set_native_stall_diagnostics', 'read_meeting_trace_metrics',
-        'write_meeting_trace_metrics', 'write_meeting_trace_log', 'write_meeting_session_recording_text'].includes(name)) return null;
+        'write_meeting_trace_metrics', 'write_meeting_session_recording_text'].includes(name)) return null;
       // Tasks 145/183 NDI: a scenario may give each recording its own folder path. Otherwise one path, as before.
       if (name === 'start_meeting_session_recording') return pc.recordingFolderPath ? pc.recordingFolderPath(args) : '/pc-c3-recording';
       if (name === 'write_meeting_session_recording_base64') return `/pc-c3-recording/${args.relativePath}`;
@@ -369,7 +369,11 @@ const logLevel = page => page.evaluate(SETTINGS => {
     setting: window.__pc.meeting.settings.diagnosticLogLevel,
     debugMode: window.__pc.meeting.settings.debugMode,
     stored: localStorage.getItem(SETTINGS),
-    commands: window.__pc.calls.filter(call => call.name === 'write_diagnostic_log').map(call => call.args),
+    // The applies: the calls with an empty batch. Since commit 3 the command also carries the entries of the migrated
+    // call sites; they are listed on their own, each with the level of its call.
+    commands: window.__pc.calls.filter(call => call.name === 'write_diagnostic_log' && (call.args.entries ?? []).length === 0).map(call => call.args),
+    entries: window.__pc.calls.filter(call => call.name === 'write_diagnostic_log').flatMap(call => (call.args.entries ?? [])
+      .map(entry => [call.args.level, entry.level, entry.source, entry.event, entry.data ?? null])),
     held: (window.__pc.diagnosticLogHeld ?? []).map(request => request.args),
     renders: (window.__pc.diagnosticLogRenders ?? []).slice(),
     requests: window.__pc.requests.length,
@@ -876,11 +880,13 @@ test('PC1 and PC7: Preview controls and the Meeting Metadata selector with the r
     // Task 178 LG: LG1, LG7 and the LG UI, through real clicks on the Log Level selector.
     await scenario('LG1, LG7 and LG UI: a real click on a level is saved at once and shown as requested, then applied or failed from the native reply; a reload applies it again', {}, async (page, host) => {
       const HELP = 'Sets the threshold of the diagnostic log: entries at this level and every more severe level go to the terminal and to ' +
-        'local log files, which keep at most 50 MiB or 14 days. The log currently holds native system-audio command errors and one ' +
-        'summary for each Relation wait, Voice Type deadline, failed or abandoned Advisor answer, Fact Risk Review, Meeting Metadata ' +
-        'inference and Whiteboard check. Screen answers are not logged yet. Saved separately from Debug Mode. Log Level does not control ' +
-        'Debug Mode trace printing, Preparation, the focus window, native prints, Session Recording or Native Stall Diagnostics files, ' +
-        'and starts no model request, sampler or capture.';
+        'local log files, which keep at most 50 MiB or 14 days. Errors and warnings cover failed Voice answers, capture, ' +
+        'recording and saving failures and lost model results. Info adds capture start and stop, manual corrections and Brief ' +
+        'updates. Debug and Trace add operation summaries and every trace and step change. No entry holds transcript, prompt or ' +
+        'answer text. Debug Mode alone no longer prints trace lines: they are Debug and Trace entries of this log. Saved ' +
+        'separately from Debug Mode. Log Level does not control Preparation, the focus window, shutdown messages, other console ' +
+        'and native prints, Session Recording or Native Stall Diagnostics files, and starts no model request, sampler or ' +
+        'capture.';
       const pending = level => `Status: ${level} requested, waiting for the native reply. Not yet confirmed on native.`;
       const applied = (level, sink = 'ready') => `Status: native applied ${level}. Log sink at that time: ${sink}.`;
       const failed = (level, message) => `Status: native did not confirm ${level}. Select ${level} again to retry. Reason: ${message}`;
@@ -890,11 +896,15 @@ test('PC1 and PC7: Preview controls and the Meeting Metadata selector with the r
       const phase = name => page.waitForFunction(name => window.__pc.meeting.diagnosticLogLevelStatus.phase === name, name, { timeout: 15000 });
       const heldCalls = count => page.waitForFunction(count => window.__pc.diagnosticLogHeld.length === count, count, { timeout: 15000 });
       const answer = (kind, value) => page.evaluate(([kind, value]) => window.__pc.diagnosticLogHeld.shift()[kind](value), [kind, value]);
-      // From here native answers only when the test says so, and every projection the Hook returns is listed.
+      // From here native answers an apply only when the test says so, and every projection the Hook returns is listed.
+      // A call that carries entries is answered at once, as before: this scenario is about the apply.
       const hold = () => page.evaluate(() => {
         const pc = window.__pc;
         pc.diagnosticLogHeld = [];
-        pc.diagnosticLog = args => new Promise((resolve, reject) => pc.diagnosticLogHeld.push({ args, resolve, reject }));
+        pc.diagnosticLog = args => (args.entries ?? []).length > 0
+          ? { v: 1, appliedLevel: args.level, accepted: args.entries.length, filtered: 0, rejected: 0, dropped: 0,
+            sink: { state: 'ready', droppedTotal: 0, writeFailures: 0, unsavedAtExit: 0 } }
+          : new Promise((resolve, reject) => pc.diagnosticLogHeld.push({ args, resolve, reject }));
         pc.diagnosticLogRenders = [];
         let meeting = pc.meeting;
         Object.defineProperty(pc, 'meeting', { configurable: true, get: () => meeting, set: value => {
@@ -915,6 +925,14 @@ test('PC1 and PC7: Preview controls and the Meeting Metadata selector with the r
       assert.deepEqual([view.status, view.red, view.controls], [[applied('info')], [false], 0]);
       assert.deepEqual(view.exported, { phase: 'applied', level: 'info', appliedLevel: 'info', sinkState: 'ready' });
       assert.deepEqual(view.commands, [apply('info')], 'one apply at mount: the level and an empty batch');
+      // LG7: the one entry of this mount. This host answers the trace metrics read with null, which the Hook cannot
+      // read. That used to be a console warning and is now a warn entry, with the bounded summary of the error the
+      // Hook caught as its cause (decisions A8).
+      const logged = count => page.waitForFunction(count => window.__pc.calls.filter(call => call.name === 'write_diagnostic_log')
+        .reduce((sum, call) => sum + (call.args.entries ?? []).length, 0) === count, count, { timeout: 15000 });
+      const AT_MOUNT = ['info', 'warn', 'meeting.trace-metrics', 'load-failed', { cause: "TypeError: Cannot read properties of null (reading 'trim')" }];
+      await logged(1);
+      assert.deepEqual((await logLevel(page)).entries, [AT_MOUNT]);
 
       // A real click on Trace while native is silent: saved and selected at once, shown as requested, not as applied.
       await hold();
@@ -939,11 +957,15 @@ test('PC1 and PC7: Preview controls and the Meeting Metadata selector with the r
       assert.deepEqual(view.exported, { phase: 'applied', level: 'trace', appliedLevel: 'trace', sinkState: 'degraded' });
 
       // Debug Mode on and off while a level is applied: the level, its status and native are left alone.
+      // LG7: each change of Debug Mode is one info entry of the trace store, sent at the applied level. No apply is sent.
+      const DEBUG_MODE = enabled => ['trace', 'info', 'meeting.trace', 'store-event', { change: 'debug-mode', enabled }];
       for (const expected of [true, false]) {
         const toggled = await act(page, () => rowSwitch(page, 'Debug Mode').click());
         assert.deepEqual(toggled.moved, [`settings.debugMode: ${!expected} -> ${expected}`]);
+        await logged(expected ? 2 : 3);
         const now = await logLevel(page);
         assert.deepEqual([now.selected, now.setting, now.status, now.held.length, now.commands.length], [['Trace'], 'trace', [applied('trace', 'degraded')], 0, 2]);
+        assert.deepEqual(now.entries, [AT_MOUNT, DEBUG_MODE(true), ...(expected ? [] : [DEBUG_MODE(false)])]);
       }
 
       // A click on Debug (the level) that native rejects: failed with the reason, in red, and never shown as applied.
@@ -1006,6 +1028,7 @@ test('PC1 and PC7: Preview controls and the Meeting Metadata selector with the r
       assert.deepEqual(debugPhases, ['pending', 'failed', 'pending', 'applied'], 'debug was rejected, and shown as applied only once the retry was confirmed');
       for (const entry of view.renders) assert.equal(entry[0], entry[2], 'the status always names the saved level');
       assert.deepEqual(view.commands, [apply('info'), apply('trace'), apply('debug'), apply('debug'), apply('warn'), apply('error')]);
+      assert.deepEqual(view.entries, [AT_MOUNT, DEBUG_MODE(true), DEBUG_MODE(false)], 'the clicks on a level logged nothing');
       assert.equal(view.requests, 0, 'no provider request was made');
       t.diagnostic(`LG mounted Hook; renders=${JSON.stringify(view.renders)}`);
 
@@ -1042,6 +1065,7 @@ test('PC1 and PC7: Preview controls and the Meeting Metadata selector with the r
       view = await logLevel(page);
       assert.deepEqual([view.selected, view.setting, view.status, view.stored], [['Error'], 'error', [applied('error')], saved]);
       assert.deepEqual(view.commands, [apply('error')], 'the new page applied the saved level once');
+      assert.deepEqual(view.entries, [], 'at error, the warning of this mount is filtered before it is built or sent');
     });
   } finally { await browser.close(); }
 });

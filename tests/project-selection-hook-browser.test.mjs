@@ -251,7 +251,6 @@ export async function openProjectSelectionBrowserHost(t,bundle,browser,execution
           if (name==='write_meeting_session_recording_text') {writes.set(args.relativePath,(args.append?writes.get(args.relativePath)??'':'')+args.payload);return null;}
           if (name==='read_meeting_trace_metrics') return null;
           if (name==='write_meeting_trace_metrics') return null;
-          if (name==='write_meeting_trace_log') return null;
           // Task 178 LG: the level of the call is applied and every entry is taken. An invalid level rejects, as on native.
           if (name==='write_diagnostic_log') {
             if (!['error','warn','info','debug','trace'].includes(args.level)) throw new Error('Diagnostic log level is not one of error, warn, info, debug, trace');

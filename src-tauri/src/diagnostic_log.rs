@@ -255,19 +255,30 @@ struct AllowedTarget {
 /// Every call site outside this list is answered with `Interest::never()`.
 ///
 /// `speaker::commands` runs on Tokio workers, the `native-audio-start` thread and
-/// the main thread, never inside the audio callback. Only its `error!` call sites
-/// are live: each sits on a failure branch. Its `warn!` call sites stay off until
-/// they are graded, because one of them fires on every normal stop (the capture
-/// task's release finds the capture already stopping). Its two `info!` receipts
-/// stay off: they format one whole JSON value per emitted segment and carry
-/// device identifiers, and the same facts already reach the frontend as events.
+/// the main thread, never inside the audio callback. Its `error!` and `warn!`
+/// call sites are live. Each `error!` sits on a failure branch. Each `warn!`
+/// reports a loss or a degradation: a cleanup thread that could not be
+/// started, a stream that ended on its own, a continuous capture that held no
+/// audio, a capture that did not drain in time. They format one operating
+/// system error, one capture session identifier that native made, one
+/// generation and a fixed duration, and no device, path or content.
+/// Four designed outcomes are `debug!` at their call sites and therefore off,
+/// like every `debug!`: the release that every normal stop makes while the
+/// capture is already stopping, a start that was superseded, a stop request
+/// for another owner, and a stop request for a lease native no longer holds.
+/// Its two `info!` receipts stay off, and with them the whole info level of
+/// this module. The capture-format receipt carries the requested device
+/// identifier and the route's device identifiers. The segment-delivery receipt
+/// carries none, but it shares this target and level, and it is one JSON value
+/// per emitted segment, longer than the message bound of an entry. The same
+/// facts already reach the frontend as events.
 /// `speaker::macos` is left out because that module holds the CoreAudio callback;
 /// `speaker::windows` and `speaker::linux` because their call sites run on the
 /// capture threads.
 const NATIVE_ALLOWLIST: &[AllowedTarget] = &[AllowedTarget {
     target: "jarvis_lib::speaker::commands",
     source: "native.speaker.commands",
-    most_detailed: DiagnosticLogLevel::Error,
+    most_detailed: DiagnosticLogLevel::Warn,
 }];
 
 /// The one event tag of version 1 for native events: call sites carry no tag yet.

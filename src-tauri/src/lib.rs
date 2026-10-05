@@ -37,11 +37,6 @@ fn get_app_version() -> String {
 }
 
 #[tauri::command]
-fn write_meeting_trace_log(message: String) {
-    eprintln!("{}", message);
-}
-
-#[tauri::command]
 fn write_preparation_trace_log(message: String) {
     eprintln!("[preparation-trace] {}", message);
 }
@@ -437,7 +432,6 @@ pub fn run() {
             app_shutdown::complete_app_shutdown,
             app_shutdown::force_app_shutdown,
             get_app_version,
-            write_meeting_trace_log,
             write_preparation_trace_log,
             log_preparation_material_import_summary,
             read_meeting_trace_metrics,

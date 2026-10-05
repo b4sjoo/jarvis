@@ -40,6 +40,7 @@ import {
   type DiagnosticLogReceipt,
   type DiagnosticLogSnapshot,
 } from "../src/lib/meeting/diagnostic-log.js";
+import { CAUSE_CHARS } from "./helpers/diagnostic-log-spy.js";
 
 type Logger = typeof import("../src/lib/meeting/diagnostic-log.js");
 
@@ -786,6 +787,105 @@ test("LG4 a shape that straddles the cut refuses the whole text; the shortest ke
     ["past-the-window", words(256), undefined], ["sk-16", undefined, undefined], ["sk-15", `rejected sk-${"a".repeat(15)}`, undefined]]);
   assert.equal(w.calls.map((call) => call.json).join("").includes("sk-live"), false);
   assertNothingForbidden(w);
+});
+
+// Decisions A8, item 1: the summary of a caught value, for the data field `cause` of an entry about a failed native
+// command or a failed local save. The call sites that use it are driven in tests/diagnostic-log-migration.test.ts.
+test("LG4 the cause summary: the name and the message of an Error, String of any other value, cut at 160 UTF-16 code units, never a throw; as a data string the shape backstop refuses it whole, also when the cut would divide the shape", async (t) => {
+  const w = await world(t);
+  const { diagnosticLogCause, DIAGNOSTIC_LOG_CAUSE_CHARS, DIAGNOSTIC_LOG_UNREADABLE_CAUSE } = w.logger;
+  assert.deepEqual([DIAGNOSTIC_LOG_CAUSE_CHARS, CAUSE_CHARS, DIAGNOSTIC_LOG_UNREADABLE_CAUSE], [160, 160, "unreadable"]);
+  const before = w.snapshot();
+  // An Error: its name and its message. No stack, no code and no nested cause.
+  const decorated = Object.assign(new Error("the device was removed"), { name: "NotFoundError", stack: "STACK at file.ts:1", code: "E_SECRET", cause: new Error("inner") });
+  const throwingMessage = new Error("x");
+  Object.defineProperty(throwingMessage, "message", { get() { throw new Error("no message"); } });
+  const revoked = Proxy.revocable({}, {});
+  revoked.revoke();
+  const cases: Array<[unknown, string]> = [
+    [new Error("disk full"), "Error: disk full"],
+    [new TypeError("x is not a function"), "TypeError: x is not a function"],
+    [decorated, "NotFoundError: the device was removed"],
+    [new Error(""), "Error"],
+    [Object.assign(new Error("only a message"), { name: "" }), "only a message"],
+    [Object.assign(new Error("named by a symbol"), { name: Symbol("odd") }), "Symbol(odd): named by a symbol"],
+    // An Error made in another realm is not an Error of this one; String gives the same name and message.
+    [vm.runInNewContext('new RangeError("made in another realm")'), "RangeError: made in another realm"],
+    // Any other value through String. A native command rejects with a string.
+    ["failed to open /Users/example/Library/trace.json: No such file or directory (os error 2)", "failed to open /Users/example/Library/trace.json: No such file or directory (os error 2)"],
+    ["", ""], [404, "404"], [null, "null"], [undefined, "undefined"], [false, "false"], [Symbol("reason"), "Symbol(reason)"], [["a", 1], "a,1"],
+    [{ code: 1 }, "[object Object]"],
+    // A value that cannot be read as text: the fixed word, and no throw.
+    [Object.create(null), "unreadable"], [{ toString() { throw new Error("no text"); } }, "unreadable"], [revoked.proxy, "unreadable"],
+    [throwingMessage, "unreadable"],
+  ];
+  for (const [caught, expected] of cases) assert.equal(diagnosticLogCause(caught), expected, expected);
+  // The cut: 160 UTF-16 code units. A cut that falls inside a character outside the Basic Multilingual Plane leaves
+  // its first half, and the logger writes U+FFFD in its place.
+  assert.equal(diagnosticLogCause(new Error(words(400))), `Error: ${words(400)}`.slice(0, 160));
+  assert.equal(diagnosticLogCause(words(160)), words(160));
+  assert.equal(diagnosticLogCause(words(161)), words(160));
+  const insidePair = `${words(159)}\u{1F600} and more`;
+  assert.deepEqual([diagnosticLogCause(insidePair).length, diagnosticLogCause(insidePair).charCodeAt(159)], [160, 0xd83d]);
+  // Pure: the caught value is as it was, and the logger counted, queued and sent nothing.
+  assert.deepEqual([decorated.name, decorated.message, decorated.stack, decorated.code], ["NotFoundError", "the device was removed", "STACK at file.ts:1", "E_SECRET"]);
+  assert.deepEqual(w.snapshot(), before);
+  assert.equal(w.pendingTimers(), 0);
+
+  // As the data field `cause` of an entry. A path and a device name are written as they are.
+  const log = (event: string, caught: unknown) => w.logger.logDiagnostic("warn", "lg4.cause", event, () => ({ data: { cause: diagnosticLogCause(caught) } }));
+  const withPath = new Error("failed to write /Users/example/Recordings/2026-10-04 Team sync/manifest.json on Studio Display Speakers: No space left on device (os error 28)");
+  log("path", withPath);
+  log("cut", new Error(words(400)));
+  log("inside-pair", insidePair);
+  assert.deepEqual([w.snapshot().refusedFields, w.snapshot().truncatedFields], [0, 0], "the summary is within every bound of the logger: it is cut by its own function");
+  // A credential shape in the summary: the field is left out and the entry is kept.
+  log("header", new Error(`request failed: Authorization: Bearer ${SECRET_KEY}`));
+  log("key-parameter", `GET https://api.example.test/v1/models?key=${SECRET_KEY} failed`);
+  log("blob", new Error(`unexpected reply ${AUDIO_BASE64}`));
+  assert.deepEqual([w.snapshot().refusedFields, w.snapshot().truncatedFields], [3, 0]);
+  // A key the cut at 160 would divide. Cut first, `sk-live-01` would stay, which is not a key shape, and would be sent.
+  // The summary is then handed over uncut up to the backstop's own window, and the logger refuses it.
+  const straddling = `${words(150)}${SECRET_KEY} and what follows it`;
+  assert.equal(straddling.slice(0, 160).endsWith(" sk-live-01"), true);
+  assert.equal(diagnosticLogCause(straddling), straddling, "handed over whole: it is shorter than 160 and the window of 128 together");
+  assert.equal(diagnosticLogCause(`${straddling} ${words(400)}`), `${straddling} ${words(400)}`.slice(0, 288), "or up to the end of that window");
+  log("straddling-key", straddling);
+  log("straddling-key-in-long-text", new Error(`${straddling} ${words(400)}`));
+  // An encoded run that starts before the cut and reaches 96 characters after it.
+  log("straddling-blob", `${words(120)}${"QUJD".repeat(30)}`);
+  assert.deepEqual([w.snapshot().refusedFields, w.snapshot().truncatedFields], [6, 0]);
+  // A shape wholly past that window is cut away with the rest: nothing of it is sent.
+  log("past-the-window", `${words(300)}${SECRET_KEY}`);
+  assert.deepEqual([w.snapshot().refusedFields, w.snapshot().truncatedFields], [6, 0]);
+  // A known limit of the backstop, which is frozen: a run of 96 or more letters, digits, slashes, hyphens and
+  // underscores has the shape of an encoded blob, and a long path with no dot, space or colon in it is such a run.
+  // An error that names one keeps its entry and loses its cause. The same path with a space and a dot passes.
+  const DOTLESS_PATH = "/private/var/folders/zz/abcdefgh12345678/T/jarvis-recordings/session_recording_1759570000000_ab12cd/manifest";
+  assert.ok(DOTLESS_PATH.length >= 96);
+  log("long-dotless-path", `failed to write ${DOTLESS_PATH}: No space left on device (os error 28)`);
+  log("path-with-a-space-and-a-dot", `failed to write ${DOTLESS_PATH.replace("/T/", "/T/Application Support/")}.json`);
+  assert.deepEqual([w.snapshot().refusedFields, w.snapshot().truncatedFields], [7, 0]);
+  // An entry below the threshold builds no summary: the caught value is not read.
+  let read = 0;
+  w.logger.setDiagnosticLogThreshold("error");
+  log("filtered", { toString() { read += 1; return "never read"; } });
+  assert.equal(read, 0);
+  w.logger.setDiagnosticLogThreshold("info");
+  await w.drain();
+  assert.deepEqual(w.sent().map((entry) => [entry.event, entry.data]), [
+    ["path", { cause: "Error: failed to write /Users/example/Recordings/2026-10-04 Team sync/manifest.json on Studio Display Speakers: No space left on device (os error 28)" }],
+    ["cut", { cause: `Error: ${words(400)}`.slice(0, 160) }],
+    ["inside-pair", { cause: `${words(159)}\uFFFD` }],
+    ["header", undefined], ["key-parameter", undefined], ["blob", undefined],
+    ["straddling-key", undefined], ["straddling-key-in-long-text", undefined], ["straddling-blob", undefined],
+    ["past-the-window", { cause: words(160) }],
+    ["long-dotless-path", undefined],
+    ["path-with-a-space-and-a-dot", { cause: `failed to write ${DOTLESS_PATH.replace("/T/", "/T/Application Support/")}.json` }],
+  ]);
+  for (const entry of w.sent()) assert.ok(entry.data === undefined || (entry.data.cause as string).length <= 160, entry.event);
+  assert.equal(w.calls.map((call) => call.json).join("").includes("sk-live"), false);
+  assertAllWithinA2(w);
 });
 
 test("LG4 a data key named like the IPC serialiser's hook is refused, so one entry never fails the call that carries it", async (t) => {
@@ -1582,18 +1682,20 @@ test("LG5 the 50 ms window: one info entry leaves after 50 ms and not before, an
 
 // ---- LG8: frontend cost ----
 
-// Debug-on trace printing of the scripted S63 session, measured on 2026-10-04 through write_meeting_trace_log
-// (G5): lines per 50 ms window, first line to last. Voice 341 lines in 2.7 s, Screen 258 lines in 2.6 s.
+// Debug-on trace printing of the scripted S63 session, measured on 2026-10-04 through the string command the trace
+// store used before commit 3 retired it (G5): lines per 50 ms window, first line to last. Voice 341 lines in 2.7 s,
+// Screen 258 lines in 2.6 s.
 // Replayed below with one task per line, the Voice lines leave in 18 calls and the Screen lines in 14: one call for
 // each window that holds a line, and one more for the Screen window of 69 lines, whose first 64 leave as a full batch.
 const MEASURED_ARRIVALS = {
   voice: [1, 7, 44, 47, 43, 28, 17, 2, 0, 0, 0, 1, 12, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 29, 55, 41, 4, 2, 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 2],
   screen: [1, 0, 37, 48, 30, 2, 0, 0, 0, 0, 0, 0, 0, 0, 4, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 69, 43, 4, 0, 0, 0, 0, 0, 0, 0, 0, 10, 0, 0, 0, 2],
 };
-// A bounded entry of the size a migrated trace line would have: identifiers and a few scalars. It is an assumed
-// entry of about 269 bytes, not a measured line: the measured lines average 1,686 bytes (575,059 / 341 for Voice) and
-// 90 of the 341 are over 2,048 bytes. Only the arrival counts above are measured. The byte figures these tests print
-// are therefore not comparable with the bytes of today's trace printing.
+// A bounded entry of about the size of a trace store entry: identifiers and a few scalars. It is a stand-in of about
+// 269 bytes, not the store's own projection and not a measured line: the old lines averaged 1,686 bytes (575,059 / 341
+// for Voice) and 90 of the 341 were over 2,048 bytes. Only the arrival counts above are measured here. What the store
+// really logs for the same scripted turns since commit 3, with its entries, calls and bytes per turn, is measured
+// with the real Hook in tests/diagnostic-log-level-consumer.test.mjs (LG8): about 217 bytes an entry at trace.
 const traceDetail = (index: number): DiagnosticLogDetail => ({ refs: { traceId: "voice_trace_1791115200000_ij56kl" },
   data: { stepId: `step_${index}`, name: "advisor-stream", status: "success", durationMs: index, valueChars: 1432, metadataKeys: 12 } });
 

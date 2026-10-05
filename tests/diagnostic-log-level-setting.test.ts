@@ -709,7 +709,8 @@ test("LG2 the level is read and written at twelve sites of the Hook and in four 
   assert.deepEqual(readers("diagnosticLogLevelReapply"), ["diagnosticLogLevelReapply", "useEffect()"]);
   assert.deepEqual(readers("setDiagnosticLogLevelReapply"), ["diagnosticLogLevelReapply", "setDiagnosticLogLevel"]);
   assert.deepEqual(readers("diagnosticLogLevelStatus"), ["diagnosticLogLevelStatus", "return"]);
-  // In src, the level and the threshold are named by the logger, the settings type, the Hook and the page. Nothing else.
+  // In src, the level and the threshold are named by the logger, the settings type, the Hook and the page. Nothing else:
+  // the trace store, which logs since commit 3, passes each entry its own level and never names the level type or the threshold.
   const files: string[] = [];
   const walk = (directory: string) => {
     for (const entry of readdirSync(directory, { withFileTypes: true })) {

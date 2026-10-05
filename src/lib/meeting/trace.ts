@@ -1,3 +1,7 @@
+import {
+  logDiagnostic,
+  type DiagnosticLogDataValue,
+} from "./diagnostic-log.js";
 import { createMeetingId } from "./meeting-id.js";
 import {
   MeetingTrace,
@@ -7,8 +11,6 @@ import {
   MeetingTraceStatus,
   MeetingTraceStep,
 } from "./types.js";
-
-import { invoke } from "@tauri-apps/api/core";
 
 const MAX_TRACE_ITEMS = 500;
 const DEFAULT_SUMMARY_WINDOW_SIZE = 20;
@@ -22,6 +24,47 @@ export interface MeetingTraceChange {
   changed: MeetingTrace[];
   removedTraceIds: string[];
   reset: boolean;
+}
+
+// Task 178 LG, M1. What the store reports to the diagnostic log, and the level
+// of each change. The level is a property of the kind of change alone: a step
+// or a trace that ends with the status "error" is reported at debug like any
+// other, because the store cannot tell a failed attempt from an operation that
+// recovered. Errors and warnings are logged at the outcome branches of the
+// caller.
+type MeetingTraceStoreChange =
+  | "debug-mode"
+  | "traces-cleared"
+  | "trace-started"
+  | "step-started"
+  | "step-finished"
+  | "input-recorded"
+  | "output-recorded"
+  | "trace-metadata-updated"
+  | "trace-finished";
+
+const TRACE_STORE_CHANGE_LEVELS = {
+  "debug-mode": "info",
+  "traces-cleared": "info",
+  "trace-started": "debug",
+  "step-finished": "debug",
+  "trace-finished": "debug",
+  "step-started": "trace",
+  "input-recorded": "trace",
+  "output-recorded": "trace",
+  "trace-metadata-updated": "trace",
+} as const satisfies Record<MeetingTraceStoreChange, "info" | "debug" | "trace">;
+
+// The whole of what an entry may say about one change: the trace it belongs
+// to, and names, statuses, durations and sizes. A metadata object is counted,
+// never copied; an error text and a recorded value are not part of it.
+interface MeetingTraceStoreProjection {
+  traceId?: string;
+  data?: Record<string, DiagnosticLogDataValue | undefined>;
+}
+
+function countMetadataKeys(metadata: Record<string, unknown> | undefined) {
+  return metadata ? Object.keys(metadata).length : 0;
 }
 
 export class MeetingTraceStore {
@@ -44,9 +87,8 @@ export class MeetingTraceStore {
   setDebugEnabled(debugEnabled: boolean) {
     if (this.debugEnabled === debugEnabled) return;
 
-    const wasDebugEnabled = this.debugEnabled;
     this.debugEnabled = debugEnabled;
-    this.log("debug-mode", { enabled: debugEnabled }, wasDebugEnabled);
+    this.log("debug-mode", () => ({ data: { enabled: debugEnabled } }));
   }
 
   getTraces() {
@@ -123,11 +165,13 @@ export class MeetingTraceStore {
     this.currentProcessTraceIds.add(trace.id);
     const removed = this.traces.slice(MAX_TRACE_ITEMS - 1);
     this.traces = [trace, ...this.traces].slice(0, MAX_TRACE_ITEMS);
-    this.log("trace-started", {
-      id: trace.id,
-      kind: trace.kind,
-      metadata: trace.metadata,
-    });
+    this.log("trace-started", () => ({
+      traceId: trace.id,
+      data: {
+        kind: trace.kind,
+        metadataKeys: countMetadataKeys(trace.metadata),
+      },
+    }));
     this.emit([trace], removed.map((item) => item.id));
     return cloneTrace(trace);
   }
@@ -148,12 +192,10 @@ export class MeetingTraceStore {
     this.updateTrace(traceId, (trace) => {
       trace.steps.push(step);
     });
-    this.log("step-started", {
+    this.log("step-started", () => ({
       traceId,
-      stepId: step.id,
-      name,
-      metadata,
-    });
+      data: { step: name, metadataKeys: countMetadataKeys(metadata) },
+    }));
 
     return step.id;
   }
@@ -178,15 +220,15 @@ export class MeetingTraceStore {
       step.durationMs = endedAt - step.startedAt;
       step.metadata = { ...step.metadata, ...metadata };
       step.error = stringifyError(error);
-      this.log("step-finished", {
+      this.log("step-finished", () => ({
         traceId,
-        stepId,
-        name: step.name,
-        status,
-        durationMs: step.durationMs,
-        metadata: step.metadata,
-        error: step.error,
-      });
+        data: {
+          step: step.name,
+          status,
+          durationMs: step.durationMs,
+          metadataKeys: countMetadataKeys(step.metadata),
+        },
+      }));
     });
   }
 
@@ -202,12 +244,13 @@ export class MeetingTraceStore {
       metadata,
       recordedAt: Date.now(),
     });
-    this.log("input-recorded", {
+    this.log("input-recorded", () => ({
       traceId,
-      label,
-      valueChars: value.length,
-      metadata,
-    });
+      data: {
+        valueChars: value.length,
+        metadataKeys: countMetadataKeys(metadata),
+      },
+    }));
   }
 
   recordOutput(
@@ -222,19 +265,23 @@ export class MeetingTraceStore {
       metadata,
       recordedAt: Date.now(),
     });
-    this.log("output-recorded", {
+    this.log("output-recorded", () => ({
       traceId,
-      label,
-      valueChars: value.length,
-      metadata,
-    });
+      data: {
+        valueChars: value.length,
+        metadataKeys: countMetadataKeys(metadata),
+      },
+    }));
   }
 
   updateMetadata(traceId: string, metadata: Record<string, unknown>) {
     this.updateTrace(traceId, (trace) => {
       trace.metadata = { ...trace.metadata, ...metadata };
     });
-    this.log("trace-metadata-updated", { traceId, metadata });
+    this.log("trace-metadata-updated", () => ({
+      traceId,
+      data: { metadataKeys: countMetadataKeys(metadata) },
+    }));
   }
 
   finishTrace(
@@ -248,13 +295,10 @@ export class MeetingTraceStore {
       trace.endedAt = endedAt;
       trace.durationMs = endedAt - trace.startedAt;
       trace.error = stringifyError(error);
-      this.log("trace-finished", {
+      this.log("trace-finished", () => ({
         traceId,
-        kind: trace.kind,
-        status,
-        durationMs: trace.durationMs,
-        error: trace.error,
-      });
+        data: { kind: trace.kind, status, durationMs: trace.durationMs },
+      }));
     });
   }
 
@@ -299,16 +343,26 @@ export class MeetingTraceStore {
     });
   }
 
+  // Task 178 LG, M1. One entry of the diagnostic log for one change of the
+  // store. Whether it is written is decided by Log Level alone: Debug Mode no
+  // longer decides it. The projection is a function, so a change below the
+  // level builds nothing. The call returns nothing and is never awaited.
   private log(
-    event: string,
-    details?: Record<string, unknown>,
-    force = false
+    change: MeetingTraceStoreChange,
+    project?: () => MeetingTraceStoreProjection
   ) {
-    if (!force && !this.debugEnabled) return;
-
-    const message = formatTraceLogLine(event, details);
-    console.info(message);
-    void invoke("write_meeting_trace_log", { message }).catch(() => {});
+    logDiagnostic(
+      TRACE_STORE_CHANGE_LEVELS[change],
+      "meeting.trace",
+      "store-event",
+      () => {
+        const projection = project?.();
+        return {
+          refs: { traceId: projection?.traceId },
+          data: { change, ...projection?.data },
+        };
+      }
+    );
   }
 }
 
@@ -1182,21 +1236,4 @@ function compareTracesNewestFirst(left: MeetingTrace, right: MeetingTrace) {
 function stringifyError(error: unknown) {
   if (!error) return undefined;
   return error instanceof Error ? error.message : String(error);
-}
-
-function formatTraceLogLine(
-  event: string,
-  details: Record<string, unknown> | undefined
-) {
-  const timestamp = new Date().toISOString();
-  const suffix = details ? ` ${safeStringify(details)}` : "";
-  return `[${timestamp}] [meeting-trace] ${event}${suffix}`;
-}
-
-function safeStringify(value: Record<string, unknown>) {
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
 }

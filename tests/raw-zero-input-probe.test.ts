@@ -5,7 +5,9 @@ import vm from "node:vm";
 import ts from "typescript";
 import { RawZeroInputEpisode } from "../src/lib/meeting/audio-input-liveness.js";
 import { CaptureLifecycleCoordinator } from "../src/lib/meeting/capture-lifecycle.js";
-import { getNativeAudioCaptureStartPolicy, pruneNativeAudioRecoveryAttempts } from "../src/lib/meeting/native-audio-lifecycle.js";
+import { getNativeAudioCaptureStartPolicy, pruneNativeAudioRecoveryAttempts, resolveNativeAudioCaptureStartFailure } from "../src/lib/meeting/native-audio-lifecycle.js";
+import { assertEntryInLedger, assertPlantedOnlyInCause, createDiagnosticLogSpy, DIAGNOSTIC_LOG_SPY_FAILING_DELIVERIES, DIAGNOSTIC_LOG_SPY_LEVELS,
+  PLANTED, type DiagnosticLogSpyDelivery } from "./helpers/diagnostic-log-spy.js";
 
 const source = ts.createSourceFile("hook.ts", readFileSync("src/hooks/useMeetingAssistant.ts", "utf8"), ts.ScriptTarget.Latest, true);
 function productionCallback(name: string, env: Record<string, unknown>) {
@@ -138,4 +140,71 @@ test("old or delayed observations and exhausted shared rate budget do not restar
     const h = harness(); alter(h); await h.run();
     assert.equal(h.calls.includes("stop"), false);
   }
+});
+
+// ---- Task 178 LG, commit 3 (LG7): the added entry of a capture start that failed, at its catch ----
+//
+// A capture start that failed printed nothing: it reached the panel and an active recording. The branch that handles
+// a failure whose operation is still current now makes one error entry, with the bounded summary of the native
+// command's error as its cause (decisions A8). Driven through the real startCapture: the native start of an automatic
+// recovery rejects with a text that names a device. (The other branch of the same entry, a start blocked by a missing
+// speech-to-text provider, is driven in tests/local-model-retirement.test.ts.)
+const NATIVE_START_ERROR = `${PLANTED.deviceLabel}: the output device is no longer available`;
+test("LG7 capture start failure: one error entry on the authorized failure branch, with typed fields and its cause; a superseded failure logs nothing; the recording, the state and the native calls are as before at every level and with a failing log delivery", async () => {
+  const failed = async (level: (typeof DIAGNOSTIC_LOG_SPY_LEVELS)[number], delivery?: DiagnosticLogSpyDelivery, superseded = false) => {
+    const h = harness();
+    const spy = createDiagnosticLogSpy({ threshold: level, now: () => 100_000, delivery });
+    h.env.logDiagnostic = spy.logDiagnostic;
+    h.env.diagnosticLogCause = spy.logger.diagnosticLogCause;
+    h.env.resolveNativeAudioCaptureStartFailure = resolveNativeAudioCaptureStartFailure;
+    // The rejection is an Error of this realm, so the callback reads its message as it does in the app.
+    h.env.Error = Error;
+    h.nativeStart(async () => {
+      // Superseded: a Pause claims the lifecycle while the native start is under way.
+      if (superseded) h.coordinator.claim("pause");
+      throw new Error(NATIVE_START_ERROR);
+    });
+    await h.run();
+    return { entries: spy.entries(), observed: { calls: [...h.calls], records: JSON.parse(JSON.stringify(h.records)), value: JSON.parse(JSON.stringify(h.value)),
+      refs: [h.env.activeRef.current, h.env.runtimeActiveRef.current, h.env.nativeCaptureSessionIdRef.current] } };
+  };
+  const reference = await failed("trace");
+  assert.deepEqual(reference.entries.map((entry) => [entry.level, `${entry.source} ${entry.event}`, entry.refs ?? {}, entry.data]), [
+    ["error", "meeting.capture start-failed", {}, { mode: "automatic-recovery", captureOperationId: 1, nativeStartAttempted: true,
+      automaticRecovery: true, manualRecovery: false, silentSourceProbe: true, cause: `Error: ${NATIVE_START_ERROR}` }]]);
+  for (const entry of reference.entries) assertEntryInLedger(entry);
+  // LG4 and A8: the failure text is in the recording and the panel state, as before. The entry has its bounded summary
+  // as the cause, and the device it names is in no other part of the entry. This branch names no block.
+  assertPlantedOnlyInCause(reference.entries, "capture start failure");
+  assert.equal("blocked" in reference.entries[0]!.data!, false);
+  assert.ok(reference.observed.records.some((record: any) => record.stage === "automatic-recovery-failed" && String(record.error).includes(PLANTED.deviceLabel)));
+  assert.ok(reference.observed.records.some((record: any) => record.stage === "capture-start-failure-reconciled"));
+  assert.equal(reference.observed.value.error, NATIVE_START_ERROR);
+  // LG2 and LG5: the same recording writes, state and native calls at every level and with every failing delivery.
+  for (const level of DIAGNOSTIC_LOG_SPY_LEVELS) {
+    const current = await failed(level);
+    assert.deepEqual(current.observed, reference.observed, level);
+    assert.equal(current.entries.length, 1, `${level}: an error entry passes every level`);
+  }
+  for (const delivery of DIAGNOSTIC_LOG_SPY_FAILING_DELIVERIES) {
+    const current = await failed("trace", delivery);
+    assert.deepEqual(current.observed, reference.observed, delivery);
+    assert.deepEqual(current.entries, reference.entries, delivery);
+  }
+  // A failure that arrives after another operation claimed the lifecycle is not this start's to report: no entry, and
+  // the stale error goes to the recording alone, as before.
+  const stale = await failed("trace", undefined, true);
+  assert.deepEqual(stale.entries, []);
+  assert.ok(stale.observed.records.some((record: any) => record.stage === "stale-native-start-error"));
+  assert.equal(stale.observed.records.some((record: any) => record.stage === "capture-start-failure-reconciled"), false);
+  // The same before the native start was attempted: the permission check rejects after a Pause claimed the lifecycle.
+  // Nothing is logged, recorded or shown for a start that is no longer the current operation.
+  const early = harness();
+  const spy = createDiagnosticLogSpy({ threshold: "trace" });
+  early.env.logDiagnostic = spy.logDiagnostic;
+  early.env.diagnosticLogCause = spy.logger.diagnosticLogCause;
+  early.env.resolveNativeAudioCaptureStartFailure = resolveNativeAudioCaptureStartFailure;
+  early.permission(async () => { early.coordinator.claim("pause"); throw new Error(NATIVE_START_ERROR); });
+  await early.run();
+  assert.deepEqual([spy.entries(), early.records, early.calls], [[], [], ["check_system_audio_access"]]);
 });

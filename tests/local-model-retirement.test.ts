@@ -23,6 +23,8 @@ import { hashTaxonomySourceTurnIds } from "../src/lib/meeting/taxonomy-adjudicat
 import { createScreenPreflightDeadlineArbiter } from "../src/lib/meeting/screen-preflight-deadline.js";
 import { createMeetingId } from "../src/lib/meeting/meeting-id.js";
 import { isDiagnosticLogLevel } from "../src/lib/meeting/diagnostic-log.js";
+import { assertEntryInLedger, createDiagnosticLogSpy, DIAGNOSTIC_LOG_SPY_FAILING_DELIVERIES, DIAGNOSTIC_LOG_SPY_LEVELS,
+  type DiagnosticLogSpyDelivery } from "./helpers/diagnostic-log-spy.js";
 import {
   createRuntimeCriticalEventHarness,
   RUNTIME_CRITICAL_EVENT_HOOK_CALLBACKS,
@@ -285,7 +287,7 @@ test("168-C1 a stored Meeting Metadata off is still honoured next to any legacy 
 });
 
 // Run the complete production callbacks, supplying native I/O and UI state only.
-function entryHarness(old = {}) {
+function entryHarness(old = {}, log: { level?: (typeof DIAGNOSTIC_LOG_SPY_LEVELS)[number]; delivery?: DiagnosticLogSpyDelivery } = {}) {
   const { globals } = settingsHarness(JSON.stringify(old));
   const calls: string[] = [];
   for (const name of ["startCapture", "captureScreenContext"]) {
@@ -297,8 +299,11 @@ function entryHarness(old = {}) {
     };
     visit(callback(name));
   }
+  // Task 178 LG: a failed capture start makes one entry of the diagnostic log. The real logger, its delivery controlled,
+  // at trace and with a working delivery unless a test asks otherwise.
+  const diagnosticLog = createDiagnosticLogSpy({ threshold: log.level ?? "trace", delivery: log.delivery });
   Object.assign(globals, nativeLifecycle, {
-    AbortController,
+    AbortController, logDiagnostic: diagnosticLog.logDiagnostic, diagnosticLogCause: diagnosticLog.logger.diagnosticLogCause,
     sttProvider: { id: "stt" }, aiProvider: null,
     selectedAudioDevices: { output: { id: "default" } },
     readNativeCaptureLease: () => ({}),
@@ -330,7 +335,7 @@ function entryHarness(old = {}) {
     globals[name] = evaluate(callback(name), hook, globals);
   }
   globals.setupWarnings = evaluate(callback("setupWarnings"), hook, globals);
-  return { globals, calls, criticalEvents };
+  return { globals, calls, criticalEvents, diagnosticLog };
 }
 
 test("L115-D4 actual Meeting Start/Resume accept current providers regardless of retired keys", async () => {
@@ -357,6 +362,19 @@ test("L115-D4 Meeting keeps provider, native permission, Replay and shutdown che
   await denied.globals.start();
   assert.match(denied.globals.state.error, /System audio permission is required/);
   assert.deepEqual(denied.calls, ["check_system_audio_access"]);
+  // Task 178 LG: the denied start is one error entry, with the error of the start as its cause. A start that a missing
+  // provider blocks is the same entry, with the block named and no cause (decisions A8, item 5; the test after this
+  // one drives that branch). Replay and shutdown end before any start is claimed and log nothing.
+  const deniedEntries = denied.diagnosticLog.entries();
+  for (const entry of deniedEntries) assertEntryInLedger(entry);
+  assert.deepEqual(deniedEntries.map((entry) => [entry.level, entry.source, entry.event, entry.data]), [["error", "meeting.capture", "start-failed",
+    { mode: "fresh-start", captureOperationId: 1, nativeStartAttempted: false, automaticRecovery: false, manualRecovery: false, silentSourceProbe: false,
+      cause: "Error: System audio permission is required for meeting assistant." }]]);
+  const missingEntries = missing.diagnosticLog.entries();
+  for (const entry of missingEntries) assertEntryInLedger(entry);
+  assert.deepEqual(missingEntries.map((entry) => [entry.level, entry.source, entry.event, entry.data]), [["error", "meeting.capture", "start-failed",
+    { mode: "fresh-start", captureOperationId: 1, nativeStartAttempted: false, automaticRecovery: false, manualRecovery: false, silentSourceProbe: false,
+      blocked: "stt-provider-missing" }]]);
   const replay = entryHarness();
   replay.globals.runtimeRegressionRunRef.current = {};
   await replay.globals.start();
@@ -367,6 +385,103 @@ test("L115-D4 Meeting keeps provider, native permission, Replay and shutdown che
   await shutdown.globals.start();
   await shutdown.globals.captureScreenContext();
   assert.deepEqual(shutdown.calls, []);
+  assert.deepEqual([replay.diagnosticLog.entries(), shutdown.diagnosticLog.entries()], [[], []]);
+});
+
+// Task 178 LG, commit 3, decisions A8 item 5 (LG7, LG1, LG2, LG4, LG5): a capture start that is blocked because no
+// speech-to-text provider is configured. It printed nothing and made no entry; it is a capture start that failed, so it
+// makes the same error entry as the catch of the start, with one typed field naming the block. Through the real
+// startCapture, by Start, by Resume and by a manual recovery. What the branch does beside logging is entered in one
+// sequence with the logger call: the recording writes, the lifecycle stages of the real coordinator, the two
+// cancellations and each state update.
+test("LG7 capture start blocked by a missing speech-to-text provider: one error entry of a failed start, with the block named and no cause, on Start, Resume and a manual recovery; no native command is called, and the recording, the lifecycle and the state are as before at every level and with a failing log delivery", async () => {
+  type Mode = "fresh-start" | "resume" | "manual-recovery";
+  const PENDING_RECOVERY = { requiredAt: 1_000, reason: "buffer-overflow", message: "Native audio stopped.", interruptedCaptureSessionId: "capture_old",
+    interruptedCaptureGeneration: 2, circuitBreakerOpen: false };
+  const blocked = async (mode: Mode, log: Parameters<typeof entryHarness>[1] = {}) => {
+    const h = entryHarness({}, log);
+    const g = h.globals;
+    const sequence: unknown[][] = [];
+    g.sttProvider = null;
+    g.createMeetingId = () => "native_audio_manual_recovery_fixture";
+    const logger = g.logDiagnostic;
+    g.logDiagnostic = (level: string, source: string, event: string, detail: unknown) => {
+      sequence.push(["logDiagnostic", `${source} ${event}`]);
+      assert.equal(logger(level, source, event, detail), undefined, "the logger call returns nothing: there is nothing to await");
+    };
+    g.sessionRecordingManagerRef.current = { recordCaptureLifecycle: (data: Record<string, unknown>) =>
+      sequence.push(["recording.recordCaptureLifecycle", data.stage, data.status ?? data.reason ?? null, data.error ?? null]) };
+    g.captureLifecycleCoordinatorRef.current = new CaptureLifecycleCoordinator((event) =>
+      sequence.push(["lifecycle", event.stage, event.action, event.authorized, event.detail ?? null]));
+    g.cancelActiveAdvisorJob = (reason: string) => sequence.push(["cancelActiveAdvisorJob", reason]);
+    g.invalidateAudioProcessingSession = () => sequence.push(["invalidateAudioProcessingSession"]);
+    const setState = g.setState;
+    g.setState = (update: unknown) => { setState(update); sequence.push(["setState", g.state.status, g.state.error]); };
+    g.activeRef.current = true;
+    g.runtimeActiveRef.current = true;
+    if (mode === "manual-recovery") g.nativeAudioManualRecoveryRef.current = { ...PENDING_RECOVERY };
+    await (mode === "fresh-start" ? g.start() : mode === "resume" ? g.resume() : g.startCapture("manual-recovery"));
+    return { entries: h.diagnosticLog.entries(), sequence, calls: h.calls, refs: [g.activeRef.current, g.runtimeActiveRef.current],
+      counters: h.diagnosticLog.snapshot() };
+  };
+  const entry = (mode: Mode) => ["error", "meeting.capture start-failed", {}, { mode, captureOperationId: 1, nativeStartAttempted: false,
+    automaticRecovery: false, manualRecovery: mode === "manual-recovery", silentSourceProbe: false, blocked: "stt-provider-missing" }];
+  const shown = (run: Awaited<ReturnType<typeof blocked>>) => run.entries.map((logged) => [logged.level, `${logged.source} ${logged.event}`, logged.refs ?? {}, logged.data]);
+  const MISSING = entryHarness().globals.MISSING_STT_MESSAGE as string;
+  const SEQUENCES: Record<Mode, unknown[][]> = {
+    "fresh-start": [
+      ["lifecycle", "claimed", "start", true, null],
+      ["logDiagnostic", "meeting.capture start-failed"],
+      ["invalidateAudioProcessingSession"],
+      ["cancelActiveAdvisorJob", "stt-provider-missing"],
+      ["recording.recordCaptureLifecycle", "capture-start-failure-reconciled", "error", MISSING],
+      ["setState", "error", MISSING],
+      ["lifecycle", "authorization-checked", "start", true, "blocked-stt-provider-missing"],
+    ],
+    resume: [
+      ["lifecycle", "claimed", "resume", true, null],
+      ["logDiagnostic", "meeting.capture start-failed"],
+      ["invalidateAudioProcessingSession"],
+      ["cancelActiveAdvisorJob", "stt-provider-missing"],
+      ["recording.recordCaptureLifecycle", "capture-start-failure-reconciled", "paused", MISSING],
+      ["setState", "paused", MISSING],
+      ["lifecycle", "authorization-checked", "resume", true, "blocked-stt-provider-missing"],
+    ],
+    "manual-recovery": [
+      ["lifecycle", "claimed", "resume", true, null],
+      ["recording.recordCaptureLifecycle", "manual-recovery-started", "buffer-overflow", null],
+      ["logDiagnostic", "meeting.capture start-failed"],
+      ["invalidateAudioProcessingSession"],
+      ["cancelActiveAdvisorJob", "stt-provider-missing"],
+      ["recording.recordCaptureLifecycle", "capture-start-failure-reconciled", "error", MISSING],
+      ["setState", "error", MISSING],
+      ["lifecycle", "authorization-checked", "resume", true, "blocked-stt-provider-missing"],
+      ["recording.recordCaptureLifecycle", "manual-recovery-failed", "blocked-stt-provider-missing", null],
+    ],
+  };
+  for (const mode of ["fresh-start", "resume", "manual-recovery"] as const) {
+    const reference = await blocked(mode);
+    assert.deepEqual(shown(reference), [entry(mode)], mode);
+    for (const logged of reference.entries) assertEntryInLedger(logged);
+    // The entry names the block and has no cause: nothing was caught. No message, and nothing of the panel text.
+    assert.deepEqual(["cause" in reference.entries[0]!.data!, "message" in reference.entries[0]!, JSON.stringify(reference.entries).includes(MISSING)],
+      [false, false, false], mode);
+    assert.deepEqual([reference.counters.refusedFields, reference.counters.truncatedFields, reference.counters.detailFailures], [0, 0, 0], mode);
+    // What the branch does, in order: nothing native, and the start ends there.
+    assert.deepEqual(reference.sequence, SEQUENCES[mode], mode);
+    assert.deepEqual([reference.calls, reference.refs], [[], [false, false]], mode);
+    for (const level of DIAGNOSTIC_LOG_SPY_LEVELS) {
+      const current = await blocked(mode, { level });
+      assert.deepEqual([current.sequence, current.calls, current.refs], [reference.sequence, [], [false, false]], `${mode} at ${level}`);
+      assert.deepEqual(shown(current), [entry(mode)], `${mode} at ${level}: an error entry passes every level`);
+    }
+    for (const delivery of DIAGNOSTIC_LOG_SPY_FAILING_DELIVERIES) {
+      const current = await blocked(mode, { level: "trace", delivery });
+      assert.deepEqual([current.sequence, current.calls, current.refs], [reference.sequence, [], [false, false]], `${mode}, ${delivery}`);
+      assert.deepEqual(shown(current), [entry(mode)], `${mode}, ${delivery}: the same entry was handed over`);
+      assert.equal(current.counters.undeliveredEntries, 1, `${mode}, ${delivery}: it was not delivered`);
+    }
+  }
 });
 
 test("L115-D4 actual setup warnings retain STT, AI and image capability checks", () => {

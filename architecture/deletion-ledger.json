@@ -1,7 +1,7 @@
 {
   "$schema": "./deletion-ledger.schema.json",
   "version": 1,
-  "updatedAt": "2026-10-03",
+  "updatedAt": "2026-10-04",
   "entries": [
     {
       "id": "correction-private-reduction-and-scope-decision",
@@ -709,6 +709,27 @@
         "onSemanticTaxonomyModeChange",
         "Semantic Type Rescue",
         "semantic-unknown-rescue"
+      ]
+    },
+    {
+      "id": "meeting-trace-string-log-ipc",
+      "symbolOrSurface": "write_meeting_trace_log: the unbounded string command that printed Debug Mode trace lines and the trace-metrics persistence failure to stderr, with its two frontend callers and the trace store's Debug print gate",
+      "verdict": "migrate-then-delete",
+      "ownerTaskId": 178,
+      "replacement": "write_diagnostic_log: levelled, bounded entries from the frontend diagnostic logger to the native sink. The trace store and the trace-metrics persistence failure log through it; Preparation keeps write_preparation_trace_log",
+      "persistedDataImpact": "none",
+      "proofCommands": [
+        "npm test",
+        "npm run verify:architecture",
+        "npm run build",
+        "cargo test --lib"
+      ],
+      "deletionGate": "Both callers log through the diagnostic logger, no source invokes the command, and it is absent from the native registration and from both pinned command lists; the trace store holds what it held and the recording, critical-event and evaluation calls at each migrated call site are made as before.",
+      "rollbackBoundary": "The command printed to stderr and held no state: restoring it touches neither the diagnostic log sink, the trace store nor Session Recording.",
+      "status": "deleted",
+      "forbiddenPatterns": [
+        "fn write_meeting_trace_log(",
+        "invoke(\"write_meeting_trace_log\""
       ]
     }
   ]

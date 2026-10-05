@@ -202,7 +202,8 @@ async function harness() {
     ...truth, structuredClone, resolveHumanEvaluationAttemptIdentityV2,
     validateHumanEvaluationAttemptSubjectV2, buildHumanEvaluationAttemptEvidenceV2,
     toHumanEvaluationCollectionProvenance, humanEvaluationStore: store,
-    console: { error() {}, warn() {} }, scriptedValidationRef: { current: false },
+    // Task 178 LG: the commit callback's two log call sites are driven in tests/human-evaluation-store.test.ts.
+    console: { error() {}, warn() {} }, logDiagnostic() {}, scriptedValidationRef: { current: false },
     sessionRecordingManagerRef: { current: recorder },
     contextManagerRef: { current: { getState: () => ({ sessionId: runtime.sessionId }) } },
     traceStoreRef: { current: { getTraces: () => runtime.traces, updateMetadata() {} } },

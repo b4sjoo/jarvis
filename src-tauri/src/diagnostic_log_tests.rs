@@ -36,6 +36,23 @@ const LEVELS: [DiagnosticLogLevel; 5] = [
 /// A target that exists only in these tests, admitted at every level, so that
 /// the threshold can be exercised on native events of all five levels.
 const TEST_TARGET: &str = "jarvis_lib::diagnostic_log::tests::admitted";
+/// The format string of each `warn!` call site of speaker/commands.rs, in
+/// source order: the call sites the production allowlist makes live.
+const REVIEWED_WARN_FORMATS: [&str; 4] = [
+    "Could not start background audio cleanup: {error}",
+    "Audio stream ended unexpectedly",
+    "No audio captured in continuous mode",
+    "Capture {} generation {} did not drain within {}ms; aborting",
+];
+/// The format string of each `debug!` call site of speaker/commands.rs, in
+/// source order. Each reports a designed outcome and was a `warn!` before it
+/// was graded. None is live, whatever the threshold.
+const REVIEWED_DEBUG_FORMATS: [&str; 4] = [
+    "Capture start superseded: expected {:?}, observed {:?}, phase {:?}",
+    "Capture release rejected: expected {}/{}/{} {:?}, observed {:?} {:?}",
+    "Ignoring {} stop request because capture is owned by {}",
+    "Ignoring stale {} stop request for session {:?} generation {:?}; active session is {} generation {}",
+];
 const TEST_ALLOWLIST: &[AllowedTarget] = &[AllowedTarget {
     target: TEST_TARGET,
     source: "native.test",
@@ -670,7 +687,7 @@ fn lg1_only_the_allowlisted_native_call_sites_are_live() {
     );
     assert_eq!(NATIVE_ALLOWLIST.len(), 1);
     assert_eq!(NATIVE_ALLOWLIST[0].target, COMMANDS);
-    assert_eq!(NATIVE_ALLOWLIST[0].most_detailed, DiagnosticLogLevel::Error);
+    assert_eq!(NATIVE_ALLOWLIST[0].most_detailed, DiagnosticLogLevel::Warn);
 
     let log = TestSink::started("lg1-allowlist");
     log.apply("trace");
@@ -678,15 +695,22 @@ fn lg1_only_the_allowlisted_native_call_sites_are_live() {
         sink: Arc::clone(&log.sink),
         allowlist: NATIVE_ALLOWLIST,
     };
-    let live = probe!(COMMANDS, Level::ERROR, Kind::EVENT);
-    assert!(subscriber.register_callsite(live).is_sometimes());
-    assert!(subscriber.enabled(live));
+    for live in [
+        probe!(COMMANDS, Level::ERROR, Kind::EVENT),
+        probe!(COMMANDS, Level::WARN, Kind::EVENT),
+    ] {
+        assert!(subscriber.register_callsite(live).is_sometimes());
+        assert!(subscriber.enabled(live));
+    }
     for (label, refused) in [
-        ("ungraded warn", probe!(COMMANDS, Level::WARN, Kind::EVENT)),
         ("info receipt", probe!(COMMANDS, Level::INFO, Kind::EVENT)),
-        ("debug", probe!(COMMANDS, Level::DEBUG, Kind::EVENT)),
+        (
+            "debug, the four designed outcomes of the lease",
+            probe!(COMMANDS, Level::DEBUG, Kind::EVENT),
+        ),
         ("trace", probe!(COMMANDS, Level::TRACE, Kind::EVENT)),
         ("span", probe!(COMMANDS, Level::ERROR, Kind::SPAN)),
+        ("warn span", probe!(COMMANDS, Level::WARN, Kind::SPAN)),
         (
             "test module of the target",
             probe!(
@@ -710,6 +734,14 @@ fn lg1_only_the_allowlisted_native_call_sites_are_live() {
         (
             "Linux capture thread",
             probe!("jarvis_lib::speaker::linux", Level::ERROR, Kind::EVENT),
+        ),
+        (
+            "warn of the CoreAudio callback module",
+            probe!("jarvis_lib::speaker::macos", Level::WARN, Kind::EVENT),
+        ),
+        (
+            "warn of the Linux capture thread",
+            probe!("jarvis_lib::speaker::linux", Level::WARN, Kind::EVENT),
         ),
         (
             "Native Stall Diagnostics",
@@ -739,13 +771,16 @@ fn lg1_only_the_allowlisted_native_call_sites_are_live() {
 
     tracing::dispatcher::with_default(&log.dispatch(), || {
         tracing::error!(target: "jarvis_lib::speaker::commands", "admitted error");
-        tracing::warn!(target: "jarvis_lib::speaker::commands", "refused: not graded yet");
+        tracing::warn!(target: "jarvis_lib::speaker::commands", "admitted warn");
         tracing::info!(target: "jarvis_lib::speaker::commands", "[native-audio-observation] refused");
         tracing::debug!(target: "jarvis_lib::speaker::commands", "refused");
         tracing::error!(target: "jarvis_lib::speaker::macos", "refused");
+        tracing::warn!(target: "jarvis_lib::speaker::macos", "refused");
         tracing::error!(target: "jarvis_lib::speaker::windows", "refused");
         tracing::error!(target: "jarvis_lib::speaker::linux", "refused");
+        tracing::warn!(target: "jarvis_lib::speaker::linux", "refused");
         tracing::error!(target: "sqlx::query", "refused");
+        tracing::warn!(target: "sqlx::query", "refused");
         tracing::error!("refused: the default target of this module");
     });
 
@@ -755,11 +790,15 @@ fn lg1_only_the_allowlisted_native_call_sites_are_live() {
         lines
             .iter()
             .map(|line| (
+                line["level"].as_str().unwrap(),
                 line["source"].as_str().unwrap(),
                 line["message"].as_str().unwrap()
             ))
             .collect::<Vec<_>>(),
-        [("native.speaker.commands", "admitted error")]
+        [
+            ("error", "native.speaker.commands", "admitted error"),
+            ("warn", "native.speaker.commands", "admitted warn")
+        ]
     );
     assert!(!log.file_text().contains("refused"));
     assert!(!log.terminal_text().contains("refused"));
@@ -778,9 +817,11 @@ fn lg1_the_subscriber_caps_the_process_wide_level_at_what_its_allowlist_admits()
         }
         .max_level_hint()
     };
-    // Production: errors only, so warn, info, debug and trace macros anywhere in
-    // the process stay behind their level gate as they did before.
-    assert_eq!(hint(NATIVE_ALLOWLIST), Some(LevelFilter::ERROR));
+    // Production: errors and warnings, so info, debug and trace macros anywhere
+    // in the process stay behind their level gate as they did before. A warn
+    // macro outside the allowlist now reaches the subscriber once, is answered
+    // `never`, and costs one atomic load from then on.
+    assert_eq!(hint(NATIVE_ALLOWLIST), Some(LevelFilter::WARN));
     assert_eq!(hint(TEST_ALLOWLIST), Some(LevelFilter::TRACE));
     assert_eq!(hint(&[]), Some(LevelFilter::OFF));
     const MIXED: &[AllowedTarget] = &[
@@ -805,14 +846,14 @@ fn lg1_the_subscriber_caps_the_process_wide_level_at_what_its_allowlist_admits()
     // needs no rebuild of the call site cache.
     for level in LEVELS {
         log.apply(wire(level));
-        assert_eq!(hint(NATIVE_ALLOWLIST), Some(LevelFilter::ERROR));
+        assert_eq!(hint(NATIVE_ALLOWLIST), Some(LevelFilter::WARN));
         assert_eq!(hint(TEST_ALLOWLIST), Some(LevelFilter::TRACE));
     }
 }
 
-// The allowlist admits the `error!` call sites of a whole module. This pins the
-// ones that were reviewed for the thread they run on and for what they format,
-// so that a new one is reviewed too before it becomes live.
+// The allowlist admits the `error!` and `warn!` call sites of a whole module.
+// This pins the ones that were reviewed for the thread they run on and for what
+// they format, so that a new one is reviewed too before it becomes live.
 #[test]
 fn lg1_the_allowlisted_module_holds_exactly_the_reviewed_call_sites() {
     let source = include_str!("speaker/commands.rs");
@@ -820,21 +861,124 @@ fn lg1_the_allowlisted_module_holds_exactly_the_reviewed_call_sites() {
         .split_once("\n#[cfg(test)]\n")
         .expect("the first test module marker separates production from tests");
     let count = |needle: &str| production.matches(needle).count();
+    // The format string of each call of a macro, in source order.
+    let formats = |needle: &str| {
+        production
+            .match_indices(needle)
+            .map(|(at, _)| {
+                let rest = &production[at + needle.len()..];
+                let open = rest.find('"').expect("a format string");
+                let close = rest[open + 1..].find('"').expect("its end");
+                &rest[open + 1..open + 1 + close]
+            })
+            .collect::<Vec<_>>()
+    };
     assert_eq!(
         count("error!("),
         8,
         "review the thread and the fields of the new call site, then update this count"
     );
-    // Never live, whatever the threshold.
+    // Live at warn and below. Reviewed on 2026-10-04: none runs inside the audio
+    // callback (the start command's Tokio worker for the cleanup thread, the
+    // capture task for the stream end and the empty continuous capture, the
+    // stop command's Tokio worker for the capture that did not drain), and each
+    // formats nothing, one operating system error, or one capture session
+    // identifier with its generation and a fixed duration. What each prints is
+    // in the test after this one.
     assert_eq!(
-        (
-            count("warn!("),
-            count("info!("),
-            count("debug!("),
-            count("trace!(")
-        ),
-        (8, 2, 0, 0)
+        formats("warn!("),
+        REVIEWED_WARN_FORMATS,
+        "review the thread, the fields and the rendered length of the new or changed call site, then update the list"
     );
+    // Never live, whatever the threshold. The two receipts: the capture format,
+    // which carries device identifiers, and the segment delivery. The four
+    // debug calls report designed outcomes of the capture lease: a start that
+    // was superseded, the release that every normal stop makes while the
+    // capture is already stopping, a stop request for another owner and a stop
+    // request for a lease native no longer holds.
+    assert_eq!(
+        formats("info!("),
+        [
+            "[native-audio-observation] {}",
+            "[native-audio-observation] {}"
+        ]
+    );
+    assert_eq!(formats("debug!("), REVIEWED_DEBUG_FORMATS);
+    assert_eq!(count("trace!("), 0);
+    // The session identifier a warning prints is made here, from a UUID.
+    assert!(
+        production.contains("let capture_session_id = format!(\"capture_{}\", Uuid::new_v4());")
+    );
+}
+
+// What each admitted warning prints, through the real subscriber over the
+// production allowlist. A message holds at most 256 characters. The two
+// warnings without a field and the capture that did not drain, with the
+// largest generation, are written whole. The cleanup warning holds one
+// operating system error after 42 fixed characters, so an error text of up to
+// 214 characters is written whole as well.
+#[test]
+fn lg4_each_admitted_warning_is_written_whole_within_the_message_bound() {
+    const COMMANDS: &str = "jarvis_lib::speaker::commands";
+    // One warning with a reviewed format string, on the allowlisted target,
+    // and the same text rendered in full.
+    let rendered = std::cell::RefCell::new(Vec::<String>::new());
+    macro_rules! reviewed_warn {
+        ($index:expr, $format:literal $(, $argument:expr)* $(,)?) => {{
+            assert_eq!(REVIEWED_WARN_FORMATS[$index], $format);
+            rendered.borrow_mut().push(format!($format $(, $argument)*));
+            tracing::warn!(target: COMMANDS, $format $(, $argument)*);
+        }};
+    }
+    // A capture session identifier as native makes one: 44 characters.
+    let session = "capture_123e4567-e89b-42d3-a456-426614174000";
+    assert_eq!(session.len(), format!("capture_{}", Uuid::new_v4()).len());
+    // The duration the last warning prints is a constant of that module.
+    assert!(include_str!("speaker/commands.rs")
+        .contains("const GRACEFUL_CAPTURE_STOP_TIMEOUT_MS: u64 = 750;"));
+
+    let log = TestSink::started("lg4-admitted-warning-lengths");
+    log.apply("warn");
+    tracing::dispatcher::with_default(&log.dispatch(), || {
+        // What a thread spawn that fails reports.
+        let error = std::io::Error::from_raw_os_error(35);
+        reviewed_warn!(0, "Could not start background audio cleanup: {error}");
+        reviewed_warn!(1, "Audio stream ended unexpectedly");
+        reviewed_warn!(2, "No audio captured in continuous mode");
+        reviewed_warn!(
+            3,
+            "Capture {} generation {} did not drain within {}ms; aborting",
+            session,
+            u64::MAX,
+            750u64
+        );
+    });
+    log.finish();
+
+    let lines = log.file_lines();
+    let rendered = rendered.into_inner();
+    assert_eq!(lines.len(), REVIEWED_WARN_FORMATS.len());
+    let chars = |text: &str| text.chars().count();
+    for (line, full) in lines.iter().zip(&rendered) {
+        assert_eq!(line["level"], "warn");
+        assert_eq!(line["source"], "native.speaker.commands");
+        assert_eq!(line["message"].as_str().unwrap(), full);
+        assert!(
+            chars(full) <= MAX_MESSAGE_CHARS,
+            "{} characters",
+            chars(full)
+        );
+        assert!(line["data"].get("truncated").is_none(), "{full}");
+    }
+    assert_eq!(
+        rendered.iter().map(|full| chars(full)).collect::<Vec<_>>(),
+        [88, 31, 36, 121],
+        "the longest message with fixed-size fields is the capture that did not drain"
+    );
+    // The room the one free text has: the operating system error.
+    let fixed = "Could not start background audio cleanup: ";
+    assert_eq!(REVIEWED_WARN_FORMATS[0], format!("{fixed}{{error}}"));
+    assert_eq!((chars(fixed), MAX_MESSAGE_CHARS - chars(fixed)), (42, 214));
 }
 
 // The level is read first. An entry below the threshold is counted as filtered

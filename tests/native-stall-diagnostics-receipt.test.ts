@@ -41,6 +41,8 @@ import {
   type NativeStallDiagnosticsReceiptStatus,
 } from "../src/lib/meeting/native-stall-diagnostics-receipt.js";
 import { isDiagnosticLogLevel } from "../src/lib/meeting/diagnostic-log.js";
+import { assertEntryInLedger, createDiagnosticLogSpy, DIAGNOSTIC_LOG_SPY_FAILING_DELIVERIES, DIAGNOSTIC_LOG_SPY_LEVELS,
+  type DiagnosticLogSpyDelivery } from "./helpers/diagnostic-log-spy.js";
 
 const HOOK = "src/hooks/useMeetingAssistant.ts";
 const PAGE = "src/pages/app/components/meeting/index.tsx";
@@ -141,7 +143,9 @@ const arm = (folderName: string | undefined) => ({ name: COMMAND, args: { enable
 interface IpcCall { name: string; args: Record<string, unknown> }
 interface HeldRequest { args: { enabled: boolean; folderName: string | null }; resolve(value: string | null): void; reject(error: unknown): void; settled: boolean }
 interface RecorderFile { command: string; args: Record<string, any> }
-interface MountOptions { stored?: Record<string, unknown> | string; native?: "auto" | "hold"; dev?: boolean; commits?: "each" | "manual" }
+interface MountOptions { stored?: Record<string, unknown> | string; native?: "auto" | "hold"; dev?: boolean; commits?: "each" | "manual";
+  // Task 178 LG: the level and the delivery of the diagnostic log the Hook block logs through. Trace and a working delivery when not given.
+  log?: { level?: (typeof DIAGNOSTIC_LOG_SPY_LEVELS)[number]; delivery?: DiagnosticLogSpyDelivery } }
 // One render of the Hook: the state it rendered with and the projection it returned.
 interface Frame {
   setting: boolean; active: boolean; folderName?: string; folderPath?: string;
@@ -168,7 +172,16 @@ function mount(options: MountOptions = {}) {
   const held: HeldRequest[] = [];
   const files: RecorderFile[] = [];
   const storageWrites: string[] = [];
+  // Task 178 LG, commit 3 (LG7): a rejected request printed a console warning with the message. It is now one warn
+  // entry of the diagnostic log, with the bounded summary of the native command's error as its cause (decisions A8).
+  // `warnings` holds what still reaches the console: nothing.
+  // `logged` reads the entries the real logger took from the Hook block, with its delivery boundary controlled.
   const warnings: unknown[][] = [];
+  const diagnosticLog = createDiagnosticLogSpy({ threshold: options.log?.level ?? "trace", delivery: options.log?.delivery });
+  const logged = () => diagnosticLog.entries().map((entry) => {
+    assertEntryInLedger(entry);
+    return [entry.level, `${entry.source} ${entry.event}`, entry.refs ?? {}, entry.data ?? {}];
+  });
   const receiptWrites: Array<NativeStallDiagnosticsReceipt | null> = [];
   const actions: string[] = [];
   const frames: Frame[] = [];
@@ -205,6 +218,7 @@ function mount(options: MountOptions = {}) {
     STORAGE_KEYS: { MEETING_ASSISTANT_SETTINGS: SETTINGS_KEY },
     safeLocalStorage: { getItem: () => stored ?? null, setItem: (_key: string, value: string) => { storageWrites.push(value); } },
     console: { warn: (...args: unknown[]) => { warnings.push(args); } },
+    logDiagnostic: diagnosticLog.logDiagnostic, diagnosticLogCause: diagnosticLog.logger.diagnosticLogCause,
     invoke,
     // The five functions the Hook imports from the leaf module.
     beginNativeStallDiagnosticsRequest, createNativeStallDiagnosticsRequest, isNativeStallDiagnosticsRequestRecording,
@@ -350,7 +364,7 @@ function mount(options: MountOptions = {}) {
     .filter((event) => event.kind === "capture-lifecycle" && String(event.metadata?.stage).startsWith("native-stall-diagnostics"))
     .map((event) => ({ sessionId: event.sessionId, ...event.metadata }));
   return {
-    globals, manager, ipc, held, files, storageWrites, warnings, receiptWrites, actions, frames, runs,
+    globals, manager, ipc, held, files, storageWrites, warnings, logged, receiptWrites, actions, frames, runs,
     start, stop, recording, release, releaseDisarms, fail, drain, timeline, settle: tick, flush: render, head,
     setSwitch: (enabled: boolean) => globals.setNativeStallDiagnosticsEnabled(enabled),
     settings: () => plain(globals.state.settings),
@@ -402,7 +416,7 @@ test("NDI1 the four switch x Recording combinations reach set_native_stall_diagn
     } else {
       assert.equal(h.files.filter((file) => file.command === "start_meeting_session_recording").length, 1, label);
     }
-    assert.deepEqual(h.warnings, [], label);
+    assert.deepEqual([h.warnings, h.logged()], [[], []], label);
   }
 });
 
@@ -519,7 +533,7 @@ test("NDI2 success: waiting, then arming while native has not answered, then arm
   await h.settle();
   assert.deepEqual(h.timeline(a.folderName), [{ sessionId: a.sessionId, stage: "native-stall-diagnostics", enabled: true, runId: "run-1",
     folderName: a.folderName, recordingSessionId: a.sessionId, requestId: 3 }]);
-  assert.deepEqual(h.warnings, []);
+  assert.deepEqual([h.warnings, h.logged()], [[], []]);
   // The path is derived: the recorder was asked for no listing and native for nothing but the command.
   assert.deepEqual([...new Set(h.ipc.map((call) => call.name))], [COMMAND]);
   assert.deepEqual([...new Set(h.files.map((file) => file.command))].sort(),
@@ -527,8 +541,9 @@ test("NDI2 success: waiting, then arming while native has not answered, then arm
 });
 
 test("NDI2 failure: the message is shown for that recording only, never as armed, and the next recording does not inherit it", async () => {
-  for (const [rejection, message] of [[new Error("Cannot start diagnostics observer"), "Cannot start diagnostics observer"],
-    ["Session recording is not active on disk", "Session recording is not active on disk"]] as const) {
+  // The cause of the log entry: the name and the message of an Error, or the string the native bridge rejects with.
+  for (const [rejection, message, cause] of [[new Error("Cannot start diagnostics observer"), "Cannot start diagnostics observer", "Error: Cannot start diagnostics observer"],
+    ["Session recording is not active on disk", "Session recording is not active on disk", "Session recording is not active on disk"]] as const) {
     const h = mount({ native: "hold", stored: { nativeStallDiagnosticsEnabled: true } });
     await h.release();
     const a = await h.start();
@@ -537,7 +552,11 @@ test("NDI2 failure: the message is shown for that recording only, never as armed
     assert.deepEqual(h.shown(), { phase: "failed", message });
     assert.deepEqual(h.receipt(), { requestId: 2, enabled: true, folderName: a.folderName, recordingSessionId: a.sessionId,
       folderPath: a.folderPath, status: "failed", message });
-    assert.deepEqual(h.warnings, [["Native stall diagnostics could not be armed", message]]);
+    // LG7: one warn entry for the rejected request, with the recording it was issued in, whether it was an arm, its
+    // Hook-local request number and the cause. The whole message is in the receipt above and in the recording below.
+    assert.deepEqual(h.logged(), [["warn", "meeting.native-stall-diagnostics request-failed", { recordingSessionId: a.sessionId },
+      { enabled: true, requestSequence: 2, cause }]]);
+    assert.deepEqual(h.warnings, [], "nothing is printed to the console");
     await h.settle();
     assert.deepEqual(h.timeline(a.folderName), [{ sessionId: a.sessionId, stage: "native-stall-diagnostics-error", enabled: true, message,
       folderName: a.folderName, recordingSessionId: a.sessionId, requestId: 2 }]);
@@ -554,6 +573,36 @@ test("NDI2 failure: the message is shown for that recording only, never as armed
     await h.settle();
     assert.deepEqual(h.timeline(b.folderName).map((entry) => entry.stage), ["native-stall-diagnostics"]);
     assert.equal(h.timeline(a.folderName).length, 1);
+  }
+});
+
+// Task 178 LG, commit 3 (LG7, LG1, LG2, LG5): the rejected request at every level and with a failing log delivery.
+test("LG7 Native Stall Diagnostics request failure: one warn entry at every level but error; the receipt, the line shown and the recording are what they were at every level and with a failing log delivery", async () => {
+  const run = async (log: MountOptions["log"]) => {
+    const h = mount({ native: "hold", stored: { nativeStallDiagnosticsEnabled: true }, log });
+    await h.release();
+    const a = await h.start();
+    await h.fail(new Error("Cannot start diagnostics observer"));
+    await h.settle();
+    // The identifiers of this run's recording differ between two runs: they are named, not compared.
+    const named = (value: unknown) => JSON.parse(JSON.stringify(value ?? null).split(a.folderPath).join("<path>").split(a.folderName).join("<folder>")
+      .split(a.sessionId).join("<recording>"));
+    return { logged: named(h.logged()), observed: named({ shown: h.shown(), receipt: h.receipt(), timeline: h.timeline(a.folderName), warnings: h.warnings,
+      ipc: shape(h.ipc), files: h.files.map((file) => [file.command, file.args.relativePath ?? null]) }) };
+  };
+  const reference = await run({ level: "trace" });
+  assert.deepEqual(reference.logged, [["warn", "meeting.native-stall-diagnostics request-failed", { recordingSessionId: "<recording>" },
+    { enabled: true, requestSequence: 2, cause: "Error: Cannot start diagnostics observer" }]]);
+  assert.deepEqual([reference.observed.shown, reference.observed.warnings], [{ phase: "failed", message: "Cannot start diagnostics observer" }, []]);
+  for (const level of DIAGNOSTIC_LOG_SPY_LEVELS) {
+    const current = await run({ level });
+    assert.deepEqual(current.observed, reference.observed, level);
+    assert.deepEqual(current.logged, level === "error" ? [] : reference.logged, level);
+  }
+  for (const delivery of DIAGNOSTIC_LOG_SPY_FAILING_DELIVERIES) {
+    const current = await run({ level: "trace", delivery });
+    assert.deepEqual(current.observed, reference.observed, delivery);
+    assert.deepEqual(current.logged, reference.logged, delivery);
   }
 });
 
@@ -681,7 +730,7 @@ test("NDI2 a reply that resolves after the recording changed is not written to t
     assert.deepEqual(h.timeline(b.folderName), [{ sessionId: b.sessionId, stage: "native-stall-diagnostics", enabled: true, runId,
       folderName: b.folderName, recordingSessionId: b.sessionId, requestId: requestOfB }]);
     assert.deepEqual(shape(h.ipc), ["disarms", `arm ${a.folderName}`, "disarms", `arm ${b.folderName}`]);
-    assert.deepEqual(h.warnings.length, outcome === "rejects" ? 1 : 0);
+    assert.deepEqual([h.warnings.length, h.logged().length], [0, outcome === "rejects" ? 1 : 0]);
   }
 });
 
@@ -871,7 +920,7 @@ test("NDI2 Stop A and Start B in one commit: B's first frame is arming, no frame
       assert.notEqual(frame.shown.evidencePath, evidence(a.folderPath), label);
       if (frame.shown.phase !== "arming") assert.deepEqual(frame.shown, armedB, label);
     }
-    assert.deepEqual(h.warnings, [], label);
+    assert.deepEqual([h.warnings, h.logged()], [[], []], label);
   }
 });
 
@@ -935,11 +984,11 @@ test("NDI2 an arming reply without a run id is shown as failed, never as armed o
   assert.deepEqual(h.receipt(), { requestId: 2, enabled: true, folderName: a.folderName, recordingSessionId: a.sessionId,
     folderPath: a.folderPath, status: "failed", message: NATIVE_STALL_DIAGNOSTICS_NO_RUN_ID_MESSAGE });
   // The recording write is what it was before this slice plus the identity: the success stage with a null
-  // run id, and no console warning. Only the display treats it as a failure.
+  // run id, and no console warning or log entry. Only the display treats it as a failure.
   await h.settle();
   assert.deepEqual(h.timeline(a.folderName), [{ sessionId: a.sessionId, stage: "native-stall-diagnostics", enabled: true, runId: null,
     folderName: a.folderName, recordingSessionId: a.sessionId, requestId: 2 }]);
-  assert.deepEqual(h.warnings, []);
+  assert.deepEqual([h.warnings, h.logged()], [[], []]);
   await h.stop();
   await h.drain();
   assert.deepEqual(h.shown(), { phase: "waiting-for-recording" }, "nothing was armed, so no folder is named");
@@ -1534,7 +1583,7 @@ test("NDI6 the wording keeps intent and receipt apart: armed appears only in the
   }
 });
 
-test("NDI6 a rejected disarm is not a phase: the line states the switch or the wait, and the rejection reaches the console and the recording", async () => {
+test("NDI6 a rejected disarm is not a phase: the line states the switch or the wait, and the rejection reaches the diagnostic log and the recording", async () => {
   // The switch goes off inside an armed recording and both disarm requests are rejected (a transport failure;
   // native's disarm itself cannot fail). Whether the native observer stopped is unknown to the Hook.
   const h = mount({ native: "hold", stored: { nativeStallDiagnosticsEnabled: true } });
@@ -1552,7 +1601,10 @@ test("NDI6 a rejected disarm is not a phase: the line states the switch or the w
   const view = panel(h);
   assert.deepEqual(view.lines, ["Status: switch off."], "the line states the switch; it does not say that native stopped");
   assert.deepEqual(view.lineClasses, [undefined]);
-  assert.deepEqual(h.warnings, Array.from({ length: 2 }, () => ["Native stall diagnostics could not be armed", "ipc channel closed"]));
+  // LG7: each rejected disarm is one warn entry, for a request that was not an arm, with the reason as its cause.
+  assert.deepEqual(h.logged(), [3, 4].map((requestSequence) => ["warn", "meeting.native-stall-diagnostics request-failed",
+    { recordingSessionId: a.sessionId }, { enabled: false, requestSequence, cause: "Error: ipc channel closed" }]));
+  assert.deepEqual(h.warnings, []);
   assert.deepEqual(h.timeline(a.folderName).map((entry) => [entry.requestId, entry.stage, entry.enabled, entry.message]), [
     [2, "native-stall-diagnostics", true, undefined],
     [3, "native-stall-diagnostics-error", false, "ipc channel closed"], [4, "native-stall-diagnostics-error", false, "ipc channel closed"]]);
@@ -1568,7 +1620,7 @@ test("NDI6 a rejected disarm is not a phase: the line states the switch or the w
   assert.ok(rejections >= 1);
   assert.deepEqual(panel(s).lines, [STATUS.waiting, PATH.lastArmed(b.folderPath)]);
   assert.deepEqual(panel(s).lineClasses, [undefined, "break-all"]);
-  assert.equal(s.warnings.length, rejections);
+  assert.deepEqual([s.warnings.length, s.logged().length], [0, rejections]);
   assert.deepEqual(s.timeline(b.folderName).map((entry) => entry.requestId), [2], "the recording was sealed before the rejections arrived");
 });
 

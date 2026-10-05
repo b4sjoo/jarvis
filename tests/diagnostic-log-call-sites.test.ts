@@ -1,20 +1,22 @@
-// Task 178 LG, commit 2: the field ledger of the logger call sites (LG4) and the
-// loss counters the Hook hands to the panel.
+// Task 178 LG, commits 2 and 3: the field ledger of the logger call sites (LG4) and
+// the loss counters the Hook hands to the panel.
 //
 // The ledger table is DIAGNOSTIC_LOG_LEDGER in tests/helpers/diagnostic-log-spy.ts,
 // so that every call-site test checks its entries against the same rows. This
 // file requires that table to be complete: each `logDiagnostic(` call in src is
-// one of its rows, and each row is one such call.
+// in one of its rows, and each row is one such call, or the two calls on two
+// branches that make the same entry.
 //
-// Real: the Hook source, read as text and as a syntax tree, and the logger leaf
-// that each spy evaluates. Controlled: the logger's delivery boundary, timers,
-// clock and console (see the helper). Each call site is driven through its own
-// production code in the test file of its harness:
+// Real: the Hook and trace store source, read as text and as a syntax tree, and the
+// logger leaf that each spy evaluates. Controlled: the logger's delivery boundary,
+// timers, clock and console (see the helper). Each call site is driven through its
+// own production code in the test file of its harness:
 //   formal Relation, observation stage, Type window  tests/ordered-relation-publication-callback.test.mjs
 //   Advisor                                           tests/main-advisor-waiting-budget.test.ts
 //   Fact Risk Review                                  tests/fact-risk-review.test.ts
 //   Meeting Metadata inference                        tests/recording-inference-admission.test.ts
 //   Whiteboard repair                                 tests/whiteboard-shadow-consumer.test.ts
+//   the migrated call sites of commit 3               tests/diagnostic-log-migration.test.ts and the files it names
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
@@ -23,10 +25,13 @@ import vm from "node:vm";
 import ts from "typescript";
 import * as leaf from "../src/lib/meeting/diagnostic-log.js";
 import {
+  CAUSE_CHARS,
+  CAUSE_LIMIT,
   DIAGNOSTIC_LOG_LEDGER,
   DIAGNOSTIC_LOG_NOT_GRADED,
   DIAGNOSTIC_LOG_SPY_FAILING_DELIVERIES,
   DIAGNOSTIC_LOG_SPY_LEVELS,
+  NO_CAUSE_ON_PROVIDER_PATH,
   PLANTED_VALUES,
   assertEntryInLedger,
   assertNothingPlanted,
@@ -35,15 +40,21 @@ import {
 } from "./helpers/diagnostic-log-spy.js";
 
 const HOOK = "src/hooks/useMeetingAssistant.ts";
+const TRACE_STORE = "src/lib/meeting/trace.ts";
 const hookText = readFileSync(HOOK, "utf8");
 const hook = ts.createSourceFile("hook.ts", hookText, ts.ScriptTarget.Latest, true);
 const key = (row: { file: string; owner: string; source: string; event: string }) => `${row.file} ${row.owner} ${row.source} ${row.event}`;
 
-test("LG4 ledger completeness: every logDiagnostic call in src is one ledger row and every row is one call, with literal tags, a lazy detail and no await", () => {
+test("LG4 ledger completeness: every logDiagnostic call in src is in one ledger row and every row is its one call, or the two branches it states, with literal tags, a lazy detail and no await", () => {
   const sites = listDiagnosticLogCallSites("src");
-  assert.deepEqual(sites.map(key).sort(), DIAGNOSTIC_LOG_LEDGER.map(key).sort());
+  // A row stands for one call, or for the number of calls of its owner that it states.
+  assert.deepEqual(sites.map(key).sort(), DIAGNOSTIC_LOG_LEDGER.flatMap((row) => Array.from({ length: row.callSites ?? 1 }, () => key(row))).sort());
   assert.equal(new Set(DIAGNOSTIC_LOG_LEDGER.map((row) => `${row.source} ${row.event}`)).size, DIAGNOSTIC_LOG_LEDGER.length,
-    "a source and event pair names one call site");
+    "a source and event pair names one row");
+  // One entry is made on two branches: a capture start that failed, in the catch of the start and on the branch that
+  // blocks it for a missing speech-to-text provider (decisions A8, item 5).
+  assert.deepEqual(DIAGNOSTIC_LOG_LEDGER.filter((row) => row.callSites !== undefined).map((row) => [`${row.source} ${row.event}`, row.owner, row.callSites]),
+    [["meeting.capture start-failed", "startCapture", 2]]);
   for (const site of sites) {
     const label = `${site.file}:${site.line} ${site.source} ${site.event}`;
     assert.match(site.source, /^[a-z0-9.-]{1,48}$/, `${label}: the source is a literal tag`);
@@ -51,21 +62,36 @@ test("LG4 ledger completeness: every logDiagnostic call in src is one ledger row
     assert.equal(site.lazyDetail, true, `${label}: the detail is a function, so a filtered call builds nothing`);
     assert.equal(site.awaited, false, `${label}: the call is not awaited`);
   }
-  // The logger is named in src by its own module and by the Hook alone, and the Hook
-  // takes it from the module directly: it is not passed through a business dependency.
-  assert.deepEqual([...new Set(sites.map((site) => site.file))], [HOOK]);
-  const named = hook.statements.filter(ts.isImportDeclaration).filter((node) =>
-    node.importClause?.namedBindings && ts.isNamedImports(node.importClause.namedBindings) &&
-    node.importClause.namedBindings.elements.some((element) => element.name.text === "logDiagnostic"));
-  assert.deepEqual(named.map((node) => node.moduleSpecifier.getText(hook)), ['"@/lib/meeting/diagnostic-log"']);
-  const mentions: ts.Identifier[] = [];
-  const visit = (node: ts.Node) => { if (ts.isIdentifier(node) && node.text === "logDiagnostic") mentions.push(node); ts.forEachChild(node, visit); };
-  visit(hook);
-  assert.equal(mentions.length, sites.length + 1, "the import and the calls: the function is never stored, passed or wrapped by another name");
-  // No call sits in a file of the realtime audio path or of the critical event stream.
-  for (const file of ["src/lib/meeting/runtime-critical-event.ts", "src/lib/meeting/trace.ts"]) {
-    assert.equal(/logDiagnostic|diagnostic-log/.test(readFileSync(file, "utf8")), false, file);
+  // The logger is called in src by the Hook and by the trace store alone, and each takes it from the module directly:
+  // it is not passed through a business dependency.
+  assert.deepEqual([...new Set(sites.map((site) => site.file))], [HOOK, TRACE_STORE]);
+  for (const [file, specifier, text] of [[HOOK, '"@/lib/meeting/diagnostic-log"', hookText],
+    [TRACE_STORE, '"./diagnostic-log.js"', readFileSync(TRACE_STORE, "utf8")]] as const) {
+    const source = file === HOOK ? hook : ts.createSourceFile("trace.ts", text, ts.ScriptTarget.Latest, true);
+    const named = source.statements.filter(ts.isImportDeclaration).filter((node) =>
+      node.importClause?.namedBindings && ts.isNamedImports(node.importClause.namedBindings) &&
+      node.importClause.namedBindings.elements.some((element) => element.name.text === "logDiagnostic"));
+    assert.deepEqual(named.map((node) => node.moduleSpecifier.getText(source)), [specifier], file);
+    const mentions: ts.Identifier[] = [];
+    const visit = (node: ts.Node) => { if (ts.isIdentifier(node) && node.text === "logDiagnostic") mentions.push(node); ts.forEachChild(node, visit); };
+    visit(source);
+    assert.equal(mentions.length, sites.filter((site) => site.file === file).length + 1,
+      `${file}: the import and the calls: the function is never stored, passed or wrapped by another name`);
   }
+  // The trace store has one call, in its private method, for all nine kinds of change.
+  assert.deepEqual(sites.filter((site) => site.file === TRACE_STORE).map((site) => site.owner), ["log"]);
+  // No other file of src names the function: not the critical event stream, the recording, the capture lifecycle
+  // coordinator or any library the Hook hands a callback to.
+  const naming: string[] = [];
+  const walk = (directory: string) => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const file = path.join(directory, entry.name);
+      if (entry.isDirectory()) walk(file);
+      else if (/\.(ts|tsx)$/.test(entry.name) && readFileSync(file, "utf8").includes("logDiagnostic")) naming.push(file.split(path.sep).join("/"));
+    }
+  };
+  walk("src");
+  assert.deepEqual(naming.sort(), [HOOK, "src/lib/meeting/diagnostic-log.ts", TRACE_STORE]);
 });
 
 const ancestors = (node: ts.Node) => { const chain: ts.Node[] = []; for (let current = node.parent; current; current = current.parent) chain.push(current); return chain; };
@@ -77,7 +103,7 @@ function collect<T extends ts.Node>(root: ts.Node, predicate: (node: ts.Node) =>
 }
 const named = (name: string) => (node: ts.Node): node is ts.Identifier => ts.isIdentifier(node) && node.text === name;
 
-test("LG3 the two additive facts are read-only: the selection reason of a stage result is read for the trace key, the observation entry and the stage selections alone, and the Type boolean for its entry alone; the trace printing of commit 3 is untouched", () => {
+test("LG3 the two additive facts are read-only: the selection reason of a stage result is read for the trace key, the observation entry and the stage selections alone, and the Type boolean for its entry alone; the trace store names neither", () => {
   // Every read of the reason of a Relation stage result in the Hook is the value of a `...SelectionReason` trace key, is
   // inside the observation summary, or is the stage settle's one write of the stage selections (its condition and its
   // value). (Two other objects of the Hook have a field of the same name; they are not stage results.)
@@ -111,10 +137,12 @@ test("LG3 the two additive facts are read-only: the selection reason of a stage 
     assert.ok(ancestors(read).some((node) => ts.isCallExpression(node) && node.expression.getText(hook) === "logDiagnostic"),
       "read inside the logger call");
   }
-  // Commit 3 is not started: the trace store prints as it did, through the command it had.
-  const traceStore = readFileSync("src/lib/meeting/trace.ts", "utf8");
-  assert.equal(traceStore.includes('"write_meeting_trace_log"'), true);
-  assert.equal(/diagnostic-log|logDiagnostic/.test(traceStore), false);
+  // The trace store, which logs each of its changes since commit 3, names neither fact: it counts the keys of a
+  // metadata patch and reads none of them.
+  const traceStore = readFileSync(TRACE_STORE, "utf8");
+  const storeClass = traceStore.slice(traceStore.indexOf("export class MeetingTraceStore"), traceStore.indexOf("export interface MeetingTraceValueSummary"));
+  assert.ok(storeClass.includes("logDiagnostic(") && storeClass.includes("countMetadataKeys(metadata)"));
+  assert.equal(/selectionReason|SelectionReason|typeOutcomePendingAtDeadline/.test(storeClass), false);
 });
 
 test("LG3 the stage selections are a diagnostics-only carrier: one optional field of the handle type, one object per scheduled operation, written by the two stage settles and read by the formal summary alone; no decision, selection, wait or recorded value reads it", () => {
@@ -220,10 +248,32 @@ test("LG the not-graded list names each case once and says what the log holds fo
     assert.ok(DIAGNOSTIC_LOG_NOT_GRADED.some((row) => row.id === id), id);
   }
   // Known limits are stated on the rows they belong to.
-  const limits = Object.fromEntries(DIAGNOSTIC_LOG_LEDGER.filter((row) => row.knownLimits).map((row) => [row.event, row.knownLimits!.length]));
-  assert.deepEqual(limits, { "formal-operation-settled": 2, "foreground-deadline-finalized": 1 });
+  const limits = Object.fromEntries(DIAGNOSTIC_LOG_LEDGER.filter((row) => row.knownLimits).map((row) => [`${row.source} ${row.event}`, row.knownLimits!.length]));
+  // Decisions A8: nineteen catches of a native command or of local persistence carry the cause and state its limit; the two
+  // queued-segment catches carry none and state why (tests/diagnostic-log-migration.test.ts proves which and why).
+  const causeLimits = Object.fromEntries(DIAGNOSTIC_LOG_LEDGER.filter((row) => row.knownLimits?.includes(CAUSE_LIMIT)).map((row) => [`${row.source} ${row.event}`, 1]));
+  const noCause = Object.fromEntries(DIAGNOSTIC_LOG_LEDGER.filter((row) => row.knownLimits?.includes(NO_CAUSE_ON_PROVIDER_PATH)).map((row) => [`${row.source} ${row.event}`, 1]));
+  assert.deepEqual([Object.keys(causeLimits).length, Object.keys(noCause).sort()], [19, ["meeting.audio-queue microphone-segment-failed", "meeting.audio-queue system-segment-failed"]]);
+  assert.deepEqual(limits, { "meeting.relation formal-operation-settled": 2, "meeting.question-type foreground-deadline-finalized": 1,
+    "meeting.trace store-event": 2, "meeting.native-audio lifecycle-event": 1, "meeting.raw-zero-input probe-observed": 4,
+    "meeting.manual-action type-correction-recorded": 1, ...causeLimits, ...noCause,
+    // A second limit of their own: the retry that a changed payload supersedes, the refresh that repeats, and the step of the close.
+    "meeting.trace-metrics persist-failed": 2, "meeting.stt-evaluation-capture refresh-failed": 2, "meeting.recording close-failed": 2 });
+  assert.match(CAUSE_LIMIT, /cut at 160 UTF-16 code units/);
+  assert.match(CAUSE_LIMIT, /can name a path or a device/);
+  // Decisions A8, item 6: the M2 row states that a scheduled retry is not a retry that ran.
+  assert.match(DIAGNOSTIC_LOG_LEDGER.find((row) => row.event === "persist-failed")!.knownLimits![1]!,
+    /A scheduled retry that a changed payload supersedes leaves that payload unsaved with a debug entry only/);
+  // Decisions A8, item 2: the probe report says what the default level holds of the run log Task 145 asks for, and what it does not.
+  assert.match(DIAGNOSTIC_LOG_LEDGER.find((row) => row.event === "probe-observed")!.knownLimits![0]!, /at the default level Info the run log holds the four action stages/);
+  assert.match(DIAGNOSTIC_LOG_LEDGER.find((row) => row.event === "probe-observed")!.knownLimits![0]!, /Task 145/);
+  assert.match(DIAGNOSTIC_LOG_LEDGER.find((row) => row.event === "probe-observed")!.knownLimits![0]!, /a warning that no probe action follows has no entry there/);
   assert.match(DIAGNOSTIC_LOG_LEDGER.find((row) => row.event === "foreground-deadline-finalized")!.knownLimits![0]!, /no longer active/);
 });
+
+// A cause as a native command gives one: a path with a space, an operating system error. Within the cut.
+const SAMPLE_CAUSE = "Error: failed to write /Users/example/Library/Application Support/jarvis/meeting-trace-metrics.json: No space left on device (os error 28)";
+assert.ok(SAMPLE_CAUSE.length <= CAUSE_CHARS);
 
 test("LG4 ledger rows are deliverable as they are listed: every key and every listed value passes the real logger unchanged, with nothing refused or cut", () => {
   for (const row of DIAGNOSTIC_LOG_LEDGER) {
@@ -234,12 +284,14 @@ test("LG4 ledger rows are deliverable as they are listed: every key and every li
       const spy = createDiagnosticLogSpy({ threshold: "trace", now: () => 1 });
       const data = Object.fromEntries(Object.entries(row.data).map(([name, kind]) => [name,
         kind === "boolean" ? pick % 2 === 0 : kind === "count" ? pick : kind === "ms" ? 4000 + pick
-          : kind === "code" ? "affinity-below-release-threshold" : kind[pick % kind.length]!]));
+          : kind === "code" ? "affinity-below-release-threshold" : kind === "identifier" ? "capture_3f2b1c9e-7a44-4c1d-9b1e-2f6a8d0c5e71"
+            : kind === "label" ? "Fact anchor output authorization" : kind === "bounded-text" ? SAMPLE_CAUSE : kind[pick % kind.length]!]));
       const refs = Object.fromEntries(row.refs.map((name) => [name, `${name}_1759570000000_ab12cd`]));
       spy.logDiagnostic(level, row.source, row.event, () => ({ refs, data }));
       const label = `${row.source} ${row.event} ${level} #${pick}`;
+      // A site with no reference or no field sends an entry without that part.
       assert.deepEqual(spy.entries(), [{ v: 1, at: 1, level, source: row.source, event: row.event,
-        ...(row.refs.length ? { refs } : {}), data }], label);
+        ...(row.refs.length ? { refs } : {}), ...(Object.keys(data).length ? { data } : {}) }], label);
       const counters = spy.snapshot();
       assert.deepEqual([counters.refusedEntries, counters.refusedFields, counters.truncatedFields, counters.oversizeEntries,
         counters.detailFailures, counters.internalErrors], [0, 0, 0, 0, 0, 0], label);

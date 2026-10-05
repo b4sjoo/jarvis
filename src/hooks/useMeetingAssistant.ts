@@ -44,6 +44,7 @@ import {
 import {
   applyDiagnosticLogLevel,
   beginDiagnosticLogLevelApply,
+  diagnosticLogCause,
   isDiagnosticLogLevel,
   logDiagnostic,
   projectDiagnosticLogLevel,
@@ -2553,6 +2554,23 @@ interface NativeAudioRecoveryAttemptContext {
   faultInjectionId?: string;
 }
 
+// What a caller of the raw-zero probe report adds to its observation: the
+// identifiers, counts and flags of the action it reports. The diagnostic log
+// entry of the report reads its fields from these by name.
+interface RawZeroProbeReportMetadata {
+  recoveryAttemptId?: string;
+  // The capture lifecycle operation that carries out the probe.
+  operationId?: number;
+  previousCaptureSessionId?: string;
+  previousCaptureGeneration?: number;
+  signalRestored?: boolean;
+  snapshotSequence?: number;
+  // The Screen operation the report is about, when it is not the active one.
+  screenOperationId?: string;
+  // The disposition the caller acted on. It is the stage of that report.
+  disposition?: string;
+}
+
 interface NativeAudioManualRecoveryAttemptContext {
   id: string;
   startedAt: number;
@@ -2847,7 +2865,11 @@ export function useMeetingAssistant() {
       .then(() => sttEvaluationCaptureManagerRef.current?.refresh())
       .catch((error) => {
         if (!disposed) {
-          console.warn("Failed to initialize STT evaluation capture", error);
+          // Task 178 LG, M7. The error is a native command's: its bounded
+          // summary is the entry's cause.
+          logDiagnostic("warn", "meeting.stt-evaluation-capture", "initialize-failed", () => ({
+            data: { cause: diagnosticLogCause(error) },
+          }));
         }
       });
     return () => {
@@ -2858,7 +2880,11 @@ export function useMeetingAssistant() {
     if (!state.sttEvaluationCapture.active) return;
     const intervalId = window.setInterval(() => {
       void sttEvaluationCaptureManagerRef.current?.refresh().catch((error) => {
-        console.warn("Failed to refresh STT evaluation capture", error);
+        // Task 178 LG, M7. Debug: this refresh repeats every two seconds while
+        // a capture is active, and a failure that persists repeats with it.
+        logDiagnostic("debug", "meeting.stt-evaluation-capture", "refresh-failed", () => ({
+          data: { cause: diagnosticLogCause(error) },
+        }));
       });
     }, 2_000);
     return () => {
@@ -2874,7 +2900,10 @@ export function useMeetingAssistant() {
       void sttEvaluationCaptureManagerRef.current
         ?.stop("authorization-source-disabled")
         .catch((error) => {
-          console.warn("Failed to stop STT evaluation capture", error);
+          // Task 178 LG, M7.
+          logDiagnostic("warn", "meeting.stt-evaluation-capture", "authorization-stop-failed", () => ({
+            data: { cause: diagnosticLogCause(error) },
+          }));
         });
     }
   }, [
@@ -3375,9 +3404,27 @@ export function useMeetingAssistant() {
           detail: event.detail,
           error: event.error,
         };
-        console.info(
-          `[${new Date(event.occurredAt).toISOString()}] [capture-lifecycle] ${event.stage}`,
-          JSON.stringify(metadata)
+        // Task 178 LG, M3. The level is read from the typed stage: an
+        // operation that was claimed or finished is info, a stale cleanup that
+        // failed is warn, every other stage is debug. The detail is the fixed
+        // code its caller passed; the error text stays in the recording below.
+        logDiagnostic(
+          event.stage === "claimed" || event.stage === "finished"
+            ? "info"
+            : event.stage === "stale-cleanup-failed"
+              ? "warn"
+              : "debug",
+          "meeting.capture-lifecycle",
+          "stage-reported",
+          () => ({
+            data: {
+              stage: event.stage,
+              action: event.action,
+              authorized: event.authorized,
+              captureOperationId: event.operationId,
+              detail: event.detail,
+            },
+          })
         );
         sessionRecordingManagerRef.current?.recordCaptureLifecycle(metadata);
       }
@@ -3812,7 +3859,19 @@ export function useMeetingAssistant() {
       ingressReceivedAt?: number;
     }) => {
       const runtimeState = contextManagerRef.current.getState();
-      if (input.action === "type-correction") console.info("[manual-runtime-action]", input);
+      // Task 178 LG, M10. A fixed field list: the corrected type and the
+      // reason are in the recorded action event below, not in the entry.
+      if (input.action === "type-correction") {
+        logDiagnostic("info", "meeting.manual-action", "type-correction-recorded", () => ({
+          refs: { traceId: input.traceId, operationId: input.actionId },
+          data: {
+            stage: input.stage,
+            uiSurface: input.uiSurface,
+            ingressSource: input.ingressSource,
+            terminalDisposition: input.terminalDisposition,
+          },
+        }));
+      }
       const manualAction = createManualRuntimeActionEvent({
         ...input,
         runtimeSessionId: runtimeState.sessionId,
@@ -4172,8 +4231,12 @@ export function useMeetingAssistant() {
       const next = result.projections;
       humanEvaluationProjectionsV2Ref.current = next;
       setHumanEvaluationProjectionsV2(next);
-      void humanEvaluationStore.saveObservation(result.projection).catch(error => {
-        console.warn("Evaluation observed projection persistence failed", { projectionId: result.projection?.projectionId, error: String(error) });
+      void humanEvaluationStore.saveObservation(result.projection).catch((error) => {
+        // Task 178 LG, M7. The error is the local evaluation store's.
+        logDiagnostic("warn", "meeting.evaluation", "observed-projection-persist-failed", () => ({
+          refs: { traceId: trace.id },
+          data: { projectionId: result.projection?.projectionId, cause: diagnosticLogCause(error) },
+        }));
       });
       sessionRecordingManagerRef.current?.recordHumanEvaluationProjectionV2(
         result.projection
@@ -8862,6 +8925,15 @@ export function useMeetingAssistant() {
       }
       return sessionRecording;
     } catch (error) {
+      // Task 178 LG, added under brief section 6. Any rejection of the
+      // recording manager's stop is a Session Recording close that failed:
+      // one error entry, with the recording that was being closed, the fixed
+      // reason its caller gave and the bounded summary of the error, which
+      // comes from the local recording writes, as its cause.
+      logDiagnostic("error", "meeting.recording", "close-failed", () => ({
+        refs: { recordingSessionId: priorRecording?.sessionId },
+        data: { reason, cause: diagnosticLogCause(error) },
+      }));
       const message =
         error instanceof Error
           ? error.message
@@ -8977,7 +9049,13 @@ export function useMeetingAssistant() {
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           settle({ message });
-          console.warn("Native stall diagnostics could not be armed", message);
+          // Task 178 LG, M8. The whole message stays in the receipt the panel
+          // shows and in the recording below; the entry carries the bounded
+          // summary of the native command's error as its cause.
+          logDiagnostic("warn", "meeting.native-stall-diagnostics", "request-failed", () => ({
+            refs: { recordingSessionId: request.recordingSessionId },
+            data: { enabled, requestSequence: requestId, cause: diagnosticLogCause(error) },
+          }));
           if (recordingIsCurrent()) {
             sessionRecordingManagerRef.current?.recordCaptureLifecycle({
               stage: "native-stall-diagnostics-error",
@@ -9150,13 +9228,19 @@ export function useMeetingAssistant() {
     const manager = sttEvaluationCaptureManagerRef.current;
     if (!manager) return;
     void (enabled ? manager.start(72) : manager.stop("manual")).catch((error) => {
-      console.warn("Failed to update STT evaluation capture", error);
+      // Task 178 LG, M7.
+      logDiagnostic("warn", "meeting.stt-evaluation-capture", "update-failed", () => ({
+        data: { enabled, cause: diagnosticLogCause(error) },
+      }));
     });
   }, [state.sessionRecording.active, state.settings.debugMode]);
 
   const deleteSttEvaluationCapture = useCallback(() => {
     void sttEvaluationCaptureManagerRef.current?.deleteCurrent().catch((error) => {
-      console.warn("Failed to delete STT evaluation capture", error);
+      // Task 178 LG, M7.
+      logDiagnostic("warn", "meeting.stt-evaluation-capture", "delete-failed", () => ({
+        data: { cause: diagnosticLogCause(error) },
+      }));
     });
   }, []);
 
@@ -9450,11 +9534,22 @@ export function useMeetingAssistant() {
               recorder?.recordHumanGroundTruthEventV2(committed.event);
               recorder?.recordHumanEvaluationProjectionV2(committed.projection);
             } else if (recording?.active) {
-              console.warn("Evaluation committed to SQLite; recording closed before mirror", { eventId: event.eventId, sessionId, recordingId: recording.sessionId });
+              // Task 178 LG, M7. The evaluation is saved; what is missing is
+              // its copy in the recording that was active when it was made.
+              logDiagnostic("warn", "meeting.evaluation", "recording-closed-before-mirror", () => ({
+                refs: { runtimeSessionId: sessionId, recordingSessionId: recording.sessionId },
+                data: { eventId: event.eventId },
+              }));
             }
           } catch (error) {
             save.error = `Evaluation not saved: ${String(error)}`;
-            console.error("Evaluation persistence failed", { eventId: event.eventId, sessionId, error: String(error) });
+            // Task 178 LG, M7. Error: the user's evaluation was not saved. The
+            // whole reason stays in the persistence state the panel shows; the
+            // entry carries the bounded summary of the store's error as its cause.
+            logDiagnostic("error", "meeting.evaluation", "persistence-failed", () => ({
+              refs: { runtimeSessionId: sessionId },
+              data: { eventId: event.eventId, cause: diagnosticLogCause(error) },
+            }));
           } finally {
             save.running = false;
             setEvaluationPersistence(previous => ({ ...previous, pending: Math.max(0, previous.pending - 1),
@@ -9677,16 +9772,26 @@ export function useMeetingAssistant() {
               });
               lastTraceMetricsPayloadRef.current = candidatePayload;
             } catch (error) {
-              const errorMessage = String(error).slice(0, 320);
-              console.warn("Failed to persist meeting trace metrics", error);
-              const message = `[${new Date().toISOString()}] [meeting-trace] trace-metrics-persist-failed ${JSON.stringify(
-                { attempt: attempt + 1, error: errorMessage }
-              )}`;
-              void invoke("write_meeting_trace_log", { message }).catch(
-                () => {}
+              // Task 178 LG, M2. The level is read from the retry branch
+              // below: a failed write that is tried once more is debug, and
+              // one that is not tried again is warn, because that payload is
+              // then not saved. The error is the native write command's.
+              const retryScheduled =
+                attempt < 1 && !shutdownRequestedRef.current;
+              logDiagnostic(
+                retryScheduled ? "debug" : "warn",
+                "meeting.trace-metrics",
+                "persist-failed",
+                () => ({
+                  data: {
+                    attempt: attempt + 1,
+                    retryScheduled,
+                    cause: diagnosticLogCause(error),
+                  },
+                })
               );
 
-              if (attempt < 1 && !shutdownRequestedRef.current) {
+              if (retryScheduled) {
                 if (traceMetricsPersistRetryTimerRef.current !== null) {
                   window.clearTimeout(
                     traceMetricsPersistRetryTimerRef.current
@@ -9796,7 +9901,12 @@ export function useMeetingAssistant() {
 
         void exportTraceObject(trace, getAutoExportTrigger(trace)).catch(
           (error) => {
-            console.warn("Failed to auto-export meeting trace", error);
+            // Task 178 LG, M7. The error is the export's: the native write
+            // command or the local serialisation of the trace.
+            logDiagnostic("warn", "meeting.trace-export", "auto-export-failed", () => ({
+              refs: { traceId: trace.id },
+              data: { kind: trace.kind, status: trace.status, cause: diagnosticLogCause(error) },
+            }));
           }
         );
       }
@@ -9858,7 +9968,15 @@ export function useMeetingAssistant() {
       const normalizedBrief = normalizeInterviewSessionBrief(brief);
       const observation = { stage: "interview-brief-updated", uiSurface,
         interviewTypes: normalizedBrief?.interviewTypes ?? [], priorOnly: true };
-      console.info("[interview-brief]", observation);
+      // Task 178 LG, M10. The entry counts the interview types; the
+      // recording below names them.
+      logDiagnostic("info", "meeting.interview-brief", "brief-updated", () => ({
+        data: {
+          uiSurface,
+          briefPresent: normalizedBrief !== undefined,
+          interviewTypeCount: observation.interviewTypes.length,
+        },
+      }));
       sessionRecordingManagerRef.current?.recordCaptureLifecycle(observation);
       persistInterviewSessionBrief(normalizedBrief);
       contextManagerRef.current.setInterviewSessionBrief(normalizedBrief);
@@ -10789,7 +10907,16 @@ export function useMeetingAssistant() {
           // Only Quit waits for frontend acceptance, and only for this Stop's exact lease.
           if (shutdownRequestedRef.current) await waitForShutdownTerminal();
         } catch (error) {
-          console.warn("Failed to stop meeting audio capture", error);
+          // Task 178 LG, M5. Warn on both branches below: Quit hands this
+          // error to its own owner, a normal Stop goes on locally. The error
+          // is a native command's or this block's own.
+          logDiagnostic("warn", "meeting.capture", "stop-native-failed", () => ({
+            data: {
+              captureOperationId: lifecycleOperation.id,
+              shutdownRequested: shutdownRequestedRef.current,
+              cause: diagnosticLogCause(error),
+            },
+          }));
           if (shutdownRequestedRef.current) throw error;
           if (!coordinator.authorize(lifecycleOperation, "native-stop-error")) {
             return;
@@ -10882,7 +11009,14 @@ export function useMeetingAssistant() {
             await sttEvaluationCaptureManagerRef.current?.stop("meeting-assistant-stopped");
           }
         } catch (error) {
-          console.warn("Failed to stop STT evaluation capture", error);
+          // Task 178 LG, M5.
+          logDiagnostic("warn", "meeting.stt-evaluation-capture", "meeting-stop-failed", () => ({
+            data: {
+              captureOperationId: lifecycleOperation.id,
+              shutdownRequested: shutdownRequestedRef.current,
+              cause: diagnosticLogCause(error),
+            },
+          }));
           if (shutdownRequestedRef.current) throw error;
         }
         // Quit finalizes recording only after the strict runtime/trace barrier.
@@ -24334,7 +24468,11 @@ export function useMeetingAssistant() {
               );
               return audioStatus;
             } catch (error) {
-              console.warn("Failed to stop meeting audio capture", error);
+              // Task 178 LG, M5. The error is the native stop command's.
+              logDiagnostic("warn", "meeting.capture", "missing-provider-stop-failed", () => ({
+                refs: { traceId },
+                data: { captureOperationId: lifecycleOperation.id, cause: diagnosticLogCause(error) },
+              }));
               coordinator.authorize(
                 lifecycleOperation,
                 "missing-provider-native-stop-error"
@@ -25731,8 +25869,13 @@ export function useMeetingAssistant() {
           });
           return processQueuedSpeechSegment(segment);
         })
-        .catch((error) => {
-          console.warn("Failed to process queued system audio segment", error);
+        .catch(() => {
+          // Task 178 LG, M5. No cause: this rejection can carry a
+          // speech-to-text provider's response.
+          logDiagnostic("warn", "meeting.audio-queue", "system-segment-failed", () => ({
+            refs: { traceId: trace.id },
+            data: { segmentSequence: sequence },
+          }));
         })
         .finally(() => {
           const pending = pendingSentenceCompletionRef.current;
@@ -25827,8 +25970,13 @@ export function useMeetingAssistant() {
           });
           return processQueuedSpeechSegment(segment);
         })
-        .catch((error) => {
-          console.warn("Failed to process queued microphone segment", error);
+        .catch(() => {
+          // Task 178 LG, M5. No cause: this rejection can carry a
+          // speech-to-text provider's response.
+          logDiagnostic("warn", "meeting.audio-queue", "microphone-segment-failed", () => ({
+            refs: { traceId: trace.id },
+            data: { segmentSequence: sequence },
+          }));
         });
     },
     [processQueuedSpeechSegment]
@@ -25882,17 +26030,69 @@ export function useMeetingAssistant() {
       state.settings.microphoneContextEnabled;
   }, [state.settings.microphoneContextEnabled]);
 
-  const reportRawZeroProbe = useCallback((stage: string, metadata: Record<string, unknown> = {}) => {
+  const reportRawZeroProbe = useCallback((stage: string, metadata: RawZeroProbeReportMetadata = {}) => {
+    const occurredAtMs = Date.now();
+    const captureSessionId = nativeCaptureSessionIdRef.current;
+    const captureGeneration = nativeCaptureGenerationRef.current;
+    const activeScreenOperationId = screenOperationCoordinatorRef.current.getActiveOperationId();
+    const episode = rawZeroInputEpisodeRef.current.read(Date.now(), false);
     const observation = {
       stage: `raw-zero-input:${stage}`,
-      occurredAtMs: Date.now(),
-      captureSessionId: nativeCaptureSessionIdRef.current,
-      captureGeneration: nativeCaptureGenerationRef.current,
-      screenOperationId: screenOperationCoordinatorRef.current.getActiveOperationId(),
-      ...rawZeroInputEpisodeRef.current.read(Date.now(), false),
+      occurredAtMs,
+      captureSessionId,
+      captureGeneration,
+      screenOperationId: activeScreenOperationId,
+      ...episode,
       ...metadata,
     };
-    console.info("[raw-zero-input]", JSON.stringify(observation));
+    // Task 178 LG, M6: the run log of the probe (Task 145). The stage is the
+    // fixed code its caller passed, and the level is read from it: the four
+    // stages that report an action of the probe (it was requested, the native
+    // restart began, the native restart ended, real signal returned) are info,
+    // so the default level keeps a run log of them whether or not a recording
+    // is active; every other stage is debug. The capture, the Screen
+    // operation and the episode are the values read above, before the
+    // caller's metadata is merged into the observation, so a metadata key of
+    // the same name cannot replace them here. The rest is read from the typed
+    // metadata by name: identifiers, counts and one flag. The start of the
+    // zero input and the end of the wait are given as durations from this
+    // moment.
+    logDiagnostic(
+      stage === "requested" ||
+        stage === "native-restart-started" ||
+        stage === "native-restart-completed" ||
+        stage === "signal-restored"
+        ? "info"
+        : "debug",
+      "meeting.raw-zero-input",
+      "probe-observed",
+      () => ({
+        data: {
+          stage,
+          captureSessionId: captureSessionId ?? undefined,
+          captureGeneration: captureGeneration ?? undefined,
+          captureOperationId: metadata.operationId,
+          screenOperationId:
+            metadata.screenOperationId ?? activeScreenOperationId ?? undefined,
+          recoveryAttemptId: metadata.recoveryAttemptId,
+          previousCaptureSessionId: metadata.previousCaptureSessionId,
+          previousCaptureGeneration: metadata.previousCaptureGeneration,
+          snapshotSequence: metadata.snapshotSequence,
+          signalRestored: metadata.signalRestored,
+          warning: episode.warning,
+          episodeDisposition: episode.disposition,
+          probeUsed: episode.probeUsed,
+          zeroDurationMs:
+            episode.zeroSince === undefined
+              ? undefined
+              : Math.max(0, occurredAtMs - episode.zeroSince),
+          waitRemainingMs:
+            episode.waitUntil === undefined
+              ? undefined
+              : Math.max(0, episode.waitUntil - occurredAtMs),
+        },
+      })
+    );
     sessionRecordingManagerRef.current?.recordCaptureLifecycle(observation);
   }, []);
 
@@ -26049,6 +26249,21 @@ export function useMeetingAssistant() {
       }
 
       if (!sttProvider) {
+        // Task 178 LG, added under brief section 6. A start that is blocked
+        // because no speech-to-text provider is configured is a capture start
+        // that failed: the same error entry as the catch below makes, with the
+        // block named. Nothing was caught, so it has no cause.
+        logDiagnostic("error", "meeting.capture", "start-failed", () => ({
+          data: {
+            mode,
+            captureOperationId: lifecycleOperation.id,
+            nativeStartAttempted: false,
+            automaticRecovery: recoveryAttempt !== undefined,
+            manualRecovery: manualRecoveryAttempt !== undefined,
+            silentSourceProbe,
+            blocked: "stt-provider-missing",
+          },
+        }));
         activeRef.current = false;
         runtimeActiveRef.current = false;
         invalidateAudioProcessingSession();
@@ -26328,6 +26543,23 @@ export function useMeetingAssistant() {
           }
           if (!authorized) return;
 
+          // Task 178 LG, added under brief section 6. One error entry for a
+          // capture start that failed while its operation was still current.
+          // The whole message stays where it was, in the panel and the
+          // recording; the entry carries the bounded summary of the error, a
+          // native command's or this block's own, as its cause.
+          logDiagnostic("error", "meeting.capture", "start-failed", () => ({
+            data: {
+              mode,
+              captureOperationId: lifecycleOperation.id,
+              nativeStartAttempted,
+              automaticRecovery: recoveryAttempt !== undefined,
+              manualRecovery: manualRecoveryAttempt !== undefined,
+              silentSourceProbe,
+              cause: diagnosticLogCause(error),
+            },
+          }));
+
           activeRef.current = false;
           if (!silentSourceProbe) runtimeActiveRef.current = false;
           invalidateAudioProcessingSession();
@@ -26488,7 +26720,10 @@ export function useMeetingAssistant() {
           return;
         }
       } catch (error) {
-        console.warn("Failed to pause meeting audio capture", error);
+        // Task 178 LG, M5. The error is the native stop command's.
+        logDiagnostic("warn", "meeting.capture", "pause-native-failed", () => ({
+          data: { captureOperationId: lifecycleOperation.id, cause: diagnosticLogCause(error) },
+        }));
         if (!coordinator.authorize(lifecycleOperation, "native-pause-error")) {
           return;
         }
@@ -37398,7 +37633,11 @@ export function useMeetingAssistant() {
           traceStoreRef.current.hydrate(traces);
         }
       } catch (error) {
-        console.warn("Failed to load meeting trace metrics", error);
+        // Task 178 LG, M7. The error is the native read command's, or comes
+        // from reading and hydrating what it returned.
+        logDiagnostic("warn", "meeting.trace-metrics", "load-failed", () => ({
+          data: { cause: diagnosticLogCause(error) },
+        }));
       } finally {
         if (!cancelled) {
           traceMetricsPersistenceReadyRef.current = true;
@@ -37574,7 +37813,15 @@ export function useMeetingAssistant() {
               captureGeneration: marker.captureGeneration,
               snapshotSequence: marker.snapshotSequence,
             }).catch((error) => {
-              console.warn("Native stall marker ACK failed", error);
+              // Task 178 LG, M4. The error is the native acknowledge command's.
+              logDiagnostic("warn", "meeting.native-audio", "stall-marker-ack-failed", () => ({
+                data: {
+                  captureSessionId: marker.captureSessionId,
+                  captureGeneration: marker.captureGeneration,
+                  snapshotSequence: marker.snapshotSequence,
+                  cause: diagnosticLogCause(error),
+                },
+              }));
             });
           }
           const metadata = {
@@ -37596,10 +37843,15 @@ export function useMeetingAssistant() {
             metadata
           );
           if (!authorization.authorized) {
-            console.info(
-              `[${new Date().toISOString()}] [native-audio-liveness] rejected`,
-              JSON.stringify(metadata)
-            );
+            // Task 178 LG, M4.
+            logDiagnostic("debug", "meeting.native-audio", "liveness-rejected", () => ({
+              data: {
+                reason: authorization.reason,
+                captureSessionId: authorization.event?.captureSessionId,
+                captureGeneration: authorization.event?.captureGeneration,
+                snapshotSequence: authorization.event?.snapshotSequence,
+              },
+            }));
             return;
           }
 
@@ -37676,10 +37928,15 @@ export function useMeetingAssistant() {
             metadata
           );
           if (!authorization.authorized) {
-            console.info(
-              `[${new Date().toISOString()}] [native-speech-start] rejected`,
-              JSON.stringify(metadata)
-            );
+            // Task 178 LG, M4.
+            logDiagnostic("debug", "meeting.native-audio", "speech-start-rejected", () => ({
+              data: {
+                reason: authorization.reason,
+                captureSessionId: authorization.event?.captureSessionId,
+                captureGeneration: authorization.event?.captureGeneration,
+                candidateSegmentSequence: authorization.event?.candidateSegmentSequence,
+              },
+            }));
             return;
           }
 
@@ -37773,13 +38030,20 @@ export function useMeetingAssistant() {
                 }
               );
             }
-            console.info(
-              `[${new Date().toISOString()}] [native-speech-event] observed`,
-              JSON.stringify({
+            // Task 178 LG, M4.
+            logDiagnostic("debug", "meeting.native-audio", "speech-segment-observed", () => ({
+              refs: { traceId: observation.traceId },
+              data: {
                 reason: authorization.reason,
-                ...formatAudioSegmentObservationForTrace(observation),
-              })
-            );
+                captureSessionId: observation.identity.captureSessionId,
+                captureGeneration: observation.identity.captureGeneration,
+                segmentSequence: observation.identity.segmentSequence,
+                observationDisposition: observation.observationDisposition,
+                observationCount: observation.observationCount,
+                duplicateObservationCount: observation.duplicateObservationCount,
+                canonicalDisposition: observation.canonicalDisposition,
+              },
+            }));
             return;
           }
           const metadata = {
@@ -37795,10 +38059,16 @@ export function useMeetingAssistant() {
               ? buildNativeSpeechEventTraceMetadata(authorization.event)
               : {}),
           };
-          console.info(
-            `[${new Date().toISOString()}] [native-speech-event] rejected`,
-            JSON.stringify(metadata)
-          );
+          // Task 178 LG, M4.
+          logDiagnostic("debug", "meeting.native-audio", "speech-segment-rejected", () => ({
+            data: {
+              reason: authorization.reason,
+              authority: openDrainAuthorization ? "open-drain" : "active-capture",
+              captureSessionId: authorization.event?.captureSessionId,
+              captureGeneration: authorization.event?.captureGeneration,
+              segmentSequence: authorization.event?.segmentSequence,
+            },
+          }));
           sessionRecordingManagerRef.current?.recordNativeSpeechEvent(metadata);
           return;
         }
@@ -37846,10 +38116,20 @@ export function useMeetingAssistant() {
             authorized,
             ...(dropped ?? { rejectionReason: "invalid-envelope" }),
           };
-          console.warn(
-            `[${new Date().toISOString()}] [native-audio-segment-dropped]`,
-            JSON.stringify(metadata)
-          );
+          // Task 178 LG, M4. A dropped segment of the current capture is lost
+          // evidence, warn. One of another capture, or an envelope that could
+          // not be read, is debug. The native reason and message stay in the
+          // recording below.
+          logDiagnostic(authorized ? "warn" : "debug", "meeting.native-audio", "segment-dropped", () => ({
+            data: {
+              authorized,
+              envelopeValid: dropped !== null,
+              owner: dropped?.owner,
+              captureSessionId: dropped?.captureSessionId,
+              captureGeneration: dropped?.captureGeneration,
+              attemptedSegmentSequence: dropped?.attemptedSegmentSequence,
+            },
+          }));
           sessionRecordingManagerRef.current?.recordCaptureLifecycle(metadata);
         }
       );
@@ -37880,9 +38160,31 @@ export function useMeetingAssistant() {
               : {}),
           };
           sessionRecordingManagerRef.current?.recordCaptureLifecycle(metadata);
-          console.info(
-            `[${new Date().toISOString()}] [native-audio-lifecycle]`,
-            JSON.stringify(metadata)
+          // Task 178 LG, M4. The level is read from the typed event type of an
+          // authorized event: started and stopped are info, error is warn. It
+          // is not error here: what the end of the stream means for the
+          // meeting is decided below. An event that is not authorized is
+          // debug. The native reason and message stay in the recording above.
+          logDiagnostic(
+            !authorization.authorized
+              ? "debug"
+              : authorization.event.eventType === "error"
+                ? "warn"
+                : "info",
+            "meeting.native-audio",
+            "lifecycle-event",
+            () => ({
+              data: {
+                authorized: authorization.authorized,
+                rejectionReason: authorization.authorized ? undefined : authorization.reason,
+                eventType: authorization.event?.eventType,
+                owner: authorization.event?.owner,
+                captureSessionId: authorization.event?.captureSessionId,
+                captureGeneration: authorization.event?.captureGeneration,
+                expected: authorization.event?.expected,
+                recoverability: authorization.event?.recoverability,
+              },
+            })
           );
           const recordedEvent = authorization.event;
           if (recordedEvent && recordedEvent.eventType !== "started") {
@@ -38136,7 +38438,11 @@ export function useMeetingAssistant() {
     };
 
     void setupListeners().catch((error) => {
-      console.warn("Failed to setup meeting speech listener", error);
+      // Task 178 LG, M4. Error: without its listeners the meeting receives no
+      // native audio event. The error is the native event subscription's.
+      logDiagnostic("error", "meeting.native-audio", "listener-setup-failed", () => ({
+        data: { cause: diagnosticLogCause(error) },
+      }));
     });
 
     return () => {

@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -267,7 +267,9 @@ fn activate_capture_if_owner(
         &lease.session_id,
         lease.generation,
     ) {
-        warn!(
+        // Debug, not warn: a start that a later stop or start superseded is a
+        // designed outcome of the lease, and its caller receives the error.
+        debug!(
             "Capture start superseded: expected {:?}, observed {:?}, phase {:?}",
             lease, control.lease, control.phase
         );
@@ -2373,7 +2375,9 @@ fn release_capture_if_owner(
     generation: u64,
 ) -> Option<ReleasedActiveCapture> {
     if !control_owns(control, phase, owner, session_id, generation) {
-        warn!(
+        // Debug, not warn: this fires on every normal stop, when the capture
+        // task's own release finds the capture already stopping.
+        debug!(
             "Capture release rejected: expected {}/{}/{} {:?}, observed {:?} {:?}",
             owner.as_str(),
             session_id,
@@ -2510,7 +2514,9 @@ async fn stop_capture_for_owner(
                 return Ok((NativeStopDisposition::AlreadyIdle, None))
             }
             NativeStopDecision::WrongOwner(owner) => {
-                warn!(
+                // Debug, not warn: a stop request for another owner is refused
+                // by design, and its caller receives the disposition.
+                debug!(
                     "Ignoring {} stop request because capture is owned by {}",
                     requested_owner.as_str(),
                     owner.as_str()
@@ -2518,7 +2524,10 @@ async fn stop_capture_for_owner(
                 return Ok((NativeStopDisposition::OwnerMismatch, None));
             }
             NativeStopDecision::StaleLease(active_lease) => {
-                warn!(
+                // Debug, not warn: a stop request for a lease native no longer
+                // holds is refused by design, and its caller receives the
+                // disposition.
+                debug!(
                     "Ignoring stale {} stop request for session {:?} generation {:?}; active session is {} generation {}",
                     requested_owner.as_str(),
                     expected_session_id,

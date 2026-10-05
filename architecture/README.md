@@ -133,8 +133,8 @@ local absolute paths, provider secrets, or session-recording payloads.
 Current verified source checkpoint: `cf23c8cf7581d4baa8b0d1a76a188f791dd2ea7c`
 (October 1, 2026). The analyzer passes with 10 task-writer callsites in two
 modules, no live legacy-reader imports, one cycle with 17 edges, six broad-barrel
-consumers, 73 registered commands, 74 recognized frontend calls, no known
-IPC exceptions, and 37 deleted ledger entries. These are scanner metrics, not a
+consumers, 72 registered commands, 73 recognized frontend calls, no known
+IPC exceptions, and 38 deleted ledger entries. These are scanner metrics, not a
 claim that registered-command and call counts form a one-to-one mapping.
 
 The contract's `sourceCommit` identifies the source checkpoint last reconciled

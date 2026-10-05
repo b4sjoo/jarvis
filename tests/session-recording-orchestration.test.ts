@@ -37,6 +37,7 @@ import { compileSettledAdvisorPromptContext } from "../src/lib/meeting/settled-a
 import { buildAdvisorUserMessage } from "../src/lib/meeting/advisor-prompt.js";
 import { authorizeRuntimeCommit, buildRuntimeCommitSnapshot, createRuntimeCommitToken } from "../src/lib/meeting/runtime-commit-authorization.js";
 import { createRuntimeCriticalEventHarness, RUNTIME_CRITICAL_EVENT_HOOK_CALLBACKS } from "./helpers/runtime-critical-events.js";
+import { createDiagnosticLogSpy } from "./helpers/diagnostic-log-spy.js";
 import { createManualRuntimeActionEvent } from "../src/lib/meeting/manual-runtime-action.js";
 import { parseRuntimeCriticalEventJournal, RUNTIME_CRITICAL_EVENT_JOURNAL_PATH } from "../src/lib/meeting/runtime-critical-event.js";
 
@@ -136,8 +137,13 @@ function harness() {
   // Task 178A: the real stream, bound to the runtime session as the Hook binds
   // it at mount. The auto-stubbed Map above must not stand in for it.
   const criticalEvents = createRuntimeCriticalEventHarness({ sessionId: context.getState().sessionId });
+  // Task 178 LG: the Hook's recording stop makes one entry of the diagnostic log when the close fails, with the logger
+  // leaf's summary of the error. The real logger, its delivery controlled; tests/diagnostic-log-migration.test.ts
+  // drives that entry.
+  const diagnosticLog = createDiagnosticLogSpy();
   Object.assign(globals, {
     ...criticalEvents.hookRefs,
+    logDiagnostic: diagnosticLog.logDiagnostic, diagnosticLogCause: diagnosticLog.logger.diagnosticLogCause,
     console, Promise, Date, JSON, Map, Set, Error,
     createMeetingId, createInterviewSessionContextFromBrief,
     createNeutralPreparationRuntimeContext, loadPreparationRuntimeContext,

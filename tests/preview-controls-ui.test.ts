@@ -1220,11 +1220,13 @@ const LOG_LEVELS = ["error", "warn", "info", "debug", "trace"] as const;
 const LOG_LEVEL_LABELS = ["Error", "Warn", "Info", "Debug", "Trace"];
 // Verbatim UI text of the selector.
 const LOG_LEVEL_HELP = "Sets the threshold of the diagnostic log: entries at this level and every more severe level go to the terminal and to " +
-  "local log files, which keep at most 50 MiB or 14 days. The log currently holds native system-audio command errors and one " +
-  "summary for each Relation wait, Voice Type deadline, failed or abandoned Advisor answer, Fact Risk Review, Meeting Metadata " +
-  "inference and Whiteboard check. Screen answers are not logged yet. Saved separately from Debug Mode. Log Level does not control " +
-  "Debug Mode trace printing, Preparation, the focus window, native prints, Session Recording or Native Stall Diagnostics files, " +
-  "and starts no model request, sampler or capture.";
+  "local log files, which keep at most 50 MiB or 14 days. Errors and warnings cover failed Voice answers, capture, " +
+  "recording and saving failures and lost model results. Info adds capture start and stop, manual corrections and Brief " +
+  "updates. Debug and Trace add operation summaries and every trace and step change. No entry holds transcript, prompt or " +
+  "answer text. Debug Mode alone no longer prints trace lines: they are Debug and Trace entries of this log. Saved " +
+  "separately from Debug Mode. Log Level does not control Preparation, the focus window, shutdown messages, other console " +
+  "and native prints, Session Recording or Native Stall Diagnostics files, and starts no model request, sampler or " +
+  "capture.";
 const logLevelPending = (level: string) => `Status: ${level} requested, waiting for the native reply. Not yet confirmed on native.`;
 const logLevelApplied = (level: string, sink: string) => `Status: native applied ${level}. Log sink at that time: ${sink}.`;
 const logLevelFailed = (level: string, message: string) => `Status: native did not confirm ${level}. Select ${level} again to retry. Reason: ${message}`;
@@ -1416,18 +1418,26 @@ test("LG UI the help text states what Log Level controls and what it does not, i
     assert.equal(help, LOG_LEVEL_HELP, JSON.stringify({ dev, debug, recording }));
     assert.equal(text(block.children), `Log Level${LOG_LEVEL_LABELS.join("")}${LOG_LEVEL_HELP}`, "the selector, the help and nothing else");
   }
-  // What the log holds now is said, one summary per named operation, and what it does not hold yet.
-  assert.match(LOG_LEVEL_HELP, /The log currently holds native system-audio command errors and one summary for each /);
-  const held = LOG_LEVEL_HELP.slice(LOG_LEVEL_HELP.indexOf("one summary for each "), LOG_LEVEL_HELP.indexOf(" Screen answers"));
-  assert.equal(held, "one summary for each Relation wait, Voice Type deadline, failed or abandoned Advisor answer, Fact Risk Review, " +
-    "Meeting Metadata inference and Whiteboard check.");
-  assert.match(LOG_LEVEL_HELP, /Screen answers are not logged yet\./);
-  // It claims no entry per Relation decision, no level for any entry and no sameness of the levels.
-  assert.doesNotMatch(LOG_LEVEL_HELP, /each Relation decision|is an error|Warnings are|every level gives the same output|holds only/);
-  // What it does not control is named, each by its own name, and nothing wider is promised.
+  // The text is the design owner's ruling (decisions A8, item 7), sentence by sentence: the threshold and the retention
+  // bounds; what each group of levels holds; what no entry holds; the consequence of the migration for Debug Mode; that
+  // the level is saved on its own; and what it does not control.
+  assert.deepEqual(LOG_LEVEL_HELP.split(/(?<=\.) /), [
+    "Sets the threshold of the diagnostic log: entries at this level and every more severe level go to the terminal and to local log files, which keep at most 50 MiB or 14 days.",
+    "Errors and warnings cover failed Voice answers, capture, recording and saving failures and lost model results.",
+    "Info adds capture start and stop, manual corrections and Brief updates.",
+    "Debug and Trace add operation summaries and every trace and step change.",
+    "No entry holds transcript, prompt or answer text.",
+    "Debug Mode alone no longer prints trace lines: they are Debug and Trace entries of this log.",
+    "Saved separately from Debug Mode.",
+    "Log Level does not control Preparation, the focus window, shutdown messages, other console and native prints, Session Recording or Native Stall Diagnostics files, and starts no model request, sampler or capture.",
+  ]);
+  // It claims no entry per Relation decision, no sameness of the levels and no gap that is closed since: the recording
+  // close that fails has its error entry now.
+  assert.doesNotMatch(LOG_LEVEL_HELP, /each Relation decision|every level gives the same output|holds only|no error entry yet/);
+  // What it does not control is named, and nothing wider is promised. Debug Mode trace printing is not on that list:
+  // there is none left to control.
   const notControlled = LOG_LEVEL_HELP.slice(LOG_LEVEL_HELP.indexOf("Log Level does not control "));
-  assert.equal(notControlled, "Log Level does not control Debug Mode trace printing, Preparation, the focus window, native prints, " +
-    "Session Recording or Native Stall Diagnostics files, and starts no model request, sampler or capture.");
+  assert.doesNotMatch(notControlled, /Debug Mode/);
   // The retention bounds of the local files, as the sink enforces them.
   assert.match(LOG_LEVEL_HELP, /local log files, which keep at most 50 MiB or 14 days\./);
   assert.match(LOG_LEVEL_HELP, /Saved separately from Debug Mode\./);

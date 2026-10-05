@@ -14,6 +14,8 @@ import type { MeetingAssistantSettings, MeetingAudioStatus } from "../src/lib/me
 import { createRuntimeCriticalEventHarness, RUNTIME_CRITICAL_EVENT_HOOK_CALLBACKS } from "./helpers/runtime-critical-events.js";
 import { MeetingContextManager } from "../src/lib/meeting/context-manager.js";
 import { createMeetingId } from "../src/lib/meeting/meeting-id.js";
+import { assertEntryInLedger, createDiagnosticLogSpy, DIAGNOSTIC_LOG_SPY_FAILING_DELIVERIES, DIAGNOSTIC_LOG_SPY_LEVELS,
+  type DiagnosticLogSpyDelivery } from "./helpers/diagnostic-log-spy.js";
 
 // Same AST/VM technique as session-recording-orchestration: execute the production Hook
 // callbacks with real capture coordinator, trace store and 127 manager, stubbing only I/O/UI.
@@ -63,7 +65,11 @@ function deferred() {
 }
 async function settle() { await new Promise<void>((resolve) => setImmediate(resolve)); }
 
-async function harness(owner: "meeting" | "system" = "meeting") {
+// Task 178 LG: the Stop callback and the lifecycle listener log through `logDiagnostic`. The harness hands them the
+// real logger with its delivery boundary controlled (see the helper), at the level and delivery a test asks for.
+async function harness(owner: "meeting" | "system" = "meeting",
+  log: { level?: (typeof DIAGNOSTIC_LOG_SPY_LEVELS)[number]; delivery?: DiagnosticLogSpyDelivery } = {}) {
+  const diagnosticLog = createDiagnosticLogSpy({ threshold: log.level ?? "trace", delivery: log.delivery });
   const calls: string[] = [];
   const nativeCommands: Array<{ command: string; args: Record<string, unknown> }> = [];
   const files: Array<{ command: string; args: Record<string, any> }> = [];
@@ -123,7 +129,8 @@ async function harness(owner: "meeting" | "system" = "meeting") {
   const disposeMicrophone = async () => { calls.push("mic-dispose"); };
   let ui: any = { presentationArtifactResetRevision: 0, status: "listening" };
   Object.assign(globals, {
-    console: { info: noop, warn: noop }, Date, Promise, Set, Map, Error, structuredClone, exports: {}, importMeta: { env: { DEV: false } },
+    console: { info: noop, warn: noop }, logDiagnostic: diagnosticLog.logDiagnostic, diagnosticLogCause: diagnosticLog.logger.diagnosticLogCause,
+    Date, Promise, Set, Map, Error, structuredClone, exports: {}, importMeta: { env: { DEV: false } },
     artifactReuseSettingsRef: { current: { useMemory: false } },
     manualCorrectionRevisionRef: { current: 0 },
     preparationRuntimeContextRef: { current: { preparationContextRevision: 0 } },
@@ -224,7 +231,7 @@ async function harness(owner: "meeting" | "system" = "meeting") {
   const coordinator = new ApplicationShutdownCoordinator(globals.shutdownOwner as ApplicationShutdownOwner, transport);
   await connectApplicationShutdownOwner(coordinator, transport, (error) => errors.push(error));
   return {
-    globals, calls, nativeCommands, files, recording, traces, nativeReply, nativeEntered, queue, errors, runtimeCancels, criticalEvents,
+    globals, calls, nativeCommands, files, recording, traces, nativeReply, nativeEntered, queue, errors, runtimeCancels, criticalEvents, diagnosticLog,
     getStatus: () => ({ ...status }),
     setStatusRead: (read: typeof readStatus) => { readStatus = read; },
     replaceCapture: (captureSessionId: string | null, captureGeneration: number | null) => {
@@ -540,6 +547,72 @@ test("ordinary Stop retains its soft native/evaluation error contract outside Qu
   assert.equal(h.globals.shutdownRequestedRef.current, false);
   assert.equal(h.recording.getState().lifecycle, "idle");
   assert.equal(h.exits, 0);
+});
+
+// ---- Task 178 LG, commit 3 (LG7, LG1, LG2, LG5): Stop's two migrated call sites, through the real Stop ----
+//
+// The native stop that fails and the evaluation capture stop that fails each printed a console warning. Each is now
+// one warn entry, on the branch where Stop goes on and on the branch where Quit hands the error on, with the bounded
+// summary of the caught error as its cause (decisions A8: both errors come from native commands). What Stop does
+// is compared as this harness observes it: its calls in order, the recording files it wrote, the recording's
+// lifecycle, the panel state and whether the application exited.
+test("LG7 Stop: a failed native stop and a failed evaluation capture stop are one warn entry each, with its cause, on a normal Stop and under Quit; at every level and with a failing log delivery Stop does what it did", async () => {
+  type Log = Parameters<typeof harness>[1];
+  const observed = (h: Awaited<ReturnType<typeof harness>>) => ({ calls: [...h.calls], files: h.files.map((file) => [file.command, file.args.relativePath ?? null]),
+    lifecycle: h.recording.getState().lifecycle, recordingActive: h.recording.getState().active, shutdownRequested: h.globals.shutdownRequestedRef.current,
+    exits: h.exits, waiting: h.waiting, status: h.ui().status, errors: h.errors.length });
+  const stops = (h: Awaited<ReturnType<typeof harness>>) => {
+    const entries = h.diagnosticLog.entries();
+    for (const entry of entries) assertEntryInLedger(entry);
+    // The text of each failure is in the cause of its own entry and in no other part of any entry.
+    assert.equal(/native failure|evaluation failure/.test(JSON.stringify(entries.map((entry) => ({ ...entry, data: { ...entry.data, cause: undefined } })))), false);
+    return entries.filter((entry) => entry.event === "stop-native-failed" || entry.event === "meeting-stop-failed")
+      .map((entry) => [entry.level, `${entry.source} ${entry.event}`, entry.refs ?? {}, entry.data]);
+  };
+  const SCENARIOS = {
+    // A normal Stop: both stops fail and Stop goes on to its end.
+    "normal Stop": { run: async (log: Log) => {
+      const h = await harness("meeting", log);
+      h.failure("native", true); h.failure("evaluation", true); h.queue.resolve();
+      await h.globals.stop();
+      return h;
+    }, entries: [["warn", "meeting.capture stop-native-failed", {}, { captureOperationId: 1, shutdownRequested: false, cause: "Error: native failure" }],
+      ["warn", "meeting.stt-evaluation-capture meeting-stop-failed", {}, { captureOperationId: 1, shutdownRequested: false, cause: "Error: evaluation failure" }]] },
+    // Quit: the native stop fails and the error is handed on; the attempt stays unresolved.
+    "Quit, native stop": { run: async (log: Log) => {
+      const h = await harness("meeting", log);
+      h.failure("native", true);
+      await h.quit(); await h.nativeEntered.promise;
+      h.nativeReply.resolve(); await h.terminal(); h.queue.resolve(); await settle();
+      return h;
+    }, entries: [["warn", "meeting.capture stop-native-failed", {}, { captureOperationId: 1, shutdownRequested: true, cause: "Error: native failure" }]] },
+    // Quit: the evaluation capture cannot be stopped; the attempt stays unresolved.
+    "Quit, evaluation capture": { run: async (log: Log) => {
+      const h = await harness("meeting", log);
+      h.failure("evaluation", true);
+      await h.quit(); await h.nativeEntered.promise;
+      h.nativeReply.resolve(); await h.terminal(); h.queue.resolve(); await settle();
+      return h;
+    }, entries: [["warn", "meeting.stt-evaluation-capture meeting-stop-failed", {}, { captureOperationId: 1, shutdownRequested: true, cause: "Error: evaluation failure" }]] },
+  };
+  for (const [name, scenario] of Object.entries(SCENARIOS)) {
+    const reference = await scenario.run({ level: "trace" });
+    assert.deepEqual(stops(reference), scenario.entries, name);
+    const expected = observed(reference);
+    if (name === "normal Stop") assert.deepEqual([expected.lifecycle, expected.shutdownRequested, expected.exits], ["idle", false, 0], name);
+    else assert.deepEqual([expected.recordingActive, expected.exits, expected.waiting], [true, 0, false], `${name}: the attempt failed and can be retried`);
+    for (const level of DIAGNOSTIC_LOG_SPY_LEVELS) {
+      const current = await scenario.run({ level });
+      assert.deepEqual(observed(current), expected, `${name} at ${level}`);
+      // A warn entry passes every level but error.
+      assert.deepEqual(stops(current), level === "error" ? [] : scenario.entries, `${name} at ${level}`);
+    }
+    for (const delivery of DIAGNOSTIC_LOG_SPY_FAILING_DELIVERIES) {
+      const current = await scenario.run({ level: "trace", delivery });
+      assert.deepEqual(observed(current), expected, `${name} with a log delivery that fails (${delivery})`);
+      assert.deepEqual(stops(current), scenario.entries, `${name}: the same entries were handed over (${delivery})`);
+    }
+  }
 });
 
 for (const pending of ["system-queue", "microphone-queue", "stt-request"] as const) {

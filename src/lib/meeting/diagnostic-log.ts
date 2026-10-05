@@ -37,6 +37,14 @@
 // reaching a typed string. They are not the control: a secret in the shape of
 // an identifier passes them.
 //
+// Cause. The logger turns no Error into text. One function here does, for a
+// call site that asks: diagnosticLogCause gives the name and the message of a
+// caught value, cut at 160 characters, for the data field `cause` of an entry
+// about a failed native command or a failed local save. That text can name a
+// path or a device, and `cause` is the one field that may. A catch that can
+// receive a provider's response does not use it. The summary is a string data
+// value like any other: the shape backstop below refuses it whole.
+//
 // Lengths. A length limit is counted here in UTF-16 code units and on native
 // in Unicode scalar values. This side is the stricter one: a character outside
 // the Basic Multilingual Plane counts as two here and as one there, so a text
@@ -425,6 +433,48 @@ export function logDiagnostic(
     }
   } catch {
     counters.internalErrors += 1;
+  }
+}
+
+// ---- the cause of a caught failure ----
+
+export const DIAGNOSTIC_LOG_CAUSE_CHARS = 160;
+// The summary of a caught value that cannot be read as text.
+export const DIAGNOSTIC_LOG_UNREADABLE_CAUSE = "unreadable";
+
+// The summary of a caught value for the data field `cause`: the name and the
+// message of an Error, or String of any other value, cut at 160 UTF-16 code
+// units. No stack and no other property. Pure and total: it reads the value,
+// keeps nothing and never throws. A call site calls it inside its lazy
+// detail, so an entry below the threshold builds no summary.
+//
+// The cut and the shape backstop. The logger looks for a restricted shape in a
+// string before it cuts it, so that a credential the cut would divide refuses
+// the text instead of leaving its first part. The cut here comes first, so the
+// same is done here: when the text up to the backstop's window past the cut
+// holds a restricted shape, that window is returned uncut, the logger finds
+// the shape whole and leaves the field out. A summary that reaches an entry
+// has at most 160 code units.
+export function diagnosticLogCause(caught: unknown): string {
+  try {
+    let text: string;
+    if (caught instanceof Error) {
+      const name = String(caught.name);
+      const message = String(caught.message);
+      text = name && message ? `${name}: ${message}` : name || message;
+    } else {
+      text = String(caught);
+    }
+    if (text.length <= DIAGNOSTIC_LOG_CAUSE_CHARS) return text;
+    const examined = text.slice(
+      0,
+      DIAGNOSTIC_LOG_CAUSE_CHARS + SHAPE_WINDOW_CHARS
+    );
+    return RESTRICTED_TEXT_PATTERN.test(examined)
+      ? examined
+      : text.slice(0, DIAGNOSTIC_LOG_CAUSE_CHARS);
+  } catch {
+    return DIAGNOSTIC_LOG_UNREADABLE_CAUSE;
   }
 }
 

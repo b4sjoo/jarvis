@@ -4789,15 +4789,18 @@ const ConfigurationsPanel = ({
               <div className="text-[10px] text-muted-foreground">
                 Sets the threshold of the diagnostic log: entries at this level
                 and every more severe level go to the terminal and to local log
-                files, which keep at most 50 MiB or 14 days. The log currently
-                holds native system-audio command errors and one summary for
-                each Relation wait, Voice Type deadline, failed or abandoned
-                Advisor answer, Fact Risk Review, Meeting Metadata inference
-                and Whiteboard check. Screen answers are not logged yet. Saved
-                separately from Debug Mode. Log Level does not control Debug
-                Mode trace printing, Preparation, the focus window, native
-                prints, Session Recording or Native Stall Diagnostics files,
-                and starts no model request, sampler or capture.
+                files, which keep at most 50 MiB or 14 days. Errors and warnings
+                cover failed Voice answers, capture, recording and saving
+                failures and lost model results. Info adds capture start and
+                stop, manual corrections and Brief updates. Debug and Trace add
+                operation summaries and every trace and step change. No entry
+                holds transcript, prompt or answer text. Debug Mode alone no
+                longer prints trace lines: they are Debug and Trace entries of
+                this log. Saved separately from Debug Mode. Log Level does not
+                control Preparation, the focus window, shutdown messages, other
+                console and native prints, Session Recording or Native Stall
+                Diagnostics files, and starts no model request, sampler or
+                capture.
               </div>
               {diagnosticLogLevelStatus ? (
                 <div
