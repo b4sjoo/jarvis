@@ -524,6 +524,7 @@ function publishImmediate(h, candidate) {
     advisorCommitTaskRuntimeState: h.manager.getTaskRuntimeState(), screenCommitTaskRuntimeState: h.manager.getTaskRuntimeState(),
     screenGenerationTaskRuntimeRevision: candidate.taskRuntimeRevision,
     advisorResponseCandidate: candidate.candidate, screenResponseCandidate: candidate.candidate,
+    screenSourceRequiresPublication: false,
     parsedMeetingAnswer: candidate.candidate.meetingAnswer, nextSuggestion: candidate.candidate,
     generationAuthorizedArtifacts: ["answer"], screenPresentationAuthorizedArtifacts: ["answer"],
     artifactReuseInputs: h.environment.readArtifactReuseInputs(), screenArtifactReuseInputs: h.environment.readArtifactReuseInputs(),

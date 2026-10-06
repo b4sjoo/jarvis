@@ -178,7 +178,8 @@ for (const [kind, relation, action] of [
     assert.equal(observed.parentAction, action);
     assert.equal(observed.settledParentId, proposal.parent.id);
     assert.equal(observed.settledChildId, proposal.parent.child?.id);
-    assert.equal(observed.playbookPhase, "project_summary");
+    // This fixture commits the lifecycle but never authorizes an Advisor attempt.
+    assert.equal(observed.playbookPhase, undefined);
     assert.equal(evaluateTaskSettlementTupleCompatibilityV2({ relation: observed.relation!, parentAction: observed.parentAction!,
       manualCorrectionEvidence: observed.manualCorrectionEvidence }).compatible, true);
     const saved = JSON.parse(JSON.stringify(summary(trace)));
