@@ -8,6 +8,7 @@ export function buildManualScreenLogicalQuestionUnit(input: {
   runtimeEpoch: number;
   createdAt: number;
   transcriptTurns?: TranscriptTurn[];
+  voiceQuestionUnit?: LogicalQuestionUnit;
 }): LogicalQuestionUnit | undefined {
   const primaryAsk = input.packet.primaryAsk;
   if (!primaryAsk?.text.trim()) return undefined;
@@ -19,6 +20,12 @@ export function buildManualScreenLogicalQuestionUnit(input: {
     primaryAsk.source === "voice-lqu" &&
     Boolean(primaryAsk.logicalQuestionUnitId) &&
     typeof primaryAsk.revision === "number";
+  const voiceUnit = input.voiceQuestionUnit;
+  if (voiceOwned && voiceUnit &&
+    voiceUnit.sessionId === input.sessionId && voiceUnit.runtimeEpoch === input.runtimeEpoch &&
+    voiceUnit.id === primaryAsk.logicalQuestionUnitId && voiceUnit.revision === primaryAsk.revision) {
+    return structuredClone(voiceUnit);
+  }
   const sourceTurnIds = voiceOwned
     ? uniqueStrings(primaryAsk.sourceTurnIds)
     : [];

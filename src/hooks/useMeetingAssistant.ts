@@ -180,6 +180,8 @@ import {
 } from "@/lib/meeting/coding-solution-manifest";
 import {
   formatVisibleAnswerResponseActionTargetForTrace,
+  hasCompleteEffectiveSourceRecord,
+  reconstructEffectiveSourceQuestion,
   resolveResponseActionLogicalQuestionUnit,
   resolveVisibleAnswerResponseActionTarget,
 } from "@/lib/meeting/response-action-target";
@@ -1047,6 +1049,7 @@ interface PreparedStableAnswerPublication {
     childSummary?: string;
     deadlineCalculatedAt?: number;
     presentationParent?: ActiveInterviewParent | null;
+    effectiveSourceRecord?: ReturnType<typeof createEffectiveQuestionSourceRecord>;
   };
   previousGeneratedContinuity: BoundedGeneratedContinuityState;
   nextGeneratedContinuity: BoundedGeneratedContinuityState;
@@ -1060,6 +1063,7 @@ interface PreparedStableAnswerPublication {
   nextLatestManualCorrectionTarget?: ManualCorrectionRuntimeTarget;
   previousPendingAnswerRevision: PendingGenerationAnswerRevision | null;
   previousAnswerDeliveryProgress: AnswerDeliveryProgress | null;
+  effectiveSourceUpdate?: ReturnType<EffectiveQuestionSourceLedger["prepareUpsert"]>;
 }
 
 function prepareGenerationDerivedTaskRuntimeTransition(input: {
@@ -4588,6 +4592,7 @@ export function useMeetingAssistant() {
         deadlineDelta?: MeetingTaskDeadlineDelta;
         deadlineCalculatedAt?: number;
         presentationParent?: ActiveInterviewParent | null;
+        effectiveSourceRecord?: ReturnType<typeof createEffectiveQuestionSourceRecord>;
       } = {}
     ): PreparedStableAnswerPublication => {
       const pending = pendingAnswerRevisionRef.current;
@@ -4684,6 +4689,9 @@ export function useMeetingAssistant() {
         nextLatestManualCorrectionTarget,
         previousPendingAnswerRevision: pendingAnswerRevisionRef.current,
         previousAnswerDeliveryProgress: answerDeliveryProgressRef.current,
+        effectiveSourceUpdate: options.effectiveSourceRecord
+          ? effectiveQuestionSourceLedgerRef.current.prepareUpsert(options.effectiveSourceRecord)
+          : undefined,
       };
     },
     []
@@ -4694,6 +4702,10 @@ export function useMeetingAssistant() {
       if (prepared.deadlineUpdate &&
         !contextManagerRef.current.installPreparedTaskDeadlineUpdate(prepared.deadlineUpdate)) {
         throw new Error("Output deadline no longer belongs to the authorized task.");
+      }
+      if (prepared.effectiveSourceUpdate &&
+        !effectiveQuestionSourceLedgerRef.current.installPreparedUpsert(prepared.effectiveSourceUpdate)) {
+        throw new Error("Answer source changed before publication.");
       }
       recentAdvisorContinuityRef.current = prepared.nextGeneratedContinuity;
       if (!prepared.selectedQuestionOnly) stableAnswerRevisionRef.current = prepared.stable;
@@ -4713,6 +4725,8 @@ export function useMeetingAssistant() {
     (prepared: PreparedStableAnswerPublication) => {
       const deadlineRestored = !prepared.deadlineUpdate ||
         contextManagerRef.current.rollbackPreparedTaskDeadlineUpdate(prepared.deadlineUpdate);
+      const sourceRestored = !prepared.effectiveSourceUpdate ||
+        effectiveQuestionSourceLedgerRef.current.rollbackPreparedUpsert(prepared.effectiveSourceUpdate);
       recentAdvisorContinuityRef.current = prepared.previousGeneratedContinuity;
       stableAnswerRevisionRef.current = prepared.previousStable;
       visibleAnswerRevisionRef.current =
@@ -4725,7 +4739,7 @@ export function useMeetingAssistant() {
         prepared.previousPendingAnswerRevision;
       answerDeliveryProgressRef.current =
         prepared.previousAnswerDeliveryProgress;
-      return deadlineRestored;
+      return deadlineRestored && sourceRestored;
     },
     []
   );
@@ -28434,14 +28448,31 @@ export function useMeetingAssistant() {
             screenVoiceQuestionCapsule?.logicalQuestionRevision,
           sourceVoiceQuestionChars: screenVoiceQuestionCapsule?.text.length ?? 0,
         });
+        const boundVoiceSourceRecord = screenVoiceQuestionCapsule
+          ? effectiveQuestionSourceLedgerRef.current.findLogicalQuestion({
+              sessionId: preflightContextState.sessionId,
+              runtimeEpoch: runtimeEpochRef.current,
+              logicalQuestionUnitId: screenVoiceQuestionCapsule.logicalQuestionUnitId,
+              logicalQuestionRevision: screenVoiceQuestionCapsule.logicalQuestionRevision,
+            })
+          : undefined;
+        const boundVoiceQuestionUnit = screenVoiceQuestionCapsule
+          ? [activeAdvisorAtScreenRequest?.logicalQuestionUnit, logicalQuestionUnitRef.current].find(unit =>
+              unit?.sessionId === preflightContextState.sessionId &&
+              unit.id === screenVoiceQuestionCapsule!.logicalQuestionUnitId &&
+              unit.revision === screenVoiceQuestionCapsule!.logicalQuestionRevision)
+            ?? (boundVoiceSourceRecord && hasCompleteEffectiveSourceRecord(boundVoiceSourceRecord)
+              ? reconstructEffectiveSourceQuestion(boundVoiceSourceRecord, preflightContextState) : undefined)
+          : undefined;
         const baseScreenRelationLogicalQuestionUnit =
           buildManualScreenLogicalQuestionUnit({
             packet: candidateScreenSourcePacket,
             sessionId: preflightContextState.sessionId,
             runtimeEpoch:
-              boundVisualRecoveryFact?.runtimeEpoch ?? screenRuntimeToken.runtimeEpoch,
+              boundVoiceQuestionUnit?.runtimeEpoch ?? boundVisualRecoveryFact?.runtimeEpoch ?? screenRuntimeToken.runtimeEpoch,
             createdAt: observation.capturedAt,
             transcriptTurns: preflightContextState.transcriptTurns,
+            voiceQuestionUnit: boundVoiceQuestionUnit,
           });
         const screenTaskBoundaryConsumption =
           consumeInterviewTaskBoundary({
@@ -29726,8 +29757,7 @@ export function useMeetingAssistant() {
           screenLifecyclePublicationAuthorized &&
           !screenCurrentOnly &&
           effectiveScreenSettlementView.effectiveSettlement &&
-          screenRelationLogicalQuestionUnit &&
-          !existingBoundVoiceSourceRecord
+          screenRelationLogicalQuestionUnit
             ? createEffectiveQuestionSourceRecord({
                 logicalQuestionUnit: screenRelationLogicalQuestionUnit,
                 settlement:
@@ -29736,10 +29766,11 @@ export function useMeetingAssistant() {
                   contextManagerRef.current.getState().activeMeetingTask,
               })
             : undefined;
+        const screenSourceRequiresPublication = Boolean(existingBoundVoiceSourceRecord && screenEffectiveQuestionSourceRecord);
         if (screenEffectiveQuestionSourceRecord) {
-          effectiveQuestionSourceLedgerRef.current.upsert(
-            screenEffectiveQuestionSourceRecord
-          );
+          if (!screenSourceRequiresPublication) {
+            effectiveQuestionSourceLedgerRef.current.upsert(screenEffectiveQuestionSourceRecord);
+          }
           contextManagerRef.current.recordTaskQuestionAdmission({
             sessionId: screenEffectiveQuestionSourceRecord.sessionId,
             parentId: screenEffectiveQuestionSourceRecord.owner.parentId,
@@ -29754,7 +29785,9 @@ export function useMeetingAssistant() {
             existingBoundVoiceSourceRecord?.recordId,
           screenEffectiveQuestionSourceDisposition:
             screenEffectiveQuestionSourceRecord
-              ? screenTransitionCandidate
+              ? screenSourceRequiresPublication
+                ? "prepared-bound-source-for-publication"
+                : screenTransitionCandidate
                 ? "committed-after-durable-lifecycle"
                 : "committed-no-lifecycle-required"
               : existingBoundVoiceSourceRecord
@@ -31782,6 +31815,7 @@ export function useMeetingAssistant() {
             authorizedArtifacts: screenPresentationAuthorizedArtifacts,
             publicationOptions: {
               presentationParent: preparedScreenTransition.transition?.parent,
+              effectiveSourceRecord: screenSourceRequiresPublication ? screenEffectiveQuestionSourceRecord : undefined,
               unpublishedArtifacts: {
                 parsed: nextSuggestion.meetingAnswer!,
                 authorizedArtifacts: screenPresentationAuthorizedArtifacts,
@@ -31799,6 +31833,11 @@ export function useMeetingAssistant() {
           const generationCommit = directCommit.result;
           screenPublication = directCommit.publication;
           if (generationCommit.committed && screenPublication) {
+            if (screenSourceRequiresPublication) {
+              traceStoreRef.current.updateMetadata(trace.id, {
+                screenEffectiveQuestionSourceDisposition: "committed-with-stable-answer",
+              });
+            }
             updatedContextState = contextManagerRef.current.getState();
             currentQuestionLineageRef.current = screenQuestionLineage;
             setState((previous) => ({

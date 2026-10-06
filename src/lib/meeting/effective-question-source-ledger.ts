@@ -161,14 +161,31 @@ export class EffectiveQuestionSourceLedger {
   constructor(private readonly maxEntries = 96) {}
 
   upsert(record: EffectiveQuestionSourceRecord) {
+    this.records = this.prepareUpsert(record).nextRecords;
+    return cloneRecord(record);
+  }
+
+  prepareUpsert(record: EffectiveQuestionSourceRecord) {
     const index = this.records.findIndex(
       (candidate) => candidate.recordId === record.recordId
     );
     const next = [...this.records];
     if (index >= 0) next[index] = cloneRecord(record);
     else next.push(cloneRecord(record));
-    this.records = this.trimRecords(next);
-    return cloneRecord(record);
+    return { previousRecords: this.records, nextRecords: this.trimRecords(next) };
+  }
+
+  installPreparedUpsert(prepared: ReturnType<EffectiveQuestionSourceLedger["prepareUpsert"]>) {
+    if (this.records !== prepared.previousRecords) return false;
+    this.records = prepared.nextRecords;
+    return true;
+  }
+
+  rollbackPreparedUpsert(prepared: ReturnType<EffectiveQuestionSourceLedger["prepareUpsert"]>) {
+    if (this.records === prepared.previousRecords) return true;
+    if (this.records !== prepared.nextRecords) return false;
+    this.records = prepared.previousRecords;
+    return true;
   }
 
   getRetainedParentSourceReferences() {

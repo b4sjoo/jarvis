@@ -345,7 +345,7 @@ function accepted(
   };
 }
 
-function reconstructEffectiveSourceQuestion(
+export function reconstructEffectiveSourceQuestion(
   record: CompleteEffectiveQuestionSourceRecord,
   meetingContext: MeetingContextState
 ): LogicalQuestionUnit {
@@ -416,7 +416,7 @@ function reconstructEffectiveSourceQuestion(
   };
 }
 
-function hasCompleteEffectiveSourceRecord(
+export function hasCompleteEffectiveSourceRecord(
   record: EffectiveQuestionSourceRecord
 ): record is CompleteEffectiveQuestionSourceRecord {
   return Boolean(

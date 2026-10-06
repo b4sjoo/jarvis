@@ -94,6 +94,7 @@ export async function browserBundle(additionalPlugins = []) {
       useEffect(()=>{if(envelope){consumer.current.applied(envelope);window.__s63.focusSnapshot=envelope;}},[envelope]);
       const snapshot=envelope?.payload;
       const sendFocusAction=action=>consumer.current.dispatch(action);
+      window.__s63.sendFocusAction=sendFocusAction;
       if(!snapshot)return null;
       return <><pre data-answer>{snapshot.sections.primaryAnswer}</pre>
         <FactRiskNotice result={snapshot.factRiskReview}/>

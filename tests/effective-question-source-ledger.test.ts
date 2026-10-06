@@ -913,6 +913,31 @@ test("supersedes an old parent id without merging sessions or runtime epochs", (
   );
 });
 
+test("SI61 source publication is staged, bounded and restores the exact prior ledger on rollback", () => {
+  const ledger = new EffectiveQuestionSourceLedger(2);
+  const voice = record({ recordId: "voice", sourceHash: "voice-hash", sourceKind: "voice", settledAt: 1 });
+  ledger.upsert(voice);
+  ledger.upsert(record({ recordId: "other", logicalQuestionUnitId: "other-question", settledAt: 2 }));
+  const before = ledger.listHistory();
+  const mixed = record({ recordId: "mixed", sourceHash: "mixed-hash", sourceKind: "mixed",
+    sourceObservationIds: ["screen-1"], settledAt: 3 });
+  const staged = ledger.prepareUpsert(mixed);
+  assert.deepEqual(ledger.listHistory(), before, "preparation cannot invalidate the displayed source");
+  assert.equal(ledger.installPreparedUpsert(staged), true);
+  assert.equal(ledger.listHistory().length, 2);
+  assert.equal(ledger.findLogicalQuestion({ sessionId: "session-a", runtimeEpoch: 3,
+    logicalQuestionUnitId: voice.logicalQuestionUnitId, logicalQuestionRevision: 1 })?.sourceHash, "mixed-hash");
+  assert.equal(ledger.rollbackPreparedUpsert(staged), true);
+  assert.deepEqual(ledger.listHistory(), before, "rollback also restores a record trimmed during installation");
+  assert.equal(ledger.rollbackPreparedUpsert(staged), true);
+  const stale = ledger.prepareUpsert(mixed);
+  ledger.upsert(record({ recordId: "new-revision", logicalQuestionRevision: 2, settledAt: 4 }));
+  const current = ledger.listHistory();
+  assert.equal(ledger.installPreparedUpsert(stale), false);
+  assert.equal(ledger.rollbackPreparedUpsert(stale), false);
+  assert.deepEqual(ledger.listHistory(), current, "stale rollback cannot resurrect the old revision");
+});
+
 function record(
   overrides: Partial<EffectiveQuestionSourceRecord> = {}
 ): EffectiveQuestionSourceRecord {

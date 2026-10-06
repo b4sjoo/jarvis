@@ -1077,3 +1077,32 @@ test("gives a Screen-owned milestone its own canonical question identity", () =>
   assert.equal(unit.currentTurnId, "screen:screen-new-question");
   assert.equal(unit.boundaryReason, "visible-screen-question");
 });
+
+test("SI61 bound Screen keeps the canonical Voice semantic snapshot and only changes visual evidence", () => {
+  const packet = resolveManualScreenSourcePacket({ voiceQuestion: {
+    logicalQuestionUnitId: "voice-q", logicalQuestionRevision: 2,
+    text: "Explain the highlighted block.", sourceTurnIds: ["ask"],
+  }, screenObservationId: "screen-new", screenPreflightQuestion: "Implement a cache." });
+  const voice: LogicalQuestionUnit = {
+    id: "voice-q", revision: 2, sessionId: "session-a", runtimeEpoch: 3,
+    currentTurnId: "ask", sourceTurnIds: ["ask"], contextSourceTurnIds: ["setup"],
+    recentLogicalQuestionSourceTurnIds: ["previous"],
+    sources: [{ turnId: "ask", text: "In the corrected cache, explain the highlighted block.", startedAt: 10, endedAt: 20 }],
+    normalizedText: "In the corrected cache, explain the highlighted block.",
+    startedAt: 10, updatedAt: 20, compositionReasons: ["manual-term-correction"],
+    boundaryReason: "independent-current-turn", truncated: false,
+  };
+  const result = buildManualScreenLogicalQuestionUnit({ packet, sessionId: "session-a", runtimeEpoch: 3,
+    createdAt: 30, voiceQuestionUnit: voice })!;
+  assert.deepEqual(result, voice);
+  assert.notEqual(result, voice);
+  const expected = createProvisionalCurrentQuestion({ logicalQuestionUnit: voice, sourceKind: "mixed", sourceObservationIds: ["screen-new"] });
+  const actual = createProvisionalCurrentQuestion({ logicalQuestionUnit: result, sourceKind: "mixed", sourceObservationIds: ["screen-new"] });
+  assert.equal(actual.sourceHash, expected.sourceHash);
+  result.sources[0].text = "Changed clone";
+  assert.equal(voice.sources[0].text, "In the corrected cache, explain the highlighted block.");
+  const foreign = buildManualScreenLogicalQuestionUnit({ packet, sessionId: "session-a", runtimeEpoch: 3,
+    createdAt: 30, voiceQuestionUnit: { ...voice, sessionId: "other-session" } })!;
+  assert.equal(foreign.normalizedText, packet.primaryAsk!.text);
+  assert.equal(foreign.contextSourceTurnIds, undefined);
+});
