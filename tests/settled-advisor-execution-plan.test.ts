@@ -22,6 +22,9 @@ import {
   projectPrimaryAsk,
 } from "../src/lib/meeting/primary-ask-projection.js";
 import { projectCrossTypeTaskRelationHint } from "../src/lib/meeting/task-relation-authority.js";
+import { createTaskBoundaryCandidate } from "../src/lib/meeting/task-boundary-transaction.js";
+import { detectPersonalEvidenceRequirement } from "../src/lib/meeting/personal-evidence-guardrail.js";
+import { resolveTransientPersonalStatusDecision } from "../src/lib/meeting/transient-personal-status.js";
 import { composeCanonicalTurnCandidate } from "../src/lib/meeting/logical-question-unit.js";
 import { createProvisionalCurrentQuestion, settleCurrentQuestion } from "../src/lib/meeting/current-question-settlement.js";
 import { decideOrderedTaskRelationResolution } from "../src/lib/meeting/task-relation-split-shadow.js";
@@ -1490,6 +1493,87 @@ test("semantic setup preserves a design parent and revises its whiteboard", () =
   assert.equal(plan.contextReadScope, "active-parent-read");
   assert.equal(plan.artifactIntent, "revise-whiteboard");
 });
+
+for (const scope of ["no-parent", "parent", "child"] as const) {
+  test(`IP183 personal status settles before boundary and Plan with ${scope}`, () => {
+    const task = scope === "no-parent" ? undefined : activeTask("project-deep-dive");
+    if (task && scope === "child") task.child = {
+      id: "child-a", questionType: "field-knowledge", relation: "child-probe", intent: "unknown",
+      question: "Explain the queue tradeoff", createdAt: 10, updatedAt: 10,
+      basedOnTurnIds: ["old-turn"], basedOnObservationIds: [],
+    };
+    const before = JSON.stringify(task);
+    const unit = composeCanonicalTurnCandidate({ sessionId: "session-a", runtimeEpoch: 4,
+      currentTurn: { id: "personal-turn", text: "What is your work authorization status?",
+        speaker: "them", source: "system-audio", isFinal: true, startedAt: 100, endedAt: 110 } });
+    const current = createProvisionalCurrentQuestion({ logicalQuestionUnit: unit, sourceKind: "voice" });
+    const proposed = settlement({ logicalQuestionUnitId: unit.id, revision: unit.revision,
+      sourceHash: current.sourceHash, sourceTurnIds: unit.sourceTurnIds, questionType: "project-deep-dive" });
+    const decision = resolveTransientPersonalStatusDecision({
+      personalEvidenceDecision: detectPersonalEvidenceRequirement({ questionText: unit.normalizedText,
+        questionType: proposed.questionType, mode: "shadow" }),
+      sourceQuestionUnitId: unit.id, sourceQuestionRevision: unit.revision, activeMeetingTask: task,
+    });
+    assert.ok(decision);
+    const input = { settlement: proposed, activeMeetingTask: task, taskRuntimeRevision: 7,
+      fallback: { questionType: proposed.questionType, relation: "new-parent" as const },
+      transientPersonalStatusDecision: decision };
+    const view = buildEffectiveAdvisorSettlementView(input);
+    const effective = view.effectiveSettlement!;
+    assert.equal(effective.questionType, "unknown");
+    assert.equal(effective.relation, "none");
+    assert.equal(effective.rawQuestionType, "project-deep-dive");
+    assert.equal(effective.rawRelation, "new-parent");
+    assert.equal(effective.responseAuthorized, true);
+    assert.equal(effective.parentMutationAuthorized, false);
+    assert.equal(effective.relationMutationAuthorized, false);
+    assert.equal(effective.nullHypothesisApplied, false);
+    assert.equal(view.nullHypothesisApplied, false);
+    assert.ok(effective.reasons.includes(`transient-personal-status:${decision.id}`));
+    assert.equal(buildEffectiveAdvisorSettlementView({ ...input, settlement: effective }).effectiveSettlement, effective);
+    const downstream = buildEffectiveAdvisorSettlementView({ ...input, settlement: effective,
+      transientPersonalStatusDecision: undefined });
+    assert.equal(downstream.nullHypothesisApplied, false);
+    assert.equal(downstream.effectiveSettlement, effective);
+    const boundary = createTaskBoundaryCandidate({ logicalQuestionUnit: unit, currentQuestion: current,
+      settlement: effective, proposedQuestionType: proposed.questionType, proposedRelation: "new-parent",
+      authoritySource: "accepted-transcript", confidence: .99, questionComplete: true,
+      mutationAuthorized: true, commitParent: true });
+    assert.ok(boundary);
+    assert.notEqual(boundary.commitPolicy, "immediate");
+    const plan = buildSettledAdvisorExecutionPlan({ settlement: effective, activeMeetingTask: task,
+      preBoundaryQuestionType: task?.parent.questionType, taskBoundaryCommitted: false, childOwnsResponse: false,
+      providerSnapshot: providers, memoryUseCase: "meeting_assistant", askFrame: "unknown", topicDomain: "unknown",
+      transientPersonalStatusDecision: decision });
+    assert.deepEqual(plan.taskMutationPolicy, { kind: "preserve" });
+    assert.equal(plan.contextReadScope, "current-only");
+    assert.equal(plan.relation, "none");
+    assert.equal(plan.modelRoute.route, "main");
+    assert.deepEqual(plan.requestedArtifacts, ["answer"]);
+    assert.equal(plan.artifactPolicy.allowLatestUsefulAnswer, false);
+    const authorization = authorizeSettledAdvisorExecutionPlan({ plan, currentSettlement: effective,
+      currentSessionId: "session-a", currentRuntimeEpoch: 4, currentLogicalQuestionUnitId: unit.id,
+      currentLogicalQuestionRevision: unit.revision, currentSourceHash: current.sourceHash, currentActiveMeetingTask: task });
+    assert.equal(authorization.authorized, true, authorization.reason);
+    const observed = buildHumanEvaluationObservedSnapshotV2({ id: "trace-personal", kind: "voice", status: "success",
+      startedAt: 100, steps: [], inputs: [], outputs: [], metadata: {
+        ...formatEffectiveAdvisorSettlementViewForTrace(view), ...formatSettledAdvisorExecutionPlanForTrace(plan, authorization) } });
+    assert.equal(observed.relation, "none");
+    assert.equal(observed.parentAction, task ? "preserve" : "none");
+    assert.equal(observed.adviseOnly, true);
+    assert.equal(JSON.stringify(task), before);
+    assert.equal(proposed.questionType, "project-deep-dive");
+    assert.equal(proposed.parentMutationAuthorized, true);
+    const denied = buildEffectiveAdvisorSettlementView({ ...input, settlement: { ...proposed, responseAuthorized: false } });
+    assert.equal(denied.effectiveSettlement?.responseAuthorized, false);
+    const manual = buildEffectiveAdvisorSettlementView({ ...input, settlement: { ...proposed, typeAuthoritySource: "manual-correction" } });
+    assert.equal(manual.questionType, "project-deep-dive");
+    assert.equal(manual.relation, "new-parent");
+    const wrongRevision = buildEffectiveAdvisorSettlementView({ ...input,
+      transientPersonalStatusDecision: { ...decision, sourceQuestionRevision: unit.revision + 1 } });
+    assert.equal(wrongRevision.relation, "new-parent");
+  });
+}
 
 test("a personal-status response owns the current answer without mutating its coding parent", () => {
   const task = activeTask();

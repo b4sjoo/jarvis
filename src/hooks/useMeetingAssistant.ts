@@ -12767,6 +12767,15 @@ export function useMeetingAssistant() {
             revisionStableTopologyBinding.boundRevision,
         });
       }
+      if (transientPersonalStatusDecision && currentQuestionSettlement) {
+        currentQuestionSettlement = buildEffectiveAdvisorSettlementView({
+          settlement: currentQuestionSettlement,
+          activeMeetingTask: originalPromptContext.activeMeetingTask ?? promptContext.activeMeetingTask,
+          taskRuntimeRevision: promptContext.taskRuntime.revision,
+          fallback: { questionType: advisorTaskSignals.questionType, relation: advisorTaskSignals.taskRelation },
+          transientPersonalStatusDecision,
+        }).effectiveSettlement!;
+      }
       if (
         !responseMutationSuppressed &&
         !options.artifactRegenerationTarget && !selectedQuestionOnly
