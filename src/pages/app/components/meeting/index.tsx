@@ -12,6 +12,9 @@ import {
   Textarea,
 } from "@/components";
 import { STORAGE_KEYS } from "@/config";
+import { open as openReplayFileDialog } from "@tauri-apps/plugin-dialog";
+import { openPath as openReplayReportPath } from "@tauri-apps/plugin-opener";
+import type { RuntimeRegressionScenarioPresentation } from "@/lib/meeting/meeting-presentation-contracts";
 import { useMeetingAssistant, useShortcuts, useWindowResize } from "@/hooks";
 import type { GlobalShortcutInvocation } from "@/hooks/useGlobalShortcuts";
 import type {
@@ -123,6 +126,7 @@ import {
   ClockIcon,
   EyeOffIcon,
   FileTextIcon,
+  FolderOpenIcon,
   FlaskConicalIcon,
   HelpCircleIcon,
   LanguagesIcon,
@@ -2070,6 +2074,9 @@ export const MeetingAssistant = ({
                   meeting.setSessionScriptedValidation
                 }
                 runtimeRegression={meeting.runtimeRegression}
+                runtimeRegressionScenario={meeting.runtimeRegressionScenario}
+                onLoadRuntimeRegressionScenario={meeting.loadRuntimeRegressionScenarioFile}
+                onRunRuntimeRegressionScenario={meeting.runLoadedRuntimeRegressionScenario}
                 onStartRuntimeRegressionRun={
                   meeting.startRuntimeRegressionRun
                 }
@@ -4363,6 +4370,9 @@ const ConfigurationsPanel = ({
   onSessionRecordingAbandon,
   onSessionScriptedValidationChange,
   runtimeRegression,
+  runtimeRegressionScenario = { status: "empty", steps: [] },
+  onLoadRuntimeRegressionScenario,
+  onRunRuntimeRegressionScenario,
   onStartRuntimeRegressionRun,
   onStopRuntimeRegressionRun,
   onResetRuntimeRegressionRun,
@@ -4439,6 +4449,9 @@ const ConfigurationsPanel = ({
   ) => Promise<MeetingSessionRecordingState | undefined>;
   onSessionScriptedValidationChange: (enabled: boolean) => void;
   runtimeRegression: RuntimeRegressionRunnerPresentation;
+  runtimeRegressionScenario: RuntimeRegressionScenarioPresentation;
+  onLoadRuntimeRegressionScenario: (path: string) => Promise<boolean>;
+  onRunRuntimeRegressionScenario: () => Promise<unknown>;
   onStartRuntimeRegressionRun: () => Promise<boolean>;
   onStopRuntimeRegressionRun: () => Promise<boolean>;
   onResetRuntimeRegressionRun: () => Promise<boolean>;
@@ -4450,6 +4463,7 @@ const ConfigurationsPanel = ({
 }) => {
   const [replayLabOpen, setReplayLabOpen] = useState(false);
   const [replayText, setReplayText] = useState("");
+  const [replayFileError, setReplayFileError] = useState<string | null>(null);
   const [recordingRecoveryError, setRecordingRecoveryError] = useState<string | null>(null);
   useEffect(() => {
     setRecordingRecoveryError(null);
@@ -4992,12 +5006,42 @@ const ConfigurationsPanel = ({
 
                 {replayLabOpen ? (
                   <div className="mt-2 space-y-2">
+                    <div className="flex min-w-0 items-center gap-1">
+                      <Button size="icon" variant="outline" className="h-8 w-8 shrink-0" title="Load reviewed scenario"
+                        disabled={runtimeRegression.active || ["loading", "running"].includes(runtimeRegressionScenario.status)}
+                        onClick={async () => {
+                          setReplayFileError(null);
+                          try {
+                            const selected = await openReplayFileDialog({ multiple: false, filters: [{ name: "Replay scenario", extensions: ["json"] }] });
+                            if (typeof selected === "string") await onLoadRuntimeRegressionScenario(selected);
+                          } catch (error) { setReplayFileError(error instanceof Error ? error.message : "File selection failed."); }
+                        }}><FolderOpenIcon className="h-3.5 w-3.5" /></Button>
+                      <Button size="sm" className="h-8 min-w-0 flex-1 text-[10px]"
+                        disabled={!runtimeRegressionScenario.scenarioId || runtimeRegression.active || ["loading", "running"].includes(runtimeRegressionScenario.status) || sessionRecording.lifecycle !== "idle"}
+                        onClick={() => { void onRunRuntimeRegressionScenario(); }}>
+                        <PlayIcon className="mr-1 h-3.5 w-3.5 shrink-0" />Run Scenario
+                      </Button>
+                      {runtimeRegressionScenario.status === "running" ? <Button size="icon" variant="outline" className="h-8 w-8 shrink-0" title="Stop scenario"
+                        onClick={() => { void onStopRuntimeRegressionRun(); }}><SquareIcon className="h-3.5 w-3.5" /></Button> : null}
+                      {runtimeRegressionScenario.reportPath ? <Button size="icon" variant="outline" className="h-8 w-8 shrink-0" title="Open replay report"
+                        onClick={() => { void openReplayReportPath(runtimeRegressionScenario.reportPath!).catch(error => setReplayFileError(String(error))); }}><FileTextIcon className="h-3.5 w-3.5" /></Button> : null}
+                    </div>
+                    {runtimeRegressionScenario.scenarioId ? <div className="min-w-0 space-y-1 text-[10px]">
+                      <div className="break-words font-mono">{runtimeRegressionScenario.scenarioId} / r{runtimeRegressionScenario.revision} / {runtimeRegressionScenario.purpose} / {runtimeRegressionScenario.status}</div>
+                      <ol className="max-h-40 overflow-y-auto">
+                        {runtimeRegressionScenario.steps.map(step => <li key={step.id} className="grid grid-cols-[3rem_minmax(0,1fr)_auto] gap-2 border-b border-border/40 py-1">
+                          <span className="break-all">{step.id}</span><span className="break-words">{step.kind}</span><span>{step.status ?? "Not run"}</span>
+                        </li>)}
+                      </ol>
+                    </div> : null}
+                    {runtimeRegressionScenario.error || replayFileError ? <div className="break-words text-[10px] text-red-600">{runtimeRegressionScenario.error ?? replayFileError}</div> : null}
                     {!runtimeRegression.active ? (
                       <Button
                         size="sm"
                         className="h-8 w-full text-[10px]"
                         disabled={
                           runtimeRegression.status === "starting" ||
+                          runtimeRegressionScenario.status === "running" ||
                           sessionRecording.lifecycle !== "idle"
                         }
                         onClick={() => {
@@ -5022,6 +5066,7 @@ const ConfigurationsPanel = ({
                           className="min-h-20 resize-y text-xs"
                           disabled={
                             runtimeRegression.status === "running-step" ||
+                            runtimeRegressionScenario.status === "running" ||
                             runtimeRegression.status === "stopping"
                           }
                           onKeyDown={(event) => {
@@ -5040,6 +5085,7 @@ const ConfigurationsPanel = ({
                             className="h-8 flex-1 text-[10px]"
                             disabled={
                               !replayText.trim() ||
+                              runtimeRegressionScenario.status === "running" ||
                               runtimeRegression.status !== "ready"
                             }
                             onClick={() => {
@@ -5059,6 +5105,7 @@ const ConfigurationsPanel = ({
                             className="h-8 w-8"
                             title="Reset replay run"
                             disabled={
+                              runtimeRegressionScenario.status === "running" ||
                               runtimeRegression.status === "running-step" ||
                               runtimeRegression.status === "stopping"
                             }

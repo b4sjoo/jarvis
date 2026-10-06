@@ -318,6 +318,11 @@ import {
   type RuntimeCriticalEventListener,
 } from "@/lib/meeting/runtime-critical-event";
 import { waitForRuntimeRegressionCompletion } from "@/lib/meeting/runtime-regression-completion";
+import { buildRuntimeRegressionStepResult, executeRuntimeRegressionScenario, type RuntimeRegressionScenarioReport, type RuntimeRegressionStepResult } from "@/lib/meeting/runtime-regression-runner";
+import { assertRuntimeRegressionPreconditions, type RuntimeRegressionEnvironment, type RuntimeRegressionSourceInput } from "@/lib/meeting/runtime-regression-scenario";
+import { loadRuntimeRegressionScenario, type LoadedRuntimeRegressionScenario } from "@/lib/meeting/runtime-regression-loader";
+import type { RuntimeRegressionScenarioPresentation } from "@/lib/meeting/meeting-presentation-contracts";
+import { createCapturedScreenObservation, type CaptureScreenContextResponse } from "@/lib/meeting/screen-observation.service";
 import type { TaskRelationAdjudicationRequest } from "@/lib/meeting/task-relation-adjudication";
 import {
   AdvisorEngine,
@@ -2546,6 +2551,7 @@ interface CaptureScreenContextOptions {
   onCaptured?: () => void;
   requestedAt?: number;
   latePreflightRepair?: LateScreenPreflightRepairRequest;
+  replayCapture?: CaptureScreenContextResponse;
 }
 
 interface LateScreenPreflightRepairRequest {
@@ -2604,6 +2610,7 @@ interface QueuedSpeechSegment {
     scenarioRunId: string;
     runtimeSessionId: string;
     runtimeEpoch: number;
+    durationMs?: number;
   }>;
   base64Audio?: string;
   audioBlob?: Blob;
@@ -3262,7 +3269,7 @@ export function useMeetingAssistant() {
   const finishTurnInput = useCallback((traceId: string, status: "success" | "error" | "cancelled", error?: unknown) => {
     traceStoreRef.current.finishTrace(traceId, status, error);
     const metadata = traceStoreRef.current.getTrace(traceId)?.metadata;
-    if (typeof metadata?.canonicalTurnIngressSessionId !== "string") return;
+    if (typeof metadata?.canonicalTurnIngressSessionId !== "string" || typeof metadata.answerGenerationLeaseId === "string") return;
     emitRuntimeCriticalEvent({
       fact: "terminal", stage: "turn-input-completed", purpose: "formal",
       runtimeSessionId: metadata.canonicalTurnIngressSessionId,
@@ -3478,12 +3485,20 @@ export function useMeetingAssistant() {
         runtimeSessionId: string;
         startedAt: number;
         stepOrdinal: number;
+        lastStepResult?: RuntimeRegressionStepResult;
+        scenarioId?: string;
+        scenarioRevision?: number;
+        procedureDigest?: string;
       }
     | undefined
   >(undefined);
   const runtimeRegressionStepIdRef = useRef<string | undefined>(undefined);
+  const runtimeRegressionDispatchRef = useRef<((input: RuntimeRegressionSourceInput, screen?: CaptureScreenContextResponse) => Promise<RuntimeRegressionStepResult>) | null>(null);
+  const loadedRuntimeRegressionScenarioRef = useRef<LoadedRuntimeRegressionScenario | null>(null);
+  const automaticRuntimeRegressionRef = useRef<{ controller: AbortController; report?: RuntimeRegressionScenarioReport; recordedSteps: number } | null>(null);
+  const [runtimeRegressionScenario, setRuntimeRegressionScenario] = useState<RuntimeRegressionScenarioPresentation>({ status: "empty", steps: [] });
   const stopRuntimeRegressionRunRef = useRef<
-    (() => Promise<boolean>) | null
+    ((reason?: string) => Promise<boolean>) | null
   >(null);
   useEffect(() => {
     if (state.status !== "idle") return;
@@ -3885,7 +3900,7 @@ export function useMeetingAssistant() {
       terminalDisposition?: ManualRuntimeActionTerminalDisposition;
       reason?: string;
       occurredAt?: number;
-      ingressSource?: "ui" | "shortcut";
+      ingressSource?: "ui" | "shortcut" | "replay";
       ingressReceivedAt?: number;
     }) => {
       const runtimeState = contextManagerRef.current.getState();
@@ -6781,9 +6796,10 @@ export function useMeetingAssistant() {
           );
         }
       }
-      traceStoreRef.current.finishTrace(job.traceId, status, error);
+      finishTurnInput(job.traceId, status, error);
     },
-    []
+    [
+      finishTurnInput,]
   );
 
   const updateForceAdviseTargetForAdvisorOutcome = useCallback(
@@ -11317,7 +11333,7 @@ export function useMeetingAssistant() {
   const runAdvisor = useCallback(async (options: RunAdvisorOptions = {}) => {
     const artifactReuseInputs = readArtifactReuseInputs();
     if (shutdownRequestedRef.current) {
-      if (options.traceId) traceStoreRef.current.finishTrace(options.traceId, "cancelled");
+      if (options.traceId) finishTurnInput(options.traceId, "cancelled");
       return;
     }
     contextManagerRef.current.clearExpiredActiveMeetingTask();
@@ -11414,7 +11430,7 @@ export function useMeetingAssistant() {
         commitAuthorizationReason: responseActionContextSelection.reason,
       });
       if (traceId) {
-        traceStoreRef.current.finishTrace(
+        finishTurnInput(
           traceId,
           "cancelled",
           responseActionContextSelection.reason
@@ -11502,7 +11518,7 @@ export function useMeetingAssistant() {
         commitAuthorizationReason: reason,
       });
       if (traceId) {
-        traceStoreRef.current.finishTrace(traceId, "error", reason);
+        finishTurnInput(traceId, "error", reason);
       }
       setState((previous) => ({
         ...previous,
@@ -11930,7 +11946,7 @@ export function useMeetingAssistant() {
             "candidate-dropped-no-output",
           advisorOutputCommittedToUi: false,
         });
-        traceStoreRef.current.finishTrace(traceId, "success");
+        finishTurnInput(traceId, "success");
       }
       return;
     }
@@ -11946,7 +11962,7 @@ export function useMeetingAssistant() {
         commitAuthorizationReason: "meeting-assistant-inactive",
       });
       if (traceId) {
-        traceStoreRef.current.finishTrace(traceId, "cancelled");
+        finishTurnInput(traceId, "cancelled");
       }
       return;
     }
@@ -12018,7 +12034,7 @@ export function useMeetingAssistant() {
         commitAuthorizationReason: "missing-meeting-context",
       });
       if (traceId) {
-        traceStoreRef.current.finishTrace(traceId, "error", NO_MEETING_CONTEXT_MESSAGE);
+        finishTurnInput(traceId, "error", NO_MEETING_CONTEXT_MESSAGE);
       }
       setState((previous) => ({
         ...previous,
@@ -13198,7 +13214,7 @@ export function useMeetingAssistant() {
         commitAuthorizationReason: executionAuthorization.reason,
       });
       if (traceId) {
-        traceStoreRef.current.finishTrace(traceId, "success");
+        finishTurnInput(traceId, "success");
       }
       setState((previous) => ({
         ...previous,
@@ -13452,7 +13468,7 @@ export function useMeetingAssistant() {
             commitAuthorizationReason: reason,
           });
           if (traceId) {
-            traceStoreRef.current.finishTrace(traceId, "error", reason);
+            finishTurnInput(traceId, "error", reason);
           }
           setState((previous) => ({
             ...previous,
@@ -13914,7 +13930,7 @@ export function useMeetingAssistant() {
           sourceOwnedTransitionReceipt.reason,
       });
       if (traceId) {
-        traceStoreRef.current.finishTrace(
+        finishTurnInput(
           traceId,
           "cancelled",
           sourceOwnedTransitionReceipt.reason
@@ -14505,7 +14521,7 @@ export function useMeetingAssistant() {
         commitAuthorizationReason: reason,
       });
       if (traceId) {
-        traceStoreRef.current.finishTrace(traceId, "error", reason);
+        finishTurnInput(traceId, "error", reason);
       }
       setState((previous) => ({
         ...previous,
@@ -17698,6 +17714,7 @@ export function useMeetingAssistant() {
       }));
     }
   }, [
+      finishTurnInput,
     activateAdvisorJob,
     aiProvider,
     buildAdvisorJob,
@@ -22652,7 +22669,7 @@ export function useMeetingAssistant() {
             contextManagerRef.current.getState().activeMeetingTask?.id,
           ...metadata,
         });
-        traceStoreRef.current.finishTrace(
+        finishTurnInput(
           input.traceId,
           "cancelled",
           relationOperationInvalidatedReason
@@ -22666,7 +22683,7 @@ export function useMeetingAssistant() {
           taskRelationOrderedResolutionFailureDisposition:
             "client-error",
         });
-        traceStoreRef.current.finishTrace(
+        finishTurnInput(
           input.traceId,
           "error",
           relationFatalError
@@ -22996,7 +23013,7 @@ export function useMeetingAssistant() {
         }
 
         if (!runtimeActiveRef.current || !leaseAuthorization.authorized) {
-          traceStoreRef.current.finishTrace(
+          finishTurnInput(
             input.traceId,
             "cancelled",
             runtimeActiveRef.current
@@ -23159,7 +23176,7 @@ export function useMeetingAssistant() {
               error:
                 "Runtime relation coordination failed. Jarvis did not replace the current task; retry or use an explicit correction.",
             }));
-            traceStoreRef.current.finishTrace(
+            finishTurnInput(
               input.traceId,
               "error",
               relationFatalError
@@ -23405,6 +23422,7 @@ export function useMeetingAssistant() {
       return true;
     },
     [
+      finishTurnInput,
       recordQuestionTypeAdjudicationOutcome,
       resolveOrderedTaskRelationWithinWindow,
       scheduleAdvisor,
@@ -24201,7 +24219,8 @@ export function useMeetingAssistant() {
       );
 
       if (turn.speaker === "me") {
-        const classification = classifyMeTurn(turn, hasActiveInterviewTask);
+        const classification = classifyMeTurn(turn, hasActiveInterviewTask,
+          transport === "manual-text" ? segment.replaySource?.durationMs : undefined);
         turn.contextTier = classification.tier;
         turn.contextPromptEligible = classification.promptEligible;
         turn.contextFusionStatus = classification.promptEligible
@@ -25366,7 +25385,7 @@ export function useMeetingAssistant() {
     return runtimeCriticalEventStreamRef.current!.subscribe(listener);
   }, []);
 
-  const startRuntimeRegressionRun = useCallback(async () => {
+  const startRuntimeRegressionRun = useCallback(async (scenario?: { scenarioId: string; scenarioRevision: number; procedureDigest: string }) => {
     if (shutdownRequestedRef.current) return false;
     if (!import.meta.env.DEV || !debugModeRef.current) {
       setState((previous) => ({
@@ -25375,7 +25394,7 @@ export function useMeetingAssistant() {
       }));
       return false;
     }
-    if (activeRef.current || runtimeActiveRef.current) {
+    if (activeRef.current || runtimeActiveRef.current || activeAdvisorJobRef.current || screenOperationCoordinatorRef.current.getActiveOperationId()) {
       setState((previous) => ({
         ...previous,
         error: "Stop the active meeting before starting Replay Lab.",
@@ -25435,6 +25454,7 @@ export function useMeetingAssistant() {
       runtimeSessionId,
       startedAt,
       stepOrdinal: 0,
+      ...scenario,
     };
     runtimeActiveRef.current = true;
     if (state.settings.useMemory) {
@@ -25446,6 +25466,7 @@ export function useMeetingAssistant() {
         scenarioRunId,
         runtimeSessionId,
         startedAt,
+        ...scenario,
       })
     );
     setState((previous) => ({
@@ -25467,9 +25488,18 @@ export function useMeetingAssistant() {
     state.settings.useMemory,
   ]);
 
-  const stopRuntimeRegressionRun = useCallback(async () => {
+  const stopRuntimeRegressionRun = useCallback(async (reason = "manual-stop") => {
+    const automatic = automaticRuntimeRegressionRef.current;
+    automatic?.controller.abort();
     const run = runtimeRegressionRunRef.current;
     if (!run) return false;
+    if (automatic?.report?.scenarioRunId === run.scenarioRunId) {
+      const report = automatic.report;
+      if (report.status === "running") { report.status = "stopped"; report.endedAt = Date.now(); }
+      const reportPath = sessionRecordingManagerRef.current?.recordRuntimeRegressionScenarioResult(report);
+      setRuntimeRegressionScenario(previous => ({ ...previous, status: report.status === "running" ? "stopped" : report.status,
+        reportPath, error: report.firstDivergence?.reason }));
+    }
     setState((previous) => ({
       ...previous,
       runtimeRegression: {
@@ -25486,7 +25516,8 @@ export function useMeetingAssistant() {
         status: "stopped",
         startedAt: run.startedAt,
         endedAt,
-        reason: "manual-stop",
+        reason,
+        scenarioId: run.scenarioId, scenarioRevision: run.scenarioRevision, procedureDigest: run.procedureDigest,
       })
     );
     runtimeActiveRef.current = false;
@@ -25529,9 +25560,12 @@ export function useMeetingAssistant() {
   }, [startRuntimeRegressionRun, stopRuntimeRegressionRun]);
 
   const submitRuntimeRegressionText = useCallback(
-    async (value: string) => {
+    async (value: string, options: { speaker?: "them" | "me"; durationMs?: number } = {}) => {
       if (shutdownRequestedRef.current) return false;
       const text = value.replace(/\s+/g, " ").trim();
+      const speaker = options.speaker ?? "them";
+      const inputKind = speaker === "me" ? "me-text" : "them-text";
+      if (options.durationMs !== undefined && (!Number.isFinite(options.durationMs) || options.durationMs < 0)) throw new Error("Replay source duration is invalid.");
       const run = runtimeRegressionRunRef.current;
       if (!run || !runtimeActiveRef.current) {
         setState((previous) => ({
@@ -25562,9 +25596,10 @@ export function useMeetingAssistant() {
         scenarioRunId: run.scenarioRunId,
         scenarioStepId,
         scenarioStepOrdinal: ordinal,
-        scenarioInputKind: "them-text",
+        scenarioInputKind: inputKind,
+        scenarioInputDurationMs: options.durationMs,
         runtimeEpoch: runtimeEpochRef.current,
-        speaker: "them",
+        speaker,
         source: "manual-text",
       });
       const injectionStepId = traceStoreRef.current.startStep(
@@ -25599,12 +25634,13 @@ export function useMeetingAssistant() {
           scenarioStepId,
           ordinal,
           event: "injected",
-          inputKind: "them-text",
+          inputKind,
           runtimeSessionId: run.runtimeSessionId,
           traceId: trace.id,
           text,
           textChars: text.length,
           sourceHash,
+          durationMs: options.durationMs,
           occurredAt: startedAt,
         })
       );
@@ -25618,7 +25654,7 @@ export function useMeetingAssistant() {
           currentStep: {
             scenarioStepId,
             ordinal,
-            inputKind: "them-text",
+            inputKind,
             status: "pending",
             traceId: trace.id,
           },
@@ -25628,8 +25664,8 @@ export function useMeetingAssistant() {
 
       const turn: TranscriptTurn = {
         id: createMeetingId("turn"),
-        speaker: "them",
-        source: "system-audio",
+        speaker,
+        source: speaker === "me" ? "microphone" : "system-audio",
         text,
         startedAt,
         endedAt: startedAt,
@@ -25640,14 +25676,15 @@ export function useMeetingAssistant() {
           scenarioRunId: run.scenarioRunId,
           runtimeSessionId: run.runtimeSessionId,
           runtimeEpoch: runtimeEpochRef.current,
+          ...(options.durationMs !== undefined ? { durationMs: options.durationMs } : {}),
         },
         audioBase64Chars: 0,
         sessionId: `scenario:${run.scenarioRunId}`,
         sequence: ordinal,
         queuedAt: startedAt,
         queueDepthAtEnqueue: 0,
-        speaker: "them",
-        source: "system-audio",
+        speaker,
+        source: speaker === "me" ? "microphone" : "system-audio",
         traceId: trace.id,
         queueStepId: injectionStepId,
       };
@@ -25682,7 +25719,7 @@ export function useMeetingAssistant() {
             scenarioStepId,
             ordinal,
             event: "terminal",
-            inputKind: "them-text",
+            inputKind,
             runtimeSessionId: run.runtimeSessionId,
             traceId: trace.id,
             logicalQuestionUnitId:
@@ -25716,7 +25753,7 @@ export function useMeetingAssistant() {
             currentStep: {
               scenarioStepId,
               ordinal,
-              inputKind: "them-text",
+              inputKind,
               status: terminalDisposition,
               traceId: trace.id,
               reason: terminalTrace.error,
@@ -25725,6 +25762,8 @@ export function useMeetingAssistant() {
           error: terminalTrace.error ?? null,
         }));
         runtimeRegressionStepIdRef.current = undefined;
+        run.lastStepResult = buildRuntimeRegressionStepResult({ scenarioRunId: run.scenarioRunId,
+          runtimeSessionId: run.runtimeSessionId, scenarioStepId, startedAt, completion: completed, trace: terminalTrace });
         return true;
       } catch (error) {
         completion.cancel();
@@ -25745,7 +25784,7 @@ export function useMeetingAssistant() {
             scenarioStepId,
             ordinal,
             event: "terminal",
-            inputKind: "them-text",
+            inputKind,
             runtimeSessionId: run.runtimeSessionId,
             traceId: trace.id,
             sourceHash,
@@ -25763,7 +25802,7 @@ export function useMeetingAssistant() {
             currentStep: {
               scenarioStepId,
               ordinal,
-              inputKind: "them-text",
+              inputKind,
               status: "error",
               traceId: trace.id,
               reason: message,
@@ -26810,6 +26849,13 @@ export function useMeetingAssistant() {
       options: CaptureScreenContextOptions = {}
     ) => {
       if (shutdownRequestedRef.current) return;
+      if (options.replayCapture && (!debugModeRef.current || !runtimeRegressionRunRef.current)) {
+        throw new Error("Replay Screen input requires an active Debug replay run.");
+      }
+      const replayOrigin = options.replayCapture ? {
+        scenarioRunId: runtimeRegressionRunRef.current?.scenarioRunId,
+        scenarioStepId: runtimeRegressionStepIdRef.current,
+      } : undefined;
       contextManagerRef.current.clearExpiredActiveMeetingTask();
       const screenOperationId = createMeetingId("screen_operation");
       const screenOperationRequestedAt = options.requestedAt ?? Date.now();
@@ -27061,6 +27107,7 @@ export function useMeetingAssistant() {
           source,
           screenOperationId,
           screenOperationRequestedAt,
+          ...replayOrigin,
           screenOperationAdmission: screenOperationClaim.supersedesOperationId
             ? "superseding"
             : "initial",
@@ -27106,7 +27153,8 @@ export function useMeetingAssistant() {
           operationId: screenOperationId,
           operationKind: "screen-operation",
           sourceKind: "screen",
-          transport: latePreflightRepair ? "late-preflight-replay" : "capture",
+          transport: latePreflightRepair ? "late-preflight-replay" : options.replayCapture ? "replay-file" : "capture",
+          ...replayOrigin,
         },
       });
       if (screenOperationClaim.supersedesTraceId) {
@@ -27460,16 +27508,19 @@ export function useMeetingAssistant() {
           trace.id,
           latePreflightRepair
             ? "Screen observation replay"
-            : "Screen capture command",
+            : options.replayCapture ? "Reviewed Screen file input" : "Screen capture command",
           {
             target: latePreflightRepair
               ? "existing-observation"
-              : "active-window",
+              : options.replayCapture ? "reviewed-file" : "active-window",
           }
         );
         const observation = latePreflightRepair
           ? latePreflightRepair.observation
-          : await captureScreenObservation({
+          : options.replayCapture ? createCapturedScreenObservation({ ...options.replayCapture,
+              target: options.replayCapture.target ? structuredClone(options.replayCapture.target) : undefined }, {
+              source, previousHash: latestScreenHashRef.current,
+            }) : await captureScreenObservation({
               source,
               previousHash: latestScreenHashRef.current,
             });
@@ -32973,6 +33024,7 @@ export function useMeetingAssistant() {
         repairTraceId?: string;
         evaluation?: QuestionHumanEvaluation;
       }) => {
+        if (invocation.ingressSource === "replay") return;
         const sourceTraceId =
           correctionQuestion.sourceTraceId ?? correctionTrace.id;
         const provenance = {
@@ -34517,7 +34569,7 @@ export function useMeetingAssistant() {
     ]
   );
 
-  const forceAdviseLatestTurn = useCallback(async () => {
+  const forceAdviseLatestTurn = useCallback(async (invocation: ManualRuntimeActionInvocation = {}) => {
     const manualActionId = createMeetingId("manual_action");
     contextManagerRef.current.clearExpiredActiveMeetingTask();
     const requestedRuntime = contextManagerRef.current.getState();
@@ -34525,6 +34577,7 @@ export function useMeetingAssistant() {
       actionId: manualActionId,
       action: "force-advise",
       stage: "requested",
+      ingressSource: invocation.ingressSource,
       observedLogicalQuestionUnitId: logicalQuestionUnitRef.current?.id,
       observedLogicalQuestionUnitRevision:
         logicalQuestionUnitRef.current?.revision,
@@ -34709,7 +34762,7 @@ export function useMeetingAssistant() {
       ),
       humanEvaluationCollection: forceAdviseEvaluationCollection,
     });
-    recordHumanGroundTruthV2(
+    if (invocation.ingressSource !== "replay") recordHumanGroundTruthV2(
       target.presentation.originalTraceId,
       {
         kind: "expected-runtime-action",
@@ -38934,6 +38987,181 @@ export function useMeetingAssistant() {
       error: result.accepted ? previous.error : "The visible Advise target changed or is empty. Try again." }));
   }, [recordManualRuntimeAction, tryCommitPendingAnswer]);
 
+  const dispatchRuntimeRegressionInput = useCallback(async (
+    input: RuntimeRegressionSourceInput, screenCapture?: CaptureScreenContextResponse
+  ): Promise<RuntimeRegressionStepResult> => {
+    const run = runtimeRegressionRunRef.current;
+    if (!run || !runtimeActiveRef.current || shutdownRequestedRef.current) throw new Error("Replay run is not active.");
+    if (input.kind === "them-text" || input.kind === "me-text") {
+      const accepted = await submitRuntimeRegressionText(input.text, { speaker: input.kind === "me-text" ? "me" : "them", durationMs: input.durationMs });
+      if (!accepted || !run.lastStepResult) throw new Error("Replay text input did not complete.");
+      return run.lastStepResult;
+    }
+    if (runtimeRegressionStepIdRef.current || activeAdvisorJobRef.current) throw new Error("Replay input is still active.");
+    if (input.kind === "screen-input" && !screenCapture) throw new Error("Replay Screen assets are unavailable.");
+    const ordinal = ++run.stepOrdinal;
+    const scenarioStepId = `step-${ordinal}`;
+    runtimeRegressionStepIdRef.current = scenarioStepId;
+    const startedAt = Date.now();
+    const wasLocked = manualAdviseDisplayRef.current.locked;
+    const completion = waitForRuntimeRegressionCompletion({ subscribe: subscribeRuntimeCriticalEvents,
+      runtimeSessionId: run.runtimeSessionId, runtimeEpoch: runtimeEpochRef.current,
+      root: input.kind === "screen-input" ? { screen: true } : { manualAction: input.kind === "term-correction-deactivation" ? "stop-term-replacement" : input.kind },
+      waitForDisplay: input.kind === "screen-input" ? !wasLocked : true,
+    });
+    sessionRecordingManagerRef.current?.recordRuntimeRegressionStep(createRuntimeRegressionStepEvent({
+      scenarioRunId: run.scenarioRunId, scenarioStepId, ordinal, event: "injected", inputKind: input.kind, runtimeSessionId: run.runtimeSessionId, occurredAt: startedAt,
+    }));
+    setState(previous => ({ ...previous, error: null, runtimeRegression: { active: true, status: "running-step", scenarioRunId: run.scenarioRunId, stepOrdinal: ordinal,
+      currentStep: { scenarioStepId, ordinal, inputKind: input.kind, status: "pending" } } }));
+    try {
+      if (!completion.accepted) await completion.promise;
+      let unlockedTarget: { suggestionId: string; stableRevision: number } | undefined;
+      const displayTarget = manualAdviseDisplayRef.current.current?.target;
+      switch (input.kind) {
+        case "screen-input": await captureScreenContext("full-screen", { replayCapture: screenCapture }); break;
+        case "type-correction": {
+          const menu = readManualCorrectionMenu(input.correctedType, displayTarget);
+          const choice = menu.options.find(option => option.id === input.correctionIntentKind);
+          if (!choice || !("target" in menu)) throw new Error("Replay Correction intent is unavailable on the current displayed task.");
+          await correctActiveQuestionType(input.correctedType, "normal-mode", { correctionIntent: choice.intent, correctionTarget: menu.target, displayTarget, ingressSource: "replay" });
+          break;
+        }
+        case "term-correction": await submitSpeechCorrection(input.text); break;
+        case "term-correction-deactivation": {
+          const matches = speechCorrectionsRef.current.filter(rule => !rule.deactivatedAt &&
+            rule.from === input.sourceTerm && (rule.to ?? rule.term) === input.replacementTerm);
+          if (matches.length !== 1) throw new Error("Replay Term rule is missing or ambiguous.");
+          await deactivateSpeechCorrection(matches[0].id);
+          break;
+        }
+        case "force-advise": await forceAdviseLatestTurn({ ingressSource: "replay" }); break;
+        case "regenerate": await regenerateSuggestion({ displayTarget, ingressSource: "replay" }); break;
+        case "clear-task": clearActiveTask(); break;
+        case "toggle-advise-pin": {
+          toggleAdvisePin({ displayTarget, ingressSource: "replay" });
+          if (wasLocked && !manualAdviseDisplayRef.current.locked) {
+            const selected = selectAdviseDisplay(emptyAdviseDisplay);
+            if (selected.target.suggestionId && selected.target.stableRevision !== undefined) unlockedTarget = {
+              suggestionId: selected.target.suggestionId, stableRevision: selected.target.stableRevision,
+            };
+          }
+          break;
+        }
+        default: await applyResponseAction(input.kind, { displayTarget, ingressSource: "replay" }); break;
+      }
+      completion.dispatched(unlockedTarget);
+      const completed = await completion.promise;
+      if (runtimeRegressionRunRef.current?.scenarioRunId !== run.scenarioRunId) throw new Error("Replay run stopped before completion.");
+      const trace = completed.traceId ? traceStoreRef.current.getTrace(completed.traceId) : undefined;
+      const result = buildRuntimeRegressionStepResult({ scenarioRunId: run.scenarioRunId, runtimeSessionId: run.runtimeSessionId,
+        scenarioStepId, startedAt, completion: completed, trace });
+      run.lastStepResult = result;
+      sessionRecordingManagerRef.current?.recordRuntimeRegressionStep(createRuntimeRegressionStepEvent({
+        scenarioRunId: run.scenarioRunId, scenarioStepId, ordinal, event: "terminal", inputKind: input.kind, runtimeSessionId: run.runtimeSessionId,
+        traceId: completed.traceId, terminalDisposition: completed.disposition, reason: completed.reason, visibleAnswerRevision: completed.stableRevision,
+      }));
+      setState(previous => ({ ...previous, runtimeRegression: { active: true, status: "ready", scenarioRunId: run.scenarioRunId, stepOrdinal: ordinal,
+        currentStep: { scenarioStepId, ordinal, inputKind: input.kind, status: completed.disposition, traceId: completed.traceId, reason: completed.reason } } }));
+      return result;
+    } catch (error) {
+      completion.cancel();
+      if (runtimeRegressionRunRef.current?.scenarioRunId === run.scenarioRunId) {
+        const reason = error instanceof Error ? error.message : "Replay input failed.";
+        sessionRecordingManagerRef.current?.recordRuntimeRegressionStep(createRuntimeRegressionStepEvent({
+          scenarioRunId: run.scenarioRunId, scenarioStepId, ordinal, event: "terminal", inputKind: input.kind,
+          runtimeSessionId: run.runtimeSessionId, terminalDisposition: "error", reason,
+        }));
+        setState(previous => ({ ...previous, error: reason, runtimeRegression: { ...previous.runtimeRegression, status: "error" } }));
+      }
+      throw error;
+    } finally {
+      if (runtimeRegressionStepIdRef.current === scenarioStepId && runtimeRegressionRunRef.current?.scenarioRunId === run.scenarioRunId) runtimeRegressionStepIdRef.current = undefined;
+    }
+  }, [submitRuntimeRegressionText, subscribeRuntimeCriticalEvents, captureScreenContext, readManualCorrectionMenu,
+    correctActiveQuestionType, submitSpeechCorrection, deactivateSpeechCorrection, forceAdviseLatestTurn,
+    regenerateSuggestion, clearActiveTask, toggleAdvisePin, selectAdviseDisplay, emptyAdviseDisplay, applyResponseAction]);
+  runtimeRegressionDispatchRef.current = dispatchRuntimeRegressionInput;
+
+  const readRuntimeRegressionEnvironment = useCallback((): RuntimeRegressionEnvironment => {
+    const settings = artifactReuseSettingsRef.current;
+    const providers = meetingModelProviderSnapshotRef.current;
+    const fast = resolveRuntimeInferenceModelRouteFromSnapshot({ snapshot: providers, operationKind: "question-type-adjudication", reason: "replay-prerequisites" });
+    return {
+      useMemory: settings.useMemory, language: settings.response.language,
+      microphoneContextEnabled: settings.microphoneContextEnabled,
+      runtimeCrossChecksEnabled: settings.runtimeCrossChecksEnabled,
+      factGuardrailMode: settings.personalEvidenceGuardrailMode,
+      meetingMetadataMode: settings.taxonomyAdjudication.meetingMetadataMode,
+      snapshotId: preparationRuntimeContextRef.current.pinnedSnapshot?.snapshotId ?? null,
+      mainProviderId: providers.selectedProvider.provider, mainModel: readSelectedProviderModelId(providers.selectedProvider) ?? null,
+      fastProviderId: fast.resolvedProviderId ?? null, fastModel: readSelectedProviderModelId(fast.selectedProvider) ?? null,
+      codingProviderId: providers.codingProvider.provider, codingModel: readSelectedProviderModelId(providers.codingProvider) ?? null,
+    };
+  }, []);
+
+  const loadRuntimeRegressionScenarioFile = useCallback(async (path: string) => {
+    if (!import.meta.env.DEV || !debugModeRef.current || automaticRuntimeRegressionRef.current) return false;
+    setRuntimeRegressionScenario({ status: "loading", steps: [] });
+    try {
+      const loaded = await loadRuntimeRegressionScenario(path);
+      assertRuntimeRegressionPreconditions(loaded.manifest.review.preconditions, readRuntimeRegressionEnvironment());
+      loadedRuntimeRegressionScenarioRef.current = loaded;
+      setRuntimeRegressionScenario({ status: "ready", scenarioId: loaded.manifest.id, revision: loaded.manifest.revision,
+        purpose: loaded.manifest.review.purpose, steps: loaded.procedure.steps.map(step => ({ id: step.id, kind: step.kind })) });
+      return true;
+    } catch (error) {
+      loadedRuntimeRegressionScenarioRef.current = null;
+      setRuntimeRegressionScenario({ status: "failed", steps: [], error: error instanceof Error ? error.message : "Replay loading failed." });
+      return false;
+    }
+  }, [readRuntimeRegressionEnvironment]);
+
+  const runLoadedRuntimeRegressionScenario = useCallback(async () => {
+    const scenario = loadedRuntimeRegressionScenarioRef.current;
+    if (!scenario || automaticRuntimeRegressionRef.current || !import.meta.env.DEV || !debugModeRef.current) return undefined;
+    const automatic = { controller: new AbortController(), recordedSteps: 0, report: undefined as RuntimeRegressionScenarioReport | undefined };
+    automaticRuntimeRegressionRef.current = automatic;
+    setRuntimeRegressionScenario(previous => ({ ...previous, status: "running", error: undefined, reportPath: undefined }));
+    try {
+      return await executeRuntimeRegressionScenario({
+        scenario, signal: automatic.controller.signal, environment: readRuntimeRegressionEnvironment,
+        start: async () => {
+          if (!await startRuntimeRegressionRun({ scenarioId: scenario.manifest.id, scenarioRevision: scenario.manifest.revision,
+            procedureDigest: scenario.manifest.procedure.sha256 })) throw new Error("Replay could not start a fresh scripted run.");
+          const run = runtimeRegressionRunRef.current!;
+          return { scenarioRunId: run.scenarioRunId, runtimeSessionId: run.runtimeSessionId };
+        },
+        execute: (input, stepId) => runtimeRegressionDispatchRef.current!(input, scenario.screenInputs.get(stepId)),
+        progress: report => {
+          if (automaticRuntimeRegressionRef.current !== automatic) return;
+          automatic.report = report;
+          if (runtimeRegressionRunRef.current?.scenarioRunId === report.scenarioRunId) {
+            while (automatic.recordedSteps < report.steps.length) {
+              sessionRecordingManagerRef.current?.recordRuntimeRegressionScenarioStep(report, report.steps[automatic.recordedSteps++]);
+            }
+          }
+          const completedSteps = new Map(report.steps.map(row => [row.procedureStepId, row.result.completion.disposition]));
+          setRuntimeRegressionScenario(previous => ({ ...previous, status: report.status, error: report.firstDivergence?.reason,
+            steps: scenario.procedure.steps.map(step => ({ id: step.id, kind: step.kind,
+              status: completedSteps.get(step.id) ??
+                (step.id === report.firstDivergence?.stepId ? report.status :
+                  step.id === report.currentStepId && report.status === "running" ? "pending" : undefined) })) }));
+        },
+        stop: async report => {
+          if (runtimeRegressionRunRef.current?.scenarioRunId === report.scenarioRunId) await stopRuntimeRegressionRunRef.current!(`scenario-${report.status}`);
+          if (sessionRecordingManagerRef.current?.getState().lifecycle === "close-failed") throw new Error("Replay recording could not be sealed. Retry its existing close action.");
+        },
+      });
+    } catch (error) {
+      setRuntimeRegressionScenario(previous => ({ ...previous, status: automatic.report?.status === "stopped" || (!automatic.report && automatic.controller.signal.aborted) ? "stopped" : "failed",
+        error: error instanceof Error ? error.message : "Replay failed." }));
+      return undefined;
+    } finally {
+      if (automaticRuntimeRegressionRef.current === automatic) automaticRuntimeRegressionRef.current = null;
+    }
+  }, [dispatchRuntimeRegressionInput, readRuntimeRegressionEnvironment, startRuntimeRegressionRun, stopRuntimeRegressionRun]);
+
   const presentationSessionId = contextManagerRef.current.getState().sessionId;
   // This source is published before generation and is not replaced by a pinned historical job.
   const evaluationSettlement = currentQuestionSettlementRef.current;
@@ -38995,6 +39223,11 @@ export function useMeetingAssistant() {
     stopRuntimeRegressionRun,
     resetRuntimeRegressionRun,
     submitRuntimeRegressionText,
+    dispatchRuntimeRegressionInput,
+    runtimeRegressionScenario,
+    loadRuntimeRegressionScenarioFile,
+    runLoadedRuntimeRegressionScenario,
+    readRuntimeRegressionEnvironment,
     subscribeRuntimeCriticalEvents,
     setSttEvaluationCaptureEnabled,
     deleteSttEvaluationCapture,

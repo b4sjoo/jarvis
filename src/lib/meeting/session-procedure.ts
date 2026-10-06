@@ -95,6 +95,7 @@ export interface SessionProcedureStepV1 {
   replaySupport: SessionProcedureReplaySupport;
   input: {
     text?: string;
+    durationMs?: number;
     artifactRefs?: string[];
     screen?: SessionProcedureScreenInput;
     correctedType?: string;
@@ -259,7 +260,7 @@ export function buildSessionProcedureV1(input: {
     });
     if (!step) continue;
     if (
-      step.kind === "them-text" &&
+      (step.kind === "them-text" || step.kind === "me-text") &&
       step.provenance.traceIds.some((traceId) =>
         runtimeStepTraceIds.has(traceId)
       )
@@ -385,7 +386,7 @@ function buildRuntimeRegressionTextSteps(input: {
   return Array.from(eventsByStepId.values())
     .map((events) => {
       const injected = events.find(
-        (event) => event.event === "injected" && event.inputKind === "them-text"
+        (event) => event.event === "injected" && (event.inputKind === "them-text" || event.inputKind === "me-text")
       );
       if (!injected) return undefined;
       const terminal = events.find((event) => event.event === "terminal");
@@ -407,9 +408,9 @@ function buildRuntimeRegressionTextSteps(input: {
       };
       let step = baseStep({
         event: timelineEvent,
-        kind: "them-text",
+        kind: injected.inputKind === "me-text" ? "me-text" : "them-text",
         replaySupport: text ? "ready" : "capture-only",
-        input: text ? { text } : {},
+        input: text ? { text, ...(injected.durationMs !== undefined ? { durationMs: injected.durationMs } : {}) } : {},
         traceIds,
         sourceTurnIds: sourceTurnId ? [sourceTurnId] : [],
         sourceTransport: "manual-text",
@@ -499,9 +500,11 @@ function buildTranscriptStep(
   return baseStep({
     event,
     kind,
-    replaySupport: kind === "them-text" ? "ready" : "capture-only",
+    replaySupport: "ready",
     input: {
       text: turn.text,
+      ...(kind === "me-text" && Number.isFinite(turn.startedAt) && Number.isFinite(turn.endedAt) && turn.endedAt >= turn.startedAt
+        ? { durationMs: turn.endedAt - turn.startedAt } : {}),
     },
     traceIds,
     sourceTurnIds: [turn.id],

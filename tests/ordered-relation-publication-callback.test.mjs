@@ -47,6 +47,7 @@ function findDescendant(node, predicate) {
 }
 
 const callbackNames = [
+  "finishTurnInput",
   "scheduleTaskRelationSplitRuntime",
   "scheduleTaskRelationAdjudication",
   "scheduleAdvisorAfterQuestionTypeWindow",
@@ -528,6 +529,7 @@ function createHarness({ logLevel = "trace", logDelivery = "ok" } = {}) {
     },
     traceStoreRef: {
       current: {
+        getTrace: (id) => ({ id, metadata: id === "trace" ? metadata : otherTraces[id] }),
         updateMetadata: (id, update) => {
           if (id !== "trace") {
             Object.assign((otherTraces[id] ??= {}), update);

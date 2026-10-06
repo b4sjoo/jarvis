@@ -124,8 +124,29 @@ const RECORDED_ACTIONS = [
   "setMicrophoneContextEnabled", "setSessionRecordingEnabled", "stopSessionRecording", "abandonSessionRecording",
   "setSessionScriptedValidation", "startRuntimeRegressionRun", "stopRuntimeRegressionRun", "resetRuntimeRegressionRun",
   "submitRuntimeRegressionText", "setSttEvaluationCaptureEnabled", "deleteSttEvaluationCapture",
+  "loadRuntimeRegressionScenarioFile", "runLoadedRuntimeRegressionScenario",
   "setInterviewSessionBrief", "clearInterviewSessionBrief", "setPreparationRuntimeCapabilities",
 ];
+
+test("SR187 reviewed scenario controls use the existing Hook and disable manual text during automatic execution", async () => {
+  const h = harness(JSON.stringify({ debugMode: true }), { dev: true, panelState: { replayLabOpen: true, replayText: "text" },
+    state: { runtimeRegressionScenario: { status: "ready", scenarioId: "reviewed", revision: 1, purpose: "regression", steps: [{ id: "step-1", kind: "them-text" }] } } });
+  const c = configurations(h);
+  const buttons = c.of(h.globals.Button, c.group("Debug").all);
+  const run = buttons.find(button => text(button.children).trim() === "Run Scenario");
+  assert.ok(run); assert.equal(Boolean(run.props.disabled), false);
+  run.props.onClick();
+  assert.equal(h.actions.at(-1)?.name, "runLoadedRuntimeRegressionScenario");
+  h.globals.openReplayFileDialog = async () => "/reviewed/scenario.json";
+  await buttons.find(button => button.props.title === "Load reviewed scenario")!.props.onClick();
+  assert.deepEqual(h.actions.at(-1), { name: "loadRuntimeRegressionScenarioFile", args: ["/reviewed/scenario.json"] });
+  h.globals.state.runtimeRegression = { active: true, status: "ready", scenarioRunId: "run" };
+  h.globals.state.runtimeRegressionScenario.status = "running";
+  const active = configurations(h);
+  for (const button of active.of(h.globals.Button, active.group("Debug").all)) {
+    if (["Run Scenario", "Send"].includes(text(button.children).trim())) assert.equal(button.props.disabled, true);
+  }
+});
 const brief = Object.freeze({
   targetCompany: "Oracle", targetCompanyNormalized: "oracle", companyLocked: true,
   interviewTypes: Object.freeze(["coding"]), updatedAt: 1,
@@ -182,6 +203,7 @@ function harness(stored?: string, options: HarnessOptions = {}) {
     aiProviders: [{ id: "test-provider", curl: "" }],
     sessionRecording: { lifecycle: "idle", active: false }, scriptedValidation: false,
     runtimeRegression: { active: false, status: "idle", steps: [] },
+    runtimeRegressionScenario: { status: "empty", steps: [] },
     sttEvaluationCapture: { lifecycle: "idle", active: false },
     ...options.state,
   };
@@ -1087,7 +1109,7 @@ test("PC7 Replay Lab and the native fault test stay behind DEV and Debug Mode in
   assert.equal(faultCells, 48);
 
   // The opened Replay Lab. The panel keeps "open" and the typed text in its own state.
-  assert.deepEqual(configurationsPanelStateNames(), ["replayLabOpen", "replayText", "recordingRecoveryError"]);
+  assert.deepEqual(configurationsPanelStateNames(), ["replayLabOpen", "replayText", "replayFileError", "recordingRecoveryError"]);
   const runs = [{ active: false, status: "idle", steps: [] }, { active: false, status: "starting", steps: [] },
     { active: true, status: "ready", steps: [], scenarioRunId: "run-1" }];
   let labCells = 0;

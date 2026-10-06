@@ -1,16 +1,7 @@
-export const MANUAL_RUNTIME_ACTION_SCHEMA_VERSION = 1 as const;
+import type { ManualRuntimeActionKind } from "./meeting-presentation-contracts.js";
+export type { ManualRuntimeActionKind } from "./meeting-presentation-contracts.js";
 
-export type ManualRuntimeActionKind =
-  | "type-correction"
-  | "force-advise"
-  | "next-phase"
-  | "previous-phase"
-  | "narrow-context"
-  | "enhance-context"
-  | "regenerate-artifacts"
-  | "toggle-advise-pin"
-  | "clear-task"
-  | "regenerate";
+export const MANUAL_RUNTIME_ACTION_SCHEMA_VERSION = 1 as const;
 
 export type ManualRuntimeActionEventStage =
   | "requested"
@@ -38,7 +29,7 @@ export interface ManualRuntimeActionInvocation {
   correctionTarget?: import("./manual-correction-intent.js").ManualCorrectionTargetSnapshot;
   uiSurface?: "meeting-response-actions" | "normal-mode" | "focus-mode";
   actionId?: string;
-  ingressSource?: "ui" | "shortcut";
+  ingressSource?: "ui" | "shortcut" | "replay";
   ingressReceivedAt?: number;
   preflightRejectionReason?: Extract<
     ManualRuntimeActionIngressRejectionReason,
@@ -65,7 +56,7 @@ export interface ManualRuntimeActionEventV1 {
   runtimeEpoch: number;
   uiSurface: "meeting-response-actions" | "normal-mode" | "focus-mode";
   occurredAt: number;
-  ingressSource?: "ui" | "shortcut";
+  ingressSource?: "ui" | "shortcut" | "replay";
   ingressReceivedAt?: number;
   traceId?: string;
   observedLogicalQuestionUnitId?: string;

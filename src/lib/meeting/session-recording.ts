@@ -70,6 +70,7 @@ import type {
   RuntimeRegressionRunRecordV1,
   RuntimeRegressionStepEventV1,
 } from "./runtime-regression.js";
+import type { RuntimeRegressionScenarioReport } from "./runtime-regression-runner.js";
 import type { ManualRuntimeActionEventV1 } from "./manual-runtime-action.js";
 import {
   RUNTIME_CRITICAL_EVENT_JOURNAL_PATH,
@@ -1773,6 +1774,27 @@ export class SessionRecordingManager {
       terminalDisposition: event.terminalDisposition,
       traceId: event.traceId,
     });
+    return true;
+  }
+
+  recordRuntimeRegressionScenarioResult(report: RuntimeRegressionScenarioReport) {
+    const session = this.getWritableSession();
+    if (!session?.scriptedValidationForced || session.scenarioRunId !== report.scenarioRunId ||
+      !session.runtimeMeetingSessionIds.has(report.runtimeSessionId)) return undefined;
+    const relativePath = "runtime-regression/result.v1.json";
+    const payload = JSON.stringify({ ...report, build: readBuildProvenance(),
+      recording: { sessionId: session.sessionId, integritySource: "manifest.json" } });
+    this.enqueue(session, () => this.writeText(session, relativePath, payload));
+    return `${session.folderPath}/${relativePath}`;
+  }
+
+  recordRuntimeRegressionScenarioStep(report: RuntimeRegressionScenarioReport, step: RuntimeRegressionScenarioReport["steps"][number]) {
+    const session = this.getWritableSession();
+    if (!session?.scriptedValidationForced || session.scenarioRunId !== report.scenarioRunId ||
+      !session.runtimeMeetingSessionIds.has(report.runtimeSessionId)) return false;
+    this.enqueue(session, () => this.appendJsonl(session, "runtime-regression/results.v1.jsonl", {
+      scenarioRunId: report.scenarioRunId, scenarioId: report.scenarioId, procedureDigest: report.procedureDigest, ...step,
+    }));
     return true;
   }
 

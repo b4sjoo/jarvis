@@ -72,6 +72,13 @@ fn read_file(
     } else {
         TEXT_MAX_BYTES
     };
+    if !file
+        .metadata()
+        .map_err(|_| "Replay asset metadata is unavailable.")?
+        .is_file()
+    {
+        return Err("Replay asset is not a regular file.".into());
+    }
     let opened = File::open(&file).map_err(|_| "Replay asset cannot be opened.")?;
     if !opened
         .metadata()

@@ -211,7 +211,7 @@ async function enrichRuntimeRegressionStepText(
     events.map(async (event) => {
       if (
         event.event !== "injected" ||
-        event.inputKind !== "them-text" ||
+        (event.inputKind !== "them-text" && event.inputKind !== "me-text") ||
         event.text?.trim() ||
         !event.traceId
       ) {

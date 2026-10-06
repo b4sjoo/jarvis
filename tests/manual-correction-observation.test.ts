@@ -46,10 +46,12 @@ function invokeProductionCorrectionTruth(input: {
   sourceTraceId?: string;
   taskId?: string;
   repairTraceId?: string;
+  ingressSource?: "ui" | "replay";
 }) {
   const calls: Array<{ traceId: string; fact: HumanGroundTruthFactV2; provenance: Record<string, unknown> }> = [];
   const capturedQuestion = unit("selected-Q");
   const environment: Record<string, unknown> = {
+    invocation: { ingressSource: input.ingressSource },
     correctionQuestion: { sourceTraceId: input.sourceTraceId }, correctionTrace: { id: "correction-trace" },
     correctionIntentPreparation: { capability: input.prepared.capability },
     decision: input.prepared.proposal.decision, correctionScopeDecision: input.prepared.proposal.scopeDecision,
@@ -68,6 +70,11 @@ function invokeProductionCorrectionTruth(input: {
   callback({ taskId: input.taskId, repairTraceId: input.repairTraceId });
   return calls;
 }
+
+test("SR187 replayed Correction keeps its runtime command separate from new human truth", () => {
+  assert.deepEqual(invokeProductionCorrectionTruth({ prepared: committed("retype-parent"), ingressSource: "replay" }), []);
+  assert.equal(invokeProductionCorrectionTruth({ prepared: committed("retype-parent"), ingressSource: "ui" }).length, 2);
+});
 
 function unit(id: string): LogicalQuestionUnit {
   return { id, revision: 1, sessionId, runtimeEpoch: 1, currentTurnId: `turn:${id}`, sourceTurnIds: [`turn:${id}`],

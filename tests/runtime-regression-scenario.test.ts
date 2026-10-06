@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { assertRuntimeRegressionPreconditions, compareRuntimeRegressionExpected, readRuntimeRegressionScenario, readRuntimeRegressionScenarioManifest, readRuntimeRegressionSourceInput } from "../src/lib/meeting/runtime-regression-scenario.js";
 import { loadRuntimeRegressionScenario, type RuntimeRegressionFileReader } from "../src/lib/meeting/runtime-regression-loader.js";
 import type { SessionProcedureStepV1, SessionProcedureV1 } from "../src/lib/meeting/session-procedure.js";
+import { classifyMeTurn } from "../src/lib/meeting/transcript-fusion.js";
 
 const sha = (text: string) => `sha256:${createHash("sha256").update(text).digest("hex")}`;
 const manifest = () => readRuntimeRegressionScenarioManifest({ schemaVersion: 1, id: "reviewed-case", revision: 1,
@@ -55,6 +56,16 @@ test("HR187 reviewed practice may omit labels; regression and conflicts do not s
   assert.equal(readRuntimeRegressionScenario(practice, unlabelled).inputs.length, 1);
   assert.throws(() => readRuntimeRegressionScenario(manifest(), unlabelled), /Expected/);
   assert.deepEqual(compareRuntimeRegressionExpected(undefined, undefined, new Map()), []);
+});
+
+test("Replay Me duration uses the original classifier without backdating or creating speech-start truth", () => {
+  const turn = { id: "new-me", text: "Do you mean the cache capacity?", speaker: "me" as const, source: "microphone" as const,
+    startedAt: 1000, endedAt: 1000, isFinal: true };
+  const before = JSON.stringify(turn);
+  assert.deepEqual(classifyMeTurn(turn, true, 25000), classifyMeTurn({ ...turn, endedAt: 26000 }, true));
+  assert.notEqual(classifyMeTurn(turn, true).tier, classifyMeTurn(turn, true, 25000).tier);
+  assert.equal(JSON.stringify(turn), before);
+  assert.equal(Object.hasOwn(turn, "speechStartedAt"), false);
 });
 
 test("SR187 comparison uses common Observed phase, bijective comparison-only identities, no automatic answer-quality label", () => {

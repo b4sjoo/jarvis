@@ -26,6 +26,7 @@ import {
   createRuntimeRegressionStepEvent,
 } from "../src/lib/meeting/runtime-regression.js";
 import { createManualRuntimeActionEvent } from "../src/lib/meeting/manual-runtime-action.js";
+import type { RuntimeRegressionScenarioReport } from "../src/lib/meeting/runtime-regression-runner.js";
 import { parseMeetingAnswer } from "../src/lib/meeting/meeting-answer.js";
 import { buildFactAnchorDecision } from "../src/lib/meeting/fact-anchor-guardrail.js";
 import { enforceFactAnchorOutput, formatFactAnchorOutputDecisionForTrace } from "../src/lib/meeting/fact-anchor-output-guardrail.js";
@@ -249,6 +250,34 @@ test("forces Scenario Runner recordings to remain scripted", async () => {
   assert.equal(provenance.forced, true);
   assert.equal(provenance.source, "scenario-runner");
   assert.equal(provenance.scenarioRunId, "scenario-run-1");
+});
+
+test("SR187 results use the forced run owner, append per step, and reference canonical manifest integrity", async () => {
+  const native = new ControlledRecordingInvoke();
+  const manager = new SessionRecordingManager(undefined, native.invoke);
+  const report: RuntimeRegressionScenarioReport = { schemaVersion: 1, scenarioId: "reviewed", scenarioRevision: 1,
+    procedureDigest: "sha256:input", purpose: "regression", scenarioRunId: "run", runtimeSessionId: START_OPTIONS.meetingSessionId,
+    environment: { useMemory: false }, status: "passed", startedAt: Date.now(), steps: [] };
+  assert.equal(manager.recordRuntimeRegressionScenarioResult(report), undefined);
+  await manager.start({ ...START_OPTIONS, scriptedValidationLock: { source: "scenario-runner", scenarioRunId: "run" } });
+  const step: RuntimeRegressionScenarioReport["steps"][number] = { procedureStepId: "step-1", assertions: [], result: {
+    scenarioRunId: "run", runtimeSessionId: report.runtimeSessionId, scenarioStepId: "step-1", startedAt: Date.now(), endedAt: Date.now(),
+    completion: { disposition: "completed", facts: [] } } };
+  assert.equal(manager.recordRuntimeRegressionScenarioStep(report, step), true);
+  report.steps.push(step);
+  assert.match(manager.recordRuntimeRegressionScenarioResult(report)!, /runtime-regression\/result\.v1\.json$/);
+  assert.equal(manager.recordRuntimeRegressionScenarioResult({ ...report, scenarioRunId: "foreign" }), undefined);
+  await manager.stop();
+  const saved = native.calls.find(call => stringArg(call, "relativePath") === "runtime-regression/result.v1.json")!;
+  const parsed = parsePayload(saved) as any;
+  assert.equal(parsed.recording.integritySource, "manifest.json");
+  assert.equal(parsed.scenarioRunId, "run"); assert.ok(parsed.build);
+  const count = native.calls.length;
+  assert.equal(manager.recordRuntimeRegressionScenarioResult(report), undefined);
+  assert.equal(native.calls.length, count);
+  await manager.start({ ...START_OPTIONS, scriptedValidationLock: { source: "scenario-runner", scenarioRunId: "new-run" } });
+  assert.equal(manager.recordRuntimeRegressionScenarioStep(report, step), false);
+  await manager.stop();
 });
 
 test("records matching runtime regression run and step artifacts only", async () => {

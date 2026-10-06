@@ -72,10 +72,12 @@ const FILLER_WORDS = new Set(["uh", "um", "er", "ah", "like"]);
 
 export function classifyMeTurn(
   turn: TranscriptTurn,
-  hasActiveTask: boolean
+  hasActiveTask: boolean,
+  sourceDurationMs?: number
 ): MeTurnClassification {
   const wordEquivalent = calculateWordEquivalent(turn.text);
-  const durationMs = Math.max(0, turn.endedAt - turn.startedAt);
+  // Replay duration is classification evidence, not this run's speech clock.
+  const durationMs = Math.max(0, sourceDurationMs ?? turn.endedAt - turn.startedAt);
   const hasClarificationSignal =
     hasClarificationOrCorrectionSignal(turn.text) ||
     (hasActiveTask &&

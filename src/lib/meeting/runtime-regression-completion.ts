@@ -101,7 +101,7 @@ export function waitForRuntimeRegressionCompletion(input: {
     const event = delivery.event;
     if (event.runtimeSessionId !== input.runtimeSessionId || event.purpose !== "formal" ||
       (event.runtimeEpoch !== undefined && event.runtimeEpoch !== input.runtimeEpoch)) return;
-    if (!["input-accepted", "generation-admitted", "stable-answer-committed", "stable-answer-applied", "terminal"].includes(event.fact) ||
+    if (!["input-accepted", "generation-admitted", "stable-answer-committed", "artifact-committed", "stable-answer-applied", "terminal"].includes(event.fact) ||
       (event.fact === "terminal" && !["generation", "turn-input", "screen-operation", "manual-action"].includes(event.terminal!.object))) return;
     const correlationKeys = ["traceId", "operationId", "manualActionId", "generationLeaseId", "suggestionId", "stableRevision"];
     if (events.length >= 256 || [...(event.omittedRefs ?? []), ...(event.digestedRefs ?? [])].some(key => correlationKeys.includes(key))) {

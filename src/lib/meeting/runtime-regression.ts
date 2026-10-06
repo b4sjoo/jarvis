@@ -12,7 +12,10 @@ export interface RuntimeRegressionRunRecordV1 {
   scenarioRunId: string;
   recordingSessionId?: string;
   runtimeSessionId: string;
-  mode: "manual-replay";
+  mode: "manual-replay" | "sequential-replay";
+  scenarioId?: string;
+  scenarioRevision?: number;
+  procedureDigest?: string;
   forcedScripted: true;
   status: RuntimeRegressionRunStatus;
   startedAt: number;
@@ -45,6 +48,7 @@ export interface RuntimeRegressionStepEventV1 {
   visibleAnswerRevision?: number;
   text?: string;
   textChars?: number;
+  durationMs?: number;
   sourceHash?: string;
   terminalDisposition?: RuntimeRegressionStepTerminalDisposition;
   reason?: string;
@@ -58,12 +62,16 @@ export function createRuntimeRegressionRunRecord(input: {
   startedAt?: number;
   endedAt?: number;
   reason?: string;
+  scenarioId?: string;
+  scenarioRevision?: number;
+  procedureDigest?: string;
 }): RuntimeRegressionRunRecordV1 {
   return {
     schemaVersion: RUNTIME_REGRESSION_RUN_SCHEMA_VERSION,
     scenarioRunId: input.scenarioRunId,
     runtimeSessionId: input.runtimeSessionId,
-    mode: "manual-replay",
+    mode: input.scenarioId ? "sequential-replay" : "manual-replay",
+    ...(input.scenarioId ? { scenarioId: input.scenarioId, scenarioRevision: input.scenarioRevision, procedureDigest: input.procedureDigest } : {}),
     forcedScripted: true,
     status: input.status ?? "running",
     startedAt: input.startedAt ?? Date.now(),

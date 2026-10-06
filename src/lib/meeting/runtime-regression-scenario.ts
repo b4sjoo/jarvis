@@ -95,6 +95,12 @@ export function readRuntimeRegressionSourceInput(value: unknown): RuntimeRegress
 
 export function readRuntimeRegressionScenario(manifest: RuntimeRegressionScenarioManifest, value: unknown): RuntimeRegressionScenario {
   const procedure = object(value);
+  const source = object(procedure.source);
+  nonempty(procedure.id, "Procedure id");
+  nonempty(source.recordingSessionId, "source recording id");
+  nonempty(source.folderName, "source folder");
+  nonempty(source.sourceDigest, "source evidence digest");
+  if (typeof source.scriptedValidation !== "boolean" || typeof source.forcedScripted !== "boolean") throw new Error("Replay source provenance is invalid.");
   if (procedure.schemaVersion !== 1 || procedure.execution?.defaultBarrier !== "typed-terminal" || !Array.isArray(procedure.steps) || !procedure.steps.length)
     throw new Error("Replay Procedure version/barrier/steps are invalid.");
   if (Object.keys(procedure.execution).some(key => key !== "defaultBarrier")) throw new Error("Replay execution mode is unsupported.");

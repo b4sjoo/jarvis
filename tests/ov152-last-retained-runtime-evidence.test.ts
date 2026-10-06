@@ -293,7 +293,7 @@ function createRuntime() {
   );
   const finishRunningAdvisorJobTrace = evaluate<(...args: unknown[]) => void>(
     `return (${hookCallback("finishRunningAdvisorJobTrace")});`,
-    { ...refs, useCallback }
+    { ...refs, useCallback, finishTurnInput: evaluate(`return (${hookCallback("finishTurnInput")});`, refs) }
   );
   // Same keys as the production formatter: an adjacent "commit authorized"
   // pair on the root and on steps that must never feed the Token group.
@@ -537,6 +537,7 @@ function admitScreenOperation(
       source: "hotkey",
       options: {},
       latePreflightRepair: undefined,
+      replayOrigin: undefined,
       screenRefreshAuthority: undefined,
       screenVoiceQuestionBinding: undefined,
       selectedVisualRecovery: {},

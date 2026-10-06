@@ -128,6 +128,16 @@ export interface RuntimeRegressionRunnerPresentation {
   error?: string;
 }
 
+export interface RuntimeRegressionScenarioPresentation {
+  status: "empty" | "loading" | "ready" | "running" | "passed" | "failed" | "unevaluated" | "stopped";
+  scenarioId?: string;
+  revision?: number;
+  purpose?: "regression" | "practice";
+  steps: Array<{ id: string; kind: string; status?: string }>;
+  reportPath?: string;
+  error?: string;
+}
+
 export type RuntimeRegressionRunnerStatus =
   | "idle"
   | "starting"
@@ -145,4 +155,17 @@ export interface RuntimeRegressionRunnerStepPresentation {
   reason?: string;
 }
 
-export type RuntimeRegressionInputKind = "them-text" | "screen";
+export type ManualRuntimeActionKind =
+  | "type-correction"
+  | "force-advise"
+  | "next-phase"
+  | "previous-phase"
+  | "narrow-context"
+  | "enhance-context"
+  | "regenerate-artifacts"
+  | "toggle-advise-pin"
+  | "clear-task"
+  | "regenerate";
+
+export type RuntimeRegressionInputKind = "them-text" | "me-text" | "screen" | "screen-input" |
+  "term-correction" | "term-correction-deactivation" | ManualRuntimeActionKind;
