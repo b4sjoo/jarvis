@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -180,7 +180,44 @@ test("writes typed Screen fixture paths and digests without enabling replay", as
   assert.deepEqual(screen.evidenceGaps, []);
 });
 
-function runCompiler(sessionDirectory) {
+test("HR187 explicit organic import writes only an independent V2 candidate and preserves source bytes", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "jarvis-history-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const session = path.join(root, "original"); await writeSessionFixture(session, false);
+  const paths = (await readdir(session, { recursive: true, withFileTypes: true })).filter(entry => entry.isFile()).map(entry => path.join(entry.parentPath, entry.name));
+  const before = await Promise.all(paths.map(async file => [file, sha256(await readFile(file))]));
+  const output = path.join(root, "derived");
+  const args = ["--historical-import", "--output", output, "--selection", "historical"];
+  const result = runCompiler(session, args); assert.equal(result.status, 0, result.stderr);
+  const bytes = await readFile(path.join(output, "session-procedure.v2.json"), "utf8");
+  const procedure = JSON.parse(bytes);
+  assert.equal(procedure.schemaVersion, 2);
+  assert.equal(procedure.source.originalScriptedValidation, false);
+  assert.equal(Object.hasOwn(procedure.source, "scriptedValidation"), false);
+  assert.equal(procedure.steps.length, 2);
+  assert.match(await readFile(path.join(output, "transcript.md"), "utf8"), /Source identity: organic/);
+  const draft = JSON.parse(await readFile(path.join(output, "scenario.draft.json"), "utf8"));
+  assert.equal(draft.review.status, "needs-review");
+  assert.equal(draft.procedure.sha256, sha256(Buffer.from(bytes)));
+  assert.equal(runCompiler(session, args).status, 0, "same input is idempotent");
+  assert.equal(await readFile(path.join(output, "session-procedure.v2.json"), "utf8"), bytes);
+  assert.deepEqual(await Promise.all(paths.map(async file => [file, sha256(await readFile(file))])), before);
+  await assert.rejects(readFile(path.join(session, "runtime-regression/session-procedure.v1.json")), { code: "ENOENT" });
+});
+
+test("HR187 refuses original, ancestor and symlinked output locations before writing", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "jarvis-history-boundary-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const session = path.join(root, "original"); await writeSessionFixture(session, false);
+  const link = path.join(root, "source-link"); await symlink(session, link);
+  for (const output of [session, root, path.join(session, "nested"), path.join(link, "nested")]) {
+    const result = runCompiler(session, ["--historical-import", "--output", output]);
+    assert.notEqual(result.status, 0); assert.match(result.stderr, /independent/);
+  }
+  await assert.rejects(readdir(path.join(session, "nested")), { code: "ENOENT" });
+});
+
+function runCompiler(sessionDirectory, extra = []) {
   return spawnSync(
     "npm",
     [
@@ -189,6 +226,7 @@ function runCompiler(sessionDirectory) {
       "--",
       "--session",
       sessionDirectory,
+      ...extra,
     ],
     {
       cwd: repoRoot,

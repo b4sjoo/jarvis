@@ -2,7 +2,7 @@ import { CANONICAL_QUESTION_TYPES, type CanonicalQuestionType } from "./task-tax
 import type { ManualCorrectionIntent } from "./manual-correction-intent.js";
 import type { ManualRuntimeActionKind } from "./manual-runtime-action.js";
 import type { HumanEvaluationObservedSnapshotV2 } from "./human-ground-truth-v2.js";
-import type { SessionProcedureExpectedContract, SessionProcedureFileRef, SessionProcedureScreenInput, SessionProcedureV1 } from "./session-procedure.js";
+import type { SessionProcedureExpectedContract, SessionProcedureFileRef, SessionProcedureScreenInput, SessionProcedure } from "./session-procedure.js";
 import type { RuntimeRegressionCompletion } from "./runtime-regression-completion.js";
 
 export type RuntimeRegressionSourceInput =
@@ -26,7 +26,7 @@ export interface RuntimeRegressionScenarioManifest {
 
 export interface RuntimeRegressionScenario {
   manifest: RuntimeRegressionScenarioManifest;
-  procedure: SessionProcedureV1;
+  procedure: SessionProcedure;
   inputs: readonly RuntimeRegressionSourceInput[];
 }
 
@@ -100,8 +100,9 @@ export function readRuntimeRegressionScenario(manifest: RuntimeRegressionScenari
   nonempty(source.recordingSessionId, "source recording id");
   nonempty(source.folderName, "source folder");
   nonempty(source.sourceDigest, "source evidence digest");
-  if (typeof source.scriptedValidation !== "boolean" || typeof source.forcedScripted !== "boolean") throw new Error("Replay source provenance is invalid.");
-  if (procedure.schemaVersion !== 1 || procedure.execution?.defaultBarrier !== "typed-terminal" || !Array.isArray(procedure.steps) || !procedure.steps.length)
+  if (procedure.schemaVersion === 1 ? source.scriptedValidation !== true || typeof source.forcedScripted !== "boolean"
+    : procedure.schemaVersion !== 2 || typeof source.originalScriptedValidation !== "boolean" || typeof source.originalForcedScripted !== "boolean") throw new Error("Replay source provenance is invalid.");
+  if (procedure.execution?.defaultBarrier !== "typed-terminal" || !Array.isArray(procedure.steps) || !procedure.steps.length)
     throw new Error("Replay Procedure version/barrier/steps are invalid.");
   if (Object.keys(procedure.execution).some(key => key !== "defaultBarrier")) throw new Error("Replay execution mode is unsupported.");
   const ids = new Set<string>();
@@ -116,7 +117,7 @@ export function readRuntimeRegressionScenario(manifest: RuntimeRegressionScenari
     return readRuntimeRegressionSourceInput(step);
   });
   if (procedure.evidenceGaps?.length || procedure.reviewStatus === "needs-review") throw new Error("Replay Procedure has unresolved evidence gaps.");
-  return { manifest, procedure: procedure as unknown as SessionProcedureV1, inputs };
+  return { manifest, procedure: procedure as unknown as SessionProcedure, inputs };
 }
 
 export interface RuntimeRegressionAssertion {

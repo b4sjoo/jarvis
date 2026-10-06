@@ -171,6 +171,28 @@ export interface SessionProcedureV1 {
   steps: SessionProcedureStepV1[];
 }
 
+export interface HistoricalSessionProcedureV2 extends Omit<SessionProcedureV1, "schemaVersion" | "source" | "steps"> {
+  schemaVersion: 2;
+  source: Omit<SessionProcedureV1["source"], "scriptedValidation" | "forcedScripted"> & {
+    originalScriptedValidation: boolean;
+    originalForcedScripted: boolean;
+    originalDirectory: string;
+    inputSelection: "historical" | "them-only";
+    orderBasis: "recorded-events" | "accepted-transcript-order" | "unavailable";
+    timestampBasis: "runtime-recorded-event-time";
+    warnings: string[];
+  };
+  steps: Array<Omit<SessionProcedureStepV1, "occurredAt" | "delayAfterPreviousMs"> & {
+    occurredAt?: number;
+    delayAfterPreviousMs?: number;
+    originalStepId: string;
+    originalOrdinal: number;
+    originalInputText?: string;
+  }>;
+}
+
+export type SessionProcedure = SessionProcedureV1 | HistoricalSessionProcedureV2;
+
 export function buildSessionProcedureV1(input: {
   recordingSessionId: string;
   folderName: string;

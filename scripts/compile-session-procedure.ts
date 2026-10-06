@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, realpath, writeFile } from "node:fs/promises";
+import { parseArgs } from "node:util";
 import path from "node:path";
 import process from "node:process";
 import { readRecordedProjectionSnapshot, readRecordedTraceSummaries } from "./lib/session-aggregate-evidence.js";
@@ -15,6 +16,7 @@ import {
   type SessionProcedureTranscriptTurn,
 } from "../src/lib/meeting/session-procedure.js";
 import { readEffectiveSessionEvaluationProvenance } from "./lib/session-evaluation-provenance.js";
+import { buildHistoricalSessionProcedure, renderHistoricalTranscript } from "./lib/historical-session-procedure.js";
 
 interface SessionProcedureManifest {
   sessionId?: string;
@@ -26,7 +28,9 @@ interface SessionProcedureManifest {
 }
 
 async function main() {
-  const sessionDirectory = parseSessionDirectory(process.argv.slice(2));
+  const options = parseOptions(process.argv.slice(2));
+  const sessionDirectory = await realpath(options.sessionDirectory);
+  if (options.outputDirectory) await assertIndependentOutput(sessionDirectory, options.outputDirectory);
   const manifestText = await readFile(
     path.join(sessionDirectory, "manifest.json"),
     "utf8"
@@ -34,7 +38,7 @@ async function main() {
   const manifest = JSON.parse(manifestText) as SessionProcedureManifest;
   const evaluationProvenance =
     await readEffectiveSessionEvaluationProvenance(sessionDirectory);
-  if (!evaluationProvenance.scriptedValidation) {
+  if (!options.historical && !evaluationProvenance.scriptedValidation) {
     process.stdout.write(
       `${JSON.stringify({ skipped: true, reason: "session-is-not-scripted", sessionDirectory }, null, 2)}\n`
     );
@@ -160,11 +164,11 @@ async function main() {
     ...manualActions.map((event) => event.occurredAt),
     ...projections.map((projection) => projection.computedAt)
   );
-  const procedure = buildSessionProcedureV1({
+  const builderInput = {
     recordingSessionId,
     folderName,
     sourceDigest,
-    scriptedValidation: true,
+    scriptedValidation: true as const,
     forcedScripted: manifest.scriptedValidationForced === true,
     recordingIntegrityStatus: manifest.recordingIntegrity?.status,
     timelineEvents,
@@ -174,19 +178,33 @@ async function main() {
     humanEvaluationProjections: projections,
     traceSummaries,
     generatedAt: generatedAt || Date.now(),
-  });
-  const outputDirectory = path.join(
+  };
+  const procedure = options.historical ? buildHistoricalSessionProcedure({ ...builderInput,
+    originalDirectory: sessionDirectory, originalScriptedValidation: evaluationProvenance.scriptedValidation,
+    selection: options.selection,
+  }) : buildSessionProcedureV1(builderInput);
+  const outputDirectory = options.outputDirectory ?? path.join(
     sessionDirectory,
     "runtime-regression"
   );
   const outputPath = path.join(
     outputDirectory,
-    "session-procedure.v1.json"
+    options.historical ? "session-procedure.v2.json" : "session-procedure.v1.json"
   );
   await mkdir(outputDirectory, { recursive: true });
-  await writeFile(
+  const payload = `${JSON.stringify(procedure, null, 2)}\n`;
+  if (options.historical && procedure.schemaVersion === 2) {
+    await assertIndependentOutput(sessionDirectory, outputDirectory);
+    await writeDerived(outputPath, payload);
+    await writeDerived(path.join(outputDirectory, "transcript.md"), renderHistoricalTranscript(procedure));
+    await writeDerived(path.join(outputDirectory, "scenario.draft.json"), `${JSON.stringify({ schemaVersion: 1,
+      id: procedure.id, revision: 1, procedure: { path: path.basename(outputPath), sha256: `sha256:${createHash("sha256").update(payload).digest("hex")}`, mediaType: "application/json" },
+      assetRoot: sessionDirectory, allowAbsoluteAssets: false,
+      review: { status: "needs-review", purpose: "practice", reviewedBy: "", preconditions: {} },
+    }, null, 2)}\n`);
+  } else await writeFile(
     outputPath,
-    `${JSON.stringify(procedure, null, 2)}\n`,
+    payload,
     "utf8"
   );
   process.stdout.write(
@@ -244,13 +262,41 @@ async function enrichRuntimeRegressionStepText(
   );
 }
 
-function parseSessionDirectory(args: string[]) {
-  if (args.length !== 2 || args[0] !== "--session" || !args[1]) {
-    throw new Error(
-      "Usage: npm run session:procedure:reflect -- --session <session-directory>"
-    );
+function parseOptions(args: string[]) {
+  const { values } = parseArgs({ args, options: { session: { type: "string" }, "historical-import": { type: "boolean" },
+    output: { type: "string" }, selection: { type: "string" } }, strict: true });
+  if (!values.session || (values["historical-import"] && !values.output) || (!values["historical-import"] && (values.output || values.selection)) ||
+    (values.selection && !["historical", "them-only"].includes(values.selection))) {
+    throw new Error("Usage: npm run session:procedure:reflect -- --session <directory> [--historical-import --output <separate-directory> --selection historical|them-only]");
   }
-  return path.resolve(args[1]);
+  return { sessionDirectory: path.resolve(values.session), historical: values["historical-import"] === true,
+    outputDirectory: values.output ? path.resolve(values.output) : undefined, selection: (values.selection ?? "historical") as "historical" | "them-only" };
+}
+
+async function canonicalOutputPath(directory: string): Promise<string> {
+  try { return await realpath(directory); }
+  catch (error) {
+    if (!isMissingFile(error)) throw error;
+    const parent = path.dirname(directory);
+    if (parent === directory) throw error;
+    return path.join(await canonicalOutputPath(parent), path.basename(directory));
+  }
+}
+
+async function assertIndependentOutput(source: string, output: string) {
+  const target = await canonicalOutputPath(output);
+  const within = (base: string, candidate: string) => {
+    const relative = path.relative(base, candidate);
+    return !relative || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
+  };
+  if (within(source, target) || within(target, source)) throw new Error("Historical output must be independent of the original recording.");
+}
+
+async function writeDerived(file: string, payload: string) {
+  try { await writeFile(file, payload, { encoding: "utf8", flag: "wx" }); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST" || await readFile(file, "utf8") !== payload) throw error;
+  }
 }
 
 async function readOptionalText(filePath: string) {
@@ -457,7 +503,10 @@ async function readScreenProcedureFile(input: {
   }
   let bytes: Buffer;
   try {
-    bytes = await readFile(absolutePath);
+    const canonical = await realpath(absolutePath);
+    const relative = path.relative(await realpath(input.sessionDirectory), canonical);
+    if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return { gap: `screen-${input.role}-outside-session` };
+    bytes = await readFile(canonical);
   } catch (error) {
     if (isMissingFile(error)) {
       return { gap: `screen-${input.role}-file-missing` };
