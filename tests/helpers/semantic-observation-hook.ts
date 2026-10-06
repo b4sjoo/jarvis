@@ -56,6 +56,7 @@ export function semanticSchedulingHook(source: string, input: SemanticScheduling
     semanticEmbeddingRevisionRef: { current: 0 }, semanticTaxonomyEvidenceByTurnRef: { current: new Map() },
     readEffectiveSemanticTask: (task: unknown) => task,
     traceStoreRef: { current: { updateMetadata: (...args: unknown[]) => events.push(["metadata", ...args]),
+      getTrace: () => undefined,
       startStep: (...args: unknown[]) => { events.push(["start", ...args]); return "step"; },
       finishStep: (...args: unknown[]) => events.push(["finish", ...args]) } },
     // An inactive recorder is still present; it just writes nothing.

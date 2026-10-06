@@ -6721,6 +6721,15 @@ export function useMeetingAssistant() {
             taskId,
             decision: failedDecision,
           });
+        })
+        .finally(() => {
+          const completedTrace = traceStoreRef.current.getTrace(traceId);
+          if (completedTrace && completedTrace.status !== "running") {
+            sessionRecordingManagerRef.current?.refreshRecordedTrace(
+              completedTrace,
+              getAutoExportTrigger(completedTrace)
+            );
+          }
         });
     },
     [recordSemanticEmbeddingRuntimeEvent]
