@@ -11927,6 +11927,12 @@ export function useMeetingAssistant() {
 
     if (rejectStaleCommit("pre-execution")) return;
 
+    // A validated committed Plan owns lifecycle effects before and after generation.
+    const committedExecutionPlan =
+      settledExecutionPlan?.taskMutationCommittedBeforeAdvisor
+        ? settledExecutionPlan
+        : undefined;
+
     if (responseOpportunityGenerationTerminallySuppressed()) {
       const gate = refreshResponseOpportunityGenerationGate();
       updateForceAdviseTargetForAdvisorOutcome({
@@ -12061,6 +12067,7 @@ export function useMeetingAssistant() {
         ? advisorPhaseResolution.view
         : undefined;
     const manualPhaseAdvance =
+      !committedExecutionPlan &&
       options.responseAction === "next-phase" &&
       !options.precommittedPhaseTransition;
     const manualPhaseAdvanceFromPhase =
@@ -13024,7 +13031,7 @@ export function useMeetingAssistant() {
       });
       currentQuestionSettlementRecorded = true;
     };
-    let taskBoundaryCandidate = createTaskBoundaryCandidate({
+    let taskBoundaryCandidate = committedExecutionPlan ? undefined : createTaskBoundaryCandidate({
       logicalQuestionUnit: advisorJob.logicalQuestionUnit,
       currentQuestion: provisionalCurrentQuestion,
       settlement: currentQuestionSettlement,
@@ -13533,7 +13540,9 @@ export function useMeetingAssistant() {
       }
     }
 
-    let advisorRuntimePlaybook = transientPersonalStatusDecision
+    let advisorRuntimePlaybook = committedExecutionPlan
+      ? committedExecutionPlan.playbook
+      : transientPersonalStatusDecision
       ? undefined
       : withInterviewPlaybookPhase(
           advisorPlaybook ??
@@ -13735,6 +13744,7 @@ export function useMeetingAssistant() {
       | SourceOwnedDurableTransitionReceipt
       | undefined;
     if (
+      !committedExecutionPlan &&
       !manualPhaseAdvance &&
       !options.artifactRegenerationTarget &&
       !transientPersonalStatusDecision &&
