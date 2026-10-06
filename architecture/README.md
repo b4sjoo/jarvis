@@ -37,6 +37,12 @@ flowchart LR
   verifies reviewed digests and confines relative assets to their canonical root.
   Absolute asset access is explicit; release builds reject this command. This is
   a source loader, not a second Screen solver or a general filesystem writer.
+  Historical import is explicit and writes a separate V2 Procedure, retaining
+  original provenance and observed input order. Default scripted compilation stays
+  V1. Both versions use the same Runner; new runs are always forced-scripted.
+  Imported labels are comparison evidence, never automatic human truth for a new
+  answer. Practice without Expected remains unevaluated. Missing source/clock
+  evidence is reported rather than reconstructed from model output.
 - `MeetingContextManager` privately owns the only live mutable
   `MeetingTaskRuntimeState`. `ActiveMeetingTask` is its read projection. The
   recognized external task writers pass through transition or clear entry
