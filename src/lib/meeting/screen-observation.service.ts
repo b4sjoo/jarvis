@@ -128,12 +128,12 @@ export interface ScreenPreflightResult extends TaskClassifierMetadata {
   amazonLeadershipPrinciple?: string;
 }
 
-interface CaptureScreenContextResponse {
+export interface CaptureScreenContextResponse {
   imageBase64: string;
   imageMediaType?: string;
   focusImageBase64?: string;
   focusImageMediaType?: string;
-  target: ScreenCaptureTarget;
+  target?: ScreenCaptureTarget;
 }
 
 
@@ -154,6 +154,13 @@ export async function captureScreenObservation({
     "capture_screen_context_to_base64",
     { target }
   );
+  return createCapturedScreenObservation(capture, { source, previousHash });
+}
+
+export function createCapturedScreenObservation(
+  capture: CaptureScreenContextResponse,
+  { source = "full-screen", previousHash }: Pick<CaptureScreenObservationOptions, "source" | "previousHash"> = {}
+): ScreenObservation {
   const imageBase64 = capture.imageBase64;
   const imageMediaType = capture.imageMediaType || "image/png";
   const hash = hashBase64(imageBase64);

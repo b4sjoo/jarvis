@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import ts from "typescript";
 import { browserBundle, openProjectSelectionBrowserHost, playwright, browserTestSkip } from "./project-selection-hook-browser.test.mjs";
-import { buildSessionProcedureV1 } from "../.tmp-tests/scripts/lib/session-procedure.js";
+import { buildSessionProcedureV1 } from "../.tmp-tests/src/lib/meeting/session-procedure.js";
 
 const EXECUTION = { executionId: "AET", caseId: "AET", surface: "normal", source: "voice", behavior: "success" };
 function plugin(baseline) {

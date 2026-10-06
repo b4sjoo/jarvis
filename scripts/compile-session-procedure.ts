@@ -13,7 +13,7 @@ import {
   type SessionProcedureTimelineEvent,
   type SessionProcedureTraceSummary,
   type SessionProcedureTranscriptTurn,
-} from "./lib/session-procedure.js";
+} from "../src/lib/meeting/session-procedure.js";
 import { readEffectiveSessionEvaluationProvenance } from "./lib/session-evaluation-provenance.js";
 
 interface SessionProcedureManifest {

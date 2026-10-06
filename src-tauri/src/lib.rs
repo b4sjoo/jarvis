@@ -7,6 +7,7 @@ mod preparation_material_extraction;
 mod preparation_material_storage;
 mod preparation_ocr;
 mod preparation_storage;
+mod runtime_regression_files;
 mod session_recording_files;
 mod shortcuts;
 mod stt_evaluation;
@@ -470,6 +471,7 @@ pub fn run() {
             preparation_material_storage::restore_preparation_material_storage_delete,
             preparation_material_storage::commit_preparation_material_storage_delete,
             preparation_material_storage::read_preparation_material_image,
+            runtime_regression_files::read_runtime_regression_file,
             preparation_material_storage::read_preparation_material_visuals,
             window::set_window_height,
             window::open_dashboard,

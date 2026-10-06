@@ -13,7 +13,7 @@ import { getManualCorrectionCapabilities, type ManualCorrectionIntent } from "..
 import { prepareManualCorrectionIntentTransition } from "../src/lib/meeting/manual-correction-transition.js";
 import { createManualRuntimeActionEvent } from "../src/lib/meeting/manual-runtime-action.js";
 import { buildCompactTraceSummary } from "../src/lib/meeting/session-recording.js";
-import { buildSessionProcedureV1 } from "../scripts/lib/session-procedure.js";
+import { buildSessionProcedureV1 } from "../src/lib/meeting/session-procedure.js";
 import { buildEffectiveAdvisorSettlementView, buildSettledAdvisorExecutionPlan, formatSettledAdvisorExecutionPlanForTrace } from "../src/lib/meeting/settled-advisor-execution-plan.js";
 import { createTestPlannedTransition, readTestLifecycleTrace, commitTestPlannedTransition } from "./helpers/planned-task-runtime-commit.js";
 import { evaluateTaskSettlementTupleCompatibilityV2, resolveCommittedManualCorrectionEvidence } from "../src/lib/meeting/task-settlement-tuple.js";

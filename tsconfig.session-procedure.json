@@ -17,7 +17,7 @@
     "src/vite-env.d.ts",
     "scripts/compile-session-procedure.ts",
     "scripts/lib/session-evaluation-provenance.ts",
-    "scripts/lib/session-procedure.ts",
+    "src/lib/meeting/session-procedure.ts",
     "src/lib/meeting/manual-runtime-action.ts"
   ]
 }

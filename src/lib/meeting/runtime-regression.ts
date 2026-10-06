@@ -26,6 +26,7 @@ export type RuntimeRegressionStepTerminalDisposition =
   | "completed"
   | "suppressed"
   | "error"
+  | "rejected"
   | "cancelled"
   | "stale";
 

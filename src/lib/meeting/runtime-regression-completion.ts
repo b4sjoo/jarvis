@@ -11,7 +11,7 @@ export type RuntimeRegressionCompletionRoot =
   | { screen: true };
 
 export interface RuntimeRegressionCompletion {
-  disposition: "visible" | "committed-hidden" | "completed" | "suppressed" | "error" | "cancelled" | "stale";
+  disposition: "visible" | "committed-hidden" | "completed" | "suppressed" | "error" | "rejected" | "cancelled" | "stale";
   traceId?: string;
   stableRevision?: number;
   suggestionId?: string;
@@ -69,7 +69,7 @@ export function waitForRuntimeRegressionCompletion(input: {
     if (!outcome) return;
     if (["failed", "error", "rejected", "timed-out", "cancelled", "aborted", "superseded", "stale", "stale-rejected"].includes(outcome)) {
       finish({ disposition: ["stale", "stale-rejected", "superseded"].includes(outcome) ? "stale"
-        : ["cancelled", "aborted"].includes(outcome) ? "cancelled" : "error",
+        : ["cancelled", "aborted"].includes(outcome) ? "cancelled" : outcome === "rejected" ? "rejected" : "error",
         traceId, reason: terminal?.terminal?.reason ?? command?.terminal?.reason ?? outcome, facts: events.slice() });
       return;
     }

@@ -30,6 +30,13 @@ flowchart LR
 - `src/lib/meeting/` contains deterministic policies for question ownership,
   task settlement, model routing, generation leases, artifacts, evaluation,
   and recording projections.
+- Replay shares the pure Session Procedure contract/builder in
+  `src/lib/meeting/session-procedure.ts`. Its completion consumer subscribes to
+  runtime-owned facts; it does not write tasks or infer display from Trace status.
+  The Debug-only `read_runtime_regression_file` command reads bounded JSON/images,
+  verifies reviewed digests and confines relative assets to their canonical root.
+  Absolute asset access is explicit; release builds reject this command. This is
+  a source loader, not a second Screen solver or a general filesystem writer.
 - `MeetingContextManager` privately owns the only live mutable
   `MeetingTaskRuntimeState`. `ActiveMeetingTask` is its read projection. The
   recognized external task writers pass through transition or clear entry

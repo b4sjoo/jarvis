@@ -1,11 +1,11 @@
 import type {
   HumanEvaluationProjectionV2,
   HumanGroundTruthEventV2,
-} from "../../src/lib/meeting/human-ground-truth-v2.js";
-import type { ManualRuntimeActionEventV1 } from "../../src/lib/meeting/manual-runtime-action.js";
-import type { RuntimeRegressionStepEventV1 } from "../../src/lib/meeting/runtime-regression.js";
-import type { ManualCorrectionIntent } from "../../src/lib/meeting/manual-correction-intent.js";
-import { readManualCorrectionIntent, readCommittedManualCorrectionEvidence, type CommittedManualCorrectionEvidence } from "../../src/lib/meeting/task-settlement-tuple.js";
+} from "./human-ground-truth-v2.js";
+import type { ManualRuntimeActionEventV1 } from "./manual-runtime-action.js";
+import type { RuntimeRegressionStepEventV1 } from "./runtime-regression.js";
+import type { ManualCorrectionIntent } from "./manual-correction-intent.js";
+import { readManualCorrectionIntent, readCommittedManualCorrectionEvidence, type CommittedManualCorrectionEvidence } from "./task-settlement-tuple.js";
 
 export const SESSION_PROCEDURE_SCHEMA_VERSION = 1 as const;
 
@@ -65,6 +65,9 @@ export interface SessionProcedureExpectedEvidenceRef {
 }
 
 export interface SessionProcedureExpectedContract {
+  terminalDisposition?: string;
+  requestedArtifacts?: string[];
+  committedArtifacts?: string[];
   questionType?: string;
   relation?: string;
   parentAction?: string;
@@ -225,7 +228,18 @@ export function buildSessionProcedureV1(input: {
     }
   }
 
-  for (const event of input.timelineEvents) {
+  const termInputs = new Map<string, SessionProcedureStepV1["input"]>();
+  for (const originalEvent of input.timelineEvents) {
+    let event = originalEvent;
+    if (event.kind === "active-question-term-correction") {
+      const id = readString(event.metadata?.manualTermCorrectionId);
+      if (id) termInputs.set(id, buildTermCorrectionStep(event).input);
+    } else if (event.kind === "speech-correction-deactivation") {
+      const id = readString(event.metadata?.correctionId);
+      const priorInput = id ? termInputs.get(id) : undefined;
+      event = { ...event, metadata: { ...event.metadata,
+        sourceTerm: priorInput?.sourceTerm, replacementTerm: priorInput?.replacementTerm } };
+    }
     const specializedIdentity = timelineSpecializedIdentity(event);
     if (specializedIdentity && ledgerTypeCorrectionIds.has(specializedIdentity)) continue;
     if (
@@ -580,7 +594,8 @@ function buildTermCorrectionDeactivationStep(
     event,
     kind: "term-correction-deactivation",
     replaySupport: "capture-only",
-    input: {},
+    input: { sourceTerm: readString(metadata.sourceTerm), replacementTerm: readString(metadata.replacementTerm) },
+    evidenceGaps: readString(metadata.replacementTerm) ? [] : ["term-deactivation-input-missing"],
     actionId: readString(metadata.correctionId),
     traceIds,
     observed: {

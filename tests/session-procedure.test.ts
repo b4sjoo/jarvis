@@ -8,9 +8,22 @@ import {
 import {
   buildSessionProcedureV1,
   type SessionProcedureTimelineEvent,
-} from "../scripts/lib/session-procedure.js";
+} from "../src/lib/meeting/session-procedure.js";
 import { createManualRuntimeActionEvent } from "../src/lib/meeting/manual-runtime-action.js";
 import { createRuntimeRegressionStepEvent } from "../src/lib/meeting/runtime-regression.js";
+
+test("Term deactivation recovers the earlier user rule label without replaying its historical ID", () => {
+  const create = (withPrior: boolean) => buildSessionProcedureV1({ recordingSessionId: "original", folderName: "original", sourceDigest: "digest",
+    scriptedValidation: true, forcedScripted: false, transcriptTurns: [], manualActions: [], humanEvaluationProjections: [],
+    timelineEvents: [
+      ...(withPrior ? [{ id: "saved", kind: "active-question-term-correction", createdAt: 1, metadata: { manualTermCorrectionId: "OLD_RULE", manualTermCorrectionSourceTerm: "car sharing", manualTermCorrectionNormalizedTerm: "RAG", manualTermCorrectionRawText: "RAG not car sharing" } }] : []),
+      { id: "stopped", kind: "speech-correction-deactivation", createdAt: 2, metadata: { correctionId: "OLD_RULE" } },
+    ], generatedAt: 3 });
+  const stopped = create(true).steps.at(-1)!;
+  assert.deepEqual(stopped.input, { sourceTerm: "car sharing", replacementTerm: "RAG" });
+  assert.doesNotMatch(JSON.stringify(stopped.input), /OLD_RULE/);
+  assert.ok(create(false).steps[0].evidenceGaps.includes("term-deactivation-input-missing"));
+});
 
 test("Type Correction requested/accepted/terminal and specialized records form one procedure input", () => {
   const common = { actionId: "manual-1", action: "type-correction" as const, correctedType: "coding",
