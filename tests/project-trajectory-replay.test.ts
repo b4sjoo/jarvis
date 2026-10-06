@@ -77,7 +77,8 @@ test("replays a sanitized project trajectory with joined evaluation evidence", (
       });
 
       assert.equal(projection.verdicts.projectCorrect, true);
-      assert.equal(projection.verdicts.playbookPhaseCorrect, true);
+      assert.equal(projection.verdicts.playbookPhaseCorrect,
+        turn.id === "field-knowledge-child" ? undefined : true);
       assert.equal(projection.verdicts.factSupportCorrect, true);
       assert.equal(projection.verdicts.childContinuityCorrect, true);
       assert.equal(
@@ -191,6 +192,7 @@ test("phase readers round-trip both PDD generations without rewriting raw labels
 
 test("cross-version phase labels are not silently remapped into a new accuracy claim", () => {
   const observed = buildHumanEvaluationObservedSnapshotV2(makeTrace("new-summary", {
+    activeMeetingParentId: "parent-project",
     activeMeetingParentPhase: "project_summary",
   }, 0));
   const event = createHumanGroundTruthEventV2({

@@ -52,7 +52,7 @@ export type ObservedQuestionSourceKind = "voice" | "screen" | "mixed";
 
 export const HUMAN_GROUND_TRUTH_SCHEMA_VERSION = 2 as const;
 export const HUMAN_EVALUATION_DERIVATION_VERSION =
-  "human-evaluation-v2.13";
+  "human-evaluation-v2.14";
 
 export type HumanGroundTruthConfirmation = "confirmed" | "suggested";
 
@@ -880,11 +880,11 @@ export function projectHumanEvaluationObservedFieldsV2(
     metadata.activeMeetingProjectBindingRevision ??
       metadata.projectBindingRevision
   );
-  const playbookPhase = normalizePlaybookPhase(
-    metadata.activeMeetingParentPhase ??
-      metadata.playbookPhaseDecisionPhase ??
-      metadata.playbookPhase
-  );
+  const playbookPhase = resolveObservedPlaybookPhase({
+    metadata, planUsable, relation, currentOnly,
+    logicalQuestionUnitId: sourceQuestionOwnerId,
+    parentId: settledParentId, childId: settledChildId,
+  });
   const factAnchorState = normalizeFactAnchorState(
     metadata.factAnchorState
   );
@@ -1596,6 +1596,44 @@ function normalizeFactAnchorState(
     value === "not-required"
     ? value
     : undefined;
+}
+
+function resolveObservedPlaybookPhase(input: {
+  metadata: Record<string, unknown>;
+  planUsable: boolean;
+  relation: HumanEvaluationTaskRelation | undefined;
+  currentOnly: boolean;
+  logicalQuestionUnitId?: string;
+  parentId?: string;
+  childId?: string;
+}): RecordedInterviewPlaybookPhase | undefined {
+  const { metadata } = input;
+  const planUnitId = readString(metadata.settledExecutionPlanLogicalQuestionUnitId);
+  if (readString(metadata.settledExecutionPlanId)) {
+    if (!input.planUsable ||
+      (planUnitId && input.logicalQuestionUnitId && planUnitId !== input.logicalQuestionUnitId)) return undefined;
+    // A Plan without a response phase must not borrow the parent snapshot's phase.
+    return normalizePlaybookPhase(metadata.settledExecutionPlanPlaybookPhase);
+  }
+  if (input.currentOnly) return undefined;
+  const kind = readString(metadata.effectiveAdvisorPhaseOwnerKind);
+  const ownerId = readString(metadata.effectiveAdvisorPhaseOwnerId);
+  if (kind) {
+    if (!ownerId || (kind === "child" ? ownerId !== input.childId
+      : kind === "parent" ? ownerId !== input.parentId : true)) return undefined;
+    return normalizePlaybookPhase(metadata.effectiveAdvisorPlaybookPhase ??
+      (kind === "child" ? metadata.activeMeetingChildPhase : metadata.activeMeetingParentPhase));
+  }
+  if (input.relation === "child-probe") {
+    if (!input.childId || input.childId !== readString(metadata.activeMeetingChildId)) return undefined;
+    return normalizePlaybookPhase(metadata.activeMeetingChildPhase);
+  }
+  const parentRelation = ["new-parent", "followup-parent", "resume-parent"].includes(input.relation ?? "");
+  const soleLegacyParent = input.relation === undefined && !readString(metadata.activeMeetingChildId);
+  if (!input.parentId || input.parentId !== readString(metadata.activeMeetingParentId) ||
+    (!parentRelation && !soleLegacyParent)) return undefined;
+  return normalizePlaybookPhase(metadata.activeMeetingParentPhase ??
+    metadata.playbookPhaseDecisionPhase ?? metadata.playbookPhase);
 }
 
 function normalizePlaybookPhase(

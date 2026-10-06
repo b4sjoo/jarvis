@@ -1845,3 +1845,62 @@ function createLegacyEvaluation(
     ...patch,
   };
 }
+
+for (const scenario of ["parent", "child", "resume", "failed-new-answer"] as const) {
+  test(`PH152 observes the execution phase for ${scenario} without rewriting Expected`, () => {
+    const child = scenario === "child";
+    const failed = scenario === "failed-new-answer";
+    const phase = child || failed ? "implementation_validation" : "requirement_clarification";
+    const relation = child ? "child-probe" : scenario === "resume" ? "resume-parent" : "followup-parent";
+    const trace: MeetingTrace = { id: `phase-${scenario}`, kind: "voice", status: failed ? "error" : "success",
+      startedAt: 10, steps: [], inputs: [], outputs: [], metadata: {
+        logicalQuestionUnitId: "question-phase", effectiveCurrentQuestionSettlementUnitId: "question-phase",
+        effectiveCurrentQuestionSettlementRelation: relation,
+        effectiveCurrentQuestionSettlementParentId: "parent-phase",
+        effectiveCurrentQuestionSettlementChildId: child ? "child-phase" : undefined,
+        activeMeetingParentId: "parent-phase", activeMeetingParentPhase: "requirement_clarification",
+        activeMeetingChildId: child ? "child-phase" : undefined,
+        activeMeetingChildPhase: child ? "implementation_validation" : undefined,
+        settledExecutionPlanId: "plan-phase", settledExecutionPlanAuthorized: true,
+        settledExecutionPlanLogicalQuestionUnitId: "question-phase", settledExecutionPlanPlaybookPhase: phase,
+        settledExecutionPlanTaskRelation: relation, settledExecutionPlanRelationApplicable: true,
+        playbookPhase: failed ? "optimized_pseudocode" : "requirement_clarification",
+        advisorStablePublicationCommitted: !failed,
+        advisorGenerationJobStatus: failed ? "failed" : "completed",
+      } };
+    const original = JSON.stringify(trace);
+    const observed = buildHumanEvaluationObservedSnapshotV2(trace);
+    assert.equal(observed.playbookPhase, phase);
+    if (failed) assert.notEqual(observed.answerCommitted, true);
+    const expected = createHumanGroundTruthEventV2({ sessionId: "session-phase",
+      subject: { questionId: "question-phase", traceIds: [trace.id], sourceTurnIds: ["turn-phase"] },
+      source: "explicit-ui", fact: { kind: "expected-project-trajectory", expectedPhase: "requirement_clarification" }, now: 20 });
+    const originalExpected = JSON.stringify(expected);
+    const projection = deriveHumanEvaluationProjectionV2({ sessionId: "session-phase", subject: expected.subject,
+      events: [expected], observed, now: 30 });
+    assert.equal(projection.derivationVersion, "human-evaluation-v2.14");
+    assert.equal(projection.verdicts.playbookPhaseCorrect, phase === "requirement_clarification");
+    assert.equal(JSON.stringify(expected), originalExpected);
+    assert.equal(JSON.stringify(trace), original);
+  });
+}
+
+test("PH152 missing, rejected or foreign Plan phases cannot fall back to an unrelated parent", () => {
+  const project = (metadata: Record<string, unknown>) => buildHumanEvaluationObservedSnapshotV2({
+    id: "phase-missing", kind: "voice", status: "success", startedAt: 1, steps: [], inputs: [], outputs: [], metadata,
+  }).playbookPhase;
+  const parent = { activeMeetingParentId: "p", activeMeetingParentPhase: "requirement_clarification" };
+  assert.equal(project(parent), "requirement_clarification");
+  assert.equal(project({ activeMeetingParentPhase: "requirement_clarification" }), undefined);
+  assert.equal(project({ ...parent, activeMeetingChildId: "c" }), undefined);
+  assert.equal(project({ ...parent, activeMeetingChildId: "c", activeMeetingChildPhase: "implementation_validation",
+    effectiveCurrentQuestionSettlementRelation: "child-probe", effectiveCurrentQuestionSettlementChildId: "c" }), "implementation_validation");
+  assert.equal(project({ ...parent, effectiveCurrentQuestionSettlementChildId: "c", effectiveAdvisorPhaseOwnerKind: "child",
+    effectiveAdvisorPhaseOwnerId: "other", effectiveAdvisorPlaybookPhase: "implementation_validation" }), undefined);
+  assert.equal(project({ ...parent, settledExecutionPlanId: "plan", settledExecutionPlanAuthorized: true }), undefined);
+  assert.equal(project({ ...parent, settledExecutionPlanId: "plan", settledExecutionPlanAuthorized: false,
+    settledExecutionPlanPlaybookPhase: "implementation_validation" }), undefined);
+  assert.equal(project({ ...parent, settledExecutionPlanId: "plan", settledExecutionPlanAuthorized: true,
+    settledExecutionPlanLogicalQuestionUnitId: "other-question", logicalQuestionUnitId: "current-question",
+    settledExecutionPlanPlaybookPhase: "implementation_validation" }), undefined);
+});
