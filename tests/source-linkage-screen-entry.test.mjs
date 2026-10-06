@@ -598,6 +598,45 @@ const aePlain = (value) => JSON.parse(JSON.stringify(value));
 const aeFacts = (h) => aePlain(h.criticalEvents.facts());
 const aeEvents = (h) => aePlain(h.criticalEvents.events());
 
+test("Screen authorization checks preserve actual model outcome until a real rejection", () => {
+  const receipt = { sourceResult: { candidate: { id: "transition", state: "committed" } },
+    runtimeResult: { authorized: true, mutationApplied: true } };
+  const trace = { id: "screen", status: "running", steps: [], metadata: {} };
+  const current = { sessionId: "session", runtimeEpoch: 1 };
+  const token = modules.createRuntimeCommitToken({ operationId: "screen-op", pipeline: "screen", snapshot: current });
+  let authorized = true;
+  const env = { ...modules,
+    readScreenAuthorization: () => modules.authorizeRuntimeCommit({ token, current, currentOperationId: authorized ? "screen-op" : "new-screen" }),
+    boundVisualRecoveryFact: undefined, screenGenerationLease: undefined,
+    contextManagerRef: { current: { getState: () => ({ sessionId: "session" }) } },
+    screenSourceOwnedTransitionReceipt: receipt,
+    screenOperationCoordinatorRef: { current: { getActiveOperationId: () => "new-screen", getActiveOperation: () => undefined } },
+    trace, traceStoreRef: { current: {
+      updateMetadata: (_id, metadata) => Object.assign(trace.metadata, metadata),
+      getTraces: () => [trace], finishTrace: (_id, status) => { trace.status = status; },
+    } },
+    screenRuntimeToken: { expectedSessionId: "session", runtimeEpoch: 1 },
+    screenOperationId: "screen-op", screenTerminalError: undefined, screenModelCompletedAt: 1,
+    emitRuntimeCriticalEvent() {}, recordScreenQuestionTypeOutcome() {},
+  };
+  const check = evaluate(`(${declaration("rejectStaleScreenOperation", capture).initializer.getText(source)})`, env);
+  for (const outcome of [undefined, "success", "empty-output", "error", "cancelled"]) {
+    trace.metadata = outcome ? modules.formatSourceOwnedDurableTransitionForTrace(receipt, {
+      modelOutcome: outcome, survivedModelOutcome: outcome !== "success",
+    }) : {};
+    for (const stage of ["post-capture", "post-model", "pre-visible-commit"]) {
+      const before = [trace.metadata.sourceTransitionModelOutcome, trace.metadata.sourceTransitionSurvivedModelOutcome];
+      assert.equal(check(stage), false);
+      assert.deepEqual([trace.metadata.sourceTransitionModelOutcome, trace.metadata.sourceTransitionSurvivedModelOutcome], before);
+    }
+  }
+  authorized = false;
+  assert.equal(check("post-model"), true);
+  assert.equal(trace.metadata.sourceTransitionModelOutcome, "stale-result");
+  assert.equal(trace.metadata.sourceTransitionSurvivedModelOutcome, true);
+  assert.equal(trace.status, "cancelled");
+});
+
 test("AE1 Screen entry: accepted where the real source operation is claimed, with the operation's own identity and no Voice turn or LQU fact", async () => {
   const h = harness();
   await h.run();

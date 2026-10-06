@@ -27327,21 +27327,21 @@ export function useMeetingAssistant() {
             ...(boundVisualRecoveryFact
               ? { sourceLinkageBoundSourceStillCurrent: boundRecoveryStillCurrent }
               : {}),
-            ...formatSourceOwnedDurableTransitionForTrace(
-              screenSourceOwnedTransitionReceipt,
-              {
-                modelOutcome: "stale-result",
-                survivedModelOutcome:
-                  sourceOwnedDurableTransitionSurvivesModelOutcome(
-                    screenSourceOwnedTransitionReceipt,
-                    "stale-result"
-                  ),
-              }
-            ),
             ...leaseTrace,
             ...(!decision.authorized || !boundRecoveryStillCurrent ||
             (leaseAuthorization && !leaseAuthorization.authorized)
               ? {
+                  ...formatSourceOwnedDurableTransitionForTrace(
+                    screenSourceOwnedTransitionReceipt,
+                    {
+                      modelOutcome: "stale-result",
+                      survivedModelOutcome:
+                        sourceOwnedDurableTransitionSurvivesModelOutcome(
+                          screenSourceOwnedTransitionReceipt,
+                          "stale-result"
+                        ),
+                    }
+                  ),
                   artifactCacheDisposition: "stale-rejected",
                   screenOperationDisposition:
                     decision.reason === "pipeline-owner-mismatch"
