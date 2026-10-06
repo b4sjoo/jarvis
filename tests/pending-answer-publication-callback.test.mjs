@@ -1144,6 +1144,8 @@ const AE_PRODUCER_TABLE = [
   "stable-answer-committed @ finalizeStableAnswerPublication",
   "artifact-committed @ announceStagedGenerationCommit",
   "first-visible-content @ recordAdviseDisplayApplied",
+  "stable-answer-applied @ recordAdviseDisplayApplied",
+  "terminal:turn-input @ finishTurnInput",
   "terminal:provider-request @ runAdvisor>onTerminal",
   "terminal:provider-request @ captureScreenContext>onTerminal",
   "terminal:provider-request @ scheduleTaskRelationSplitRuntime>runCandidates>onObservation",
@@ -1241,7 +1243,7 @@ test("AE1 static gate: every emit call site is in the fact-to-producer table, wi
   assert.deepEqual(new Set(AE_PRODUCER_TABLE.map((row) => row.split(/[: ]/)[0])),
     new Set(["input-accepted", "lqu-committed", "type-settled", "relation-settled", "lifecycle-committed",
       "generation-admitted", "provider-request-started", "stable-answer-committed", "artifact-committed",
-      "first-visible-content", "terminal"]), "all eleven facts have a producer");
+      "first-visible-content", "stable-answer-applied", "terminal"]), "all supported facts have a producer");
 
   const sites = aeCalls(sourceFile, AE_HELPERS)
     .map((call) => `${call.expression.text} @ ${aeEnclosingPath(call, sourceFile)}`);
@@ -1361,7 +1363,10 @@ test("AE1/AE4 static gate: the stream is written only by the Hook, and the runti
   assert.deepEqual(streamMethods.sort(), ["emit", "noteRecording", "noteRecordingFailure"]);
   assert.equal((hookSource.match(/recordRuntimeCriticalEvent\(/g) ?? []).length, 1,
     "one synchronous Recording call, right after emit");
-  assert.equal(hookSource.includes(".subscribe(") && /runtimeCriticalEventStream[^\n]*subscribe/.test(hookSource), false);
+  assert.equal((hookSource.match(/runtimeCriticalEventStreamRef\.current!\.subscribe\(/g) ?? []).length, 1,
+    "the DEV/Debug Replay reader is the only subscription entry");
+  assert.match(findCallbackSource("subscribeRuntimeCriticalEvents"), /import\.meta\.env\.DEV/);
+  assert.match(findCallbackSource("subscribeRuntimeCriticalEvents"), /runtimeRegressionRunRef\.current/);
   assert.equal(/getStats\(/.test(hookSource), false);
 
   // The leaf imports nothing, and only the Hook and the Recording owner import it.
@@ -1375,6 +1380,7 @@ test("AE1/AE4 static gate: the stream is written only by the Hook, and the runti
     .sort();
   assert.deepEqual(importers, [
     "src/hooks/useMeetingAssistant.ts",
+    "src/lib/meeting/runtime-regression-completion.ts",
     "src/lib/meeting/session-recording.ts",
   ]);
   const barrel = readFileSync(path.join(root, "src/lib/meeting/index.ts"), "utf8");
@@ -1584,7 +1590,8 @@ test("AE2 a pinned answer: the background commit is a Stable Answer fact and no 
     const a = select();
     for (let ack = 0; ack < 3; ack += 1) h.environment.recordAdviseDisplayApplied(a.target, "normal-mode");
     h.environment.recordAdviseDisplayApplied(a.target, "focus-mode", false);
-    assert.deepEqual(aeFacts(h), ["first-visible-content:stable"], "four ACKs, one first-visible fact");
+    assert.deepEqual(aeFacts(h), ["first-visible-content:stable", ...Array(4).fill("stable-answer-applied:stable-display-ack")],
+      "four application receipts, one first-visible fact");
     const visibleA = aeEventsOf(h, "first-visible-content")[0];
     assert.equal(visibleA.refs.suggestionId, "visible-a");
     assert.equal(visibleA.refs.stableRevision, 1);
@@ -1605,9 +1612,11 @@ test("AE2 a pinned answer: the background commit is a Stable Answer fact and no 
     for (let ack = 0; ack < 3; ack += 1) h.environment.recordAdviseDisplayApplied(select().target, "normal-mode");
     assert.deepEqual(aeFacts(h), [
       "first-visible-content:stable",
+      ...Array(4).fill("stable-answer-applied:stable-display-ack"),
       "input-accepted:manual-action-accepted",
       "terminal:manual-action:completed",
       "stable-answer-committed:stable-publication",
+      ...Array(3).fill("stable-answer-applied:stable-display-ack"),
     ]);
     assert.equal(aeEventsOf(h, "stable-answer-committed")[0].refs.suggestionId, "B");
     assert.equal(aeEventsOf(h, "first-visible-content").some((event) => event.refs.suggestionId === "B"), false,
@@ -1627,7 +1636,7 @@ test("AE2 a pinned answer: the background commit is a Stable Answer fact and no 
     h.environment.recordAdviseDisplayApplied({ sessionId: "session-a" }, "normal-mode");
     assert.equal(aeEventsOf(h, "first-visible-content").length, 2);
     const stats = h.criticalEvents.stream.getStats();
-    assert.equal(stats.staleSessionRejected, 1);
+    assert.equal(stats.staleSessionRejected, 2);
     assert.equal(stats.missingIdentityRejected, 1);
     assert.equal(stats.duplicateSuppressed, 7);
     // A rejected manual action is a terminal and never an acceptance.
@@ -2019,6 +2028,7 @@ test("AE4 semantic isolation: with the interface idle, observed, failing by a th
     "artifact-committed:section-revision-changed",
     "stable-answer-committed:stable-publication",
     "first-visible-content:stable",
+    ...Array(3).fill("stable-answer-applied:stable-display-ack"),
   ];
   assert.deepEqual(results.subscriber.facts, expectedFacts);
   for (const idle of ["idle", "idle-again"]) {
@@ -2064,7 +2074,7 @@ test("AE4 semantic isolation: with the interface idle, observed, failing by a th
   assert.deepEqual(results["unreadable-failures"].facts, expectedFacts, "the healthy observer still received every fact");
   assert.ok(results["unreadable-failures"].stats.failureDetails.every((detail) => detail.message === "unreadable failure"));
   assert.deepEqual([results["unreadable-failures"].stats.failureDetails.length,
-    results["unreadable-failures"].stats.failureDetailsTruncated], [expectedFacts.length + 1, false]);
+    results["unreadable-failures"].stats.failureDetailsTruncated], [Math.min(8, expectedFacts.length + 1), expectedFacts.length + 1 > 8]);
   // A throw of the event layer itself stays inside the Hook's emit function.
   assert.equal(results["stream-emit-throws"].thrown, expectedFacts.length + 2, "every emit call threw");
   assert.deepEqual([results["stream-emit-throws"].stats.produced, results["stream-emit-throws"].facts], [0, []]);
@@ -2082,10 +2092,10 @@ test("AE6 Recording: the real writer saves and the real reader returns the same 
   try {
     off.environment.sessionRecordingManagerRef.current = idle.manager;
     aeRunFixedScenario(off);
-    assert.equal(off.criticalEvents.events().length, 6, "the observer read every fact from memory");
+    assert.equal(off.criticalEvents.events().length, 9, "the observer read every fact from memory");
     assert.equal(idle.files.startCalls, 0, "no recording was started by the event interface");
     assert.deepEqual(idle.files.writes, []);
-    assert.equal(off.criticalEvents.stream.getStats().recording["not-recording"], 6);
+    assert.equal(off.criticalEvents.stream.getStats().recording["not-recording"], 9);
   } finally { off.restore(); await idle.cleanup(); }
 
   const h = createHarness({ now: 60_000 });
@@ -2268,7 +2278,7 @@ test("AE6 Recording: the real writer saves and the real reader returns the same 
   const withEvents = await writesByPath();
   const withoutEvents = await writesByPath({ emitDisabled: true });
   const journalKey = "append runtime-events/critical-events.v1.jsonl";
-  assert.equal(withEvents[journalKey], 6);
+  assert.equal(withEvents[journalKey], 9);
   assert.equal(withoutEvents[journalKey], undefined);
   delete withEvents[journalKey];
   assert.deepEqual(withEvents, withoutEvents, "no other recording file gained or lost a write");

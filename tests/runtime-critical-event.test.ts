@@ -86,10 +86,10 @@ test("AE5 frozen limits: every limit is asserted with its exact reviewed value, 
   assert.deepEqual([...RUNTIME_CRITICAL_FACT_KINDS], [
     "input-accepted", "lqu-committed", "type-settled", "relation-settled",
     "lifecycle-committed", "generation-admitted", "provider-request-started",
-    "stable-answer-committed", "artifact-committed", "first-visible-content", "terminal",
+    "stable-answer-committed", "artifact-committed", "first-visible-content", "stable-answer-applied", "terminal",
   ]);
   assert.deepEqual([...RUNTIME_CRITICAL_TERMINAL_OBJECTS], [
-    "provider-request", "generation", "screen-operation", "manual-action", "lifecycle-transition",
+    "provider-request", "generation", "screen-operation", "manual-action", "lifecycle-transition", "turn-input",
   ]);
 });
 
@@ -113,6 +113,18 @@ test("AE5 an event is a versioned, sequenced, deep-frozen value of plain referen
   assert.throws(() => { (first as { sequence: number }).sequence = 9; }, TypeError);
   assert.throws(() => { (first.refs as { traceId?: string }).traceId = "x"; }, TypeError);
   assert.deepEqual(h.events().map((event) => event.sequence), [1, 2]);
+});
+
+test("SR187 stable application is distinct from first content and permits a later reapplication", () => {
+  const h = createRuntimeCriticalEventHarness({ sessionId: SESSION });
+  const refs = { traceId: "trace", suggestionId: "answer", generationId: "answer", stableRevision: 2 };
+  assert.ok(h.stream.emit(input({ fact: "first-visible-content", stage: "streaming", refs })));
+  assert.ok(h.stream.emit(input({ fact: "stable-answer-applied", stage: "stable-display-ack", refs })));
+  assert.ok(h.stream.emit(input({ fact: "stable-answer-applied", stage: "stable-display-ack", refs })));
+  assert.equal(h.stream.emit(input({ fact: "stable-answer-applied", refs: { traceId: "trace" } })), undefined);
+  const terminal = input({ fact: "terminal", refs: { traceId: "trace" }, terminal: { object: "turn-input", disposition: "completed" } });
+  assert.ok(h.stream.emit(terminal));
+  assert.equal(h.stream.emit(terminal), undefined);
 });
 
 test("AE5 only whitelisted bounded references are copied; a business object, a long text, free text or a secret is refused and named", () => {

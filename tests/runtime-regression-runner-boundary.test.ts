@@ -36,7 +36,8 @@ test("routes manual text through canonical ingress and waits for terminal", () =
   assert.match(submit, /syntheticValidation: true/);
   assert.match(submit, /processCanonicalTurnIngress\(\{/);
   assert.match(submit, /transport: "manual-text"/);
-  assert.match(submit, /waitForRuntimeRegressionTraceTerminal/);
+  assert.match(submit, /waitForRuntimeRegressionCompletion/);
+  assert.doesNotMatch(submit, /advisorOutputCommittedToUi|setTimeout\(poll/);
   assert.match(submit, /recordRuntimeRegressionStep/);
   assert.doesNotMatch(submit, /submitTaskRuntimeTransition/);
   assert.doesNotMatch(submit, /settleCurrentQuestion\(/);

@@ -22,6 +22,8 @@ export interface RuntimeRegressionRunRecordV1 {
 
 export type RuntimeRegressionStepTerminalDisposition =
   | "visible"
+  | "committed-hidden"
+  | "completed"
   | "suppressed"
   | "error"
   | "cancelled"

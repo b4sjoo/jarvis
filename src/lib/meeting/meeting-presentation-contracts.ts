@@ -140,7 +140,7 @@ export interface RuntimeRegressionRunnerStepPresentation {
   scenarioStepId: string;
   ordinal: number;
   inputKind: RuntimeRegressionInputKind;
-  status: "pending" | "visible" | "suppressed" | "error" | "cancelled";
+  status: "pending" | "visible" | "committed-hidden" | "completed" | "suppressed" | "error" | "cancelled" | "stale";
   traceId?: string;
   reason?: string;
 }

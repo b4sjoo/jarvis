@@ -27,6 +27,7 @@ export const RUNTIME_CRITICAL_FACT_KINDS = [
   "stable-answer-committed",
   "artifact-committed",
   "first-visible-content",
+  "stable-answer-applied",
   "terminal",
 ] as const;
 
@@ -41,6 +42,7 @@ export const RUNTIME_CRITICAL_TERMINAL_OBJECTS = [
   "screen-operation",
   "manual-action",
   "lifecycle-transition",
+  "turn-input",
 ] as const;
 
 export type RuntimeCriticalTerminalObject =
@@ -161,6 +163,12 @@ export interface RuntimeCriticalEventTerminal {
 }
 
 // Reading the facts. Each one is what its owner confirmed, no more.
+// - turn-input terminals come from the canonical input's own non-generation
+//   exits (including deferred buffer release/cancellation). They do not predict
+//   a model result or the later effects of another input.
+// - stable-answer-applied is the display owner's ACK of an exact stable version,
+//   including a later reapplication after unlock. first-visible-content keeps
+//   its separate first-frame meaning; neither is inferred from a commit.
 // - provider-request-started is followed by a provider-request terminal only
 //   when the owner's terminal callback ran. A request whose consumer left its
 //   stream first (a stale partial output) has no provider terminal: its end is
@@ -370,6 +378,7 @@ const TERMINAL_OBJECT_REFERENCE: Record<
   "screen-operation": ["operationId"],
   "manual-action": ["manualActionId"],
   "lifecycle-transition": ["receiptId"],
+  "turn-input": ["traceId"],
 };
 
 // Subscriptions belong to a cohort. Stop and a session change end the cohort
@@ -855,6 +864,14 @@ export class RuntimeCriticalEventStream {
         value: `=${adopted ?? ""}`,
         adoption: { scope, settlementId },
       };
+    }
+    if (input.fact === "stable-answer-applied") {
+      const suggestion = this.readKeyPart(source, "suggestionId");
+      const revision = this.readKeyPart(source, "stableRevision");
+      return suggestion !== undefined && revision !== undefined
+        // Re-applying the same version after unlock is a new display receipt.
+        ? { kind: "none" }
+        : { kind: "missing" };
     }
     if (input.fact === "first-visible-content") {
       // The display target is the generation's content, whichever way it first

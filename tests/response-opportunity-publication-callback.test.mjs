@@ -26,6 +26,7 @@ function callback(name) {
 }
 
 const callbackNames = [
+  "finishTurnInput",
   "publishResponseRecoveryTarget",
   "publishCanonicalLogicalQuestionTarget",
   "scheduleResponseOpportunityInference",
@@ -46,7 +47,6 @@ const callbackNames = [
   "resolvePendingConfirmationForMeTurn",
   "processCanonicalTurnIngress",
   "submitRuntimeRegressionText",
-  "waitForRuntimeRegressionTraceTerminal",
 ];
 const callbackSources = callbackNames.map(callback);
 // Task 178A: the Hook's own emit callbacks, extracted once.
@@ -121,7 +121,10 @@ class Clock {
   };
   clearTimeout = (id) => this.timers.delete(id);
   async flush() {
-    for (let index = 0; index < 40; index += 1) await Promise.resolve();
+    for (let index = 0; index < 40; index += 1) {
+      this.flushEvents?.();
+      await Promise.resolve();
+    }
   }
   async advance(ms) {
     const end = this.now + ms;
@@ -234,7 +237,9 @@ function createHarness() {
       recordTaskRelationAdjudicationDecision() {},
     } },
     debugModeRef: { current: false },
+    manualAdviseDisplayRef: { current: { locked: false } },
     traceStoreRef: { current: {
+      getTrace: (id) => ({ ...traces.get(id), metadata: metadata.get(id) }),
       updateMetadata: (id, update) => metadata.set(id, { ...metadata.get(id), ...update }),
       startTrace: (kind, initialMetadata) => {
         const trace = { id: `replay-trace-${traces.size + 1}`, kind, status: "running" };
@@ -268,6 +273,8 @@ function createHarness() {
   assert.deepEqual([...pure.RUNTIME_CRITICAL_EVENT_HOOK_CALLBACKS], criticalEventCallbackNames);
   criticalEvents.install(environment, (name) =>
     vm.runInContext(transpile(`(${criticalEventCallbackSources[name]})`), context));
+  clock.flushEvents = () => criticalEvents.flush();
+  environment.subscribeRuntimeCriticalEvents = (listener) => criticalEvents.stream.subscribe(listener);
   callbackNames.forEach((name, index) => {
     environment[name] = vm.runInContext(transpile(`(${callbackSources[index]})`), context);
   });
@@ -406,7 +413,7 @@ test("RB1 complete Replay input still bypasses the buffer and uses the same RO",
   h.runtime.cancelAll();
 });
 
-test("RB1 buffered Replay output authorization reaches the shared Advisor plan and stable commit", async () => {
+test("RB1 buffered Replay reaches the shared Plan, but a constructed Stable candidate is not completion evidence", async () => {
   const h = createHarness();
   const { result, traceId } = await injectReplay(h);
   await h.clock.advance(3250);
@@ -433,9 +440,10 @@ test("RB1 buffered Replay output authorization reaches the shared Advisor plan a
     advisorOutputCommittedToUi: true, visibleAnswerRevisionAfter: stable.revision,
   });
   h.environment.traceStoreRef.current.finishTrace(traceId, "success");
+  h.criticalEvents.stream.closeSubscriptions("candidate-only-test");
   await h.clock.advance(100);
-  assert.equal(await result, true);
-  assert.equal(h.replaySteps.at(-1).terminalDisposition, "visible");
+  assert.equal(await result, false);
+  assert.equal(h.replaySteps.at(-1).terminalDisposition, "error");
   h.runtime.cancelAll();
 });
 
@@ -1009,9 +1017,9 @@ test("AE1 Runner manual text: accepted at the canonical ingress with run and ste
   assert.deepEqual([accepted.sequence, committed.sequence], [1, 2]);
   assert.equal(JSON.stringify(aeEvents(h)).includes("customer reviews"), false,
     "no transcript text travels in an event");
-  h.environment.traceStoreRef.current.finishTrace(traceId, "success");
+  h.criticalEvents.stream.closeSubscriptions("LQU-only-test");
   await h.clock.advance(100);
-  assert.equal(await result, true);
+  assert.equal(await result, false);
   // The step terminal changes nothing: no LQU or acceptance is announced twice.
   assert.equal(aeEvents(h).length, 2);
   h.runtime.cancelAll();
@@ -1025,8 +1033,10 @@ test("AE2 a provisional LQU that is suppressed: the input was accepted and no LQ
   assert.equal(await result, true);
   assert.equal(h.replaySteps.at(-1).terminalDisposition, "suppressed");
   assert.equal(h.environment.logicalQuestionUnitRef.current, null);
-  assert.deepEqual(aeFacts(h), ["input-accepted:canonical-turn-ingress-admitted"]);
-  assert.equal(h.criticalEvents.stream.getStats().produced, 1);
+  assert.deepEqual(aeFacts(h), ["input-accepted:canonical-turn-ingress-admitted", "terminal:turn-input:completed"]);
+  assert.equal(h.criticalEvents.stream.getStats().produced, 2);
+  assert.equal(aeEvents(h)[1].terminal.object, "turn-input");
+  assert.equal(aeEvents(h)[1].refs.traceId, aeEvents(h)[0].refs.traceId);
   h.runtime.cancelAll();
 });
 

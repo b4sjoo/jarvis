@@ -315,7 +315,9 @@ import { requestTaskRelationProviderCandidates } from "@/lib/meeting/task-relati
 import {
   RuntimeCriticalEventStream,
   type RuntimeCriticalEventInput,
+  type RuntimeCriticalEventListener,
 } from "@/lib/meeting/runtime-critical-event";
+import { waitForRuntimeRegressionCompletion } from "@/lib/meeting/runtime-regression-completion";
 import type { TaskRelationAdjudicationRequest } from "@/lib/meeting/task-relation-adjudication";
 import {
   AdvisorEngine,
@@ -3257,6 +3259,24 @@ export function useMeetingAssistant() {
   );
   const advisorEngineRef = useRef(new AdvisorEngine());
   const traceStoreRef = useRef(new MeetingTraceStore());
+  const finishTurnInput = useCallback((traceId: string, status: "success" | "error" | "cancelled", error?: unknown) => {
+    traceStoreRef.current.finishTrace(traceId, status, error);
+    const metadata = traceStoreRef.current.getTrace(traceId)?.metadata;
+    if (typeof metadata?.canonicalTurnIngressSessionId !== "string") return;
+    emitRuntimeCriticalEvent({
+      fact: "terminal", stage: "turn-input-completed", purpose: "formal",
+      runtimeSessionId: metadata.canonicalTurnIngressSessionId,
+      runtimeEpoch: typeof metadata.canonicalTurnIngressRuntimeEpoch === "number"
+        ? metadata.canonicalTurnIngressRuntimeEpoch : undefined,
+      terminal: { object: "turn-input", disposition: status === "success" ? "completed" : status },
+      refs: {
+        traceId,
+        turnId: typeof metadata.canonicalTurnIngressTurnId === "string" ? metadata.canonicalTurnIngressTurnId : undefined,
+        scenarioRunId: typeof metadata.canonicalTurnIngressScenarioRunId === "string" ? metadata.canonicalTurnIngressScenarioRunId : undefined,
+        scenarioStepId: typeof metadata.canonicalTurnIngressScenarioStepId === "string" ? metadata.canonicalTurnIngressScenarioStepId : undefined,
+      },
+    });
+  }, [emitRuntimeCriticalEvent]);
   const recordPreparationArtifactUse = useCallback(
     <T,>(input: RecordPreparationArtifactUseInput<T>) => {
       const receipts =
@@ -7148,13 +7168,13 @@ export function useMeetingAssistant() {
         resetStepId,
         "cancelled"
       );
-      traceStoreRef.current.finishTrace(
+      finishTurnInput(
         pending.segment.traceId,
         "cancelled",
         `Sentence completion buffer cleared: ${reason}`
       );
     },
-    []
+    [finishTurnInput]
   );
 
   const resetMeetingRuntimeForNewSession = useCallback(
@@ -9296,8 +9316,8 @@ export function useMeetingAssistant() {
       expiredStepId,
       "success"
     );
-    traceStoreRef.current.finishTrace(pending.segment.traceId, "success");
-  }, []);
+    finishTurnInput(pending.segment.traceId, "success");
+  }, [finishTurnInput]);
 
   const startAudioProcessingSession = useCallback(() => {
     revokeAudioDrainAuthorization("audio-session-replaced");
@@ -18175,7 +18195,7 @@ export function useMeetingAssistant() {
               "meeting-not-active-at-release",
             logicalQuestionPublicationStage: "release-cancelled",
           });
-          traceStoreRef.current.finishTrace(
+          finishTurnInput(
             traceId,
             "cancelled",
             "Meeting stopped before the response opportunity was released."
@@ -18293,7 +18313,7 @@ export function useMeetingAssistant() {
           responseOpportunityDisposition: "provider-circuit-open",
           responseOpportunitySkipReason: "provider-circuit-open",
         });
-        traceStoreRef.current.finishTrace(traceId, "error", "Response Opportunity provider circuit is open.");
+        finishTurnInput(traceId, "error", "Response Opportunity provider circuit is open.");
         setState((previous) => ({ ...previous, error: "Response Opportunity provider is unavailable. Check its configuration." }));
         return;
       }
@@ -18326,7 +18346,7 @@ export function useMeetingAssistant() {
           responseOpportunitySkipReason:
             "provider-configuration-error",
         });
-        traceStoreRef.current.finishTrace(traceId, "error", "Response Opportunity provider configuration is invalid.");
+        finishTurnInput(traceId, "error", "Response Opportunity provider configuration is invalid.");
         setState((previous) => ({ ...previous, error: "Response Opportunity provider configuration is invalid." }));
         return;
       }
@@ -18804,7 +18824,7 @@ export function useMeetingAssistant() {
               provisionalTurnGenerationInvalidationBlocked: true,
               logicalQuestionPublicationStage: "release-cancelled",
             });
-            traceStoreRef.current.finishTrace(
+            finishTurnInput(
               traceId,
               "cancelled",
               authorization.reason
@@ -18814,7 +18834,7 @@ export function useMeetingAssistant() {
 
           if (nonSemanticFailure) {
             const message = `Response Opportunity failed: ${responseFailure ?? providerDisposition}`;
-            traceStoreRef.current.finishTrace(traceId, "error", message);
+            finishTurnInput(traceId, "error", message);
             setState((previous) => ({ ...previous, error: message }));
             return;
           }
@@ -18838,11 +18858,12 @@ export function useMeetingAssistant() {
             provisionalTurnGenerationInvalidationBlocked: true,
             logicalQuestionPublicationStage: "response-suppressed",
           });
-          traceStoreRef.current.finishTrace(traceId, "success");
+          finishTurnInput(traceId, "success");
         },
       });
     },
     [
+      finishTurnInput,
       publishCanonicalLogicalQuestionTarget,
       refreshRecordedCompletedTrace,
     ]
@@ -19480,7 +19501,7 @@ export function useMeetingAssistant() {
           sentenceBufferTraceIds: pending.fragmentTraceIds,
           sentenceBufferSegmentSequences: pending.fragmentSequences,
         });
-        traceStoreRef.current.finishTrace(
+        finishTurnInput(
           pending.segment.traceId,
           "cancelled",
           "Buffered sentence belongs to an inactive input source."
@@ -19591,10 +19612,10 @@ export function useMeetingAssistant() {
           sourceOwnedSetupCandidateOrigin: "sentence-buffer-flush",
         });
       }
-      traceStoreRef.current.finishTrace(pending.segment.traceId, "success");
+      finishTurnInput(pending.segment.traceId, "success");
       return true;
     },
-    [appendTranscriptTurnForTrace, isCurrentTurnSource]
+    [finishTurnInput, appendTranscriptTurnForTrace, isCurrentTurnSource]
   );
 
   const activateSentenceContinuationFromSpeechStart = useCallback(
@@ -19871,7 +19892,7 @@ export function useMeetingAssistant() {
         mergedStepId,
         "success"
       );
-      traceStoreRef.current.finishTrace(pending.segment.traceId, "success");
+      finishTurnInput(pending.segment.traceId, "success");
 
       traceStoreRef.current.updateMetadata(segment.traceId, {
         sentenceBufferOperationId: pending.operationId,
@@ -19896,6 +19917,7 @@ export function useMeetingAssistant() {
       return mergeContext;
     },
     [
+      finishTurnInput,
       clearPendingSentenceCompletionForRuntimeReset,
       flushPendingSentenceCompletion,
       isCurrentTurnSource,
@@ -20035,7 +20057,7 @@ export function useMeetingAssistant() {
           confirmationRecoveryTargetPublished:
             recoveryDecision.publishRecoveryTarget && currentSegment,
         });
-        traceStoreRef.current.finishTrace(segment.traceId, "success");
+        finishTurnInput(segment.traceId, "success");
       }, PENDING_CONFIRMATION_TTL_MS);
 
       pendingConfirmationRef.current = {
@@ -20051,6 +20073,7 @@ export function useMeetingAssistant() {
       }));
     },
     [
+      finishTurnInput,
       appendTranscriptTurnForTrace,
       clearPendingConfirmation,
       isCurrentTurnSource,
@@ -23659,7 +23682,7 @@ export function useMeetingAssistant() {
           transcriptAppendReason: "task-switch-announcement",
         });
         traceStoreRef.current.finishStep(traceId, switchStepId, "success");
-        traceStoreRef.current.finishTrace(traceId, "success");
+        finishTurnInput(traceId, "success");
         setState((previous) => ({
           ...previous,
           status: runtimeActiveRef.current ? "listening" : "idle",
@@ -24027,7 +24050,7 @@ export function useMeetingAssistant() {
           }
         );
         traceStoreRef.current.finishStep(traceId, ignoredStepId, "success");
-        traceStoreRef.current.finishTrace(traceId, "success");
+        finishTurnInput(traceId, "success");
         setState((previous) => ({
           ...previous,
           status: runtimeActiveRef.current ? "listening" : "idle",
@@ -24089,9 +24112,9 @@ export function useMeetingAssistant() {
         }
       }
 
-      traceStoreRef.current.finishTrace(traceId, "success");
+      finishTurnInput(traceId, "success");
 
-    }, [appendTranscriptTurnForTrace, buildLogicalQuestionForTurn, holdPendingConfirmation,
+    }, [finishTurnInput, appendTranscriptTurnForTrace, buildLogicalQuestionForTurn, holdPendingConfirmation,
       publishCanonicalLogicalQuestionTarget, publishResponseRecoveryTarget, promoteMeTurnForFusion,
       scheduleAdvisorAfterQuestionTypeWindow, scheduleResponseOpportunityInference,
       scheduleQuestionRuntime]);
@@ -24167,7 +24190,7 @@ export function useMeetingAssistant() {
             transcriptAppendReason: "application-shutdown-accepted-stt",
           });
         }
-        traceStoreRef.current.finishTrace(traceId, transport === "accepted-stt" ? "success" : "cancelled");
+        finishTurnInput(traceId, transport === "accepted-stt" ? "success" : "cancelled");
         return;
       }
       const activeContextState = contextManagerRef.current.getState();
@@ -24239,7 +24262,7 @@ export function useMeetingAssistant() {
             duplicateStepId,
             "success"
           );
-          traceStoreRef.current.finishTrace(traceId, "success");
+          finishTurnInput(traceId, "success");
           setState((previous) => ({
             ...previous,
             status: activeRef.current ? "listening" : "idle",
@@ -24309,7 +24332,7 @@ export function useMeetingAssistant() {
           }
         }
         resolvePendingConfirmationForMeTurn(turn);
-        traceStoreRef.current.finishTrace(traceId, "success");
+        finishTurnInput(traceId, "success");
         return;
       }
 
@@ -24342,7 +24365,7 @@ export function useMeetingAssistant() {
           duplicateStepId,
           "success"
         );
-        traceStoreRef.current.finishTrace(traceId, "success");
+        finishTurnInput(traceId, "success");
         setState((previous) => ({
           ...previous,
           status: runtimeActiveRef.current ? "listening" : "idle",
@@ -24399,6 +24422,7 @@ export function useMeetingAssistant() {
       processPostBufferThemTurn(turn, segment);
     },
     [
+      finishTurnInput,
       appendTranscriptTurnForTrace,
       buildLogicalQuestionForTurn,
       consumePendingSentenceCompletion,
@@ -25335,39 +25359,12 @@ export function useMeetingAssistant() {
     ]
   );
 
-  const waitForRuntimeRegressionTraceTerminal = useCallback(
-    (
-      traceId: string,
-      scenarioRunId: string,
-      timeoutMs = 180_000
-    ) =>
-      new Promise<MeetingTrace>((resolve, reject) => {
-        const startedAt = Date.now();
-        const poll = () => {
-          if (
-            runtimeRegressionRunRef.current?.scenarioRunId !==
-            scenarioRunId
-          ) {
-            reject(new Error("Runtime regression run is no longer active."));
-            return;
-          }
-          const trace = traceStoreRef.current
-            .getTraces()
-            .find((candidate) => candidate.id === traceId);
-          if (trace && trace.status !== "running") {
-            resolve(trace);
-            return;
-          }
-          if (Date.now() - startedAt >= timeoutMs) {
-            reject(new Error("Runtime regression step timed out."));
-            return;
-          }
-          window.setTimeout(poll, 100);
-        };
-        poll();
-      }),
-    []
-  );
+  const subscribeRuntimeCriticalEvents = useCallback((listener: RuntimeCriticalEventListener) => {
+    if (!import.meta.env.DEV || !debugModeRef.current || !runtimeRegressionRunRef.current) {
+      return { accepted: false, reason: "not-accepting" as const, unsubscribe() {} };
+    }
+    return runtimeCriticalEventStreamRef.current!.subscribe(listener);
+  }, []);
 
   const startRuntimeRegressionRun = useCallback(async () => {
     if (shutdownRequestedRef.current) return false;
@@ -25655,7 +25652,15 @@ export function useMeetingAssistant() {
         queueStepId: injectionStepId,
       };
 
+      const completion = waitForRuntimeRegressionCompletion({
+        subscribe: subscribeRuntimeCriticalEvents,
+        runtimeSessionId: run.runtimeSessionId,
+        runtimeEpoch: runtimeEpochRef.current,
+        root: { traceId: trace.id },
+        waitForDisplay: !manualAdviseDisplayRef.current.locked,
+      });
       try {
+        if (!completion.accepted) await completion.promise;
         await processCanonicalTurnIngress({
           turn,
           segment,
@@ -25663,20 +25668,14 @@ export function useMeetingAssistant() {
           scenarioRunId: run.scenarioRunId,
           scenarioStepId,
         });
-        const terminalTrace =
-          await waitForRuntimeRegressionTraceTerminal(
-            trace.id,
-            run.scenarioRunId
-          );
+        completion.dispatched();
+        const completed = await completion.promise;
+        if (runtimeRegressionRunRef.current?.scenarioRunId !== run.scenarioRunId) return false;
+        const terminalTrace = traceStoreRef.current.getTrace(completed.traceId ?? trace.id);
+        if (!terminalTrace) throw new Error("Replay completion trace is unavailable.");
         const metadata = terminalTrace.metadata ?? {};
         const terminalDisposition: RuntimeRegressionStepTerminalDisposition =
-          terminalTrace.status === "error"
-            ? "error"
-            : terminalTrace.status === "cancelled"
-              ? "cancelled"
-              : metadata.advisorOutputCommittedToUi === true
-                ? "visible"
-                : "suppressed";
+          completed.disposition;
         sessionRecordingManagerRef.current?.recordRuntimeRegressionStep(
           createRuntimeRegressionStepEvent({
             scenarioRunId: run.scenarioRunId,
@@ -25718,14 +25717,7 @@ export function useMeetingAssistant() {
               scenarioStepId,
               ordinal,
               inputKind: "them-text",
-              status:
-                terminalDisposition === "visible"
-                  ? "visible"
-                  : terminalDisposition === "cancelled"
-                    ? "cancelled"
-                    : terminalDisposition === "error"
-                      ? "error"
-                      : "suppressed",
+              status: terminalDisposition,
               traceId: trace.id,
               reason: terminalTrace.error,
             },
@@ -25735,6 +25727,8 @@ export function useMeetingAssistant() {
         runtimeRegressionStepIdRef.current = undefined;
         return true;
       } catch (error) {
+        completion.cancel();
+        if (runtimeRegressionRunRef.current?.scenarioRunId !== run.scenarioRunId) return false;
         const message =
           error instanceof Error
             ? error.message
@@ -25783,7 +25777,7 @@ export function useMeetingAssistant() {
     },
     [
       processCanonicalTurnIngress,
-      waitForRuntimeRegressionTraceTerminal,
+      subscribeRuntimeCriticalEvents,
     ]
   );
 
@@ -38836,6 +38830,18 @@ export function useMeetingAssistant() {
         traceId: target.traceId,
       },
     });
+    if (target.stableRevision !== undefined) {
+      emitRuntimeCriticalEvent({
+        fact: "stable-answer-applied", stage: "stable-display-ack", purpose: "formal",
+        runtimeSessionId: target.sessionId, occurredAt: appliedAt,
+        refs: {
+          generationId: target.generationId, suggestionId: target.suggestionId,
+          stableRevision: target.stableRevision, traceId: target.traceId,
+          logicalQuestionUnitId: target.logicalQuestionUnitId,
+          logicalQuestionRevision: target.logicalQuestionRevision, displaySurface: surface,
+        },
+      });
+    }
     if (target.traceId && target.stableRevision !== undefined) {
       const trace = traceStoreRef.current.getTraces().find(candidate => candidate.id === target.traceId);
       if (trace && trace.metadata?.advisorOutputAppliedToDisplay !== true) {
@@ -38989,6 +38995,7 @@ export function useMeetingAssistant() {
     stopRuntimeRegressionRun,
     resetRuntimeRegressionRun,
     submitRuntimeRegressionText,
+    subscribeRuntimeCriticalEvents,
     setSttEvaluationCaptureEnabled,
     deleteSttEvaluationCapture,
     setResponseConfig,
