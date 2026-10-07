@@ -395,6 +395,10 @@ export function resolveAudioInputLivenessPresentation({
     ? Math.max(0, nowMs - latestEvent.candidateStartedAtMs)
     : latestEvent.candidateDurationMs;
   const candidateStalled =
+    // Terminal snapshots retain the old candidate's timing as diagnostic evidence.
+    (latestEvent.state === "speech-candidate" ||
+      latestEvent.state === "segment-open" ||
+      latestEvent.state === "awaiting-silence") &&
     Boolean(latestEvent.candidateStartedAtMs) &&
     candidateAgeMs >
       latestEvent.maximumSegmentMs + candidateStallGraceMs;

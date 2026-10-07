@@ -212,3 +212,76 @@ test("trace metadata remains compact and audio-free", () => {
   assert.equal(metadata.vadSegmentEmittedCount, 2);
   assert.equal("audioBase64" in metadata, false);
 });
+
+for (const state of ["speech-candidate", "segment-open", "awaiting-silence"] as const) {
+  for (const ageMs of [31_999, 32_000, 32_001]) {
+    test(`open ${state} retains the exact maximum-plus-grace boundary at ${ageMs}ms`, () => {
+      const event = { ...FIXTURE, state, candidateStartedAtMs: 1_000 };
+      const presentation = resolveAudioInputLivenessPresentation({
+        captureActive: true, vadEnabled: true, latestEvent: event,
+        latestObservedAtMs: ageMs + 1_000, nowMs: ageMs + 1_000,
+      });
+      assert.equal(presentation?.state, ageMs > 32_000 ? "stalled" : state);
+      assert.equal(presentation?.severity, ageMs > 32_000 ? "warning" : "normal");
+    });
+  }
+}
+
+for (const state of ["segment-emitted", "idle", "signal-observed"] as const) {
+  test(`${state} keeps its native meaning despite a completed candidate's old timestamp`, () => {
+    const event = { ...FIXTURE, state, candidateStartedAtMs: 1_000,
+      ...(state === "idle" ? { trigger: "candidate-discarded" as const, discardReason: "too-short" } : {}) };
+    const original = structuredClone(event);
+    for (const nowMs of [60_000, 65_000]) {
+      const presentation = resolveAudioInputLivenessPresentation({
+        captureActive: true, vadEnabled: true, latestEvent: event,
+        latestObservedAtMs: 60_000, nowMs,
+      });
+      assert.equal(presentation?.state, state);
+      assert.equal(presentation?.severity, "normal");
+      assert.equal(presentation?.candidateDurationMs, nowMs - 1_000);
+      assert.equal(presentation?.latestEvent, event);
+    }
+    assert.deepEqual(event, original, "do not erase diagnostic evidence to clear a UI warning");
+    assert.equal(buildAudioInputLivenessTraceMetadata(event, 60_000).audioInputLivenessState, state);
+    assert.equal(resolveAudioInputLivenessPresentation({
+      captureActive: true, vadEnabled: true, latestEvent: event,
+      latestObservedAtMs: 60_000, nowMs: 66_001,
+    })?.state, "unavailable", "terminal evidence cannot suppress a stale heartbeat");
+  });
+}
+
+test("native failure remains a warning without an over-age candidate", () => {
+  const presentation = resolveAudioInputLivenessPresentation({
+    captureActive: true, vadEnabled: true,
+    latestEvent: { ...FIXTURE, state: "stalled", discardReason: "segment-encode-failed", candidateStartedAtMs: undefined },
+    latestObservedAtMs: 10_000, nowMs: 10_000,
+  });
+  assert.equal(presentation?.state, "stalled");
+  assert.equal(presentation?.detail, "segment-encode-failed");
+});
+
+test("rollover starts a fresh age and capture/VAD disablement still hides liveness", () => {
+  const input = { captureActive: true, vadEnabled: true, latestObservedAtMs: 60_000, nowMs: 60_000,
+    latestEvent: { ...FIXTURE, state: "speech-candidate" as const, candidateStartedAtMs: 60_000, candidateSegmentSequence: 4 } };
+  assert.equal(resolveAudioInputLivenessPresentation(input)?.state, "speech-candidate");
+  assert.equal(resolveAudioInputLivenessPresentation(input)?.candidateDurationMs, 0);
+  assert.equal(resolveAudioInputLivenessPresentation({ ...input, captureActive: false }), null);
+  assert.equal(resolveAudioInputLivenessPresentation({ ...input, vadEnabled: false }), null);
+});
+
+test("an emitted candidate cannot hide the independent raw-zero warning or authorize a stale generation", () => {
+  const event = { ...FIXTURE, state: "segment-emitted" as const, candidateStartedAtMs: 1_000 };
+  const episode = new RawZeroInputEpisode();
+  episode.observe({ ...event, occurredAtMs: 100_000, rawSignalChunkCount: 1,
+    rawZeroDurationMs: 99_000, lastRawSignalObservedAtMs: 1_000 });
+  const presentation = resolveAudioInputLivenessPresentation({
+    captureActive: true, vadEnabled: true, latestEvent: event,
+    latestObservedAtMs: 100_000, nowMs: 100_000,
+  });
+  assert.equal(projectRawZeroInputWarning(presentation, episode.read(100_000, false))?.label, "Audio input may be silent");
+  const authorization = authorizeNativeAudioLivenessEvent({ payload: event, activeCaptureSessionId: "capture-1",
+    activeCaptureGeneration: 3, lastSnapshotSequence: 0 });
+  assert.equal(authorization.authorized, false);
+  if (!authorization.authorized) assert.equal(authorization.reason, "capture-generation-mismatch");
+});
