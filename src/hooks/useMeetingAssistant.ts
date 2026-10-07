@@ -12266,10 +12266,9 @@ export function useMeetingAssistant() {
             source: "current-question-settlement",
             reuseActivePlaybook:
               committedSettlementRelation !== "new-parent",
-            openingRoute:
-              currentQuestionSettlement.questionType === "project-deep-dive"
-                ? phaseControlledAdvisorTaskSignals.openingRoute
-                : undefined,
+            // The accepted settlement supersedes opening hints for every type.
+            // Retaining PDD's hint would veto binding and fact checks downstream.
+            openingRoute: undefined,
             latestTurnTaxonomyBoundaryReason:
               "current-question-settlement" as const,
             taxonomyFallbackSuppressed: true,

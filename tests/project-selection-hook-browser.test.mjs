@@ -329,7 +329,7 @@ export async function openProjectSelectionBrowserHost(t,bundle,browser,execution
         return new Response('data: '+JSON.stringify({choices:[{delta:{content:response},finish_reason:null}]})+'\n\n'+
           'data: '+JSON.stringify({choices:[{delta:{},finish_reason:'stop'}]})+'\n\ndata: [DONE]\n\n',{headers:{'Content-Type':'text/event-stream'}});
       };
-    }, {memory:inputs.memory??fixtures.S63_MEMORY,answers:inputs.answers??fixtures.S63_PROVIDER_ANSWERS,question:fixtures.S63_SOURCE_QUESTION,
+    }, {memory:inputs.memory??fixtures.S63_MEMORY,answers:inputs.answers??fixtures.S63_PROVIDER_ANSWERS,question:inputs.question??fixtures.S63_SOURCE_QUESTION,
       nextQuestion:fixtures.S63_NEXT_SOURCE_QUESTION,surface:execution.surface,source:execution.source,
       holdFactReview:inputs.holdFactReview??false,guardrailMode:inputs.guardrailMode,settings:inputs.settings??{}});
     await page.addScriptTag({ content: bundle.outputFiles[0].text });
@@ -346,7 +346,7 @@ export async function openProjectSelectionBrowserHost(t,bundle,browser,execution
     t.diagnostic(`Replay start=${started}; unexpected=${JSON.stringify(await page.evaluate(()=>window.__s63.unexpected))}`);
     assert.equal(started, true, JSON.stringify(await page.evaluate(()=>({error:window.__s63.meeting.error,recording:window.__s63.meeting.sessionRecording,unexpected:window.__s63.unexpected}))));
     const submitted=execution.source==='voice'
-      ? await page.evaluate(text=>window.__s63.meeting.submitRuntimeRegressionText(text),fixtures.S63_SOURCE_QUESTION)
+      ? await page.evaluate(text=>window.__s63.meeting.submitRuntimeRegressionText(text),inputs.question??fixtures.S63_SOURCE_QUESTION)
       : await page.evaluate(()=>window.__s63.meeting.captureScreenContext());
     try {
       if(inputs.memory?.length===0) await page.waitForFunction(()=>Boolean(window.__s63.observed.adviseDisplay.stable),undefined,{timeout:5000});
