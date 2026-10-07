@@ -1228,7 +1228,8 @@ test("PC7 Normal and Focus surfaces display one fact-risk result read from the H
     "the snapshot is rebuilt when the read changes");
   // That one snapshot is what the in-page surfaces read and what is published to the Focus window.
   assert.equal(findAll(ui, (node) => ts.isCallExpression(node) &&
-    compact(node.getText(ui)) === "focusPublisherRef.current?.publish(focusSnapshot)").length, 1);
+    compact(node.expression.getText(ui)) === "focusPublisherRef.current?.publish" &&
+    node.arguments[0]?.getText(ui) === "focusSnapshot").length, 1);
   // The Hook decides display from the one existing mode; the selector is the only place the page sets it.
   assert.equal(hookText.includes(
     'readFactRiskReview: (stable: StableAnswerRevision | null | undefined) => state.settings.personalEvidenceGuardrailMode === "enforcement"'), true);
