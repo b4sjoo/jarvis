@@ -116,6 +116,7 @@ export function parseNativeAudioLivenessEvent(
     "candidate-discarded",
     "stop-drain",
     "termination-drain",
+    "format-boundary",
     "tail-discarded",
   ] as const);
   const owner = readStringUnion(payload.owner, ["meeting", "system"] as const);

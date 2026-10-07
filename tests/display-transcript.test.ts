@@ -43,6 +43,20 @@ test("finalizes an ordinary batch transcript immediately", () => {
   assert.deepEqual(decision.artifact.sourceTurnIds, ["turn-1"]);
 });
 
+test("format boundary finalizes the old rollover without carrying overlap into new-rate text", () => {
+  const assembler = new BatchDisplayTranscriptAssembler();
+  assembler.accept(fragment({ rolloverFamilyId: "old", endReason: "forced-rollover", text: "Design a cache" }));
+  const end = assembler.accept(fragment({ rolloverFamilyId: "old", endReason: "format-boundary",
+    segmentSequence: 2, nativeSegmentSequence: 2, turnId: "turn-2", text: "with a bounded capacity" }));
+  assert.equal(end.disposition, "rollover-finalized");
+  assert.equal(end.semanticCommitAuthorized, true);
+  const next = assembler.accept(fragment({ segmentSequence: 3, nativeSegmentSequence: 3,
+    turnId: "turn-3", text: "and support eviction" }));
+  assert.equal(next.disposition, "standalone-finalized");
+  assert.equal(next.artifact.overlapCharsRemoved, 0);
+  assert.deepEqual(next.artifact.sourceTurnIds, ["turn-3"]);
+});
+
 test("assembles one semantic utterance across forced rollover fragments", () => {
   const assembler = new BatchDisplayTranscriptAssembler();
   const provisional = assembler.accept(

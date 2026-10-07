@@ -1,3 +1,4 @@
+use crate::speaker::audio_block::AudioSpan;
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use hound::{WavSpec, WavWriter};
 use serde::{Deserialize, Serialize};
@@ -135,7 +136,12 @@ pub struct SttEvaluationSubmittedAudioMetadata {
 
 #[derive(Debug)]
 struct RawAudioChunk {
+    captured_start_at_ms: u64,
     captured_at_ms: u64,
+    sample_rate: u32,
+    sample_start: u64,
+    span_start: u64,
+    native_clock: bool,
     samples: Vec<f32>,
 }
 
@@ -150,9 +156,19 @@ pub struct RawEvaluationCaptureTap {
     buffer: Vec<f32>,
     sender: Option<mpsc::Sender<RawAudioChunk>>,
     active: Arc<AtomicBool>,
+    span: AudioSpan,
+    sample_position: u64,
 }
 
 impl RawEvaluationCaptureTap {
+    pub(crate) fn begin_span(&mut self, span: AudioSpan) {
+        self.flush();
+        self.sample_rate = span.sample_rate;
+        self.chunk_samples = ((span.sample_rate as usize * RAW_AUDIO_CHUNK_MS) / 1000).max(1);
+        self.sample_position = span.sample_start;
+        self.span = span;
+    }
+
     pub fn push_sample(&mut self, sample: f32) {
         if !self.active.load(Ordering::Acquire) {
             self.buffer.clear();
@@ -160,6 +176,7 @@ impl RawEvaluationCaptureTap {
             return;
         }
         self.buffer.push(sample);
+        self.sample_position += 1;
         if self.buffer.len() >= self.chunk_samples {
             self.flush();
         }
@@ -175,8 +192,14 @@ impl RawEvaluationCaptureTap {
         };
         self.next_sequence = self.next_sequence.saturating_add(1);
         let samples = std::mem::take(&mut self.buffer);
+        let sample_start = self.sample_position - samples.len() as u64;
         let chunk = RawAudioChunk {
-            captured_at_ms: now_ms(),
+            captured_start_at_ms: self.span.wall_ms(sample_start),
+            captured_at_ms: self.span.wall_ms(self.sample_position),
+            sample_rate: self.sample_rate,
+            sample_start,
+            span_start: self.span.sample_start,
+            native_clock: self.span.native_clock,
             samples,
         };
 
@@ -532,6 +555,15 @@ pub fn create_raw_evaluation_capture_tap(
         buffer: Vec::with_capacity(chunk_samples),
         sender: Some(sender),
         active: session.active,
+        span: AudioSpan {
+            sample_rate,
+            sample_start: 0,
+            captured_at_ms: now_ms(),
+            native_clock: false,
+            reason: "first-audio-block",
+            gap_ms: None,
+        },
+        sample_position: 0,
     })
 }
 
@@ -604,17 +636,48 @@ async fn run_raw_audio_writer(
     session: SttEvaluationCaptureSession,
     capture_session_id: String,
     capture_generation: u64,
-    sample_rate: u32,
+    mut sample_rate: u32,
     mut receiver: mpsc::Receiver<RawAudioChunk>,
 ) {
-    let file_chunk_samples = (sample_rate as usize).saturating_mul(RAW_AUDIO_FILE_CHUNK_SECONDS);
+    let mut file_chunk_samples =
+        (sample_rate as usize).saturating_mul(RAW_AUDIO_FILE_CHUNK_SECONDS);
     let mut file_sequence = 0_u64;
     let mut file_sample_start = 0_u64;
     let mut pending_samples = Vec::with_capacity(file_chunk_samples);
     let mut first_captured_at_ms: Option<u64> = None;
     let mut last_captured_at_ms: Option<u64> = None;
+    let mut span_start = 0_u64;
+    let mut native_clock = false;
     while let Some(chunk) = receiver.recv().await {
-        first_captured_at_ms.get_or_insert(chunk.captured_at_ms);
+        if chunk.sample_rate != sample_rate
+            || chunk.span_start != span_start
+            || chunk.sample_start != file_sample_start + pending_samples.len() as u64
+        {
+            if !pending_samples.is_empty() {
+                file_sequence = file_sequence.saturating_add(1);
+                write_raw_audio_file_chunk(
+                    &session,
+                    &capture_session_id,
+                    capture_generation,
+                    sample_rate,
+                    file_sequence,
+                    file_sample_start,
+                    first_captured_at_ms,
+                    last_captured_at_ms,
+                    &pending_samples,
+                    native_clock,
+                );
+                pending_samples.clear();
+            }
+            sample_rate = chunk.sample_rate;
+            span_start = chunk.span_start;
+            file_chunk_samples =
+                (sample_rate as usize).saturating_mul(RAW_AUDIO_FILE_CHUNK_SECONDS);
+            file_sample_start = chunk.sample_start;
+            first_captured_at_ms = None;
+        }
+        native_clock = chunk.native_clock;
+        first_captured_at_ms.get_or_insert(chunk.captured_start_at_ms);
         last_captured_at_ms = Some(chunk.captured_at_ms);
         pending_samples.extend_from_slice(&chunk.samples);
 
@@ -632,6 +695,7 @@ async fn run_raw_audio_writer(
                 first_captured_at_ms,
                 last_captured_at_ms,
                 &samples,
+                native_clock,
             );
             file_sample_start = file_sample_start.saturating_add(samples.len() as u64);
             first_captured_at_ms = if pending_samples.is_empty() {
@@ -654,6 +718,7 @@ async fn run_raw_audio_writer(
             first_captured_at_ms,
             last_captured_at_ms,
             &pending_samples,
+            native_clock,
         );
     }
     let _ = append_capture_event_for_session(
@@ -692,6 +757,7 @@ fn write_raw_audio_file_chunk(
     first_captured_at_ms: Option<u64>,
     last_captured_at_ms: Option<u64>,
     samples: &[f32],
+    native_clock: bool,
 ) {
     let relative_path = format!(
         "source-audio/system-{}-{}-{:05}.wav",
@@ -721,8 +787,7 @@ fn write_raw_audio_file_chunk(
     let sample_count = samples.len() as u64;
     let duration_ms = sample_count.saturating_mul(1_000) / sample_rate.max(1) as u64;
     let sha256 = sha256_hex(&bytes);
-    let captured_start_at_ms =
-        first_captured_at_ms.map(|time| time.saturating_sub(RAW_AUDIO_CHUNK_MS as u64));
+    let captured_start_at_ms = first_captured_at_ms;
     let _ = append_capture_event_for_session(
         session,
         json!({
@@ -740,6 +805,7 @@ fn write_raw_audio_file_chunk(
             "capturedEndAt": last_captured_at_ms,
             "source": "system-audio",
             "processingStage": "pre-vad-noise-gate",
+            "timestampSource": if native_clock { "native-input-clock" } else { "capture-start-proxy" },
             "channels": 1,
             "encoding": "audio/wav; codec=pcm_s16le",
             "sha256": sha256,
@@ -1078,6 +1144,68 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn one_raw_writer_rotates_rate_and_clock_boundaries_without_resetting_source_indices() {
+        let dir = std::env::temp_dir().join(format!("jarvis-timebase-{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let session = SttEvaluationCaptureSession {
+            session_id: "test".into(),
+            folder_name: "test".into(),
+            folder_path: dir.clone(),
+            started_at_ms: 1,
+            expires_at_ms: u64::MAX,
+            active: Arc::new(AtomicBool::new(true)),
+            ended_at_ms: Arc::new(Mutex::new(None)),
+            open_raw_writer_count: Arc::new(AtomicU64::new(1)),
+            manifest_revision: Arc::new(AtomicU64::new(0)),
+            counters: Arc::new(Mutex::new(SttEvaluationCaptureCounters::default())),
+        };
+        let (tx, rx) = mpsc::channel(4);
+        for (rate, start, time) in [
+            (48000, 0, 1000),
+            (24000, 480, 1020),
+            (24000, 960, 1100),
+            (48000, 1440, 1150),
+        ] {
+            tx.send(RawAudioChunk {
+                sample_rate: rate,
+                sample_start: start,
+                span_start: start,
+                native_clock: true,
+                captured_start_at_ms: time,
+                captured_at_ms: time + 480_000 / rate as u64,
+                samples: vec![0.25; 480],
+            })
+            .await
+            .unwrap();
+        }
+        drop(tx);
+        run_raw_audio_writer(session.clone(), "capture".into(), 7, 48000, rx).await;
+        let rows: Vec<Value> = fs::read_to_string(dir.join("events/audio-artifacts.jsonl"))
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let audio: Vec<_> = rows
+            .iter()
+            .filter(|r| r["kind"] == "raw-audio-chunk")
+            .collect();
+        assert_eq!(audio.len(), 4);
+        for (i, row) in audio.iter().enumerate() {
+            let reader =
+                hound::WavReader::open(dir.join(row["relativePath"].as_str().unwrap())).unwrap();
+            assert_eq!(reader.spec().sample_rate, [48000, 24000, 24000, 48000][i]);
+            assert_eq!(reader.duration(), 480);
+            assert_eq!(row["sequence"], i + 1);
+            assert_eq!(row["sampleStart"], i * 480);
+            assert_eq!(row["captureGeneration"], 7);
+            assert_eq!(row["timestampSource"], "native-input-clock");
+        }
+        assert_eq!(session.open_raw_writer_count.load(Ordering::Acquire), 0);
+        assert_eq!(session.counters.lock().unwrap().raw_chunk_count, 4);
+        fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn submitted_audio_preserves_source_and_queue_clocks_and_accepts_old_records() {

@@ -49,6 +49,18 @@ const FIXTURE = {
   maximumSegmentMs: 30_000,
 } as const;
 
+test("format-boundary terminal receipt remains valid and does not imply a stuck candidate", () => {
+  const payload = { ...FIXTURE, trigger: "format-boundary", state: "segment-emitted",
+    candidateStartedAtMs: 1, candidateDurationMs: 90_000 };
+  const parsed = parseNativeAudioLivenessEvent(payload);
+  assert.ok(parsed);
+  assert.equal(parsed.trigger, "format-boundary");
+  const authorization = authorizeNativeAudioLivenessEvent({ payload,
+    activeCaptureSessionId: FIXTURE.captureSessionId, activeCaptureGeneration: FIXTURE.captureGeneration,
+    expectedOwner: "meeting", expectedSource: "system-audio", lastSnapshotSequence: 3 });
+  assert.equal(authorization.authorized, true);
+});
+
 test("raw-zero episodes require actual pre-gate signal and survive native generations", () => {
   const episode = new RawZeroInputEpisode();
   episode.observe({ ...FIXTURE, rawSignalChunkCount: 0, rawZeroDurationMs: 100_000 });

@@ -1430,6 +1430,7 @@ interface SessionTraceKindAggregate {
     stopDrain: number;
     terminationDrain: number;
     continuousStop: number;
+    formatBoundary: number;
     overlap: number;
   };
   sttRequestLifecycle: {
@@ -7860,6 +7861,9 @@ function aggregateTraceKind(
       continuousStop: summaries.filter(
         (summary) =>
           summary.nativeAudioBoundary?.endReason === "continuous-stop"
+      ).length,
+      formatBoundary: summaries.filter(
+        (summary) => summary.nativeAudioBoundary?.endReason === "format-boundary"
       ).length,
       overlap: summaries.filter(
         (summary) =>

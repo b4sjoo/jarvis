@@ -15,6 +15,7 @@ export type BatchTranscriptEndReason =
   | "forced-rollover"
   | "stop-drain"
   | "termination-drain"
+  | "format-boundary"
   | "continuous-stop";
 
 export interface BatchDisplayTranscriptFragment {

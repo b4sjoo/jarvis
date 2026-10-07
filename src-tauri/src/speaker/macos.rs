@@ -1,22 +1,24 @@
 // Jarvis macos speaker input and stream
+use super::audio_block::{
+    audio_block_queue, AudioBlock, AudioBlockConsumer, AudioBlockMetadata, AudioBlockProducer,
+    SourceAudioTime,
+};
 use super::{AudioDevice, SpeakerStreamTermination, SpeakerStreamTerminationReason};
 use crate::native_stall_diagnostics::CaptureCallbackCounters;
 use anyhow::Result;
 use ca::aggregate_device_keys as agg_keys;
-use cidre::{arc, av, cat, cf, core_audio as ca, ns, os};
+use cidre::{arc, av, cat, cf, core_audio as ca, mach, ns, os};
 use futures_util::Stream;
-use ringbuf::{
-    traits::{Consumer, Producer, Split},
-    HeapCons, HeapProd, HeapRb,
-};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Poll, Waker};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::error;
 
 const CAPTURE_BUFFER_SIZE: usize = 1024 * 128;
 const TERMINATION_NONE: u8 = 0;
 const TERMINATION_BUFFER_OVERFLOW: u8 = 1;
+const TERMINATION_INVALID_FORMAT: u8 = 2;
 
 pub fn get_output_devices() -> Result<Vec<AudioDevice>> {
     let mut devices = Vec::new();
@@ -111,20 +113,15 @@ struct WakerState {
 }
 
 pub struct SpeakerStream {
-    consumer: HeapCons<f32>,
+    consumer: AudioBlockConsumer,
     _device: ca::hardware::StartedDevice<ca::AggregateDevice>,
     _ctx: Box<Ctx>,
     _tap: ca::TapGuard,
     waker_state: Arc<Mutex<WakerState>>,
-    current_sample_rate: Arc<AtomicU32>,
     callback_counters: Arc<CaptureCallbackCounters>,
 }
 
 impl SpeakerStream {
-    pub fn sample_rate(&self) -> u32 {
-        self.current_sample_rate.load(Ordering::Acquire)
-    }
-
     pub(crate) fn callback_counters(&self) -> Arc<CaptureCallbackCounters> {
         self.callback_counters.clone()
     }
@@ -132,6 +129,7 @@ impl SpeakerStream {
     pub fn termination(&self) -> SpeakerStreamTermination {
         let reason = match self._ctx.termination_code.load(Ordering::Acquire) {
             TERMINATION_BUFFER_OVERFLOW => SpeakerStreamTerminationReason::BufferOverflow,
+            TERMINATION_INVALID_FORMAT => SpeakerStreamTerminationReason::InvalidAudioFormat,
             _ => SpeakerStreamTerminationReason::UnknownStreamEnd,
         };
         SpeakerStreamTermination {
@@ -144,10 +142,12 @@ impl SpeakerStream {
 }
 
 struct Ctx {
-    format: arc::R<av::AudioFormat>,
-    producer: HeapProd<f32>,
+    float_mono: bool,
+    producer: AudioBlockProducer,
     waker_state: Arc<Mutex<WakerState>>,
-    current_sample_rate: Arc<AtomicU32>,
+    timebase: mach::TimeBaseInfo,
+    origin_host_ns: u64,
+    origin_wall_ms: u64,
     consecutive_drops: Arc<AtomicU32>,
     dropped_samples: Arc<AtomicU64>,
     termination_code: Arc<AtomicU8>,
@@ -233,7 +233,7 @@ impl SpeakerInput {
             device: ca::Device,
             _now: &cat::AudioTimeStamp,
             input_data: &cat::AudioBufList<1>,
-            _input_time: &cat::AudioTimeStamp,
+            input_time: &cat::AudioTimeStamp,
             _output_data: &mut cat::AudioBufList<1>,
             _output_time: &cat::AudioTimeStamp,
             ctx: Option<&mut Ctx>,
@@ -241,41 +241,53 @@ impl SpeakerInput {
             let ctx = ctx.unwrap();
 
             ctx.callback_counters.observe_entry();
-            let mut input_frames = 0;
-
-            ctx.current_sample_rate.store(
-                device
-                    .actual_sample_rate()
-                    .unwrap_or(ctx.format.absd().sample_rate) as u32,
-                Ordering::Release,
-            );
-
-            if let Some(view) =
-                av::AudioPcmBuf::with_buf_list_no_copy(&ctx.format, input_data, None)
-            {
-                if let Some(data) = view.data_f32_at(0) {
-                    input_frames = data.len();
-                    ctx.callback_counters.observe_frames(input_frames);
-                    process_audio_data(ctx, data);
-                }
-            } else if ctx.format.common_format() == av::audio::CommonFormat::PcmF32 {
-                let first_buffer = &input_data.buffers[0];
-                let byte_count = first_buffer.data_bytes_size as usize;
-                let float_count = byte_count / std::mem::size_of::<f32>();
-
-                if float_count > 0 && !first_buffer.data.is_null() {
-                    let data = unsafe {
-                        std::slice::from_raw_parts(first_buffer.data as *const f32, float_count)
-                    };
-                    input_frames = data.len();
-                    ctx.callback_counters.observe_frames(input_frames);
-                    process_audio_data(ctx, data);
-                }
+            if ctx.should_terminate.load(Ordering::Acquire) {
+                return os::Status::NO_ERR;
             }
-
-            if input_frames == 0 {
+            if input_data.number_buffers == 0 || input_data.buffers[0].data_bytes_size == 0 {
                 ctx.callback_counters.observe_empty();
+                return os::Status::NO_ERR;
             }
+            let buffer = &input_data.buffers[0];
+            let rate = device.actual_sample_rate().ok();
+            let valid_rate = rate.filter(|r| r.is_finite() && (8000.0..=96000.0).contains(r));
+            if !ctx.float_mono
+                || input_data.number_buffers != 1
+                || buffer.number_channels != 1
+                || buffer.data.is_null()
+                || buffer.data_bytes_size % 4 != 0
+                || input_time.flags.0 & 3 != 3
+                || input_time.host_time == 0
+                || !input_time.sample_time.is_finite()
+                || valid_rate.is_none()
+            {
+                ctx.termination_code
+                    .store(TERMINATION_INVALID_FORMAT, Ordering::Release);
+                ctx.should_terminate.store(true, Ordering::Release);
+                wake_consumer(ctx);
+                return os::Status::NO_ERR;
+            }
+            let host_time_ns = ((input_time.host_time as u128 * ctx.timebase.numer as u128)
+                / ctx.timebase.denom as u128) as u64;
+            let captured_at_ms = (ctx.origin_wall_ms as i128
+                + (host_time_ns as i128 - ctx.origin_host_ns as i128) / 1_000_000)
+                .max(0) as u64;
+            let frames = buffer.data_bytes_size as usize / std::mem::size_of::<f32>();
+            let data = unsafe { std::slice::from_raw_parts(buffer.data as *const f32, frames) };
+            ctx.callback_counters.observe_frames(frames);
+            process_audio_data(
+                ctx,
+                data,
+                AudioBlockMetadata {
+                    sample_rate: valid_rate.unwrap().round() as u32,
+                    frames,
+                    source_time: Some(SourceAudioTime {
+                        sample_time: input_time.sample_time,
+                        host_time_ns,
+                        captured_at_ms,
+                    }),
+                },
+            );
 
             os::Status::NO_ERR
         }
@@ -292,22 +304,31 @@ impl SpeakerInput {
 
         let format = av::AudioFormat::with_asbd(&asbd).unwrap();
 
-        let rb = HeapRb::<f32>::new(CAPTURE_BUFFER_SIZE);
-        let (producer, consumer) = rb.split();
+        let (producer, consumer) = audio_block_queue(CAPTURE_BUFFER_SIZE, 1024);
 
         let waker_state = Arc::new(Mutex::new(WakerState {
             waker: None,
             has_data: false,
         }));
 
-        let current_sample_rate = Arc::new(AtomicU32::new(asbd.sample_rate as u32));
         let callback_counters = Arc::new(CaptureCallbackCounters::new());
+        let timebase = mach::TimeBaseInfo::new();
+        assert!(timebase.denom > 0 && timebase.numer > 0);
+        let origin_host_ns =
+            ((mach::abs_time() as u128 * timebase.numer as u128) / timebase.denom as u128) as u64;
+        let origin_wall_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
 
         let mut ctx = Box::new(Ctx {
-            format,
+            float_mono: format.common_format() == av::audio::CommonFormat::PcmF32
+                && asbd.channels_per_frame == 1,
             producer,
             waker_state: waker_state.clone(),
-            current_sample_rate: current_sample_rate.clone(),
+            timebase,
+            origin_host_ns,
+            origin_wall_ms,
             consecutive_drops: Arc::new(AtomicU32::new(0)),
             dropped_samples: Arc::new(AtomicU64::new(0)),
             termination_code: Arc::new(AtomicU8::new(TERMINATION_NONE)),
@@ -323,15 +344,18 @@ impl SpeakerInput {
             _ctx: ctx,
             _tap: self.tap,
             waker_state,
-            current_sample_rate,
             callback_counters,
         }
     }
 }
 
-fn process_audio_data(ctx: &mut Ctx, data: &[f32]) {
+fn process_audio_data(ctx: &mut Ctx, data: &[f32], metadata: AudioBlockMetadata) {
     let buffer_size = data.len();
-    let pushed = ctx.producer.push_slice(data);
+    let pushed = if ctx.producer.push(data, metadata) {
+        buffer_size
+    } else {
+        0
+    };
 
     // Consistent buffer overflow handling
     if pushed < buffer_size {
@@ -352,6 +376,7 @@ fn process_audio_data(ctx: &mut Ctx, data: &[f32]) {
             ctx.termination_code
                 .store(TERMINATION_BUFFER_OVERFLOW, Ordering::Release);
             ctx.should_terminate.store(true, Ordering::Release);
+            wake_consumer(ctx);
             return;
         }
     } else {
@@ -359,7 +384,10 @@ fn process_audio_data(ctx: &mut Ctx, data: &[f32]) {
         ctx.consecutive_drops.store(0, Ordering::Release);
     }
 
-    // Wake up consumer if we have new data
+    wake_consumer(ctx);
+}
+
+fn wake_consumer(ctx: &mut Ctx) {
     let should_wake = {
         let mut waker_state = ctx.waker_state.lock().unwrap();
         if !waker_state.has_data {
@@ -376,18 +404,18 @@ fn process_audio_data(ctx: &mut Ctx, data: &[f32]) {
 }
 
 impl Stream for SpeakerStream {
-    type Item = f32;
+    type Item = AudioBlock;
 
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        if let Some(sample) = self.consumer.try_pop() {
+        if let Some(sample) = self.consumer.pop() {
             return Poll::Ready(Some(sample));
         }
 
         if self._ctx.should_terminate.load(Ordering::Acquire) {
-            return match self.consumer.try_pop() {
+            return match self.consumer.pop() {
                 Some(sample) => Poll::Ready(Some(sample)),
                 None => Poll::Ready(None),
             };

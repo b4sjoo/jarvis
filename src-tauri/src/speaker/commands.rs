@@ -1,10 +1,11 @@
 // Jarvis AI Speech Detection, and capture system audio (speaker output) as a stream of f32 samples.
+use super::audio_block::{AudioSpan, AudioSpanStream};
 use crate::native_stall_diagnostics::NativeStallDiagnostics;
 use crate::speaker::{
     AudioDevice, SpeakerInput, SpeakerStream, SpeakerStreamTermination,
     SpeakerStreamTerminationReason,
 };
-use crate::stt_evaluation::create_raw_evaluation_capture_tap;
+use crate::stt_evaluation::{create_raw_evaluation_capture_tap, RawEvaluationCaptureTap};
 use anyhow::Result;
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use futures_util::{FutureExt, StreamExt};
@@ -81,7 +82,7 @@ pub struct NativeCaptureControl {
 #[derive(Debug)]
 struct NativeCaptureMetadata {
     device_id: Option<String>,
-    sample_rate: u32,
+    sample_rate: Option<u32>,
     started_at_ms: u64,
 }
 
@@ -89,7 +90,6 @@ const NATIVE_START_FOREGROUND_TIMEOUT: Duration = Duration::from_secs(5);
 
 struct PreparedNativeCapture {
     stream: SpeakerStream,
-    sample_rate: u32,
 }
 
 struct NativeStartFailure {
@@ -375,6 +375,7 @@ enum NativeSegmentEndReason {
     StopDrain,
     TerminationDrain,
     ContinuousStop,
+    FormatBoundary,
 }
 
 impl NativeSegmentEndReason {
@@ -385,6 +386,7 @@ impl NativeSegmentEndReason {
             Self::StopDrain => "stop-drain",
             Self::TerminationDrain => "termination-drain",
             Self::ContinuousStop => "continuous-stop",
+            Self::FormatBoundary => "format-boundary",
         }
     }
 }
@@ -554,6 +556,17 @@ struct VadLivenessAccumulator {
 }
 
 impl VadLivenessAccumulator {
+    fn begin_timebase(&mut self) {
+        self.interval_sample_count = 0;
+        self.interval_chunk_count = 0;
+        self.interval_signal_chunk_count = 0;
+        self.interval_speech_chunk_count = 0;
+        self.interval_max_rms = 0.0;
+        self.interval_max_peak = 0.0;
+        self.raw_zero_sample_count = 0;
+        self.clear_candidate();
+    }
+
     fn observe_raw_chunk(&mut self, samples: &[f32], observed_at_ms: u64) {
         if samples.iter().any(|sample| *sample != 0.0) {
             self.raw_signal_chunk_count = self.raw_signal_chunk_count.saturating_add(1);
@@ -724,7 +737,7 @@ enum CaptureTerminationReason {
     RequestedStop,
     CaptureLimitReached,
     BufferOverflow,
-    InvalidSampleRate,
+    InvalidAudioFormat,
     CapturePanic,
     UnknownStreamEnd,
 }
@@ -735,7 +748,7 @@ impl CaptureTerminationReason {
             Self::RequestedStop => "requested-stop",
             Self::CaptureLimitReached => "capture-limit-reached",
             Self::BufferOverflow => "buffer-overflow",
-            Self::InvalidSampleRate => "invalid-sample-rate",
+            Self::InvalidAudioFormat => "invalid-audio-format",
             Self::CapturePanic => "capture-panic",
             Self::UnknownStreamEnd => "unknown-stream-end",
         }
@@ -930,6 +943,10 @@ impl CaptureRunOutcome {
             SpeakerStreamTerminationReason::BufferOverflow => (
                 CaptureTerminationReason::BufferOverflow,
                 CaptureRecoverability::RetryOnce,
+            ),
+            SpeakerStreamTerminationReason::InvalidAudioFormat => (
+                CaptureTerminationReason::InvalidAudioFormat,
+                CaptureRecoverability::Manual,
             ),
             SpeakerStreamTerminationReason::UnknownStreamEnd => (
                 CaptureTerminationReason::UnknownStreamEnd,
@@ -1143,10 +1160,7 @@ async fn start_audio_capture(
                 ));
             }
         };
-    let PreparedNativeCapture {
-        stream,
-        sample_rate: sr,
-    } = match prepared {
+    let PreparedNativeCapture { stream } = match prepared {
         Ok(prepared) => prepared,
         Err(failure) => {
             let message = fail_capture_start(&app, &lease, failure);
@@ -1165,52 +1179,35 @@ async fn start_audio_capture(
         &lease,
         NativeCaptureMetadata {
             device_id: requested_device_id,
-            sample_rate: sr,
+            sample_rate: None,
             started_at_ms: now_ms(),
         },
         move || {
             tokio::spawn(async move {
                 let capture_future = async {
-                    if vad_config.enabled {
-                        run_vad_capture(
-                            app_clone.clone(),
-                            stream,
-                            sr,
-                            vad_config,
-                            task_session_id.clone(),
-                            capture_owner,
-                            capture_generation,
-                            capture_stop_requested.clone(),
-                            capture_termination_requested.clone(),
-                            capture_termination_request.clone(),
-                        )
-                        .await
-                    } else {
-                        run_continuous_capture(
-                            app_clone.clone(),
-                            stream,
-                            sr,
-                            vad_config,
-                            task_session_id.clone(),
-                            capture_owner,
-                            capture_generation,
-                            capture_stop_requested.clone(),
-                            capture_termination_requested.clone(),
-                            capture_termination_request.clone(),
-                        )
-                        .await
-                    }
+                    run_clocked_capture(
+                        app_clone.clone(),
+                        stream,
+                        vad_config,
+                        task_session_id.clone(),
+                        capture_owner,
+                        capture_generation,
+                        capture_stop_requested.clone(),
+                        capture_termination_requested.clone(),
+                        capture_termination_request.clone(),
+                    )
+                    .await
                 };
-                let outcome = AssertUnwindSafe(capture_future)
+                let (outcome, sample_rate) = AssertUnwindSafe(capture_future)
                     .catch_unwind()
                     .await
-                    .unwrap_or_else(|_| CaptureRunOutcome::panic());
+                    .unwrap_or_else(|_| (CaptureRunOutcome::panic(), None));
                 finish_capture_if_owner(
                     &app_clone,
                     capture_owner,
                     &task_session_id,
                     capture_generation,
-                    sr,
+                    sample_rate,
                     outcome,
                 );
             })
@@ -1219,7 +1216,7 @@ async fn start_audio_capture(
     drop(guard);
     activation?;
 
-    let _ = app.emit("capture-started", sr);
+    let _ = app.emit("capture-started", Option::<u32>::None);
     emit_capture_lifecycle(
         &app,
         "started",
@@ -1228,7 +1225,7 @@ async fn start_audio_capture(
         capture_generation,
         Some("start-completed"),
         None,
-        Some(sr),
+        None,
         true,
         CaptureRecoverability::NotApplicable,
         CaptureTerminationDiagnostics::default(),
@@ -1280,26 +1277,15 @@ fn prepare_native_capture(
             sample_rate: None,
         }
     })?;
-    let sample_rate = stream.sample_rate();
-    if !(8000..=96000).contains(&sample_rate) {
-        error!("Invalid sample rate: {}", sample_rate);
-        return Err(NativeStartFailure {
-            reason: CaptureTerminationReason::InvalidSampleRate.as_str(),
-            message: format!("Invalid sample rate: {sample_rate}. Expected 8000-96000 Hz"),
-            sample_rate: Some(sample_rate),
-        });
-    }
-    Ok(PreparedNativeCapture {
-        stream,
-        sample_rate,
-    })
+    Ok(PreparedNativeCapture { stream })
 }
 
-// VAD-enabled capture - OPTIMIZED for real-time speech detection
-async fn run_vad_capture(
+type CaptureSpanStream = AudioSpanStream<SpeakerStream>;
+
+#[allow(clippy::too_many_arguments)]
+async fn run_clocked_capture(
     app: AppHandle,
     stream: SpeakerStream,
-    sr: u32,
     config: VadConfig,
     capture_session_id: String,
     capture_owner: NativeCaptureOwner,
@@ -1307,8 +1293,7 @@ async fn run_vad_capture(
     stop_requested: Arc<AtomicBool>,
     termination_requested: Arc<AtomicBool>,
     termination_request: Arc<Mutex<Option<NativeCaptureTerminationRequest>>>,
-) -> CaptureRunOutcome {
-    let mut stream = stream;
+) -> (CaptureRunOutcome, Option<u32>) {
     #[cfg(target_os = "macos")]
     if capture_owner == NativeCaptureOwner::Meeting {
         app.state::<NativeStallDiagnostics>().set_capture(
@@ -1317,25 +1302,156 @@ async fn run_vad_capture(
             stream.callback_counters(),
         );
     }
+    let mut stream = AudioSpanStream::new(stream, now_ms());
+    let mut sample_rate = None;
+    let mut segment_sequence = 0;
+    let mut evaluation_tap = None;
+    let mut liveness = VadLivenessAccumulator::default();
+    let started = Instant::now();
+    loop {
+        if let Some(outcome) = take_capture_termination_request(
+            &termination_requested,
+            &termination_request,
+            capture_owner,
+            &capture_session_id,
+            capture_generation,
+        ) {
+            return (outcome, sample_rate);
+        }
+        if stop_requested.load(Ordering::Acquire) {
+            return (
+                CaptureRunOutcome::expected(CaptureTerminationReason::RequestedStop),
+                sample_rate,
+            );
+        }
+        let span = tokio::select! {
+            span = stream.begin_span() => span,
+            _ = tokio::time::sleep(Duration::from_millis(10)) => continue,
+        };
+        let Some(span) = span else {
+            return (audio_stream_outcome(&stream), sample_rate);
+        };
+        sample_rate = Some(span.sample_rate);
+        {
+            let state = app.state::<crate::AudioState>();
+            if let Ok(mut control) = state.capture_control.lock() {
+                if control_owns(
+                    &control,
+                    NativeCapturePhase::Active,
+                    capture_owner,
+                    &capture_session_id,
+                    capture_generation,
+                ) {
+                    if let Some(metadata) = control.metadata.as_mut() {
+                        metadata.sample_rate = sample_rate;
+                    }
+                }
+            };
+        }
+        let observation = serde_json::json!({
+            "stage":"audio-timebase-span", "captureSessionId":capture_session_id,
+            "captureGeneration":capture_generation, "owner":capture_owner.as_str(), "sampleRate":span.sample_rate,
+            "sampleStart":span.sample_start, "sourceStartedAtMs":span.captured_at_ms,
+            "timeBasis":if span.native_clock { "native-input-clock" } else { "capture-start-proxy" },
+            "reason":span.reason, "sourceGapMs":span.gap_ms, "occurredAtMs":now_ms()
+        });
+        info!("[native-audio-observation] {}", observation);
+        let _ = app.emit("native-audio-observation", observation);
+        if evaluation_tap.is_none() && capture_owner == NativeCaptureOwner::Meeting {
+            evaluation_tap = create_raw_evaluation_capture_tap(
+                &app,
+                &capture_session_id,
+                capture_generation,
+                span.sample_rate,
+            );
+        }
+        if let Some(tap) = evaluation_tap.as_mut() {
+            tap.begin_span(span);
+        }
+        liveness.begin_timebase();
+        let outcome = if config.enabled {
+            run_vad_capture(
+                app.clone(),
+                &mut stream,
+                span,
+                &mut segment_sequence,
+                &mut evaluation_tap,
+                &mut liveness,
+                config.clone(),
+                capture_session_id.clone(),
+                capture_owner,
+                capture_generation,
+                stop_requested.clone(),
+                termination_requested.clone(),
+                termination_request.clone(),
+            )
+            .await
+        } else {
+            run_continuous_capture(
+                app.clone(),
+                &mut stream,
+                span,
+                &mut segment_sequence,
+                &mut evaluation_tap,
+                started,
+                config.clone(),
+                capture_session_id.clone(),
+                capture_owner,
+                capture_generation,
+                stop_requested.clone(),
+                termination_requested.clone(),
+                termination_request.clone(),
+            )
+            .await
+        };
+        if !stream.at_boundary || outcome.reason != CaptureTerminationReason::RequestedStop {
+            return (outcome, sample_rate);
+        }
+    }
+}
+
+fn audio_stream_outcome(stream: &CaptureSpanStream) -> CaptureRunOutcome {
+    if let Some(reason) = stream.error {
+        error!("Invalid system audio block/timebase: {reason}");
+        let mut outcome = CaptureRunOutcome::expected(CaptureTerminationReason::InvalidAudioFormat);
+        outcome.expected = false;
+        outcome.recoverability = CaptureRecoverability::Manual;
+        outcome
+    } else {
+        CaptureRunOutcome::from_stream(stream.inner.termination())
+    }
+}
+
+// VAD-enabled capture - OPTIMIZED for real-time speech detection
+async fn run_vad_capture(
+    app: AppHandle,
+    stream: &mut CaptureSpanStream,
+    clock: AudioSpan,
+    sequence: &mut u64,
+    evaluation_tap: &mut Option<RawEvaluationCaptureTap>,
+    liveness_state: &mut VadLivenessAccumulator,
+    config: VadConfig,
+    capture_session_id: String,
+    capture_owner: NativeCaptureOwner,
+    capture_generation: u64,
+    stop_requested: Arc<AtomicBool>,
+    termination_requested: Arc<AtomicBool>,
+    termination_request: Arc<Mutex<Option<NativeCaptureTerminationRequest>>>,
+) -> CaptureRunOutcome {
+    let sr = clock.sample_rate;
     let timing = ResolvedVadTiming::resolve(&config, sr);
-    let capture_started_at_ms = now_ms();
     let mut buffer: VecDeque<f32> = VecDeque::new();
     let mut pre_speech: VecDeque<f32> = VecDeque::with_capacity(timing.pre_speech_samples);
     let mut speech_buffer = Vec::new();
     let mut in_speech = false;
     let mut silence_samples = 0_usize;
     let mut speech_evidence_samples = 0_usize;
-    let mut processed_samples = 0_u64;
-    let mut segment_start_sample = 0_u64;
+    let mut processed_samples = clock.sample_start;
+    let mut segment_start_sample = clock.sample_start;
     let mut segment_overlap_sample_count = 0_usize;
     let mut rollover_family_id: Option<String> = None;
-    let mut segment_sequence = 0_u64;
-    let mut liveness = VadLivenessAccumulator::default();
-    let mut evaluation_tap = if capture_owner == NativeCaptureOwner::Meeting {
-        create_raw_evaluation_capture_tap(&app, &capture_session_id, capture_generation, sr)
-    } else {
-        None
-    };
+    let mut segment_sequence = *sequence;
+    let mut liveness = std::mem::take(liveness_state);
     let (tail_end_reason, mut outcome) = loop {
         if let Some(outcome) = take_capture_termination_request(
             &termination_requested,
@@ -1353,15 +1469,27 @@ async fn run_vad_capture(
             );
         }
 
-        let Some(sample) = stream.next().await else {
+        let sample = match stream.buffered_sample() {
+            Some(sample) => Some(sample),
+            None => tokio::select! {
+                sample = stream.next() => sample,
+                _ = tokio::time::sleep(Duration::from_millis(10)) => continue,
+            },
+        };
+        let Some(sample) = sample else {
+            if stream.at_boundary {
+                break (
+                    NativeSegmentEndReason::FormatBoundary,
+                    CaptureRunOutcome::expected(CaptureTerminationReason::RequestedStop),
+                );
+            }
             let requested_at_ms = now_ms();
             break (
                 NativeSegmentEndReason::TerminationDrain,
-                CaptureRunOutcome::from_stream(stream.termination())
-                    .with_native_tail_flush_request(
-                        format!("native_tail_flush_{}", Uuid::new_v4()),
-                        requested_at_ms,
-                    ),
+                audio_stream_outcome(stream).with_native_tail_flush_request(
+                    format!("native_tail_flush_{}", Uuid::new_v4()),
+                    requested_at_ms,
+                ),
             );
         };
         if let Some(tap) = evaluation_tap.as_mut() {
@@ -1444,16 +1572,8 @@ async fn run_vad_capture(
                     let boundary = NativeSegmentBoundary {
                         sample_start: segment_start_sample,
                         sample_end,
-                        speech_started_at_ms: sample_offset_to_wall_ms(
-                            capture_started_at_ms,
-                            segment_start_sample,
-                            sr,
-                        ),
-                        speech_ended_at_ms: sample_offset_to_wall_ms(
-                            capture_started_at_ms,
-                            sample_end,
-                            sr,
-                        ),
+                        speech_started_at_ms: clock.wall_ms(segment_start_sample),
+                        speech_ended_at_ms: clock.wall_ms(sample_end),
                         segment_emitted_at_ms: emitted_at_ms,
                         end_reason: NativeSegmentEndReason::ForcedRollover,
                         rollover_family_id: Some(family_id.clone()),
@@ -1567,16 +1687,8 @@ async fn run_vad_capture(
                             let boundary = NativeSegmentBoundary {
                                 sample_start: segment_start_sample,
                                 sample_end,
-                                speech_started_at_ms: sample_offset_to_wall_ms(
-                                    capture_started_at_ms,
-                                    segment_start_sample,
-                                    sr,
-                                ),
-                                speech_ended_at_ms: sample_offset_to_wall_ms(
-                                    capture_started_at_ms,
-                                    sample_end,
-                                    sr,
-                                ),
+                                speech_started_at_ms: clock.wall_ms(segment_start_sample),
+                                speech_ended_at_ms: clock.wall_ms(sample_end),
                                 segment_emitted_at_ms: emitted_at_ms,
                                 end_reason: NativeSegmentEndReason::Silence,
                                 rollover_family_id: rollover_family_id.clone(),
@@ -1753,12 +1865,8 @@ async fn run_vad_capture(
         let boundary = NativeSegmentBoundary {
             sample_start: segment_start_sample,
             sample_end,
-            speech_started_at_ms: sample_offset_to_wall_ms(
-                capture_started_at_ms,
-                segment_start_sample,
-                sr,
-            ),
-            speech_ended_at_ms: sample_offset_to_wall_ms(capture_started_at_ms, sample_end, sr),
+            speech_started_at_ms: clock.wall_ms(segment_start_sample),
+            speech_ended_at_ms: clock.wall_ms(sample_end),
             segment_emitted_at_ms: emitted_at_ms,
             end_reason: tail_end_reason,
             rollover_family_id,
@@ -1843,14 +1951,19 @@ async fn run_vad_capture(
         );
     }
 
+    *sequence = segment_sequence;
+    *liveness_state = liveness;
     outcome
 }
 
 // Continuous capture (VAD disabled)
 async fn run_continuous_capture(
     app: AppHandle,
-    stream: SpeakerStream,
-    sr: u32,
+    stream: &mut CaptureSpanStream,
+    clock: AudioSpan,
+    sequence: &mut u64,
+    evaluation_tap: &mut Option<RawEvaluationCaptureTap>,
+    start_time: Instant,
     config: VadConfig,
     capture_session_id: String,
     capture_owner: NativeCaptureOwner,
@@ -1859,20 +1972,13 @@ async fn run_continuous_capture(
     capture_termination_requested: Arc<AtomicBool>,
     capture_termination_request: Arc<Mutex<Option<NativeCaptureTerminationRequest>>>,
 ) -> CaptureRunOutcome {
-    let mut stream = stream;
-    let capture_started_at_ms = now_ms();
+    let sr = clock.sample_rate;
     let max_samples = (sr as u64 * config.max_recording_duration_secs) as usize;
 
     // Pre-allocate buffer to prevent reallocations
     let mut audio_buffer = Vec::with_capacity(max_samples);
-    let start_time = Instant::now();
     let max_duration = Duration::from_secs(config.max_recording_duration_secs);
-    let mut segment_sequence = 0_u64;
-    let mut evaluation_tap = if capture_owner == NativeCaptureOwner::Meeting {
-        create_raw_evaluation_capture_tap(&app, &capture_session_id, capture_generation, sr)
-    } else {
-        None
-    };
+    let mut segment_sequence = *sequence;
 
     // Accumulate audio - check stop flag on EVERY sample for immediate response
     let mut outcome = CaptureRunOutcome::expected(CaptureTerminationReason::RequestedStop);
@@ -1926,8 +2032,9 @@ async fn run_continuous_capture(
                         }
                     },
                     None => {
+                        if stream.at_boundary { break; }
                         warn!("Audio stream ended unexpectedly");
-                        outcome = CaptureRunOutcome::from_stream(stream.termination());
+                        outcome = audio_stream_outcome(stream);
                         break;
                     }
                 }
@@ -1955,7 +2062,7 @@ async fn run_continuous_capture(
         match samples_to_wav_b64(sr, &cleaned_audio) {
             Ok(b64) => {
                 let emitted_at_ms = now_ms();
-                let sample_end = cleaned_audio.len() as u64;
+                let sample_end = clock.sample_start + cleaned_audio.len() as u64;
                 emit_speech_detected(
                     &app,
                     &capture_session_id,
@@ -1965,16 +2072,16 @@ async fn run_continuous_capture(
                     capture_owner,
                     capture_generation,
                     NativeSegmentBoundary {
-                        sample_start: 0,
+                        sample_start: clock.sample_start,
                         sample_end,
-                        speech_started_at_ms: capture_started_at_ms,
-                        speech_ended_at_ms: sample_offset_to_wall_ms(
-                            capture_started_at_ms,
-                            sample_end,
-                            sr,
-                        ),
+                        speech_started_at_ms: clock.captured_at_ms,
+                        speech_ended_at_ms: clock.wall_ms(sample_end),
                         segment_emitted_at_ms: emitted_at_ms,
-                        end_reason: NativeSegmentEndReason::ContinuousStop,
+                        end_reason: if stream.at_boundary {
+                            NativeSegmentEndReason::FormatBoundary
+                        } else {
+                            NativeSegmentEndReason::ContinuousStop
+                        },
                         rollover_family_id: None,
                         overlap_sample_count: 0,
                         silence_target_samples: 0,
@@ -2024,6 +2131,7 @@ async fn run_continuous_capture(
         );
     }
 
+    *sequence = segment_sequence;
     outcome
 }
 
@@ -2424,7 +2532,7 @@ fn finish_capture_if_owner(
     owner: NativeCaptureOwner,
     session_id: &str,
     generation: u64,
-    sample_rate: u32,
+    sample_rate: Option<u32>,
     outcome: CaptureRunOutcome,
 ) {
     app.state::<NativeStallDiagnostics>()
@@ -2446,10 +2554,12 @@ fn finish_capture_if_owner(
             Some(outcome.reason.as_str()),
             if outcome.reason == CaptureTerminationReason::CapturePanic {
                 Some("System audio capture task panicked.")
+            } else if outcome.reason == CaptureTerminationReason::InvalidAudioFormat {
+                Some("System audio format or source clock is invalid. Resume audio after checking the device.")
             } else {
                 None
             },
-            Some(sample_rate),
+            sample_rate,
             outcome.expected,
             outcome.recoverability,
             outcome.diagnostics,
@@ -2773,7 +2883,7 @@ fn capture_status_snapshot(state: &crate::AudioState) -> Result<MeetingAudioStat
     let sample_rate = control
         .metadata
         .as_ref()
-        .map(|metadata| metadata.sample_rate);
+        .and_then(|metadata| metadata.sample_rate);
     let started_at_ms = control
         .metadata
         .as_ref()
@@ -2865,14 +2975,6 @@ fn ms_to_samples_ceil(duration_ms: u64, sample_rate: u32) -> usize {
         .saturating_add(999)
         / 1_000;
     usize::try_from(samples).unwrap_or(usize::MAX)
-}
-
-fn sample_offset_to_wall_ms(
-    capture_started_at_ms: u64,
-    sample_offset: u64,
-    sample_rate: u32,
-) -> u64 {
-    capture_started_at_ms.saturating_add(samples_to_ms(sample_offset, sample_rate))
 }
 
 fn should_emit_tail_segment(

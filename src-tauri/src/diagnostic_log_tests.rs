@@ -890,8 +890,13 @@ fn lg1_the_allowlisted_module_holds_exactly_the_reviewed_call_sites() {
         REVIEWED_WARN_FORMATS,
         "review the thread, the fields and the rendered length of the new or changed call site, then update the list"
     );
-    // Never live, whatever the threshold. The two receipts: the capture format,
-    // which carries device identifiers, and the segment delivery. The four
+    // Reviewed 2026-10-07: the retired startup-rate error is replaced by the
+    // capture-worker timebase error, which carries only a static reason (no audio).
+    assert!(production.contains("Invalid system audio block/timebase: {reason}"));
+    // Never live, whatever the threshold. Three receipts: capture format,
+    // the source timebase span, and segment delivery. Timebase fields contain
+    // only source identity, rate, sample position and timing; no transcript.
+    // The four
     // debug calls report designed outcomes of the capture lease: a start that
     // was superseded, the release that every normal stop makes while the
     // capture is already stopping, a stop request for another owner and a stop
@@ -899,6 +904,7 @@ fn lg1_the_allowlisted_module_holds_exactly_the_reviewed_call_sites() {
     assert_eq!(
         formats("info!("),
         [
+            "[native-audio-observation] {}",
             "[native-audio-observation] {}",
             "[native-audio-observation] {}"
         ]

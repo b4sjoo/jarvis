@@ -4,6 +4,29 @@ use std::thread;
 
 const TEST_WAIT: Duration = Duration::from_secs(3);
 
+#[tokio::test]
+async fn capture_can_start_and_stop_without_fabricating_a_sample_rate_before_audio() {
+    let state = crate::AudioState::default();
+    let (lease, _) = reserve(&state, "waiting-for-first-block");
+    activate_capture_if_owner(
+        &state,
+        &lease,
+        NativeCaptureMetadata {
+            device_id: None,
+            sample_rate: None,
+            started_at_ms: 10,
+        },
+        || tokio::spawn(std::future::pending()),
+    )
+    .unwrap();
+    complete_start(&state, &lease);
+    let snapshot = capture_status_snapshot(&state).unwrap();
+    assert!(snapshot.active);
+    assert_eq!(snapshot.sample_rate, None);
+    assert_eq!(snapshot.capture_generation, Some(lease.generation));
+    assert_eq!(stop(&state, &lease).await, NativeStopDisposition::Stopped);
+}
+
 fn reserve(state: &crate::AudioState, name: &str) -> (NativeCaptureLease, NativeCaptureSignals) {
     let (lease, signals, _) =
         reserve_capture(state, NativeCaptureOwner::Meeting, name.to_string(), None).unwrap();
@@ -13,7 +36,7 @@ fn reserve(state: &crate::AudioState, name: &str) -> (NativeCaptureLease, Native
 fn metadata(lease: &NativeCaptureLease) -> NativeCaptureMetadata {
     NativeCaptureMetadata {
         device_id: Some(lease.session_id.clone()),
-        sample_rate: 16_000 + lease.generation as u32,
+        sample_rate: Some(16_000 + lease.generation as u32),
         started_at_ms: lease.generation,
     }
 }

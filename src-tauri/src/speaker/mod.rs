@@ -6,6 +6,7 @@ use std::pin::Pin;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpeakerStreamTerminationReason {
     BufferOverflow,
+    InvalidAudioFormat,
     UnknownStreamEnd,
 }
 
@@ -44,6 +45,7 @@ mod linux;
 #[cfg(target_os = "linux")]
 use linux::{SpeakerInput as PlatformSpeakerInput, SpeakerStream as PlatformSpeakerStream};
 
+pub(crate) mod audio_block;
 mod commands;
 
 // Re-export commands for tauri handler
@@ -128,21 +130,46 @@ impl SpeakerInput {
     }
 }
 
-// Stream of f32 audio samples from the speaker.
+// Samples and their source clock cross the platform boundary together.
 pub struct SpeakerStream {
     inner: PlatformSpeakerStream,
 }
 
 impl Stream for SpeakerStream {
-    type Item = f32;
+    type Item = audio_block::AudioBlock;
 
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
-        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+        #[cfg(target_os = "macos")]
         {
             Pin::new(&mut self.inner).poll_next(cx)
+        }
+
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
+        {
+            let mut samples = Vec::with_capacity(1024);
+            while samples.len() < 1024 {
+                match Pin::new(&mut self.inner).poll_next(cx) {
+                    std::task::Poll::Ready(Some(sample)) => samples.push(sample),
+                    std::task::Poll::Ready(None) if samples.is_empty() => {
+                        return std::task::Poll::Ready(None)
+                    }
+                    std::task::Poll::Pending if samples.is_empty() => {
+                        return std::task::Poll::Pending
+                    }
+                    _ => break,
+                }
+            }
+            std::task::Poll::Ready(Some(audio_block::AudioBlock {
+                metadata: audio_block::AudioBlockMetadata {
+                    sample_rate: self.inner.sample_rate(),
+                    frames: samples.len(),
+                    source_time: None,
+                },
+                samples,
+            }))
         }
 
         #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
@@ -158,15 +185,6 @@ impl SpeakerStream {
         &self,
     ) -> std::sync::Arc<crate::native_stall_diagnostics::CaptureCallbackCounters> {
         self.inner.callback_counters()
-    }
-
-    // Gets the sample rate (e.g., 16000 Hz on stub, variable on real impls).
-    pub fn sample_rate(&self) -> u32 {
-        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
-        return self.inner.sample_rate();
-
-        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-        0
     }
 
     pub fn termination(&self) -> SpeakerStreamTermination {

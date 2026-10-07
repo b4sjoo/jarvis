@@ -117,6 +117,7 @@ export type NativeAudioLivenessTrigger =
   | "candidate-discarded"
   | "stop-drain"
   | "termination-drain"
+  | "format-boundary"
   | "tail-discarded";
 
 export interface RuntimeRegressionRunnerPresentation {

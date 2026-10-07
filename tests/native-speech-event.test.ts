@@ -46,6 +46,33 @@ const START_FIXTURE = {
   sampleRate: 48_000,
 };
 
+test("format boundaries retain capture identity and their own sample-rate contract", () => {
+  const event = parseNativeSpeechDetectedEvent({ ...FIXTURE, owner: "meeting", endReason: "format-boundary",
+    sampleRate: 24_000, durationMs: 2_500, rolloverFamilyId: undefined,
+    overlapSampleCount: 0, overlapDurationMs: 0 });
+  assert.ok(event);
+  assert.equal(event.captureSessionId, FIXTURE.captureSessionId);
+  assert.equal(event.captureGeneration, FIXTURE.captureGeneration);
+  assert.equal(event.endReason, "format-boundary");
+  assert.equal(event.sampleRate, 24_000);
+});
+
+test("timebase observations preserve native source timing without answer authority", () => {
+  const input = { captureSessionId: "capture", captureGeneration: 2, owner: "meeting",
+    stage: "audio-timebase-span", sampleRate: 24000, sampleStart: 480000,
+    sourceStartedAtMs: 12000, occurredAtMs: 12100, timeBasis: "native-input-clock",
+    reason: "sample-rate-changed", sourceGapMs: 117.6 };
+  const output = parseNativeAudioObservation(input);
+  assert.ok(output && "sampleRate" in output);
+  assert.equal(output.sampleRate, 24000);
+  assert.equal(output.sourceStartedAtMs, 12000);
+  assert.equal(output.sourceGapMs, 117.6);
+  assert.equal("audioBase64" in output, false);
+  assert.equal(parseNativeAudioObservation({ ...input, sourceGapMs: NaN }), null);
+  assert.equal(parseNativeAudioObservation({ ...input, sampleRate: 0 }), null);
+  assert.equal(parseNativeAudioObservation({ ...input, timeBasis: "wall-guess" }), null);
+});
+
 test("delivery timing joins by exact segment and distinguishes encode, emit, JS and queue delays", () => {
   const deliveryTiming = { rawReadyAtMs: 2_300, encodeStartedAtMs: 2_305,
     encodedAtMs: 2_405, encodeDurationMicros: 100_000, emitStartedAtMs: 2_410 };

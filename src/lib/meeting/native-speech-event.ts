@@ -34,6 +34,7 @@ export interface NativeSpeechDetectedEvent {
     | "forced-rollover"
     | "stop-drain"
     | "termination-drain"
+    | "format-boundary"
     | "continuous-stop";
   rolloverFamilyId?: string;
   overlapSampleCount: number;
@@ -80,6 +81,18 @@ export function parseNativeAudioObservation(payload: unknown) {
       requestedDeviceId: text(payload.requestedDeviceId),
       actualRoute: { outputUid: text(route.outputUid), aggregateUid: text(route.aggregateUid),
         tapUid: text(route.tapUid), audioFormat: text(route.audioFormat) } };
+  }
+  if (payload.stage === "audio-timebase-span") {
+    if (!Number.isSafeInteger(payload.sampleRate) || (payload.sampleRate as number) < 8000 ||
+        (payload.sampleRate as number) > 96000 || !Number.isSafeInteger(payload.sampleStart) ||
+        (payload.sampleStart as number) < 0 || !Number.isSafeInteger(payload.sourceStartedAtMs) ||
+        (payload.sourceStartedAtMs as number) < 0 || !Number.isSafeInteger(payload.occurredAtMs) ||
+        (payload.occurredAtMs as number) < 0 || typeof payload.reason !== "string" ||
+        !payload.reason || (payload.timeBasis !== "native-input-clock" && payload.timeBasis !== "capture-start-proxy") ||
+        (payload.sourceGapMs !== null && (typeof payload.sourceGapMs !== "number" || !Number.isFinite(payload.sourceGapMs)))) return null;
+    return { ...identity, stage: "native-audio-timebase-span", occurredAtMs: payload.occurredAtMs,
+      sampleRate: payload.sampleRate, sampleStart: payload.sampleStart, sourceStartedAtMs: payload.sourceStartedAtMs,
+      timeBasis: payload.timeBasis, reason: payload.reason.slice(0, 128), sourceGapMs: payload.sourceGapMs };
   }
   return null;
 }
@@ -471,6 +484,7 @@ function isNativeSegmentEndReason(
     value === "forced-rollover" ||
     value === "stop-drain" ||
     value === "termination-drain" ||
+    value === "format-boundary" ||
     value === "continuous-stop"
   );
 }
