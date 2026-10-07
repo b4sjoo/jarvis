@@ -161,3 +161,20 @@ export function createMeetingFocusDisplayModel(input: MeetingFocusSnapshot): Mee
 export function readMeetingFocusDisplay(input: unknown): MeetingFocusSnapshot {
   return readDisplay(input) as MeetingFocusSnapshot;
 }
+
+/** Compare the validated DTO, not React references or only the answer identity. */
+export function sameMeetingFocusDisplay(a: MeetingFocusSnapshot | undefined, b: MeetingFocusSnapshot): boolean {
+  const same = (left: unknown, right: unknown): boolean => {
+    if (Object.is(left, right)) return true;
+    if (Array.isArray(left) || Array.isArray(right)) {
+      return Array.isArray(left) && Array.isArray(right) && left.length === right.length &&
+        left.every((value, index) => same(value, right[index]));
+    }
+    if (!left || !right || typeof left !== "object" || typeof right !== "object") return false;
+    const l = left as Record<string, unknown>, r = right as Record<string, unknown>;
+    const keys = Object.keys(l);
+    return keys.length === Object.keys(r).length &&
+      keys.every(key => Object.hasOwn(r, key) && same(l[key], r[key]));
+  };
+  return same(a, b);
+}

@@ -1,6 +1,6 @@
 import { MEETING_FOCUS_SCHEMA_VERSION } from "./focus-window.js";
 import type { MeetingFocusAction, MeetingFocusSnapshot, MeetingFocusWindowKind, MeetingFocusProtocolAction, MeetingFocusSnapshotEnvelope, MeetingFocusUserAction } from "./focus-window.js";
-import { createMeetingFocusDisplayModel, readMeetingFocusDisplay } from "./focus-display.js";
+import { createMeetingFocusDisplayModel, readMeetingFocusDisplay, sameMeetingFocusDisplay } from "./focus-display.js";
 import type { ManualCorrectionMenu, MeetingFocusCorrectionMenuRequest, MeetingFocusCorrectionMenuResponse } from "./focus-window.js";
 import type { AdviseDisplayTarget } from "./manual-advise-display.js";
 import type { CanonicalQuestionType } from "./task-taxonomy.js";
@@ -112,10 +112,12 @@ export function createMeetingFocusPublisher(options: Options & {
       })();
       return starting;
     },
-    async publish(payload: MeetingFocusSnapshot): Promise<void> {
+    async publish(payload: MeetingFocusSnapshot, publication?: { force?: boolean }): Promise<void> {
       if (disposed) return;
+      const display = createMeetingFocusDisplayModel(payload);
+      if (!publication?.force && sameMeetingFocusDisplay(current?.payload, display)) return;
       current = Object.freeze({ schemaVersion: MEETING_FOCUS_SCHEMA_VERSION, publisherInstanceId,
-        sequence: (current?.sequence ?? 0) + 1, payload: createMeetingFocusDisplayModel(payload) });
+        sequence: (current?.sequence ?? 0) + 1, payload: display });
       options.observe?.({ event: "published", publisherInstanceId, sequence: current.sequence });
       if (ready) {
         await send(current);

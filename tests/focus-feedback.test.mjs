@@ -17,6 +17,8 @@ const { createMeetingFocusPublisher, createMeetingFocusConsumer } = await produc
 const { EMPTY_MEETING_FOCUS_SNAPSHOT: empty } = await production("focus-window");
 const { commitStableAnswerRevision } = await production("stable-answer");
 const { SessionRecordingManager } = await production("session-recording");
+const { normalizeCanonicalQuestionType } = await production("task-taxonomy");
+const { getProjectSelectionCapability } = await production("project-binding");
 
 // Swap only the selector for a controlled old-fail run; all consumers stay identical.
 function selector() {
@@ -63,7 +65,7 @@ const recorderCreation = one(hook, node => ts.isNewExpression(node) && node.expr
 const publisherCreation = one(main, node => ts.isCallExpression(node) && node.expression.getText(main) === "createMeetingFocusPublisher", "publisher constructor");
 const observeSource = publisherCreation.arguments[0].properties.find(node => node.name?.getText(main) === "observe").initializer.getText(main);
 const publishEffect = one(main, node => ts.isCallExpression(node) && node.expression.getText(main) === "useEffect" &&
-  node.arguments[0]?.getText(main).includes("publish(focusSnapshot)"), "Focus publishing effect");
+  node.arguments[0]?.getText(main).includes("publish(focusSnapshot"), "Focus publishing effect");
 
 function stable(id, lqu = id, revision = 1) {
   const content = `Answer: ${id} answer\n\nCode:\n\`\`\`ts\n${id}();\n\`\`\`\n\nWhiteboard: ${id} diagram\n\nComplexity: O(n)`;
@@ -116,6 +118,7 @@ async function harness(t, replacement = false) {
     latestInterviewerTurnText: "First transcript", forceAdviseAvailable: true, forceAdvisePending: false, forceAdviseCompleted: false,
     meetingStatusLabel: "Thinking", factGuardrailNotice: undefined, factRiskReview: undefined, artifactReuseNotice: undefined, isBusy: true,
     factRiskReviewRuntimeRef: {current:null}, shutdownRequestedRef: {current:false},
+    focusDisplayActiveRef: { current: false },
     audioPauseResumeControl: empty.audioControl, audioWarningLabel: undefined, audioWarningDetail: undefined,
     activeClarifyingSelection: null, isTaskSwitchClarifyingQuestion: false, editableBriefForFocus: { interviewTypes: [] },
     effectiveQuestionType: "unknown", currentQuestionTypeObservation: { durableOwnerMissing: false }, transientPersonalStatusLabel: undefined,
@@ -334,3 +337,60 @@ test("BF3 Clear/new session empty fallback becomes quiescent", async t => {
   assert.equal(h.applied().length, 4);
   assert.equal(h.actions.length, 0);
 });
+
+test("FA4 reactivating the same Focus display still confirms a fresh application", async t => {
+  const h = await harness(t, true);
+  await h.drain();
+  const publications = h.published().length, acknowledgements = h.applied().length;
+  await h.update(env => { env.focusModeActive = false; });
+  assert.equal(h.published().length, publications);
+  await h.update(env => { env.focusModeActive = true; });
+  assert.equal(h.published().length, publications + 1);
+  assert.equal(h.applied().length, acknowledgements + 2);
+  for (let i = 0; i < 20; i++) { h.rerender(); await h.drain(); }
+  assert.equal(h.published().length, publications + 1);
+  assert.equal(h.actions.length, 0);
+});
+
+for (const bound of [false, true]) for (const locked of [false, true]) {
+  test(`FA1 effective PDD menu becomes quiescent (bound=${bound}, locked=${locked})`, async t => {
+    const h = await harness(t);
+    const unit = { id: "A", revision: 1, sessionId: "session", runtimeEpoch: 1 };
+    const candidates = [{ projectId: "project-a", projectName: "Project A" }];
+    const binding = bound ? { projectId: "project-a", projectName: "Project A", revision: 1, authority: "user-selection" } : undefined;
+    const context = { sessionId: "session", activeMeetingTask: { parent: {
+      id: "parent", questionType: "project-deep-dive", projectBinding: binding,
+    } } };
+    Object.assign(h.env, {
+      normalizeCanonicalQuestionType, getProjectSelectionCapability,
+      logicalQuestionUnitRef: { current: unit }, runtimeEpochRef: { current: 1 },
+      effectiveQuestionSourceLedgerRef: { current: { list: () => [], findLogicalQuestion: () => ({ owner: { kind: "parent-mainline", parentId: "parent" } }) } },
+      projectBindingObservationRef: { current: { sessionId: "session", parentId: "parent", bindingRevision: binding?.revision ?? 0,
+        decision: { action: bound ? "preserve" : "needs-selection", binding, sourceAuthority: "memory-candidate", topicCompatible: true, candidates } } },
+      // Source authorization is an admitted fixture here; the real project reader,
+      // capability, display publisher, ACK and recorder callbacks remain composed.
+      resolveVisibleAnswerResponseActionTarget: () => ({ authorized: true, logicalQuestionUnit: unit }),
+      resolveResponseActionLogicalQuestionUnit: () => unit,
+    });
+    h.env.contextManagerRef.current.getState = () => context;
+    h.env.state.settings.useMemory = true;
+    h.env.state.lastMemoryContext = { projectDirectory: { status: "ready", snapshotSessionId: "session", candidates } };
+    const complete = stable("A");
+    h.env.stableAnswerRevisionRef.current = complete;
+    h.env.state.partialSuggestion = "";
+    if (!locked) h.display.toggle();
+    await h.drain();
+    assert.ok(h.env.focusSnapshot.projectChoice);
+    assert.equal(h.env.focusSnapshot.projectChoice.canSelect, !bound);
+    assert.equal(h.env.focusSnapshot.advisePin.locked, locked);
+    const published = h.published().length, applied = h.applied().length;
+    const events = h.recorder.getState().eventCount;
+    assert.equal(published, 1);
+    assert.equal(applied, 2);
+    for (let i = 0; i < 100; i++) { h.rerender(); await h.drain(); }
+    assert.equal(h.published().length, published);
+    assert.equal(h.applied().length, applied);
+    assert.equal(h.recorder.getState().eventCount, events);
+    assert.equal(h.actions.length, 0);
+  });
+}

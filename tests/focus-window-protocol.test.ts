@@ -10,7 +10,7 @@ import {
   type MeetingFocusCorrectionMenuRequest,
 } from "../src/lib/meeting/focus-window.js";
 import { createMeetingFocusConsumer, createMeetingFocusPublisher, type MeetingFocusTransport } from "../src/lib/meeting/focus-window-protocol.js";
-import { createMeetingFocusDisplayModel } from "../src/lib/meeting/focus-display.js";
+import { createMeetingFocusDisplayModel, sameMeetingFocusDisplay } from "../src/lib/meeting/focus-display.js";
 import { formatChineseThinkingText, normalizeMeetingMarkdown } from "../src/lib/meeting/meeting-display-text.js";
 
 class Bus {
@@ -41,6 +41,76 @@ class Bus {
   }
 }
 const fail = (error: Error) => { throw error; };
+
+test("FA2 normalized display fields, not object identity, control publication", async () => {
+  const bus = new Bus(), p = publisher(bus), c = consumer(bus, "answer");
+  await p.start(); await c.start();
+  const target = { sessionId: "s", generationId: "g", logicalQuestionUnitId: "q", logicalQuestionRevision: 1, stableRevision: 1 };
+  const rich = createMeetingFocusDisplayModel({ ...empty,
+    advisePin: { locked: false, backgroundUpdated: false, target },
+    sections: { ...empty.sections, profile: "compact-spoken", whiteboardViewKey: "w", clarifyingOptions: [{ id: "a", label: "A", value: "a" }] },
+    projectChoice: { key: "p", displayTarget: target, currentProject: { id: "a", name: "A" },
+      options: [{ id: "a", label: "A", value: "a" }, { id: "b", label: "B", value: "b" }], canSelect: true, canReselect: true },
+    audioInputWarning: { label: "Audio", detail: "Check input" },
+    factRiskReview: { answerKey: "a", status: "completed", flags: [{ section: "answer", quote: "claim", reason: "verify", sourceIds: ["fact"] }] },
+    activeTask: { id: "p", source: "voice", questionType: "project-deep-dive", topic: "P", hasScreenContext: false,
+      playbookPhase: "project_summary", child: undefined },
+    speechCorrections: [{ id: "c", input: "RAG", term: "RAG", appliedCount: 1 }],
+  });
+  await p.publish(rich); bus.drain();
+  const firstSequence = c.received.at(-1)!.sequence;
+  for (let i = 0; i < 100; i++) await p.publish(structuredClone(rich));
+  bus.drain();
+  assert.equal(c.received.at(-1)!.sequence, firstSequence);
+  assert.equal(sameMeetingFocusDisplay(rich, structuredClone(rich)), true);
+
+  const paths: (string | number)[][] = [];
+  function leaves(value: unknown, at: (string | number)[] = []) {
+    if (value && typeof value === "object") {
+      Object.entries(value).forEach(([key, child]) => leaves(child, [...at, Array.isArray(value) ? Number(key) : key]));
+    } else paths.push(at);
+  }
+  leaves(rich);
+  for (const at of paths) {
+    const next = structuredClone(rich) as any;
+    const parent = at.slice(0, -1).reduce((value: any, key) => value[key], next);
+    const key = at.at(-1)!;
+    const before = parent[key];
+    parent[key] = typeof before === "boolean" ? !before : typeof before === "number" ? before + 1 : `${before ?? ""} changed`;
+    assert.equal(sameMeetingFocusDisplay(rich, next), false, at.join("."));
+    await p.publish(rich); bus.drain();
+    const count = c.received.length;
+    await p.publish(next); bus.drain();
+    assert.equal(c.received.length, count + 1, at.join("."));
+  }
+  for (const next of [
+    { ...rich, projectChoice: undefined },
+    { ...rich, projectChoice: { ...rich.projectChoice!, options: [...rich.projectChoice!.options].reverse() } },
+    { ...rich, speechCorrections: [] },
+  ]) {
+    await p.publish(rich); bus.drain();
+    const count = c.received.length;
+    await p.publish(next); bus.drain();
+    assert.equal(c.received.length, count + 1);
+  }
+  await assert.rejects(p.publish({ ...rich, isBusy: "invalid" } as any), /Invalid Focus boolean/);
+  p.dispose(); c.dispose();
+});
+
+test("FA4 equal data can be explicitly republished after a failed send", async () => {
+  const bus = new Bus(), errors: Error[] = [];
+  let failSend = true;
+  const endpoint = bus.endpoint(actionEvent, snapshotEvent);
+  const p = createMeetingFocusPublisher({ publisherInstanceId: "p", onAction() {}, onError: error => errors.push(error),
+    transport: { ...endpoint, async send(payload) { if (failSend) throw new Error("transport unavailable"); await endpoint.send(payload); } } });
+  await p.start(); await p.publish(empty);
+  assert.equal(errors.length, 1);
+  failSend = false;
+  await p.publish(empty, { force: true });
+  assert.equal(bus.sent.length, 1);
+  assert.equal(bus.sent[0].payload.sequence, 2);
+  p.dispose();
+});
 
 test("on-demand correction menu preserves request target without changing the applied display", async () => {
   const bus = new Bus(), p = publisher(bus), c = consumer(bus, "controls");

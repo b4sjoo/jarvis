@@ -1211,8 +1211,11 @@ export const MeetingAssistant = ({
     };
   }, []);
 
+  const focusDisplayActiveRef = useRef(false);
   useEffect(() => {
-    if (focusModeActive) void focusPublisherRef.current?.publish(focusSnapshot);
+    const force = focusModeActive && !focusDisplayActiveRef.current;
+    focusDisplayActiveRef.current = focusModeActive;
+    if (focusModeActive) void focusPublisherRef.current?.publish(focusSnapshot, { force });
   }, [focusModeActive, focusSnapshot]);
 
   const title = useMemo(() => {
