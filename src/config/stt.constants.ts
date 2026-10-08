@@ -65,6 +65,16 @@ export const SPEECH_TO_TEXT_PROVIDERS = [
     streaming: false,
   },
   {
+    id: "azure-mai-transcribe",
+    name: "Azure MAI-Transcribe-2",
+    curl: `curl -X POST "https://{{ENDPOINT}}/speechtotext/transcriptions:transcribe?api-version=2025-10-15" \\
+      -H "Ocp-Apim-Subscription-Key: {{API_KEY}}" \\
+      -F "audio={{AUDIO}}" \\
+      -F 'definition={"enhancedMode":{"enabled":true,"model":"MAI-Transcribe-2","modelOptions":{"transcribeStyle":"verbatim"}},"phraseList":{"phrases":{{STT_TERMS_JSON}}}}'`,
+    responseContentPath: "combinedPhrases[0].text",
+    streaming: false,
+  },
+  {
     id: "azure-stt",
     name: "Azure Speech-to-Text",
     curl: `curl -X POST "https://{{REGION}}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1?language=en-US" \\

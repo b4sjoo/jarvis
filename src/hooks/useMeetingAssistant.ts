@@ -826,6 +826,7 @@ import {
   type CancellableSttRequest,
   type SttRequestAbortReason,
   buildSttRequestEvidence,
+  isPhraseListOnlySttProvider,
   formatSttRequestEvidenceForTrace,
   formatSttPromptEchoRecoveryForTrace,
   runSttPromptEchoRecovery,
@@ -24717,10 +24718,11 @@ export function useMeetingAssistant() {
             },
           });
         }
+        const phraseListOnly = isPhraseListOnlySttProvider(sttProvider);
         const pendingContinuation = pendingSentenceCompletionRef.current;
         const continuationLease =
           pendingContinuation?.continuationPromptLease;
-        const continuationAuthorization = continuationLease
+        const continuationAuthorization = continuationLease && !phraseListOnly
           ? authorizeSttContinuationPromptLease({
               lease: continuationLease,
               segment,
@@ -24744,17 +24746,21 @@ export function useMeetingAssistant() {
             continuationLeaseForPrompt;
         }
         const composedSttPrompt = composeSttPrompt({
-          speechBiasPrompt: speechBias.prompt,
+          speechBiasPrompt: phraseListOnly ? "" : speechBias.prompt,
           continuationLease: continuationLeaseForPrompt,
         });
         const continuationTraceMetadata = {
-          sttContinuationDisposition: continuationAuthorization
+          sttContinuationDisposition: phraseListOnly && continuationLease
+            ? "rejected"
+            : continuationAuthorization
             ? continuationAuthorization.authorized
               ? "consumed"
               : "rejected"
             : "none",
           sttContinuationReason:
-            continuationAuthorization?.reason ?? "no-lease",
+            phraseListOnly && continuationLease
+              ? "provider-text-prompt-unsupported"
+              : continuationAuthorization?.reason ?? "no-lease",
           sttContinuationLeaseId: continuationLease?.id,
           sttContinuationOperationId: continuationLease?.operationId,
           sttContinuationSourceTurnId: continuationLease?.sourceTurnId,
@@ -24797,11 +24803,11 @@ export function useMeetingAssistant() {
           terms: speechBias.terms.map((term) => term.term),
         });
         const sttRequestTraceMetadata = {
+          ...continuationTraceMetadata,
           ...formatSttRequestEvidenceForTrace(sttRequestEvidence),
           sttRequestEvidenceDurationMs: Number(
             (performance.now() - sttRequestEvidenceStartedAt).toFixed(3)
           ),
-          ...continuationTraceMetadata,
         };
         traceStoreRef.current.recordInput(
           traceId,
@@ -24843,7 +24849,7 @@ export function useMeetingAssistant() {
           traceId,
           audioSessionId: segment.sessionId,
           segmentSequence: segment.sequence,
-          initialPromptKind: composedSttPrompt.kind,
+          initialPromptKind: sttRequestEvidence.promptKind,
           authorizeRetry: () => isCurrentAudioSegment(segment),
           runAttempt: async (attempt) => {
             const useConfiguredPrompt =

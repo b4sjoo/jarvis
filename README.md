@@ -106,6 +106,23 @@ Jarvis expects you to configure local/custom providers before relying on meeting
 - Speech providers are configured from curl commands that accept uploaded audio.
 - System prompts and assistant behavior can be edited in the dashboard.
 
+### Azure MAI-Transcribe-2
+
+Select **Azure MAI-Transcribe-2** in the STT settings and enter the Speech resource
+endpoint (`https://<resource>.cognitiveservices.azure.com`) and its API key. A
+hostname without `https://` is also accepted. Project and Azure OpenAI endpoints
+are not Speech endpoints. Selecting the provider is explicit; existing settings
+are not automatically migrated.
+
+The built-in template uses the non-streaming Speech REST API with automatic
+language detection and verbatim output. Existing speech-bias terms are sent as
+`phraseList.phrases`; free-form prompts and continuation text are not supported
+by this model and are not sent. Audio format and cancellation remain on the
+shared STT path. Custom multipart templates can name the audio part using
+`{{AUDIO}}`, and `{{STT_TERMS_JSON}}` supplies the runtime terms as a JSON array.
+See [Microsoft's MAI-Transcribe documentation](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/mai-transcribe)
+for region, format, billing, and preview limitations.
+
 ## Meeting Assistant Usage
 
 - Open the floating Brain button to show the Meeting Assistant panel.

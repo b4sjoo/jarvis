@@ -53,7 +53,7 @@ export const Providers = ({
             return {
               label: provider?.isCustom
                 ? json?.url || "Custom Provider"
-                : provider?.id || "Custom Provider",
+                : provider?.name || provider?.id || "Custom Provider",
               value: provider?.id || "Custom Provider",
               isCustom: provider?.isCustom,
             };
@@ -177,6 +177,8 @@ export const Providers = ({
             (variable) => variable?.key !== findKeyAndValue("api_key")?.key
           )
           .map((variable) => {
+            const isMaiEndpoint = selectedSttProvider?.provider === "azure-mai-transcribe" &&
+              variable.key === "endpoint";
             const getVariableValue = () => {
               if (!variable?.key || !selectedSttProvider?.variables) return "";
               return selectedSttProvider.variables[variable.key] || "";
@@ -185,7 +187,9 @@ export const Providers = ({
             return (
               <div className="space-y-1" key={variable?.key}>
                 <Header
-                  title={variable?.value || ""}
+                  title={isMaiEndpoint
+                    ? "Speech resource endpoint"
+                    : variable?.value || ""}
                   description={`add your preferred ${variable?.key?.replace(
                     /_/g,
                     " "
@@ -198,7 +202,9 @@ export const Providers = ({
                   }`}
                 />
                 <TextInput
-                  placeholder={`Enter ${
+                  placeholder={isMaiEndpoint
+                    ? "https://your-resource.cognitiveservices.azure.com"
+                    : `Enter ${
                     allSttProviders?.find(
                       (p) => p?.id === selectedSttProvider?.provider
                     )?.isCustom

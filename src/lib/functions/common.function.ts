@@ -62,7 +62,10 @@ export function extractVariables(
 
   const doNotInclude = includeAll
     ? []
-    : ["SYSTEM_PROMPT", "TEXT", "IMAGE", "IMAGE_MEDIA_TYPE", "AUDIO"];
+    : [
+        "SYSTEM_PROMPT", "TEXT", "IMAGE", "IMAGE_MEDIA_TYPE", "AUDIO",
+        "STT_TERMS_JSON",
+      ];
 
   const filteredVariables = uniqueVariables?.filter(
     (variable) => !doNotInclude?.includes(variable)

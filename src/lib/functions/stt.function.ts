@@ -70,10 +70,42 @@ export async function fetchSTT(params: STTParams): Promise<string> {
       ),
       STT_PROMPT: prompt ?? "",
       STT_TERMS: terms.join(", "),
+      STT_TERMS_JSON: JSON.stringify(terms),
     };
 
+    if (provider.id === "azure-mai-transcribe") {
+      if (!allVariables.API_KEY?.trim()) {
+        throw new Error("Azure Speech API key is required.");
+      }
+      const endpoint = allVariables.ENDPOINT?.trim() ?? "";
+      let parsedEndpoint: URL;
+      try {
+        parsedEndpoint = new URL(
+          endpoint.includes("://") ? endpoint : `https://${endpoint}`
+        );
+      } catch {
+        throw new Error("Use the Azure Speech resource endpoint, for example https://your-resource.cognitiveservices.azure.com.");
+      }
+      if (
+        parsedEndpoint.protocol !== "https:" ||
+        !parsedEndpoint.hostname.endsWith(".cognitiveservices.azure.com") ||
+        parsedEndpoint.pathname !== "/" || parsedEndpoint.search || parsedEndpoint.hash ||
+        parsedEndpoint.username || parsedEndpoint.password || parsedEndpoint.port
+      ) {
+        throw new Error("Use the Azure Speech resource endpoint, not a Project or Azure OpenAI endpoint.");
+      }
+      allVariables.ENDPOINT = parsedEndpoint.hostname;
+    }
+
     // Prepare request
-    let url = deepVariableReplacer(curlJson.url || "", allVariables);
+    // curl-to-json lowercases placeholders in URL hostnames.
+    const urlVariables = {
+      ...allVariables,
+      ...Object.fromEntries(
+        Object.entries(allVariables).map(([key, value]) => [key.toLowerCase(), value])
+      ),
+    };
+    let url = deepVariableReplacer(curlJson.url || "", urlVariables);
     const headers = deepVariableReplacer(curlJson.header || {}, allVariables);
     const formData = deepVariableReplacer(curlJson.form || {}, allVariables);
 
@@ -108,49 +140,33 @@ export async function fetchSTT(params: STTParams): Promise<string> {
         type: audio.type,
       });
       throwIfAborted(signal);
-      form.append("file", freshBlob, audioUploadFilename(audio.type));
+      const fields = Object.entries(formData).map(([key, val]): [string, unknown] => {
+        if (typeof val === "string" && /^\d+$/.test(key)) {
+          const separator = val.indexOf("=");
+          return separator < 0
+            ? [val, ""]
+            : [val.slice(0, separator), val.slice(separator + 1)];
+        }
+        return [key, val];
+      });
+      const audioField = fields.find(([, val]) =>
+        typeof val === "string" && /^(?:@)?\{\{AUDIO\}\}$/.test(val.trim())
+      )?.[0] ?? "file";
+      form.append(audioField, freshBlob, audioUploadFilename(audio.type));
       const headerKeys = Object.keys(headers).map((k) =>
         k.toUpperCase().replace(/[-_]/g, "")
       );
 
-      for (const [key, val] of Object.entries(formData)) {
-        if (typeof val !== "string") {
-          if (
-            !val ||
-            headerKeys.includes(key.toUpperCase()) ||
-            key.toUpperCase() === "AUDIO"
-          )
-            continue;
-          form.append(key.toLowerCase(), val as string | Blob);
-          continue;
-        }
-
-        // Check if key is a number, which indicates array-like parsing from curl2json
-        if (!isNaN(parseInt(key, 10))) {
-          const [formKey, ...formValueParts] = val.split("=");
-          const formValue = formValueParts.join("=");
-
-          if (formKey.toLowerCase() === "file") continue; // Already handled by form.append('file', audio)
-
-          if (
-            !formValue ||
-            headerKeys.includes(formKey.toUpperCase().replace(/[-_]/g, ""))
-          )
-            continue;
-
-          form.append(formKey, formValue);
-        } else {
-          if (key.toLowerCase() === "file") continue; // Already handled by form.append('file', audio)
-          if (
-            !val ||
-            headerKeys.includes(key.toUpperCase()) ||
-            key.toUpperCase() === "AUDIO"
-          )
-            continue;
-          form.append(key.toLowerCase(), val as string | Blob);
-        }
+      for (const [key, val] of fields) {
+        if (
+          key === audioField || !val ||
+          headerKeys.includes(key.toUpperCase().replace(/[-_]/g, ""))
+        ) continue;
+        form.append(key, val as string | Blob);
       }
-      delete finalHeaders["Content-Type"];
+      for (const key of Object.keys(finalHeaders)) {
+        if (key.toLowerCase() === "content-type") delete finalHeaders[key];
+      }
       body = form;
     } else if (isBinaryUpload) {
       // Deepgram-style: raw binary body

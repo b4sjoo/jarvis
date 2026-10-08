@@ -66,7 +66,7 @@ export const CreateEditProvider = ({
                   ?.filter((provider) => !provider?.isCustom)
                   .map((provider) => {
                     return {
-                      label: provider?.id || "STT Provider",
+                      label: provider?.name || provider?.id || "STT Provider",
                       value: provider?.id || "STT Provider",
                     };
                   })}

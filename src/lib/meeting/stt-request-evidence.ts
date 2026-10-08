@@ -57,6 +57,15 @@ const LANGUAGE_KEYS = new Set([
 
 const MAX_RECORDED_VALUE_CHARS = 120;
 
+export function isPhraseListOnlySttProvider(
+  provider: TYPE_PROVIDER | undefined
+): boolean {
+  return (
+    Boolean(provider?.curl.includes("{{STT_TERMS_JSON}}")) &&
+    !provider?.curl.includes("{{STT_PROMPT}}")
+  );
+}
+
 export function buildSttRequestEvidence({
   provider,
   selectedProvider,
@@ -84,6 +93,7 @@ export function buildSttRequestEvidence({
   );
   const model = selectedModel ?? parsedFields.model;
   const language = selectedLanguage ?? parsedFields.language;
+  const termsOnly = isPhraseListOnlySttProvider(provider);
 
   return {
     providerId: cleanRecordedValue(provider?.id),
@@ -101,8 +111,10 @@ export function buildSttRequestEvidence({
         ? "automatic"
         : "unknown",
     languageSource: language?.source ?? "not-observed",
-    promptKind: promptKind ?? resolvePromptKind(prompt, terms),
-    promptChars: prompt?.length ?? 0,
+    promptKind: termsOnly
+      ? (terms.length ? "speech-bias" : "none")
+      : promptKind ?? resolvePromptKind(prompt, terms),
+    promptChars: termsOnly ? 0 : prompt?.length ?? 0,
     termCount: terms.length,
     confidenceCapability: "not-exposed-by-text-adapter",
   };
@@ -248,7 +260,9 @@ function collectFormField(
 
   if (!rawValue.startsWith("{")) return;
   try {
-    collectKnownFields(JSON.parse(rawValue), output);
+    collectKnownFields(
+      JSON.parse(rawValue.replaceAll("{{STT_TERMS_JSON}}", "[]")), output
+    );
   } catch {
     // A malformed optional config field should not affect the STT request.
   }
