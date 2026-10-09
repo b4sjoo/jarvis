@@ -2,7 +2,7 @@ import { isMeetingInputLanguageSet, MEETING_INPUT_LANGUAGES, type MeetingInputLa
 import { DECISIONS_PROVIDER_ID, type DecisionsProviderSnapshot } from "../../config/decisions.constants.js";
 import type { AIResponseExecutionIdentity } from "../functions/ai-response-events.js";
 import { requestDecisionsChoice, formatDecisionsResultForTrace, type DecisionsChoiceQuestion } from "./decisions-request.js";
-import { createProviderConfigFingerprint } from "./meeting-model-route.js";
+import { createDecisionsProviderFingerprint } from "./decisions-runtime.js";
 import type { RuntimeInferenceProviderAdmissionCoordinator } from "./runtime-inference-provider-admission.js";
 import type { SourceLanguageAdmission } from "./source-language-contract.js";
 
@@ -49,8 +49,7 @@ export async function requestSourceLanguageAdmission(input: {
   try {
     const result = await input.admission.run({
       operationId: input.executionIdentity.requestId, lane: "critical", providerTier: "fast",
-      providerConfigFingerprint: createProviderConfigFingerprint({ provider: undefined,
-        selectedProvider: { provider: DECISIONS_PROVIDER_ID, variables: { api_key: configuration.apiKey, model: configuration.modelId } } }),
+      providerConfigFingerprint: createDecisionsProviderFingerprint(configuration),
       signal: controller.signal,
       onAdmitted: receipt => { queueWaitMs = receipt.waitMs;input.onMetadata?.({ languageAdmissionQueueWaitMs: receipt.waitMs,
         languageAdmissionProviderGroupKey: receipt.providerGroupKey, languageAdmissionQueueDepth: receipt.queueDepthAtEnqueue }); },

@@ -13,6 +13,9 @@ import {
   type QuestionTypeAdjudicationRequest,
 } from "./question-type-adjudication.js";
 import { getRuntimeInferenceOperationDefinition } from "./runtime-inference.js";
+import { requestDecisionsChoice, formatDecisionsResultForTrace } from "./decisions-request.js";
+import { createDecisionsExecutionIdentity, type RuntimeDecisionBackend } from "./decisions-runtime.js";
+import { CANONICAL_QUESTION_TYPES } from "./task-taxonomy.js";
 
 const OPERATION = getRuntimeInferenceOperationDefinition(
   "question-type-adjudication"
@@ -32,6 +35,7 @@ export interface QuestionTypeAdjudicationRequestResult {
   firstTokenAt?: number;
   completedAt: number;
   cacheHit?: boolean;
+  decisionMetadata?: Record<string, unknown>;
 }
 
 export async function requestQuestionTypeAdjudication(input: {
@@ -45,7 +49,28 @@ export async function requestQuestionTypeAdjudication(input: {
   maxOutputTokens?: number;
   readRetryDeadlineAt?: () => number | undefined;
   isExecutionCurrent?: () => boolean;
+  backend?: RuntimeDecisionBackend;
 }): Promise<QuestionTypeAdjudicationRequestResult> {
+  if (input.backend?.kind === "decisions" && input.request.reviewScope !== "field-vs-coding") {
+    if (input.isExecutionCurrent && !input.isExecutionCurrent()) {
+      const error = new Error("Question type source is no longer current.");error.name = "AbortError";throw error;
+    }
+    const prompts = buildQuestionTypeAdjudicationPrompts(input.request, "decisions");
+    const result = await requestDecisionsChoice({ configuration: input.backend.configuration,
+      configurationError: input.backend.configurationError,
+      question: { name: "question_type", instructions: prompts.systemPrompt, choices: CANONICAL_QUESTION_TYPES.map(value => ({ value })) },
+      modelInput: prompts.userMessage, signal: input.signal,
+      executionIdentity: createDecisionsExecutionIdentity(input.executionIdentity, {
+        logicalQuestionUnitId: input.request.logicalQuestionUnitId, logicalQuestionRevision: input.request.logicalQuestionUnitRevision }),
+      deadlineAt: Math.min(Date.now() + (input.timeoutMs ?? OPERATION.timeoutMs), input.readRetryDeadlineAt?.() ?? Infinity),
+    });
+    const parsed: QuestionTypeAdjudicationParseResult = result.decision.ok
+      ? { ok: true, value: { schemaVersion: 1, questionType: result.decision.choice,
+          confidence: result.decision.executionScore, evidenceSpans: [] }, evidenceSpansValid: true }
+      : { ok: false, reason: result.decision.reason, errorKind: result.providerOutcome.status === "success" ? "schema" : "provider", evidenceSpansValid: false };
+    return { ...result, parsed, parseDisposition: parsed.ok ? "valid-decisions" : parsed.reason,
+      decisionMetadata: formatDecisionsResultForTrace(result, "questionTypeDecision") };
+  }
   const prompts = buildQuestionTypeAdjudicationPrompts(input.request);
   const retryEnabled = Boolean(input.readRetryDeadlineAt && input.request.reviewScope !== "field-vs-coding");
   const providerResponse = await requestRuntimeInferenceResponse({

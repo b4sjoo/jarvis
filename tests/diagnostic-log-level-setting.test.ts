@@ -55,7 +55,7 @@ const hook = ts.createSourceFile("hook.ts", hookText, ts.ScriptTarget.Latest, tr
 const LEVELS = ["error", "warn", "info", "debug", "trace"] as const;
 const SETTINGS_KEY = "test-settings";
 // The keys the settings held before this slice, and the one it adds.
-const PREVIOUS_SETTINGS_KEYS = ["activeScreenTaskTimeoutMinutes", "audio", "codingModel", "debugMode", "microphoneContextEnabled",
+const PREVIOUS_SETTINGS_KEYS = ["activeScreenTaskTimeoutMinutes", "audio", "codingModel", "debugMode", "decisionsRuntimeEnabled", "microphoneContextEnabled",
   "nativeStallDiagnosticsEnabled", "personalEvidenceGuardrailMode", "response", "runtimeCrossChecksEnabled", "taxonomyAdjudication", "useMemory"];
 const INVALID_LEVEL = "Diagnostic log level is not one of error, warn, info, debug, trace";
 

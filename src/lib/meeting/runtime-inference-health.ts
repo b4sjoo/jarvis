@@ -11,20 +11,22 @@ export interface RuntimeInferenceCircuitState {
   reason?: RuntimeInferenceCircuitReason;
   detail?: string;
   openedAt?: number;
+  providerConfigFingerprint?: string;
 }
 
 export class RuntimeInferenceSessionCircuitBreaker {
   private states = new Map<
-    RuntimeInferenceOperationKind,
+    string,
     RuntimeInferenceCircuitState
   >();
 
   read(
     operationKind: RuntimeInferenceOperationKind,
-    sessionId: string
+    sessionId: string,
+    providerConfigFingerprint?: string
   ): RuntimeInferenceCircuitState {
-    this.ensureSession(operationKind, sessionId);
-    return { ...this.states.get(operationKind)! };
+    const key = this.ensureSession(operationKind, sessionId, providerConfigFingerprint);
+    return { ...this.states.get(key)! };
   }
 
   open(input: {
@@ -33,9 +35,10 @@ export class RuntimeInferenceSessionCircuitBreaker {
     reason: RuntimeInferenceCircuitReason;
     detail?: string;
     now?: number;
+    providerConfigFingerprint?: string;
   }) {
-    this.ensureSession(input.operationKind, input.sessionId);
-    const current = this.states.get(input.operationKind)!;
+    const key = this.ensureSession(input.operationKind, input.sessionId, input.providerConfigFingerprint);
+    const current = this.states.get(key)!;
     if (current.open) {
       return { state: { ...current }, newlyOpened: false };
     }
@@ -46,22 +49,26 @@ export class RuntimeInferenceSessionCircuitBreaker {
       reason: input.reason,
       detail: input.detail,
       openedAt: input.now ?? Date.now(),
+      ...(input.providerConfigFingerprint ? { providerConfigFingerprint: input.providerConfigFingerprint } : {}),
     };
-    this.states.set(input.operationKind, state);
+    this.states.set(key, state);
     return { state: { ...state }, newlyOpened: true };
   }
 
   private ensureSession(
     operationKind: RuntimeInferenceOperationKind,
-    sessionId: string
+    sessionId: string,
+    providerConfigFingerprint?: string
   ) {
-    const current = this.states.get(operationKind);
-    if (current?.sessionId === sessionId) return;
-    this.states.set(operationKind, {
-      operationKind,
-      sessionId,
-      open: false,
+    for (const [key, state] of this.states) {
+      if (state.operationKind === operationKind && state.sessionId !== sessionId) this.states.delete(key);
+    }
+    const key = `${operationKind}:${providerConfigFingerprint ?? "default"}`;
+    if (!this.states.has(key)) this.states.set(key, {
+      operationKind, sessionId, open: false,
+      ...(providerConfigFingerprint ? { providerConfigFingerprint } : {}),
     });
+    return key;
   }
 }
 
@@ -77,5 +84,6 @@ export function formatRuntimeInferenceCircuitForTrace(
     runtimeInferenceCircuitDetail: state.detail,
     runtimeInferenceCircuitOpenedAt: state.openedAt,
     runtimeInferenceCircuitNewlyOpened: newlyOpened,
+    ...(state.providerConfigFingerprint ? { runtimeInferenceCircuitProviderConfigFingerprint: state.providerConfigFingerprint } : {}),
   };
 }

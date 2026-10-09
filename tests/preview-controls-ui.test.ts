@@ -115,7 +115,7 @@ const compact = (value: string) => value.replace(/\s+/g, "");
 const SETTINGS_KEY = "test-settings";
 const BRIEF_KEY = "test-brief";
 const REAL_SETTERS = [
-  "setDebugMode", "setNativeStallDiagnosticsEnabled", "setDiagnosticLogLevel", "setRuntimeCrossChecksEnabled", "setUseMemory",
+  "setDebugMode", "setNativeStallDiagnosticsEnabled", "setDiagnosticLogLevel", "setRuntimeCrossChecksEnabled", "setDecisionsRuntimeEnabled", "setUseMemory",
   "setPersonalEvidenceGuardrailMode", "setCodingModelConfig", "setTaxonomyAdjudicationConfig",
 ];
 // Every other function the two call sites pass down. A call is recorded, never performed.
@@ -211,6 +211,7 @@ function harness(stored?: string, options: HarnessOptions = {}) {
   globals.traceStoreRef = { current: new MeetingTraceStore() };
   // The refs start from the loaded settings, as the Hook declares and syncs them.
   globals.runtimeCrossChecksEnabledRef = { current: globals.state.settings.runtimeCrossChecksEnabled };
+  globals.decisionsRuntimeEnabledRef = { current: globals.state.settings.decisionsRuntimeEnabled };
   globals.taxonomyAdjudicationSettingsRef = { current: globals.state.settings.taxonomyAdjudication };
   // Task 178 LG: the saved level as the level setter reads it, and the counter it raises when that level is selected again.
   globals.diagnosticLogLevelRef = { current: globals.state.settings.diagnosticLogLevel };
@@ -360,8 +361,9 @@ function configurations(h: Harness) {
   };
   const crossChecks = () => {
     const switches = panel.of(h.globals.Switch, group("Preview").all);
-    assert.equal(switches.length, 1, "one switch in the Preview group");
-    return switches[0]!;
+    const crossChecks = switches.find(node => node.props.onCheckedChange === h.globals.setRuntimeCrossChecksEnabled);
+    assert.ok(crossChecks, "the Runtime Cross-checks switch");
+    return crossChecks;
   };
   return { ...panel, groups, group, crossChecks, factRisk: () => panel.grid("Fact Guardrail & Review") };
 }
@@ -396,7 +398,7 @@ const METADATA_OFF_NOTE = "Stored mode is Off: no request is made until you pick
 
 // ---- PC1: frontend and settings ----
 
-test("PC1 Preview is a grouping with exactly two controls and no master switch", () => {
+test("PC1 Preview is a grouping with three independent controls and no master switch", () => {
   const h = harness();
   const c = configurations(h);
   assert.deepEqual(c.groups.map((node) => node.props.title), ["Response", "Context", "Audio", "Preview", "Debug"]);
@@ -408,11 +410,11 @@ test("PC1 Preview is a grouping with exactly two controls and no master switch",
   assert.equal(text(header.children), "Preview");
   assert.equal(nodes(header.children).filter((node) =>
     node.type === h.globals.Switch || node.type === h.globals.Button || node.type === "input" || node.type === "button").length, 0);
-  // Exactly two controls: one Switch and one two-option selector.
+  // Two independent switches and one two-option selector.
   const switches = c.of(h.globals.Switch, preview.all);
   const grids = c.of(h.globals.ConfigButtonGrid, preview.all);
   const buttons = c.of(h.globals.Button, preview.all);
-  assert.equal(switches.length, 1);
+  assert.equal(switches.length, 2);
   assert.equal(grids.length, 1);
   assert.deepEqual(grids.map((node) => node.props.label), ["Fact Guardrail & Review"]);
   assert.deepEqual(buttons.map((node) => text(node.children)), ["Enforcement", "Shadow"]);
@@ -420,10 +422,10 @@ test("PC1 Preview is a grouping with exactly two controls and no master switch",
   for (const other of ["select", "textarea", h.globals.MeetingModelOverrideConfig, h.globals.MeetingAudioSlider]) {
     assert.equal(c.of(other, preview.all).length, 0);
   }
-  assert.equal(preview.all.filter((node) => node.type === "input").length, 1, "the only input is the Cross-checks switch");
+  assert.equal(preview.all.filter((node) => node.type === "input").length, 2);
   const labels = preview.all.filter((node) => typeof node.props.className === "string" &&
     node.props.className.includes("uppercase")).map((node) => text(node.children));
-  assert.deepEqual(labels, ["Runtime Cross-checks", "Fact Guardrail & Review"]);
+  assert.deepEqual(labels, ["Decisions Runtime", "Runtime Cross-checks", "Fact Guardrail & Review"]);
   assert.doesNotMatch(preview.text, /\bOff\b|Preview mode|Enable Preview/);
   assert.deepEqual(h.writes, [], "rendering writes nothing");
   assert.deepEqual(h.actions, []);
@@ -433,6 +435,22 @@ test("PC1 Preview is a grouping with exactly two controls and no master switch",
   const previewState = /\bpreviewMode\b|\bpreviewEnabled\b|\bsetPreview[A-Z]|\bonPreview[A-Z]/;
   assert.equal(previewState.test(hookText), false, "the Hook holds no Preview state");
   assert.equal(previewState.test(uiText), false, "the page holds no Preview state");
+});
+
+test("DR205 Preview switch defaults off, persists alone and reloads through the existing settings owner", () => {
+  const h = harness();
+  const before = h.settings();
+  const c = configurations(h);
+  const control = c.of(h.globals.Switch, c.group("Preview").all).find(node => node.props.id === "decisions-runtime-enabled");
+  assert.ok(control);
+  assert.equal(control.props.checked, false);
+  assert.equal(control.props.onCheckedChange, h.globals.setDecisionsRuntimeEnabled);
+  control.props.onCheckedChange(true);
+  assert.equal(h.globals.decisionsRuntimeEnabledRef.current, true);
+  assert.deepEqual(h.settings(), { ...before, decisionsRuntimeEnabled: true });
+  assert.deepEqual(h.settingsWrites().map(value => JSON.parse(value)), [{ ...before, decisionsRuntimeEnabled: true }]);
+  assert.equal(harness(h.settingsWrites()[0]).settings().decisionsRuntimeEnabled, true);
+  assert.deepEqual(h.actions, []);
 });
 
 test("PC1 Runtime Cross-checks is a two-state switch, off by default, written through the Hook's setter and read back after a reload", () => {
@@ -691,7 +709,7 @@ test("PC1 both call sites bind the existing owner values and setters; no setting
   assert.equal(bound(briefSite, "onClear"), "meeting.clearInterviewSessionBrief");
   // The settings object has the keys it had before this commit, and diagnosticLogLevel, which Task 178 LG added later.
   assert.deepEqual(Object.keys(harness().settings()).sort(), ["activeScreenTaskTimeoutMinutes", "audio", "codingModel", "debugMode",
-    "diagnosticLogLevel", "microphoneContextEnabled", "nativeStallDiagnosticsEnabled", "personalEvidenceGuardrailMode", "response",
+    "decisionsRuntimeEnabled", "diagnosticLogLevel", "microphoneContextEnabled", "nativeStallDiagnosticsEnabled", "personalEvidenceGuardrailMode", "response",
     "runtimeCrossChecksEnabled", "taxonomyAdjudication", "useMemory"]);
   // One Hook instance feeds the page, and neither panel reads or writes storage itself.
   assert.equal(uiText.split("useMeetingAssistant(").length - 1, 1);

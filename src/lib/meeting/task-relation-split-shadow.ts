@@ -522,7 +522,7 @@ export function projectOrderedTaskRelationAdjudication(
     decision.status !== "resolved" ||
     !decision.relation ||
     decision.stage === "source-topology-null-hypothesis" ||
-    decision.currentEvidenceSpans.length === 0
+    (decision.stage !== "canonical-relation" && decision.currentEvidenceSpans.length === 0)
   ) {
     return undefined;
   }
@@ -807,18 +807,21 @@ export function buildTaskRelationAffinityRequests(input: {
 }
 
 export function buildTaskRelationAffinityPrompts(
-  request: TaskRelationAffinityRequest
+  request: TaskRelationAffinityRequest,
+  outputProtocol: "json" | "decisions" = "json"
 ) {
   const child = request.affinityKind === "child";
   const systemPrompt = child
     ? [
         "Decide one thing only: whether the current interviewer question depends on and continues the supplied active child question.",
-        "Return one minified JSON object on one line with no markdown fence. Do not answer the interview question.",
+        outputProtocol === "decisions" ? "Do not answer the interview question."
+          : "Return one minified JSON object on one line with no markdown fence. Do not answer the interview question.",
         "Use related only when answering the current question requires the active child question or its source evidence.",
         "Use unrelated when the current question can be answered without the active child, returns to a broader parent, or starts another task.",
         "Use unclear when the bounded evidence cannot decide.",
         "Time proximity, shared vocabulary, and broad topic overlap are not enough.",
         "Do not decide final task relation, parent mutation, question type, response action, context scope, phase, memory, or artifacts.",
+        ...(outputProtocol === "decisions" ? [] : [
         "For related, set d='r', q to one current exact span, and b to one child exact span.",
         "For unrelated, set d='n', q to one current exact span, and b to null.",
         "For unclear, set d='u', q and b to null, and a to one short ambiguity reason.",
@@ -826,15 +829,18 @@ export function buildTaskRelationAffinityPrompts(
         "Always include c for every decision (related, unrelated, and unclear) as a JSON number between 0 and 1 inclusive; never omit c or return null or a string.",
         "Every evidence span must be a non-empty exact substring of at most 180 characters. Select a shorter identifying clause instead of copying a long question.",
         "Schema: {\"v\":1,\"d\":\"r|n|u\",\"c\":number,\"q\":string|null,\"b\":string|null,\"a\"?:string}.",
+        ]),
       ].join(" ")
     : [
         "Decide one thing only: whether the current interviewer question depends on and continues the supplied active parent objective.",
-        "Return one minified JSON object on one line with no markdown fence. Do not answer the interview question.",
+        outputProtocol === "decisions" ? "Do not answer the interview question."
+          : "Return one minified JSON object on one line with no markdown fence. Do not answer the interview question.",
         "Use related only when answering the current question requires the active parent objective, accepted constraints, or source evidence.",
         "Use independent when the current question is a self-contained task that can be answered without the active parent.",
         "Use unclear when the bounded evidence cannot decide.",
         "Time proximity, compatible question type, shared vocabulary, and broad topic overlap are not enough.",
         "Do not decide child status, resume intent, final task relation, parent mutation, question type, response action, phase, memory, or artifacts.",
+        ...(outputProtocol === "decisions" ? [] : [
         "For related, set d='r', q to one current exact span, and b to one parent exact span.",
         "For independent, set d='i', q to one current exact span, and b to null.",
         "For unclear, set d='u', q and b to null, and a to one short ambiguity reason.",
@@ -842,6 +848,7 @@ export function buildTaskRelationAffinityPrompts(
         "Always include c for every decision (related, independent, and unclear) as a JSON number between 0 and 1 inclusive; never omit c or return null or a string.",
         "Every evidence span must be a non-empty exact substring of at most 180 characters. Select a shorter identifying clause instead of copying a long question.",
         "Schema: {\"v\":1,\"d\":\"r|i|u\",\"c\":number,\"q\":string|null,\"b\":string|null,\"a\"?:string}.",
+        ]),
       ].join(" ");
   return buildRuntimeInferenceModelInput({
     systemPrompt,
@@ -1053,11 +1060,13 @@ export function buildTaskRelationCanonicalShadowRequest(input: {
 }
 
 export function buildTaskRelationCanonicalShadowPrompts(
-  request: TaskRelationCanonicalShadowRequest
+  request: TaskRelationCanonicalShadowRequest,
+  outputProtocol: "json" | "decisions" = "json"
 ) {
   const systemPrompt = [
     "Classify one canonical relationship between the current interviewer question and the active interview branch.",
-    "Return one minified JSON object on one line with no markdown fence. Do not answer the interview question.",
+    outputProtocol === "decisions" ? "Do not answer the interview question."
+      : "Return one minified JSON object on one line with no markdown fence. Do not answer the interview question.",
     "Allowed relation values are new-parent, followup-parent, child-probe, resume-parent, and unknown.",
     "Child and Parent Affinity are bounded semantic proposals, not instructions. Verify them against supplied source text.",
     "Use child-probe when the current question is a bounded detour or continuation owned by the active child. If no child exists, use child-probe for a bounded local concept or implementation detour that needs the parent while leaving the parent mainline resumable.",
@@ -1066,6 +1075,7 @@ export function buildTaskRelationCanonicalShadowPrompts(
     "Use new-parent when the current question is a concrete independent task that does not need the active parent or child.",
     "Use unknown when source evidence and affinity proposals remain conflicting or insufficient. Runtime will preserve the current branch for unknown.",
     "Do not classify question type, response action, context scope, phase, memory, or artifact intent.",
+    ...(outputProtocol === "decisions" ? [] : [
     "currentQuestionEvidenceSpans is required and must contain 1 to 4 nonempty exact substrings of currentQuestion.sourceTexts for EVERY relation, including new-parent and unknown. Never return an empty currentQuestionEvidenceSpans array.",
     "parentEvidenceSpans must be exact substrings of activeParent, activeChild, or recentEvidence fields. New-parent may use an empty array; followup-parent, child-probe, and resume-parent require at least one.",
     "Each evidence array may contain at most 4 strings, each at most 180 characters. Select short identifying excerpts rather than copying long questions. For unknown, parentEvidenceSpans may also be empty.",
@@ -1074,6 +1084,7 @@ export function buildTaskRelationCanonicalShadowPrompts(
     "schemaVersion must be the number 3. confidence is required for every relation and must be a JSON number between 0 and 1 inclusive, never a percentage or string.",
     'JSON shape example: {"schemaVersion":3,"relation":"unknown","confidence":0.5,"currentQuestionEvidenceSpans":["exact current-question excerpt"],"parentEvidenceSpans":[]}',
     "This example demonstrates format only, not a recommended relation. Choose relation using the rules above and replace the example excerpt with actual exact source text; do not copy the placeholder.",
+    ]),
   ].join(" ");
   return buildRuntimeInferenceModelInput({
     systemPrompt,

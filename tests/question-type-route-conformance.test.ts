@@ -7,6 +7,7 @@ import * as questionType from "../src/lib/meeting/question-type-adjudication.js"
 import * as taxonomy from "../src/lib/meeting/taxonomy-adjudication.js";
 import * as inference from "../src/lib/meeting/runtime-inference.js";
 import * as routes from "../src/lib/meeting/meeting-model-route.js";
+import * as decisionRuntime from "../src/lib/meeting/decisions-runtime.js";
 import { normalizeCanonicalQuestionType } from "../src/lib/meeting/task-taxonomy.js";
 import { RuntimeInferenceOperationRuntime } from "../src/lib/meeting/runtime-inference-runtime.js";
 import { RuntimeInferenceProviderAdmissionCoordinator } from "../src/lib/meeting/runtime-inference-provider-admission.js";
@@ -41,7 +42,7 @@ for (const [label, options, expected] of [
     const metadata: Record<string, unknown> = {};
     let scheduled: any, requestInput: any;
     const environment = {
-      ...questionType, ...taxonomy, ...inference, ...routes, Date, Promise,
+      ...questionType, ...taxonomy, ...inference, ...routes, ...decisionRuntime, Date, Promise,
       normalizeCanonicalQuestionType,
       contextManagerRef: { current: { clearExpiredActiveMeetingTask() {}, getState: () => ({ sessionId: "session" }) } },
       taxonomyAdjudicationSettingsRef: { current: { questionTypeMode: "enforcement" } },

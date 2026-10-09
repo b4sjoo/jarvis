@@ -146,6 +146,8 @@ export async function requestDecisionsChoice<T extends string>(input: {
 export function formatDecisionsResultForTrace(result: DecisionsRequestResult, prefix: string) {
   return {
     [`${prefix}Protocol`]: "openai-decisions",
+    [`${prefix}ModelId`]: result.providerOutcome.modelId,
+    [`${prefix}ProviderId`]: result.providerOutcome.providerId,
     [`${prefix}HeadersAt`]: result.headersAt,
     [`${prefix}DecisionReadyAt`]: result.decisionReadyAt,
     [`${prefix}Choice`]: result.decision.ok ? result.decision.choice : undefined,

@@ -257,6 +257,7 @@ async function harness(options: { mode?: Mode; child?: boolean; source?: string;
   // Task 178 LG: the stage settle names the logger, so the environment supplies it by hand.
   const diagnosticLog = createDiagnosticLogSpy({ threshold: "trace", now: () => clock.now });
   const environment: Record<string, any> = {
+    ...await import("../src/lib/meeting/decisions-runtime.js"),
     ...split, ...operation, ...response, ...admission, ...route, ...taxonomy, isRuntimeTaskRelation,
     requestTaskRelationProviderCandidates,
     logDiagnostic: diagnosticLog.logDiagnostic,

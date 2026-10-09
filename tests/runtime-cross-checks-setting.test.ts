@@ -306,11 +306,10 @@ test("PC7 every other setting still invalidates a reusable Artifact", () => {
     ["audio", (globals) => globals.updateSettings((previous: MeetingAssistantSettings) =>
       ({ ...previous, audio: { ...previous.audio, profile: "custom" } }))],
   ];
-  // Every setting except the observation switch and the diagnostic Log Level (Task 178 LG, projected to one
-  // constant the same way; tests/diagnostic-log-level-setting.test.ts) is covered by a change above.
+  // Observation, logging and classifier backend changes do not alter the inputs of an already accepted artifact.
   const defaults = settingsHarness().globals.state.settings;
   assert.deepEqual(changes.map(([key]) => key).sort(),
-    Object.keys(defaults).filter((key) => key !== "runtimeCrossChecksEnabled" && key !== "diagnosticLogLevel").sort());
+    Object.keys(defaults).filter((key) => !["runtimeCrossChecksEnabled", "diagnosticLogLevel", "decisionsRuntimeEnabled"].includes(key)).sort());
   for (const [key, change] of changes) {
     const h = reuseHarness();
     const slot = new UnpublishedArtifactSlot();

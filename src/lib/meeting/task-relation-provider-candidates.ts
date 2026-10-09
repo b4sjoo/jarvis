@@ -4,6 +4,7 @@ import type { RuntimeInferenceLane, RuntimeInferenceProviderTier } from "./runti
 import type { RuntimeInferenceAdmissionClock, RuntimeInferenceProviderAdmissionCoordinator, RuntimeInferenceSharedAdmissionReceipt } from "./runtime-inference-provider-admission.js";
 import type { requestTaskRelationSplitShadow, TaskRelationCandidateSelectionReason, TaskRelationSplitShadowRequestResult } from "./task-relation-split-shadow-request.js";
 import type { TaskRelationAffinityRequest, TaskRelationCanonicalShadowRequest } from "./task-relation-split-shadow.js";
+import type { RuntimeInferenceProviderResponse } from "./runtime-inference-response.js";
 
 export interface TaskRelationCandidateObservation {
   operationId: string;
@@ -18,6 +19,8 @@ export interface TaskRelationCandidateObservation {
   admission?: RuntimeInferenceSharedAdmissionReceipt;
   result?: TaskRelationSplitShadowRequestResult;
   error?: string;
+  role?: "decision" | "evidence";
+  evidenceResponse?: RuntimeInferenceProviderResponse;
 }
 
 export interface TaskRelationCandidateSelection extends TaskRelationSplitShadowRequestResult {

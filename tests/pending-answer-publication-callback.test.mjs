@@ -1140,7 +1140,7 @@ const AE_PRODUCER_TABLE = [
   "generation-admitted @ captureScreenContext",
   "provider-request-started @ runAdvisor>onRequest",
   "provider-request-started @ captureScreenContext>onRequest",
-  "provider-request-started @ scheduleTaskRelationSplitRuntime>runCandidates>request",
+  "provider-request-started @ scheduleTaskRelationSplitRuntime>runCandidates>announceRequest",
   "stable-answer-committed @ finalizeStableAnswerPublication",
   "artifact-committed @ announceStagedGenerationCommit",
   "first-visible-content @ recordAdviseDisplayApplied",

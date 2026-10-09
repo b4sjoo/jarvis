@@ -5616,6 +5616,7 @@ function runScreenRegion(h, { unit, complete }) {
     sourceObservationIds: ["screen-observation"] });
   const context = vm.createContext({
     ...h.environment,
+    screenDecisionBackend: { kind: "existing" },
     settleCurrentQuestion: settlementModule.settleCurrentQuestion,
     coordinateOrderedSettlement: coordinatorModule.coordinateOrderedSettlement,
     formatOrderedSettlementCoordinatorForTrace: coordinatorModule.formatOrderedSettlementCoordinatorForTrace,
@@ -5691,6 +5692,7 @@ function runCorrectionRegion(h, { unit, handle, typeOutcome = CORRECTION_TYPE_OU
     latestParentType: "coding",
     revisionStableTopologyBinding: undefined,
     correctionRelationHandle: handle,
+    correctionDecisionBackend: { kind: "existing" },
     repairTrace: { id: "trace" },
     correctionSourceKind: "voice",
     application: { logicalQuestionUnit: unit },

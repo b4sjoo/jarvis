@@ -34,6 +34,8 @@ export type TaskRelationCandidateSelectionReason =
   | "intelligent-valid"
   // Intelligent ended with an unusable result and Fast is parse-valid.
   | "intelligent-invalid-fast-valid"
+  | "decisions-valid"
+  | "decisions-unusable"
   // Both candidates ended before the deadline and neither is usable.
   | "candidates-ended-unusable"
   // A candidate ended with an authentication or configuration failure.
@@ -61,6 +63,7 @@ export interface TaskRelationSplitShadowRequestResult {
   providerOutcome?: Readonly<AIResponseTerminalOutcome>;
   firstTokenAt?: number;
   completedAt: number;
+  decisionMetadata?: Record<string, unknown>;
 }
 
 export async function requestTaskRelationSplitShadow(input: {

@@ -2049,6 +2049,8 @@ export const MeetingAssistant = ({
                 onRuntimeCrossChecksEnabledChange={
                   meeting.setRuntimeCrossChecksEnabled
                 }
+                decisionsRuntimeEnabled={meeting.settings.decisionsRuntimeEnabled === true}
+                onDecisionsRuntimeEnabledChange={meeting.setDecisionsRuntimeEnabled}
                 debugMode={meeting.settings.debugMode}
                 onDebugModeChange={meeting.setDebugMode}
                 diagnosticLogLevel={meeting.settings.diagnosticLogLevel}
@@ -4354,6 +4356,8 @@ const ConfigurationsPanel = ({
   onMicrophoneContextEnabledChange,
   runtimeCrossChecksEnabled,
   onRuntimeCrossChecksEnabledChange,
+  decisionsRuntimeEnabled,
+  onDecisionsRuntimeEnabledChange,
   debugMode,
   onDebugModeChange,
   diagnosticLogLevel,
@@ -4412,6 +4416,8 @@ const ConfigurationsPanel = ({
   onMicrophoneContextEnabledChange: (enabled: boolean) => void;
   runtimeCrossChecksEnabled: boolean;
   onRuntimeCrossChecksEnabledChange: (enabled: boolean) => void;
+  decisionsRuntimeEnabled: boolean;
+  onDecisionsRuntimeEnabledChange: (enabled: boolean) => void;
   debugMode: boolean;
   onDebugModeChange: (enabled: boolean) => void;
   // Task 178 LG. The saved level, its writer, and what the Hook knows about the
@@ -4746,6 +4752,10 @@ const ConfigurationsPanel = ({
             icon={<FlaskConicalIcon className="h-3.5 w-3.5" />}
             title="Preview"
           >
+            <div className="flex items-center justify-between gap-2 rounded-sm border border-border/60 p-2">
+              <label htmlFor="decisions-runtime-enabled" className="text-[10px] font-medium uppercase text-muted-foreground">Decisions Runtime</label>
+              <Switch id="decisions-runtime-enabled" checked={decisionsRuntimeEnabled} onCheckedChange={onDecisionsRuntimeEnabledChange} />
+            </div>
             <div className="flex items-center justify-between gap-2 rounded-sm border border-border/60 p-2">
               <div className="min-w-0">
                 <div className="text-[10px] font-medium uppercase text-muted-foreground">

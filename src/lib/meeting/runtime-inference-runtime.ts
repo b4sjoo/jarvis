@@ -19,6 +19,9 @@ export interface RuntimeInferenceRuntimeJob {
   admissionLane?: RuntimeInferenceLane;
   providerTier?: RuntimeInferenceProviderTier;
   providerConfigFingerprint?: string;
+  // Multi-provider adapters admit each physical request through the same
+  // coordinator, rather than holding one provider's slot during another call.
+  providerAdmissionManagedByRequest?: true;
 }
 
 export interface RuntimeInferenceBudgetSnapshot {
@@ -226,7 +229,7 @@ export class RuntimeInferenceOperationRuntime<
       active.onStarted?.(active.job, startedAt, budget);
       return active.execute(active.job, controller.signal);
     };
-    const execution = this.admissionCoordinator
+    const execution = this.admissionCoordinator && !active.job.providerAdmissionManagedByRequest
       ? this.admissionCoordinator.run({
           operationId: active.job.operationId,
           lane: active.job.admissionLane ?? this.definition.lane,

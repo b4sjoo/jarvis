@@ -9,6 +9,9 @@ import * as common from "../src/lib/functions/common.function.js";
 import { decodeServerSentEventStream } from "../src/lib/functions/server-sent-event-stream.js";
 import { consumeRuntimeInferenceResponse, formatRuntimeInferenceProviderOutcomeForTrace } from "../src/lib/meeting/runtime-inference-response.js";
 import * as typeLogic from "../src/lib/meeting/question-type-adjudication.js";
+import * as decisions from "../src/lib/meeting/decisions-request.js";
+import * as decisionRuntime from "../src/lib/meeting/decisions-runtime.js";
+import * as taskTaxonomy from "../src/lib/meeting/task-taxonomy.js";
 import { getRuntimeInferenceOperationDefinition, formatRuntimeInferenceOperationForTrace } from "../src/lib/meeting/runtime-inference.js";
 import { SessionRecordingManager, type SessionRecordingInvoke } from "../src/lib/meeting/session-recording.js";
 import type { MeetingAssistantSettings } from "../src/lib/meeting/types.js";
@@ -69,6 +72,9 @@ function harness(responses: (() => Response)[], streaming = true, responseConten
     "./runtime-inference-request.js": runtimeRequest,
     "./question-type-adjudication.js": typeLogic,
     "./runtime-inference.js": { getRuntimeInferenceOperationDefinition },
+    "./decisions-request.js": decisions,
+    "./decisions-runtime.js": decisionRuntime,
+    "./task-taxonomy.js": taskTaxonomy,
   });
   const params = {
     request,
@@ -100,6 +106,7 @@ function loadSchedulerBudgetExecution(origin: { sourceKind: string; correctionOw
     return declaration.initializer;
   };
   const env: Record<string, any> = { sourceKind: origin.sourceKind, forceRuntimeExecution: origin.correctionOwned,
+    effectiveBackend: decisionRuntime.EXISTING_RUNTIME_DECISION_BACKEND, decisionsBackend: undefined,
     formatRuntimeInferenceOperationForTrace };
   const evaluate = (node: ts.Node) => vm.runInNewContext(ts.transpileModule(`(${node.getText(file)})`, {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },

@@ -98,6 +98,7 @@ export interface ResponseOpportunityLocalDecision {
 }
 
 export interface LlmResponseOpportunityDecision {
+  decisionProtocol?: "openai-decisions";
   schemaVersion: 4;
   decision: ResponseOpportunityDecision;
   confidence: number;
@@ -163,6 +164,8 @@ export interface ResponseOpportunityReleaseDecision {
     | "high-confidence-output-request"
     | "high-confidence-no-output-request"
     | "output-confidence-below-threshold"
+    | "resolved-output-request"
+    | "resolved-no-output-request"
     | "unclear";
 }
 
@@ -268,12 +271,13 @@ export function resolveResponseOpportunityExecutionMode(
 }
 
 export function buildResponseOpportunityPrompts(
-  request: ResponseOpportunityRequest
+  request: ResponseOpportunityRequest,
+  outputProtocol: "json" | "decisions" = "json"
 ) {
   const semanticPayload = projectResponseOpportunitySemanticPayload(request);
   const systemPrompt = [
       "Decide one thing only: whether the interviewer-owned source evidence currently asks the candidate for an output that Jarvis should help produce.",
-      "Return one JSON object only. Do not answer the interview content.",
+      outputProtocol === "decisions" ? "Do not answer the interview content." : "Return one JSON object only. Do not answer the interview content.",
       "Read ALL current decisionSpans together, using boundedContext to interpret them. Decide whether this current input requests an answer, explanation, design, code, revision, constraint response, or phase-control response. Then select evidence supporting that decision. A greeting, acknowledgement or polite ending cannot cancel a substantive request earlier in the SAME current input.",
       "Use no-output-request only when the current input as a whole has no request for candidate output: greeting, acknowledgement, closing, logistics, or information answering the candidate without an ask back. Do not first select a non-request tail and use only that tail to suppress a substantive current request.",
       "Use unclear when the bounded source is incomplete or does not support either conclusion.",
@@ -284,16 +288,29 @@ export function buildResponseOpportunityPrompts(
         : []),
       "Do not classify question type, task relation, parent, evidence mode, context scope, playbook phase, or artifact intent.",
       "decisionSpans are mechanically split CURRENT source candidates. boundedContext also contains earlier source context. A current fragment that clearly qualifies the method, scope or requested output of a preceding request can itself be an output-request with reason constraint, directive or correction. Unrelated background or bare acknowledgement is not automatically such a qualifier. A request present only in older context must not trigger a new response when the current input merely acknowledges it.",
+      ...(outputProtocol === "decisions" ? [] : [
       "Select the necessary current spans that best support the overall current decision, including the substantive ask and any necessary qualifier. t is a bounded evidence selection, not an enumeration of every input span. Never select only polite framing when other current spans contain the substantive ask.",
       'Return exactly the fields v,d,c,t,r as one compact valid JSON object, with double-quoted keys and string values. v is the number 4. Format-only examples: {"v":4,"d":"o","c":0.9,"t":[0],"r":"ask"}; {"v":4,"d":"n","c":0.9,"t":[0],"r":"greeting"}; {"v":4,"d":"u","c":0.5,"t":[],"r":"bounded-source-insufficient"}. Select the actual decision and indexes from the input; these examples do not recommend an outcome.',
       "d means o=output-request, n=no-output-request, u=unclear. Always include c as a JSON number from 0 to 1 inclusive.",
       "t contains only unique zero-based indexes into decisionSpans in ascending source order; never copy source text or turn IDs into the output. Select only the necessary current spans. For o or n, select at least one index and at most the number of available decisionSpans. Use an empty array for u when no target is supported.",
       "r must match d: for o use ask, directive, correction, constraint or phase-control; for n use acknowledgement, greeting, closing, logistics or answer-to-candidate; for u use bounded-source-insufficient. r explains why the current response decision applies, not just the surface speech act. A confirmation that actually resolves pendingClarification and requests continuation must use an output-compatible reason, not acknowledgement.",
+      ]),
     ].join(" ");
   return buildRuntimeInferenceModelInput({
     systemPrompt,
     semanticPayload,
   });
+}
+
+export function resolveResponseOpportunityTargetIndexes(indexes: unknown, request: ResponseOpportunityRequest): ResponseOpportunityDecisionSpan[] | undefined {
+  if (!Array.isArray(indexes) || indexes.length > request.decisionSpans.length) return undefined;
+  const unique = new Set<number>();
+  for (const index of indexes) {
+    if (typeof index !== "number" || !Number.isInteger(index) || index < 0 ||
+      index >= request.decisionSpans.length || unique.has(index)) return undefined;
+    unique.add(index);
+  }
+  return [...unique].sort((a, b) => a - b).map(index => ({ ...request.decisionSpans[index] }));
 }
 
 export function parseResponseOpportunityOutput(
@@ -340,26 +357,8 @@ export function parseResponseOpportunityOutput(
   ) {
     return parseFailure("invalid-decision-target", "schema");
   }
-  const targetIndexes = new Set<number>();
-  const targetSpans: ResponseOpportunityDecisionSpan[] = [];
-  for (const value of candidate.t) {
-    if (
-      typeof value !== "number" ||
-      !Number.isInteger(value) ||
-      value < 0 ||
-      value >= request.decisionSpans.length ||
-      targetIndexes.has(value)
-    ) {
-      return parseFailure("invalid-target-index", "evidence");
-    }
-    targetIndexes.add(value);
-  }
-  const orderedTargetIndexes = [...targetIndexes].sort(
-    (left, right) => left - right
-  );
-  for (const index of orderedTargetIndexes) {
-    targetSpans.push({ ...request.decisionSpans[index] });
-  }
+  const targetSpans = resolveResponseOpportunityTargetIndexes(candidate.t, request);
+  if (!targetSpans) return parseFailure("invalid-target-index", "evidence");
   const decision =
     candidate.d === "o"
       ? "output-request"
@@ -538,6 +537,7 @@ export function decideResponseOpportunityRelease(input: {
     };
   }
   if (
+    input.result.decisionProtocol !== "openai-decisions" &&
     input.result.confidence <
     RESPONSE_OPPORTUNITY_RELEASE_MIN_CONFIDENCE
   ) {
@@ -551,13 +551,13 @@ export function decideResponseOpportunityRelease(input: {
     return {
       released: false,
       generationDisposition: "output-suppressed",
-      reason: "high-confidence-no-output-request",
+      reason: input.result.decisionProtocol === "openai-decisions" ? "resolved-no-output-request" : "high-confidence-no-output-request",
     };
   }
   return {
     released: true,
     generationDisposition: "output-authorized",
-    reason: "high-confidence-output-request",
+    reason: input.result.decisionProtocol === "openai-decisions" ? "resolved-output-request" : "high-confidence-output-request",
   };
 }
 

@@ -1,5 +1,7 @@
 import { prepareGeneratedAnswer, prepareGeneratedAnswerPartial } from "@/lib/meeting/generated-answer-consumer";
 import { readDecisionsProviderConfiguration } from "@/config/decisions.constants";
+import { captureRuntimeDecisionBackend, EXISTING_RUNTIME_DECISION_BACKEND, formatDecisionsModelRouteForTrace, type RuntimeDecisionBackend } from "@/lib/meeting/decisions-runtime";
+import { requestTaskRelationDecisions } from "@/lib/meeting/task-relation-decisions-request";
 import { requestSourceLanguageAdmission, formatSourceLanguageAdmissionForTrace, SOURCE_LANGUAGE_DEADLINE_MS } from "@/lib/meeting/source-language-admission";
 import { sourceLanguageAdmissionMatches, isLanguageAdmittedTurn, deriveFirstParentLanguage, type SessionLanguageObservation } from "@/lib/meeting/source-language-contract";
 import { resolveOrderedTaskRelationWithinWindow as resolveOrderedTaskRelationOperation,
@@ -1528,6 +1530,7 @@ const INITIAL_STATE: MeetingAssistantState = {
     diagnosticLogLevel: "info",
     nativeStallDiagnosticsEnabled: false,
     runtimeCrossChecksEnabled: false,
+    decisionsRuntimeEnabled: false,
     microphoneContextEnabled: true,
     response: DEFAULT_MEETING_RESPONSE_CONFIG,
     codingModel: DEFAULT_MEETING_CODING_MODEL_SETTINGS,
@@ -1604,6 +1607,7 @@ function readMeetingAssistantSettings(): MeetingAssistantSettings {
         typeof parsed.runtimeCrossChecksEnabled === "boolean"
           ? parsed.runtimeCrossChecksEnabled
           : DEFAULT_MEETING_ASSISTANT_SETTINGS.runtimeCrossChecksEnabled,
+      decisionsRuntimeEnabled: parsed.decisionsRuntimeEnabled === true,
       microphoneContextEnabled:
         typeof parsed.microphoneContextEnabled === "boolean"
           ? parsed.microphoneContextEnabled
@@ -3575,6 +3579,9 @@ export function useMeetingAssistant() {
   const recordedTranscriptTurnsRef = useRef(new WeakSet<TranscriptTurn>());
   const languagePolicyRef = useRef({ languages: meetingInputLanguages, provider: selectedDecisionsProvider });
   languagePolicyRef.current = { languages: meetingInputLanguages, provider: selectedDecisionsProvider };
+  const decisionsRuntimeEnabledRef = useRef(state.settings.decisionsRuntimeEnabled === true);
+  decisionsRuntimeEnabledRef.current = state.settings.decisionsRuntimeEnabled === true;
+  const runtimeBackendByTurnRef = useRef(new WeakMap<TranscriptTurn, { text: string; backend: RuntimeDecisionBackend }>());
   const semanticTaxonomyRuntimeRef = useRef<SemanticTaxonomyRuntime | null>(
     null
   );
@@ -3908,6 +3915,7 @@ export function useMeetingAssistant() {
     settings: structuredClone({
       ...artifactReuseSettingsRef.current,
       runtimeCrossChecksEnabled: false,
+      decisionsRuntimeEnabled: false,
       diagnosticLogLevel: "info" as const,
     }),
   }), []);
@@ -10226,6 +10234,12 @@ export function useMeetingAssistant() {
     },
     [updateSettings]
   );
+
+  const setDecisionsRuntimeEnabled = useCallback((enabled: boolean) => {
+    decisionsRuntimeEnabledRef.current = enabled;
+    updateSettings(previous => ({ ...previous, decisionsRuntimeEnabled: enabled }));
+    sessionRecordingManagerRef.current?.recordCaptureLifecycle({ stage: "decisions-runtime-updated", decisionsRuntimeEnabled: enabled });
+  }, [updateSettings]);
 
   const setMicrophoneContextEnabled = useCallback(
     (microphoneContextEnabled: boolean) => {
@@ -18147,6 +18161,7 @@ export function useMeetingAssistant() {
       originalDecision,
       executionMode,
       onOutputAuthorized,
+      backend = EXISTING_RUNTIME_DECISION_BACKEND,
     }: {
       turn: TranscriptTurn;
       traceId: string;
@@ -18155,6 +18170,7 @@ export function useMeetingAssistant() {
       executionMode:
         | "authoritative"
         | "speculative-authoritative";
+      backend?: RuntimeDecisionBackend;
       onOutputAuthorized: (input: {
         intentDecision: AdvisorTurnIntentDecision;
         logicalQuestionUnit: LogicalQuestionUnit;
@@ -18163,6 +18179,7 @@ export function useMeetingAssistant() {
       const contextState = contextManagerRef.current.getState();
       const speculative =
         executionMode === "speculative-authoritative";
+      const decisionsBackend = backend.kind === "decisions" ? backend : undefined;
       const deferredAuthoritative = executionMode === "authoritative";
       const scheduledTaskId = contextState.activeMeetingTask?.id;
       const readResponseOpportunitySources = (
@@ -18381,7 +18398,8 @@ export function useMeetingAssistant() {
 
       const circuit = responseOpportunityCircuitRef.current.read(
         "response-opportunity-inference",
-        contextState.sessionId
+        contextState.sessionId,
+        decisionsBackend?.providerConfigFingerprint
       );
       if (circuit.open) {
         traceStoreRef.current.updateMetadata(traceId, {
@@ -18399,9 +18417,9 @@ export function useMeetingAssistant() {
         operationKind: "response-opportunity-inference",
         reason: "residual-response-opportunity-ambiguity",
       });
-      const routeMetadata =
-        formatRuntimeInferenceModelRouteForTrace(modelRoute);
-      if (!modelRoute.provider) {
+      const routeMetadata = decisionsBackend ? formatDecisionsModelRouteForTrace(decisionsBackend, "response-opportunity-inference")
+        : formatRuntimeInferenceModelRouteForTrace(modelRoute);
+      if (!decisionsBackend && !modelRoute.provider) {
         const opened = responseOpportunityCircuitRef.current.open({
           operationKind: "response-opportunity-inference",
           sessionId: contextState.sessionId,
@@ -18450,7 +18468,7 @@ export function useMeetingAssistant() {
         return;
       }
 
-      const prompts = buildResponseOpportunityPrompts(request);
+      const prompts = buildResponseOpportunityPrompts(request, decisionsBackend ? "decisions" : "json");
       const promptText = [
         prompts.systemPrompt,
         prompts.userMessage,
@@ -18473,7 +18491,7 @@ export function useMeetingAssistant() {
           prompts.semanticPayloadDigest,
         responseOpportunityModelVisibleChars:
           prompts.modelVisibleChars,
-        responseOpportunityModelId: readSelectedProviderModelId(
+        responseOpportunityModelId: decisionsBackend ? "gpt-6-luna" : readSelectedProviderModelId(
           modelRoute.selectedProvider
         ),
       };
@@ -18511,6 +18529,7 @@ export function useMeetingAssistant() {
         job: {
           operationId: lease.operationId,
           operationKind: "response-opportunity-inference",
+          ...(decisionsBackend ? { providerAdmissionManagedByRequest: true as const } : {}),
           sessionId: contextState.sessionId,
           budgetKey,
           budgetSlot: "intent",
@@ -18522,6 +18541,8 @@ export function useMeetingAssistant() {
         },
         execute: (job, signal) =>
           requestResponseOpportunity({
+            backend, admission: runtimeInferenceProviderAdmissionRef.current!,
+            deadlineAt: lease.createdAt + RESPONSE_OPPORTUNITY_GENERATION_WAIT_MS,
             request: job.request,
             provider: modelRoute.provider,
             selectedProvider: modelRoute.selectedProvider,
@@ -18666,6 +18687,7 @@ export function useMeetingAssistant() {
             responseOpportunityCircuitRef.current.open({
               operationKind: "response-opportunity-inference",
               sessionId: latestContext.sessionId,
+              providerConfigFingerprint: decisionsBackend?.providerConfigFingerprint,
               reason: "provider-auth-error",
               detail:
                 result?.providerOutcome?.safeErrorSummary?.slice(0, 240) ??
@@ -18744,6 +18766,7 @@ export function useMeetingAssistant() {
           );
           const metadata = {
             ...scheduledMetadata,
+            ...result?.decisionMetadata,
             ...formatRuntimeInferenceSharedAdmissionForTrace(
               settlement.sharedAdmission
             ),
@@ -19528,11 +19551,15 @@ export function useMeetingAssistant() {
     publishResponseRecoveryTarget({ logicalQuestionUnit: unit, turn, traceId, intentDecision });
   }, [publishResponseRecoveryTarget]);
 
-  const runWithLanguageAdmission = useCallback((turn: TranscriptTurn, segment: QueuedSpeechSegment, accept: () => void): Promise<void> => {
+  const runWithLanguageAdmission = useCallback((turn: TranscriptTurn, segment: QueuedSpeechSegment, accept: (backend: RuntimeDecisionBackend) => void): Promise<void> => {
+    const priorBackend = runtimeBackendByTurnRef.current.get(turn);
+    const backend = priorBackend?.text === turn.text ? priorBackend.backend : captureRuntimeDecisionBackend(
+      decisionsRuntimeEnabledRef.current, languagePolicyRef.current.provider);
+    runtimeBackendByTurnRef.current.set(turn, { text: turn.text, backend });
     const source = { sessionId: contextManagerRef.current.getState().sessionId,
       runtimeEpoch: runtimeEpochRef.current, turnId: turn.id, text: turn.text };
     if (sourceLanguageAdmissionMatches(turn.languageAdmission, source)) {
-      if (isLanguageAdmittedTurn(turn)) accept();
+      if (isLanguageAdmittedTurn(turn)) accept(backend);
       return Promise.resolve();
     }
     recordSourceTranscriptForTrace(turn, segment.traceId, segment);
@@ -19589,7 +19616,7 @@ export function useMeetingAssistant() {
         finishTurnInput(segment.traceId, "success");
         return;
       }
-      accept();
+      accept(backend);
     }).catch(error => {
       const cancelled = signal.aborted;
       traceStoreRef.current.finishStep(segment.traceId, stepId, cancelled ? "cancelled" : "error", {}, error);
@@ -20265,6 +20292,7 @@ export function useMeetingAssistant() {
       waitBudgetMsOverride,
       budgetSlotOverride,
       operationIdOverride,
+      backend = EXISTING_RUNTIME_DECISION_BACKEND,
     }: {
       turn: Pick<TranscriptTurn, "speaker">;
       traceId: string;
@@ -20284,6 +20312,7 @@ export function useMeetingAssistant() {
       waitBudgetMsOverride?: number;
       budgetSlotOverride?: string;
       operationIdOverride?: string;
+      backend?: RuntimeDecisionBackend;
     }): QuestionTypeAdjudicationScheduleHandle | undefined => {
       if (!logicalQuestionUnit) return undefined;
       contextManagerRef.current.clearExpiredActiveMeetingTask();
@@ -20336,6 +20365,9 @@ export function useMeetingAssistant() {
           sourceOwnedSubstantive &&
           !manualAuthorityConflict
       );
+      const effectiveBackend = effectiveQuestionTypeMode === "enforcement" && request.reviewScope !== "field-vs-coding"
+        ? backend : EXISTING_RUNTIME_DECISION_BACKEND;
+      const decisionsBackend = effectiveBackend.kind === "decisions" ? effectiveBackend : undefined;
       const waitBudgetMs =
         waitBudgetMsOverride ??
         (mandatoryFieldKnowledgeReview
@@ -20375,7 +20407,8 @@ export function useMeetingAssistant() {
       });
       const circuit = questionTypeAdjudicationCircuitRef.current.read(
         "question-type-adjudication",
-        contextState.sessionId
+        contextState.sessionId,
+        decisionsBackend?.providerConfigFingerprint
       );
       const scheduledTaskId = contextState.activeMeetingTask?.id;
       const operationMetadata = formatRuntimeInferenceOperationForTrace(
@@ -20387,7 +20420,7 @@ export function useMeetingAssistant() {
       const baseMetadata: Record<string, unknown> = {
         ...operationMetadata,
         runtimeInferenceMaxOutputTokens:
-          maxOutputTokens ?? operationMetadata.runtimeInferenceMaxOutputTokens,
+          decisionsBackend ? undefined : maxOutputTokens ?? operationMetadata.runtimeInferenceMaxOutputTokens,
         ...formatQuestionTypeAdjudicationForTrace({
           mode,
           eligibility,
@@ -20454,9 +20487,10 @@ export function useMeetingAssistant() {
             ? "question-type-settlement-proposal"
             : "question-type-observation",
       });
-      const routeMetadata =
-        formatRuntimeInferenceModelRouteForTrace(modelRoute);
-      if (!modelRoute.provider) {
+      const routeMetadata = decisionsBackend
+        ? formatDecisionsModelRouteForTrace(decisionsBackend, "question-type-adjudication", modelRoute.providerTier)
+        : formatRuntimeInferenceModelRouteForTrace(modelRoute);
+      if (!decisionsBackend && !modelRoute.provider) {
         const opened =
           questionTypeAdjudicationCircuitRef.current.open({
             operationKind: "question-type-adjudication",
@@ -20530,7 +20564,7 @@ export function useMeetingAssistant() {
           selfHealingBudgetConsumed: false,
         });
       };
-      const prompts = buildQuestionTypeAdjudicationPrompts(request);
+      const prompts = buildQuestionTypeAdjudicationPrompts(request, decisionsBackend ? "decisions" : "json");
       const promptText = [
         prompts.systemPrompt,
         prompts.userMessage,
@@ -20539,11 +20573,9 @@ export function useMeetingAssistant() {
         prompts.systemPrompt,
         prompts.userMessage,
       ]);
-      const modelId = readSelectedProviderModelId(
-        modelRoute.selectedProvider
-      );
+      const modelId = decisionsBackend ? "gpt-6-luna" : readSelectedProviderModelId(modelRoute.selectedProvider);
       const cacheKey = buildQuestionTypeAdjudicationCacheKey({
-        providerId: modelRoute.resolvedProviderId,
+        providerId: decisionsBackend ? "openai-decisions" : modelRoute.resolvedProviderId,
         modelId,
         requestHash,
       });
@@ -20640,6 +20672,7 @@ export function useMeetingAssistant() {
           operationId: lease.operationId,
           operationKind: "question-type-adjudication",
           providerTier: modelRoute.providerTier,
+          providerConfigFingerprint: decisionsBackend?.providerConfigFingerprint,
           sessionId: contextState.sessionId,
           budgetKey: `${logicalQuestionUnit.id}:${logicalQuestionUnit.revision}`,
           budgetSlot: budgetSlotOverride ?? "type",
@@ -20675,14 +20708,15 @@ export function useMeetingAssistant() {
                 cacheHit: true,
               })
             : requestQuestionTypeAdjudication({
+            backend: effectiveBackend,
             request: job.request,
             provider: modelRoute.provider,
             selectedProvider: modelRoute.selectedProvider,
             signal,
             timeoutMs: providerTimeoutMs,
             maxOutputTokens,
-            readRetryDeadlineAt: retryEnabled ? () => retryDeadlineAt : undefined,
-            isExecutionCurrent: retryEnabled ? () => authorizeTypeOperation().authorized : undefined,
+            readRetryDeadlineAt: retryEnabled || decisionsBackend ? () => retryDeadlineAt : undefined,
+            isExecutionCurrent: retryEnabled || decisionsBackend ? () => authorizeTypeOperation().authorized : undefined,
             executionIdentity: {
               requestId: job.operationId,
               executionPlanId: job.lease.operationId,
@@ -20757,6 +20791,7 @@ export function useMeetingAssistant() {
             questionTypeAdjudicationCircuitRef.current.open({
               operationKind: "question-type-adjudication",
               sessionId: settlement.job.lease.sessionId,
+              providerConfigFingerprint: decisionsBackend?.providerConfigFingerprint,
               reason: "provider-auth-error",
               detail:
                 result?.providerOutcome?.safeErrorSummary?.slice(0, 240) ??
@@ -20845,6 +20880,7 @@ export function useMeetingAssistant() {
           );
           const metadata = {
             ...scheduledMetadata,
+            ...result?.decisionMetadata,
             ...formatRuntimeInferenceSharedAdmissionForTrace(
               settlement.sharedAdmission
             ),
@@ -21050,13 +21086,16 @@ export function useMeetingAssistant() {
       request,
       runtimeReleaseRequested = false,
       authorizeSourceOperation,
+      backend = EXISTING_RUNTIME_DECISION_BACKEND,
     }: {
       traceId: string;
       taskId?: string;
       request: TaskRelationAdjudicationRequest;
       runtimeReleaseRequested?: boolean;
       authorizeSourceOperation: ReadTaskRelationSourceOperationAuthorization;
+      backend?: RuntimeDecisionBackend;
     }): TaskRelationSplitScheduleHandle | undefined => {
+      const decisionsBackend = runtimeReleaseRequested && backend.kind === "decisions" ? backend : undefined;
       // Formal work never depends on the switch. An observation is admitted by
       // Runtime Cross-checks as read here, once: it keeps this start-time value
       // even if the switch changes while it is in flight.
@@ -21129,7 +21168,7 @@ export function useMeetingAssistant() {
         // candidates whose request really started. Observation only.
         const admittedCandidateTiers = new Map<string, string>();
         const startedCandidateRequestIds = new Set<string>();
-        return requestTaskRelationProviderCandidates({
+        const candidateOptions: Parameters<typeof requestTaskRelationProviderCandidates>[0] = {
         request: job.request, operationId: job.operationId, routes,
         admission: runtimeInferenceProviderAdmissionRef.current!, lane, deadlineAt, signal,
         executionIdentity: {
@@ -21160,9 +21199,9 @@ export function useMeetingAssistant() {
                 disposition:
                   event.event === "cancelled"
                     ? "cancelled"
-                    : event.result?.providerOutcome?.status ??
+                    : (event.result?.providerOutcome ?? event.evidenceResponse?.providerOutcome)?.status ??
                       (event.error ? "failed" : "completed"),
-                reason: event.result?.providerOutcome?.failureClass,
+                reason: (event.result?.providerOutcome ?? event.evidenceResponse?.providerOutcome)?.failureClass,
               },
               refs: {
                 requestId: event.requestId,
@@ -21176,12 +21215,16 @@ export function useMeetingAssistant() {
               },
             });
           }
-          const { result, ...observation } = event;
+          const { result, evidenceResponse, ...observation } = event;
+          const observedOutcome = result?.providerOutcome ?? evidenceResponse?.providerOutcome;
+          const rawOutput = result?.rawOutput ?? evidenceResponse?.rawOutput;
           const metadata = {
             ...observation,
-            ...formatRuntimeInferenceModelRouteForTrace(routes[event.providerTier]),
+            ...(decisionsBackend && event.role === "decision"
+              ? formatDecisionsModelRouteForTrace(decisionsBackend, job.operationKind)
+              : formatRuntimeInferenceModelRouteForTrace(routes[event.providerTier])),
             ...formatRuntimeInferenceSharedAdmissionForTrace(event.admission),
-            ...formatRuntimeInferenceProviderOutcomeForTrace(result?.providerOutcome, prefix),
+            ...formatRuntimeInferenceProviderOutcomeForTrace(observedOutcome, prefix),
             taskRelationCandidateEvent: event.event,
             taskRelationCandidateOperationId: event.operationId,
             taskRelationCandidateRequestId: event.requestId,
@@ -21199,21 +21242,20 @@ export function useMeetingAssistant() {
           });
           if (splitRecordingManager?.getState().sessionId === splitRecordingSessionId) {
             splitRecordingManager?.recordCaptureLifecycle({ stage: "task-relation-provider-candidate", traceId, taskId, ...metadata });
-            if (event.event === "completed" && result?.rawOutput) splitRecordingManager?.recordModelOutput({
-              traceId, taskId, label: `${prefix} ${event.providerTier} candidate output`, value: result.rawOutput, metadata,
+            if (event.event === "completed" && rawOutput) splitRecordingManager?.recordModelOutput({
+              traceId, taskId, label: `${prefix} ${event.providerTier} ${event.role ?? "candidate"} output`, value: rawOutput, metadata,
             });
           }
-          if (debugModeRef.current && event.event === "completed" && result?.rawOutput) {
-            traceStoreRef.current.recordOutput(traceId, `${prefix} ${event.providerTier} candidate output`, result.rawOutput, metadata);
+          if (debugModeRef.current && event.event === "completed" && rawOutput) {
+            traceStoreRef.current.recordOutput(traceId, `${prefix} ${event.providerTier} ${event.role ?? "candidate"} output`, rawOutput, metadata);
           }
         },
-      }, {
+      };
         // The one start point shared by every Relation stage, formal and
         // observation alike: the admitted candidate's execution calls its
         // request here, immediately before transport dispatch. A candidate that
         // was closed, aborted or past its deadline after admission never does.
-        request: (candidate) => {
-          const requestId = candidate.executionIdentity?.requestId;
+        const announceRequest = (requestId: string | undefined, providerTier?: string) => {
           if (requestId) startedCandidateRequestIds.add(requestId);
           emitRuntimeCriticalEvent({
             fact: "provider-request-started",
@@ -21225,16 +21267,23 @@ export function useMeetingAssistant() {
               requestId,
               operationId: job.operationId,
               operationKind: job.operationKind,
-              providerTier: requestId ? admittedCandidateTiers.get(requestId) : undefined,
+              providerTier: providerTier ?? (requestId ? admittedCandidateTiers.get(requestId) : undefined),
               logicalQuestionUnitId: job.lease.identity.logicalQuestionUnitId,
               logicalQuestionRevision:
                 job.lease.identity.logicalQuestionUnitRevision,
               traceId,
             },
           });
-          return requestTaskRelationSplitShadow(candidate);
-        },
-      });
+        };
+        if (decisionsBackend) return requestTaskRelationDecisions({
+          request: job.request, backend: decisionsBackend, operationId: job.operationId,
+          executionIdentity: candidateOptions.executionIdentity ?? {}, fastRoute: routes.fast,
+          admission: runtimeInferenceProviderAdmissionRef.current!, lane, deadlineAt, signal,
+          onObservation: candidateOptions.onObservation, onRequest: announceRequest,
+        });
+        return requestTaskRelationProviderCandidates(candidateOptions, {
+          request: candidate => { announceRequest(candidate.executionIdentity?.requestId);return requestTaskRelationSplitShadow(candidate); },
+        });
       };
       // The operation runtime invokes these callbacks with no promise chain to
       // carry a throw. From onStarted or execute it would strand the active job
@@ -21362,7 +21411,8 @@ export function useMeetingAssistant() {
         const operationKind = affinityRequest.operationKind;
         const circuit = taskRelationSplitShadowCircuitRef.current.read(
           operationKind,
-          contextState.sessionId
+          contextState.sessionId,
+          decisionsBackend?.providerConfigFingerprint
         );
         if (circuit.open) {
           return Promise.resolve({
@@ -21380,7 +21430,7 @@ export function useMeetingAssistant() {
           providerTier: "fast", reason: "task-relation-fast-candidate",
         });
         const routes = { intelligent: modelRoute, fast: fastRoute };
-        if (!modelRoute.provider || !fastRoute.provider) {
+        if (!decisionsBackend && (!modelRoute.provider || !fastRoute.provider)) {
           // The session circuit is read by formal and observation operations
           // alike, and an open circuit ends a formal question as a client
           // error. Only a formal operation opens it; an observation ends with
@@ -21401,7 +21451,7 @@ export function useMeetingAssistant() {
             clientError: true,
           });
         }
-        const prompts = buildTaskRelationAffinityPrompts(affinityRequest);
+        const prompts = buildTaskRelationAffinityPrompts(affinityRequest, decisionsBackend ? "decisions" : "json");
         const promptText = [prompts.systemPrompt, prompts.userMessage].join(
           "\n\n"
         );
@@ -21420,7 +21470,8 @@ export function useMeetingAssistant() {
         const runtime = relationRuntimes[affinityRequest.affinityKind];
         const baseMetadata = {
           ...formatRuntimeInferenceOperationForTrace(operationKind),
-          ...formatRuntimeInferenceModelRouteForTrace(modelRoute),
+          ...(decisionsBackend ? formatDecisionsModelRouteForTrace(decisionsBackend, operationKind) : formatRuntimeInferenceModelRouteForTrace(modelRoute)),
+          ...(decisionsBackend ? { runtimeInferenceMaxOutputTokens: undefined } : {}),
           [`${prefix}OperationId`]: lease.operationId,
           [`${prefix}SemanticPayloadDigest`]:
             prompts.semanticPayloadDigest,
@@ -21528,7 +21579,9 @@ export function useMeetingAssistant() {
                     : undefined;
               const metadata = {
                 ...baseMetadata,
-                ...formatRuntimeInferenceModelRouteForTrace(routes[result?.selectedProviderTier ?? "intelligent"]),
+                ...(decisionsBackend ? formatDecisionsModelRouteForTrace(decisionsBackend, operationKind)
+                  : formatRuntimeInferenceModelRouteForTrace(routes[result?.selectedProviderTier ?? "intelligent"])),
+                ...result?.decisionMetadata,
                 ...formatRuntimeInferenceSharedAdmissionForTrace(
                   settlement.sharedAdmission
                 ),
@@ -21716,7 +21769,8 @@ export function useMeetingAssistant() {
         const operationKind = canonicalRequest.operationKind;
         const circuit = taskRelationSplitShadowCircuitRef.current.read(
           operationKind,
-          contextState.sessionId
+          contextState.sessionId,
+          decisionsBackend?.providerConfigFingerprint
         );
         const modelRoute = resolveRuntimeInferenceModelRouteFromSnapshot({
           snapshot: meetingModelProviderSnapshotRef.current,
@@ -21730,7 +21784,7 @@ export function useMeetingAssistant() {
           providerTier: "fast", reason: "task-relation-fast-candidate",
         });
         const routes = { intelligent: modelRoute, fast: fastRoute };
-        if (circuit.open || !modelRoute.provider || !fastRoute.provider) {
+        if (circuit.open || (!decisionsBackend && (!modelRoute.provider || !fastRoute.provider))) {
           const unavailableReason = circuit.open
             ? "provider-circuit-open"
             : "provider-configuration-error";
@@ -21745,7 +21799,7 @@ export function useMeetingAssistant() {
           return;
         }
         const prompts = buildTaskRelationCanonicalShadowPrompts(
-          canonicalRequest
+          canonicalRequest, decisionsBackend ? "decisions" : "json"
         );
         const promptText = [prompts.systemPrompt, prompts.userMessage].join(
           "\n\n"
@@ -21756,7 +21810,8 @@ export function useMeetingAssistant() {
         canonicalOperationId = lease.operationId;
         const baseMetadata = {
           ...formatRuntimeInferenceOperationForTrace(operationKind),
-          ...formatRuntimeInferenceModelRouteForTrace(modelRoute),
+          ...(decisionsBackend ? formatDecisionsModelRouteForTrace(decisionsBackend, operationKind) : formatRuntimeInferenceModelRouteForTrace(modelRoute)),
+          ...(decisionsBackend ? { runtimeInferenceMaxOutputTokens: undefined } : {}),
           taskRelationSplitCanonicalOperationId: lease.operationId,
           taskRelationSplitCanonicalSemanticPayloadDigest:
             prompts.semanticPayloadDigest,
@@ -21886,7 +21941,9 @@ export function useMeetingAssistant() {
             });
             const metadata = {
               ...baseMetadata,
-              ...formatRuntimeInferenceModelRouteForTrace(routes[result?.selectedProviderTier ?? "intelligent"]),
+              ...(decisionsBackend ? formatDecisionsModelRouteForTrace(decisionsBackend, operationKind)
+                : formatRuntimeInferenceModelRouteForTrace(routes[result?.selectedProviderTier ?? "intelligent"])),
+              ...result?.decisionMetadata,
               ...formatRuntimeInferenceSharedAdmissionForTrace(
                 settlement.sharedAdmission
               ),
@@ -22115,6 +22172,7 @@ export function useMeetingAssistant() {
       manualCorrectionOwned = false,
       currentQuestionEvidenceTexts,
       authorizeSourceOperation,
+      backend = EXISTING_RUNTIME_DECISION_BACKEND,
     }: {
       turn: Pick<TranscriptTurn, "speaker"> &
         Partial<Pick<TranscriptTurn, "text">>;
@@ -22128,6 +22186,7 @@ export function useMeetingAssistant() {
       manualCorrectionOwned?: boolean;
       currentQuestionEvidenceTexts?: string[];
       authorizeSourceOperation: ReadTaskRelationSourceOperationAuthorization;
+      backend?: RuntimeDecisionBackend;
     }): TaskRelationAdjudicationScheduleHandle | undefined => {
       if (!logicalQuestionUnit) return;
       contextManagerRef.current.clearExpiredActiveMeetingTask();
@@ -22259,6 +22318,7 @@ export function useMeetingAssistant() {
         request,
         runtimeReleaseRequested: releaseWindowRequested,
         authorizeSourceOperation,
+        backend,
       });
       // Only an operation scheduled as formal lends its model fields to the
       // product handle. An observation keeps running inside the executor and
@@ -22345,7 +22405,8 @@ export function useMeetingAssistant() {
           selection !== undefined &&
           !selection.tierSelected &&
           (selection.selectionReason === "candidate-deadline-expired" ||
-            selection.selectionReason === "candidates-ended-unusable");
+            selection.selectionReason === "candidates-ended-unusable" ||
+            selection.selectionReason === "decisions-unusable");
         const lostModelEvidence =
           Boolean(
             input.handle.releaseWindowRequested && input.handle.affinityOutcome
@@ -22714,6 +22775,7 @@ export function useMeetingAssistant() {
     turnGateAction: string;
     logicalQuestionUnit?: LogicalQuestionUnit;
     questionTypeAxisConflict?: RuntimeAxisConflictDecision<CanonicalQuestionType>;
+    backend?: RuntimeDecisionBackend;
   }): RuntimeAdjudicationScheduleHandle => {
     const { turn, traceId, turnGateAction, logicalQuestionUnit, questionTypeAxisConflict } = input;
     const contextState = contextManagerRef.current.getState();
@@ -22728,9 +22790,9 @@ export function useMeetingAssistant() {
     const observe = prepareSemanticTaxonomyObservation({ turn, traceId, turnGateAction, logicalQuestionUnit,
       contextState, classifierText, relationText, lexical });
     const questionType = scheduleQuestionTypeAdjudication({ turn, traceId, turnGateAction, logicalQuestionUnit,
-      lexical, questionTypeAxisConflict, authorizationLogicalQuestionUnit: logicalQuestionUnit, structuredHints });
+      lexical, questionTypeAxisConflict, authorizationLogicalQuestionUnit: logicalQuestionUnit, structuredHints, backend: input.backend });
     const relationSourceLease = logicalQuestionUnit ? createLogicalQuestionUnitLease(logicalQuestionUnit) : undefined;
-    const taskRelation = scheduleTaskRelationAdjudication({ turn, traceId, turnGateAction, logicalQuestionUnit, lexical,
+    const taskRelation = scheduleTaskRelationAdjudication({ turn, traceId, turnGateAction, logicalQuestionUnit, lexical, backend: input.backend,
       authorizeSourceOperation: () => relationSourceLease
         ? toTaskRelationOperationAuthorization(authorizeLogicalQuestionUnitLease(relationSourceLease, logicalQuestionUnitRef.current))
         : { authorized: false, reason: "logical-question-missing", mismatchedKey: "source" } });
@@ -23703,7 +23765,8 @@ export function useMeetingAssistant() {
     []
   );
 
-  const processPostBufferThemTurn = useCallback((turn: TranscriptTurn, segment: QueuedSpeechSegment, confirmationWindowClosed = false) => {
+  const processPostBufferThemTurn = useCallback((turn: TranscriptTurn, segment: QueuedSpeechSegment, confirmationWindowClosed = false,
+    backend: RuntimeDecisionBackend = EXISTING_RUNTIME_DECISION_BACKEND) => {
       const traceId = segment.traceId;
       const activeContextState = contextManagerRef.current.getState();
       const activeScreenTask = activeContextState.taskRuntime.screenAttachment;
@@ -24199,6 +24262,7 @@ export function useMeetingAssistant() {
             turnGateAction: taxonomyTurnGateAction,
             logicalQuestionUnit,
             questionTypeAxisConflict,
+            backend,
           });
         }
         traceStoreRef.current.updateMetadata(traceId, {
@@ -24244,6 +24308,7 @@ export function useMeetingAssistant() {
               : taxonomyTurnGateAction,
           logicalQuestionUnit,
           questionTypeAxisConflict,
+          backend,
         });
         const responseOpportunityExecutionMode =
           resolveResponseOpportunityExecutionMode(
@@ -24256,6 +24321,7 @@ export function useMeetingAssistant() {
             logicalQuestionUnit,
             originalDecision: turnGate,
             executionMode: responseOpportunityExecutionMode,
+            backend,
             onOutputAuthorized: ({
               intentDecision,
               logicalQuestionUnit: releasedLogicalQuestionUnit,
@@ -24286,7 +24352,7 @@ export function useMeetingAssistant() {
       scheduleAdvisorAfterQuestionTypeWindow, scheduleResponseOpportunityInference,
       scheduleQuestionRuntime]);
   const processLanguageCheckedThemTurn = useCallback((turn: TranscriptTurn, segment: QueuedSpeechSegment, confirmationWindowClosed = false) =>
-    runWithLanguageAdmission(turn, segment, () => processPostBufferThemTurn(turn, segment, confirmationWindowClosed)),
+    runWithLanguageAdmission(turn, segment, backend => processPostBufferThemTurn(turn, segment, confirmationWindowClosed, backend)),
     [runWithLanguageAdmission, processPostBufferThemTurn]);
   processPostBufferThemTurnRef.current = processLanguageCheckedThemTurn;
 
@@ -27023,6 +27089,7 @@ export function useMeetingAssistant() {
       } : undefined;
       contextManagerRef.current.clearExpiredActiveMeetingTask();
       const screenOperationId = createMeetingId("screen_operation");
+      const screenDecisionBackend = captureRuntimeDecisionBackend(decisionsRuntimeEnabledRef.current, languagePolicyRef.current.provider);
       const screenOperationRequestedAt = options.requestedAt ?? Date.now();
       const screenRequestContextState = contextManagerRef.current.getState();
       const latePreflightRepair = options.latePreflightRepair;
@@ -29304,6 +29371,7 @@ export function useMeetingAssistant() {
               scheduleTaskRelationAdjudication({
                 turn: { speaker: "them" },
                 traceId: trace.id,
+                backend: screenDecisionBackend,
                 turnGateAction: "answer-refresh",
                 logicalQuestionUnit:
                   screenRelationLogicalQuestionUnit,
@@ -36308,6 +36376,7 @@ export function useMeetingAssistant() {
       const latestSuggestionUsesScreen = Boolean(
         state.latestSuggestion?.basedOnObservationIds.length
       );
+      const correctionDecisionBackend = captureRuntimeDecisionBackend(decisionsRuntimeEnabledRef.current, languagePolicyRef.current.provider);
       const currentLogicalQuestionUnit = logicalQuestionUnitRef.current;
       const currentSettlement = currentQuestionSettlementRef.current;
       const currentSettlementOwnsLogicalQuestion = Boolean(
@@ -36889,6 +36958,7 @@ export function useMeetingAssistant() {
               },
               traceId: repairTrace.id,
               turnGateAction: "answer-refresh",
+              backend: correctionDecisionBackend,
               logicalQuestionUnit: application.logicalQuestionUnit,
               lexical: correctedQuestionTypeDecision,
               sourceKind: correctionSourceKind,
@@ -36924,6 +36994,7 @@ export function useMeetingAssistant() {
         const adjudicationHandle = scheduleQuestionTypeAdjudication({
           turn: { speaker: "them" },
           traceId: repairTrace.id,
+          backend: correctionDecisionBackend,
           turnGateAction: "answer-refresh",
           logicalQuestionUnit: application.logicalQuestionUnit,
           lexical: correctedQuestionTypeDecision,
@@ -37047,6 +37118,8 @@ export function useMeetingAssistant() {
                 revisionStableTopologyBinding?.source,
               correctionRevisionStableOwnerKind:
                 revisionStableTopologyBinding?.owner.kind,
+              correctionTypeScorePolicy: correctionDecisionBackend.kind === "decisions"
+                ? "valid-known-decision" : "legacy-min-confidence",
             });
             const effectiveOrderedRelation =
               revisionStableTopologyBinding?.relation ??
@@ -37057,6 +37130,7 @@ export function useMeetingAssistant() {
                 sourceKind: correctionSourceKind,
                 sourceObservationIds: targetSourceObservationIds,
                 adjudication: outcome.candidate,
+                minConfidence: correctionDecisionBackend.kind === "decisions" ? 0 : undefined,
                 operationAuthorized:
                   outcome.operationLeaseAuthorized,
                 operationAuthorizationReason:
@@ -39437,6 +39511,7 @@ export function useMeetingAssistant() {
     diagnosticLogLevelStatus,
     diagnosticLogLoss,
     setRuntimeCrossChecksEnabled,
+    setDecisionsRuntimeEnabled,
     setMicrophoneContextEnabled,
     toggleMicrophoneContext,
     setSessionRecordingEnabled,

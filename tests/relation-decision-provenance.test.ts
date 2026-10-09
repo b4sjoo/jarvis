@@ -71,6 +71,7 @@ function produce(entry: "voice" | "screen" | "term", decision: split.OrderedTask
   }
   const call = find(hook, n => ts.isCallExpression(n) && n.expression.getText(hook) === "resolveCorrectionOwnedTypeResettlement");
   return run(`(${call.getText(hook)})`, { ...env, application: { logicalQuestionUnit: unit }, correctionSourceKind: "voice",
+    correctionDecisionBackend: { kind: "existing" },
     targetSourceObservationIds: [], outcome: { candidate: { questionType: parent.questionType, confidence: .99 }, operationLeaseAuthorized: true },
     latestParentType: parent.questionType, correctionTargetOwnsActiveParent: true, effectiveOrderedRelation: decision.relation,
     revisionStableTopologyBinding: undefined, correctionCurrentQuestion: q, correctionCoordinatorDecision: { relation: decision, reason: decision.reason },

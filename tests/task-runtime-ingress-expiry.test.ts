@@ -1,5 +1,6 @@
 import { createMeetingId } from "../src/lib/meeting/meeting-id.js";
 import assert from "node:assert/strict";
+import * as decisionRuntime from "../src/lib/meeting/decisions-runtime.js";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
@@ -190,6 +191,7 @@ for (const [name, snapshotName, args] of [
       invocation = { correctionIntent: option.intent, correctionTarget: menu.target };
     }
     now = 101;
+    Object.assign(h.context, decisionRuntime, { decisionsRuntimeEnabledRef: { current: false }, languagePolicyRef: { current: {} } });
     compile(name, h.context, snapshotName);
     const snapshot = name === "correctActiveQuestionType"
       ? await h.context[name]("coding", "normal-mode", invocation)

@@ -41,7 +41,7 @@ for (const name of [
   "screen-preflight-deadline", "advisor-generation-supersession",
   "source-owned-transition-transaction", "source-owned-transition-runtime",
   "meeting-model-route", "task-taxonomy", "task-relation-authority", "meeting-ai-response",
-  "advisor-evidence-packet",
+  "advisor-evidence-packet", "decisions-runtime",
 ]) Object.assign(modules, await load(name));
 const evidenceBuilder = declaration("buildScreenEvidencePacket", capture).initializer;
 const advisorPacketCall = find(evidenceBuilder, (node) => ts.isCallExpression(node) && node.expression.getText(source) === "buildAdvisorEvidencePacket");
@@ -123,6 +123,7 @@ function harness(options = {}) {
   const provider = { id: "fast", curl: "{{TEXT}}", variables: [] };
   const providerCalls = [];
   const env = {
+    decisionsRuntimeEnabledRef: { current: false }, languagePolicyRef: { current: { provider: undefined } },
     ...modules, console, Date, Error, Promise, AbortController, setTimeout, clearTimeout,
     shutdownRequestedRef: { current: false }, runtimeActiveRef: { current: true }, runtimeEpochRef: { current: 4 },
     manualCorrectionRevisionRef: { current: 0 }, visibleAnswerRevisionRef: { current: 1 }, responseActionRevisionRef: { current: 0 },

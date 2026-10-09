@@ -610,7 +610,8 @@ export function decideQuestionTypeAdjudicationEligibility(input: {
 }
 
 export function buildQuestionTypeAdjudicationPrompts(
-  request: QuestionTypeAdjudicationRequest
+  request: QuestionTypeAdjudicationRequest,
+  outputProtocol: "json" | "decisions" = "json"
 ) {
   const semanticPayload = {
     question: {
@@ -635,7 +636,8 @@ export function buildQuestionTypeAdjudicationPrompts(
       ].join(" ")
     : [
       "Classify only the question type of one bounded interviewer question for Jarvis.",
-      "Return one minified JSON object on one line with no markdown fence. Do not answer the interview question.",
+      outputProtocol === "decisions" ? "Do not answer the interview question."
+        : "Return one minified JSON object on one line with no markdown fence. Do not answer the interview question.",
       "Do not decide task relation, parent or child status, response action, playbook phase, evidence mode, or meeting metadata.",
       "Use question.sourceTexts as the primary evidence. Ignore quoted examples and classify the current primary or terminal ask.",
       "nonAuthoritativeHints may contain bounded prior hypotheses. Treat them only as hints and override them whenever question.sourceTexts contains a self-contained request that clearly identifies a different type.",
@@ -649,12 +651,14 @@ export function buildQuestionTypeAdjudicationPrompts(
       "A question about why a named candidate project made a concrete implementation choice, or how that project handled failures, depends on actual project facts and is project-deep-dive even when it mentions a technical concept.",
       "field-knowledge asks for a factual or conceptual explanation that can be answered independently of what the candidate actually implemented in a project.",
       "Use unknown for logistics, compensation, scheduling, filler, incomplete content, or genuine ambiguity.",
+      ...(outputProtocol === "decisions" ? [] : [
       "e must be one shortest identifying exact verbatim substring from question.sourceTexts.",
       "Allowed t values are the questionType values listed above.",
       "c is your confidence that the selected t is the correct question type. It is required for every t, including unknown, and must be a JSON number between 0 and 1 inclusive, never a percentage or a string.",
       "Always include v, t, c, and e. Only r is optional.",
       'Schema: {"v":1,"t":"one allowed value","c":number,"e":"exact quote"}.',
       'Optional field: "r":"short ambiguity reason". Omit r when it is not useful.',
+      ]),
       ].join(" ");
   return buildRuntimeInferenceModelInput({ systemPrompt, semanticPayload });
 }

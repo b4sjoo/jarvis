@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import * as decisionRuntime from "../src/lib/meeting/decisions-runtime.js";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
@@ -501,6 +502,7 @@ function screenHarness(old = {}) {
   const manager = new MeetingContextManager();
   const traces = new MeetingTraceStore();
   Object.assign(g, screenScope, recovery, supersession, generationLease, commitAuthorization, sourceTransition, {
+    ...decisionRuntime, decisionsRuntimeEnabledRef: { current: false }, languagePolicyRef: { current: { provider: undefined } },
     Error, createMeetingId,
     screenshotConfiguration: { mode: "manual" },
     selectedAIProvider: { provider: "vision", variables: { API_KEY: "fixture-only" } },

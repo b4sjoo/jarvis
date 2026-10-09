@@ -226,7 +226,7 @@ export interface DiagnosticLogLedgerRow {
 }
 
 const SELECTION_REASONS = ["intelligent-valid", "intelligent-invalid-fast-valid", "candidates-ended-unusable", "client-error",
-  "candidate-deadline-expired"] as const;
+  "candidate-deadline-expired", "decisions-valid", "decisions-unusable"] as const;
 const RUNTIME_DISPOSITIONS = ["completed", "error", "superseded", "budget-exhausted", "operation-mismatch", "disposed"] as const;
 const PROVIDER_STATUSES = ["success", "empty", "failed", "timed-out", "aborted"] as const;
 const FAILURE_CLASSES = ["configuration", "transport", "authentication", "rate-limit", "provider-http", "provider-response-parse",

@@ -69,6 +69,16 @@ flowchart LR
   STT credentials. Configuration is frozen per language request. The shared
   Decisions client returns typed failures and selected-probability-first scores;
   each consumer owns its own fallback policy.
+- The default-off Decisions Runtime preview selects a protocol adapter for formal
+  broad Type, Response Opportunity and ordered Relation operations. Backend and
+  provider configuration freeze at input admission and continue through the same
+  settlement, execution-plan and task-writer chain. Screen preflight/narrow review
+  and observation-only Cross-checks keep their existing routes. Type has no evidence
+  request; RO targets and Affinity quotes use only the remaining stage window.
+  Auxiliary failure cannot veto a valid core decision. Canonical adds no trace-only
+  evidence request. Every physical request uses the existing provider admission
+  coordinator with its actual configuration identity. Credentials never enter the
+  source ledger or trace; changing the preview does not invalidate accepted artifacts.
 - Authorized origin references resolve through the existing bounded source ledger,
   independently of the raw transcript window. Semantic topic/child-question views
   derive from those origins and honor the same selected-source scope. Canonical

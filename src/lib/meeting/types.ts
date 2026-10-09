@@ -1530,6 +1530,7 @@ export interface MeetingAssistantSettings {
   // Metadata cross-check for a known company, Semantic Type / Interviewer Intent
   // embedding). Never an input to a formal decision or to an answer.
   runtimeCrossChecksEnabled: boolean;
+  decisionsRuntimeEnabled?: boolean;
   microphoneContextEnabled: boolean;
   response: MeetingResponseConfig;
   codingModel: MeetingCodingModelSettings;

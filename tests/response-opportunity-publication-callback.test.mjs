@@ -203,6 +203,8 @@ function createHarness({ languageAdmission = false } = {}) {
     sessionLanguageObservationRef: { current: undefined },
     languageHandoffTailRef: { current: Promise.resolve() },
     languagePolicyRef: { current: { languages: ["en", "zh"], provider: { provider: "openai-decisions", variables: { api_key: "synthetic" } } } },
+    decisionsRuntimeEnabledRef: { current: false },
+    runtimeBackendByTurnRef: { current: new WeakMap() },
     runtimeInferenceProviderAdmissionRef: { current: new pure.RuntimeInferenceProviderAdmissionCoordinator() },
     runtimeActiveRef: { current: true },
     logicalQuestionUnitRef: { current: null },

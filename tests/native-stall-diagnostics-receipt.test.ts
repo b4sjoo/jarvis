@@ -133,7 +133,7 @@ const panelCallSite = only<ts.JsxSelfClosingElement>(findAll(ui, (node) => ts.is
   node.tagName.getText(ui) === "ConfigurationsPanel"), "ConfigurationsPanel call site");
 
 const SETTINGS_KEY = "test-settings";
-const SETTINGS_KEYS = ["activeScreenTaskTimeoutMinutes", "audio", "codingModel", "debugMode", "diagnosticLogLevel", "microphoneContextEnabled",
+const SETTINGS_KEYS = ["activeScreenTaskTimeoutMinutes", "audio", "codingModel", "debugMode", "decisionsRuntimeEnabled", "diagnosticLogLevel", "microphoneContextEnabled",
   "nativeStallDiagnosticsEnabled", "personalEvidenceGuardrailMode", "response", "runtimeCrossChecksEnabled",
   "taxonomyAdjudication", "useMemory"];
 const COMMAND = "set_native_stall_diagnostics";
