@@ -487,15 +487,6 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     }
   }, [selectedSttProvider]);
 
-  useEffect(() => {
-    if (selectedDecisionsProvider.provider) {
-      safeLocalStorage.setItem(
-        STORAGE_KEYS.SELECTED_DECISIONS_PROVIDER,
-        JSON.stringify(selectedDecisionsProvider)
-      );
-    }
-  }, [selectedDecisionsProvider]);
-
   // Computed all AI providers
   const allAiProviders: TYPE_PROVIDER[] = [
     ...AI_PROVIDERS,
@@ -556,14 +547,28 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const onSetSelectedDecisionsProvider = (selection: SelectedAiProviderConfig) => {
-    if (selection.provider !== DECISIONS_PROVIDER_ID) return;
-    setSelectedDecisionsProvider({ provider: selection.provider, variables: { ...selection.variables } });
+    if (selection.provider !== DECISIONS_PROVIDER_ID) return "Only OpenAI Decisions is supported.";
+    const next = { provider: selection.provider, variables: { ...selection.variables } };
+    try {
+      localStorage.setItem(STORAGE_KEYS.SELECTED_DECISIONS_PROVIDER, JSON.stringify(next));
+    } catch (error) {
+      return error instanceof DOMException && error.name === "QuotaExceededError"
+        ? "Decisions settings were not saved: local storage is full."
+        : "Decisions settings were not saved: local storage is unavailable.";
+    }
+    setSelectedDecisionsProvider(next);
   };
 
   const onSetMeetingInputLanguages = (languages: readonly MeetingInputLanguage[]) => {
-    if (!isMeetingInputLanguageSet(languages)) return;
+    if (!isMeetingInputLanguageSet(languages)) return "Select at least one communication language.";
     const next = [...languages];
-    safeLocalStorage.setItem(STORAGE_KEYS.MEETING_INPUT_LANGUAGES, JSON.stringify(next));
+    try {
+      localStorage.setItem(STORAGE_KEYS.MEETING_INPUT_LANGUAGES, JSON.stringify(next));
+    } catch (error) {
+      return error instanceof DOMException && error.name === "QuotaExceededError"
+        ? "Language settings were not saved: local storage is full."
+        : "Language settings were not saved: local storage is unavailable.";
+    }
     setMeetingInputLanguages(next);
   };
 

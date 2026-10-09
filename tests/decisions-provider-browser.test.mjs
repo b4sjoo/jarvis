@@ -63,6 +63,30 @@ test("DR205: real AppProvider persists independent masked Decisions credentials 
     await second.waitForFunction(()=>document.querySelector('#decisions-api-key')?.value==='replacement-openai');
     await second.getByRole("button",{name:"Remove Decisions API key"}).click();
     await page.waitForFunction(()=>document.querySelector('#decisions-api-key')?.value==='');
+    // A failed write must not activate an unpersisted provider or language policy.
+    await page.evaluate(() => {
+      const original = Storage.prototype.setItem;
+      window.__restoreStorage = () => { Storage.prototype.setItem = original; };
+      Storage.prototype.setItem = function(key, value) {
+        if (["curl_selected_decisions_provider", "meeting_input_languages"].includes(key)) {
+          throw new DOMException("synthetic quota failure", "QuotaExceededError");
+        }
+        return original.call(this, key, value);
+      };
+    });
+    await page.getByLabel("API Key", { exact: true }).fill("unsaved-secret");
+    assert.match(await page.getByRole("alert").textContent(), /Decisions settings were not saved: local storage is full/);
+    assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('curl_selected_decisions_provider')).variables.api_key), "");
+    await page.getByLabel("中文", { exact: true }).click();
+    assert.equal(await page.getByLabel("中文", { exact: true }).isChecked(), true);
+    assert.ok((await page.getByRole("alert").allTextContents()).some(text => text.includes("Language settings were not saved")));
+    await page.evaluate(() => window.__restoreStorage());
+    await page.getByLabel("API Key", { exact: true }).fill("saved-after-quota");
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('curl_selected_decisions_provider')).variables.api_key === 'saved-after-quota');
+    await second.waitForFunction(() => document.querySelector('#decisions-api-key')?.value === 'saved-after-quota');
+    await page.reload();await page.addScriptTag({content:bundle.outputFiles[0].text});
+    await page.waitForFunction(() => document.querySelector('#decisions-api-key')?.value === 'saved-after-quota');
+    assert.equal(await page.getByRole("alert").count(), 0);
     assert.deepEqual(await page.evaluate(()=>JSON.parse(localStorage.getItem('curl_selected_stt_provider'))),stt);
     assert.equal(requests,0);assert.deepEqual(errors,[]);
   } finally { await browser.close(); }

@@ -14,8 +14,8 @@ export type IContextType = {
   selectedPreparationAIProvider: SelectedAiProviderConfig;
   selectedDecisionsProvider: SelectedAiProviderConfig;
   meetingInputLanguages: readonly MeetingInputLanguage[];
-  onSetMeetingInputLanguages: (languages: readonly MeetingInputLanguage[]) => void;
-  onSetSelectedDecisionsProvider: (selection: SelectedAiProviderConfig) => void;
+  onSetMeetingInputLanguages: (languages: readonly MeetingInputLanguage[]) => string | undefined;
+  onSetSelectedDecisionsProvider: (selection: SelectedAiProviderConfig) => string | undefined;
   onSetSelectedPreparationAIProvider: (
     selection: SelectedAiProviderConfig
   ) => void;
