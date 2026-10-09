@@ -1,5 +1,6 @@
 // Storage keys
 export const STORAGE_KEYS = {
+  MEETING_INPUT_LANGUAGES: "meeting_input_languages",
   THEME: "theme",
   TRANSPARENCY: "transparency",
   SYSTEM_PROMPT: "system_prompt",

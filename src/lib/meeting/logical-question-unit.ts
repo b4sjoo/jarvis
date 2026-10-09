@@ -1,4 +1,5 @@
 import { createMeetingId } from "./meeting-id.js";
+import type { SourceLanguageAdmission } from "./source-language-contract.js";
 import type { AdvisorTurnIntentDecision } from "./advisor-turn-intent.js";
 
 import type { ActiveQuestionTermCorrection, TranscriptTurn } from "./types.js";
@@ -36,6 +37,7 @@ export interface LogicalQuestionSource {
 }
 
 export interface LogicalQuestionUnit {
+  sourceLanguageAdmission?: SourceLanguageAdmission;
   id: string;
   revision: number;
   sessionId: string;
@@ -202,6 +204,7 @@ export function composeLogicalQuestionUnit(
     sessionId: input.sessionId,
     runtimeEpoch: input.runtimeEpoch,
     currentTurnId: input.currentTurn.id,
+    ...(input.currentTurn.languageAdmission ? { sourceLanguageAdmission: input.currentTurn.languageAdmission } : {}),
     sourceTurnIds,
     sources,
     normalizedText: effectiveNormalizedText,

@@ -21,7 +21,8 @@ test("DR205: real AppProvider persists independent masked Decisions credentials 
     import React from 'react';import {createRoot} from 'react-dom/client';import {MemoryRouter} from 'react-router-dom';
     import {AppProvider} from './src/contexts/app.context.tsx';
     import {DecisionsProvider} from './src/pages/dev/components/DecisionsProvider.tsx';
-    createRoot(document.getElementById('root')).render(<MemoryRouter><AppProvider><DecisionsProvider/></AppProvider></MemoryRouter>);
+    import MeetingInputLanguages from './src/pages/audio/components/MeetingInputLanguages.tsx';
+    createRoot(document.getElementById('root')).render(<MemoryRouter><AppProvider><DecisionsProvider/><MeetingInputLanguages/></AppProvider></MemoryRouter>);
   ` }, bundle: true, write: false, platform: "browser", format: "iife", jsx: "automatic",
     define: { "process.env.NODE_ENV": '"test"' },
     plugins: [{ name: "native-boundaries", setup(b) {
@@ -42,6 +43,11 @@ test("DR205: real AppProvider persists independent masked Decisions credentials 
     await page.evaluate(stt=>{localStorage.clear();localStorage.setItem('auto-configs-enabled','true');localStorage.setItem('autostart_initialized','true');
       localStorage.setItem('curl_selected_stt_provider',JSON.stringify(stt));},stt);
     await page.addScriptTag({content:bundle.outputFiles[0].text});
+    assert.equal(await page.getByLabel("English",{exact:true}).isChecked(),true);
+    assert.equal(await page.getByLabel("中文",{exact:true}).isChecked(),true);
+    await page.getByLabel("中文",{exact:true}).uncheck();
+    assert.equal(await page.getByLabel("English",{exact:true}).isDisabled(),true);
+    assert.deepEqual(await page.evaluate(()=>JSON.parse(localStorage.getItem('meeting_input_languages'))),["en"]);
     await page.getByLabel("API Key",{exact:true}).fill("synthetic-openai");
     await page.waitForFunction(()=>JSON.parse(localStorage.getItem('curl_selected_decisions_provider')||'null')?.variables?.api_key==='synthetic-openai');
     assert.equal(await page.getByLabel("API Key",{exact:true}).getAttribute("type"),"password");
@@ -50,6 +56,9 @@ test("DR205: real AppProvider persists independent masked Decisions credentials 
     const second=await context.newPage();second.on("pageerror",e=>errors.push(e.message));
     await second.goto("http://decisions-settings.fixture/");await second.addScriptTag({content:bundle.outputFiles[0].text});
     await second.waitForFunction(()=>document.querySelector('#decisions-api-key')?.value==='synthetic-openai');
+    assert.equal(await second.getByLabel("中文",{exact:true}).isChecked(),false);
+    await page.getByLabel("中文",{exact:true}).check();
+    await second.waitForFunction(()=>[...document.querySelectorAll('input[type=checkbox]')].every(input=>input.checked));
     await page.getByLabel("API Key",{exact:true}).fill("replacement-openai");
     await second.waitForFunction(()=>document.querySelector('#decisions-api-key')?.value==='replacement-openai');
     await second.getByRole("button",{name:"Remove Decisions API key"}).click();

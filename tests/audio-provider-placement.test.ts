@@ -19,6 +19,7 @@ function renderPage(file: string, settings: Record<string, unknown>) {
     "@/hooks": { useSettings: () => settings },
     "@/layouts": { PageLayout: component("PageLayout") },
     "@/lib": { getPlatform: () => "macos" },
+    "./components/MeetingInputLanguages": { default: component("MeetingInputLanguages") },
   };
   const exports: any = {};
   const context = vm.createContext({ exports, require: (id: string) => {

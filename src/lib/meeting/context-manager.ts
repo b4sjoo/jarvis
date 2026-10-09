@@ -1,4 +1,5 @@
 import type { AdvisorPromptContext, MeetingContextState } from "./meeting-context-contracts.js";
+import { isLanguageAdmittedTurn, sourceLanguageAdmissionMatches } from "./source-language-contract.js";
 
 import type {
   ActiveMeetingTask,
@@ -121,7 +122,7 @@ export class MeetingContextManager {
 
     return {
       ...this.state,
-      transcriptTurns: [...this.state.transcriptTurns],
+      transcriptTurns: this.state.transcriptTurns.filter(isLanguageAdmittedTurn),
       screenObservations: [...this.state.screenObservations],
       interviewSessionBrief: cloneInterviewSessionBrief(
         this.state.interviewSessionBrief
@@ -173,6 +174,19 @@ export class MeetingContextManager {
       ...this.state,
       transcriptTurns: nextTurns,
     };
+  }
+
+  getDisplayTranscriptTurns(): TranscriptTurn[] {
+    return [...this.state.transcriptTurns];
+  }
+
+  restoreLanguageAdmission(input: { sessionId: string; runtimeEpoch: number; turnId: string; text: string }): boolean {
+    if (this.state.sessionId !== input.sessionId) return false;
+    const turn = this.state.transcriptTurns.find(candidate => candidate.id === input.turnId && candidate.text === input.text);
+    if (!turn || !sourceLanguageAdmissionMatches(turn.languageAdmission, input) || turn.languageAdmission.disposition !== "excluded") return false;
+    turn.languageAdmission = { ...turn.languageAdmission, manualOverride: "force-advise" };
+    turn.contextPromptEligible = true;
+    return true;
   }
 
   updateTranscriptTurnText(turnId: string, text: string) {
@@ -709,8 +723,8 @@ export class MeetingContextManager {
     projectTranscript?: (turns: TranscriptTurn[], sessionId: string, task?: ActiveMeetingTask) => string
   ): AdvisorPromptContext {
     const taskRuntime = this.getTaskRuntimeState();
-    const latestTurn =
-      this.state.transcriptTurns[this.state.transcriptTurns.length - 1];
+    const effectiveTurns = this.state.transcriptTurns.filter(isLanguageAdmittedTurn);
+    const latestTurn = effectiveTurns[effectiveTurns.length - 1];
     const activeMeetingTask = this.buildActiveMeetingTask(taskRuntime);
     const promptTranscriptTurns = this.getPromptTranscriptTurns(
       activeMeetingTask?.parent.promptTranscriptStartTurnId
@@ -736,7 +750,7 @@ export class MeetingContextManager {
 
 
       interviewPlaybook: activeMeetingTask?.parent.playbook,
-      confirmedMeFacts: collectConfirmedMeFacts(this.state.transcriptTurns),
+      confirmedMeFacts: collectConfirmedMeFacts(effectiveTurns),
       latestTurn,
     };
   }
@@ -792,7 +806,7 @@ export class MeetingContextManager {
         ? this.state.transcriptTurns.slice(boundaryIndex)
         : this.state.transcriptTurns;
 
-    return scopedTurns.filter(shouldIncludeTurnInAdvisorPrompt);
+    return scopedTurns.filter(isLanguageAdmittedTurn).filter(shouldIncludeTurnInAdvisorPrompt);
   }
 
   private formatTranscriptTurns(turns: TranscriptTurn[]) {

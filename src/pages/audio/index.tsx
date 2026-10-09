@@ -2,6 +2,7 @@ import { AudioSelection, STTProviders } from "./components";
 import { useSettings } from "@/hooks";
 import { PageLayout } from "@/layouts";
 import { getPlatform } from "@/lib";
+import MeetingInputLanguages from "./components/MeetingInputLanguages";
 
 const getOsInstructions = () => {
   const platform = getPlatform();
@@ -58,6 +59,7 @@ const Audio = () => {
       </div>
 
       <STTProviders {...settings} />
+      <MeetingInputLanguages />
     </PageLayout>
   );
 };

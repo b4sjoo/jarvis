@@ -54,6 +54,21 @@ flowchart LR
   Advisor context and final settled context retain distinct scopes/read moments;
   they use the shared projection rules without a cross-request cache. Generation
   continuity is excluded from Type/Relation/RO source evidence and retrieval facts.
+- Final Them Voice/Replay inputs pass one language-admission check after sentence
+  buffering and before setup, metadata or question publication. The independent
+  Decisions provider uses a single 1.5-second queue-and-request deadline. Only a
+  timely valid outside-policy choice excludes that source version; technical
+  failures admit with diagnostics. Raw/display recording remains available while
+  Context Manager's business reads exclude rejected versions. Explicit Force can
+  restore its exact source version. A still-authorized Pause drain can retain
+  context without reviving old execution. A first-parent language observation
+  consumes the creation LQU's receipt after a durable new-parent commit and has no
+  model, task, prompt or STT-configuration authority.
+- Audio Settings owns the shared STT editor and Meeting input-language policy.
+  Decisions credentials have their own standard configuration, independent of
+  STT credentials. Configuration is frozen per language request. The shared
+  Decisions client returns typed failures and selected-probability-first scores;
+  each consumer owns its own fallback policy.
 - Authorized origin references resolve through the existing bounded source ledger,
   independently of the raw transcript window. Semantic topic/child-question views
   derive from those origins and honor the same selected-source scope. Canonical

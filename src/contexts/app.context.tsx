@@ -24,6 +24,7 @@ import {
 } from "@/types";
 import curl2Json from "@bany/curl-to-json";
 import { DECISIONS_PROVIDER_ID } from "@/config/decisions.constants";
+import { isMeetingInputLanguageSet, readMeetingInputLanguages, type MeetingInputLanguage } from "@/config/meeting-input-languages";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -118,6 +119,8 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
 
   const [selectedDecisionsProvider, setSelectedDecisionsProvider] =
     useState<SelectedAiProviderConfig>({ provider: "", variables: {} });
+  const [meetingInputLanguages, setMeetingInputLanguages] = useState(() =>
+    readMeetingInputLanguages(safeLocalStorage.getItem(STORAGE_KEYS.MEETING_INPUT_LANGUAGES)));
 
   // STT Providers
   const [customSttProviders, setCustomSttProviders] = useState<TYPE_PROVIDER[]>(
@@ -235,6 +238,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     }
 
     const savedDecisions = safeLocalStorage.getItem(STORAGE_KEYS.SELECTED_DECISIONS_PROVIDER);
+    setMeetingInputLanguages(readMeetingInputLanguages(safeLocalStorage.getItem(STORAGE_KEYS.MEETING_INPUT_LANGUAGES)));
     if (savedDecisions) {
       try {
         const parsed = JSON.parse(savedDecisions);
@@ -424,6 +428,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
         e.key === STORAGE_KEYS.CUSTOM_SPEECH_PROVIDERS ||
         e.key === STORAGE_KEYS.SELECTED_STT_PROVIDER ||
         e.key === STORAGE_KEYS.SELECTED_DECISIONS_PROVIDER ||
+        e.key === STORAGE_KEYS.MEETING_INPUT_LANGUAGES ||
         e.key === STORAGE_KEYS.SYSTEM_PROMPT ||
         e.key === STORAGE_KEYS.SCREENSHOT_CONFIG ||
         e.key === STORAGE_KEYS.CUSTOMIZABLE ||
@@ -555,6 +560,13 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     setSelectedDecisionsProvider({ provider: selection.provider, variables: { ...selection.variables } });
   };
 
+  const onSetMeetingInputLanguages = (languages: readonly MeetingInputLanguage[]) => {
+    if (!isMeetingInputLanguageSet(languages)) return;
+    const next = [...languages];
+    safeLocalStorage.setItem(STORAGE_KEYS.MEETING_INPUT_LANGUAGES, JSON.stringify(next));
+    setMeetingInputLanguages(next);
+  };
+
   // Setter for selected STT with validation
   const onSetSelectedSttProvider = ({
     provider,
@@ -636,6 +648,8 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     selectedPreparationAIProvider,
     onSetSelectedPreparationAIProvider,
     selectedDecisionsProvider,
+    meetingInputLanguages,
+    onSetMeetingInputLanguages,
     onSetSelectedDecisionsProvider,
     allSttProviders,
     customSttProviders,

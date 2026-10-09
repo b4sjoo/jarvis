@@ -279,6 +279,11 @@ const UI_SURFACES = ["meeting-response-actions", "normal-mode", "focus-mode"] as
 export const RECORDING_STOP_REASONS = ["manual", "meeting-assistant-stopped", "scenario-runner-stopped", "application-shutdown", "manual-close-retry"] as const;
 
 export const DIAGNOSTIC_LOG_LEDGER: readonly DiagnosticLogLedgerRow[] = [
+  { file: HOOK, owner: "observeTaskRuntimeWriter", source: "meeting.language-admission", event: "observation-recording-failed",
+    levels: ["warn"], refs: ["traceId"], data: {},
+    factSource: "read-only first-parent language observation failed after the durable task mutation; no model or task retry",
+    knownLimits: ["only observation loss is reported; no raw error, language or source text is placed in the diagnostic log"],
+    caught: { cause: false, from: "read-only observation projection/recording", guards: ["deriveFirstParentLanguage", "recordCaptureLifecycle"] } },
   { file: HOOK, owner: "resolveOrderedTaskRelationWithinWindow", source: "meeting.relation", event: "formal-operation-settled",
     levels: ["error", "warn", "debug"], refs: ["traceId"],
     factSource: "typed values of this operation alone: the Ordered operation's single metadata write (operation authorized, client error, each stage disposition compared with 'available') and its own handle (a formal model operation, and stageSelections: per stage the selector's reason and whether it selected a tier, written by that operation's stage settles before their terminals resolved); nothing is read from the trace",

@@ -14,6 +14,23 @@ import type { AIResponseTerminalOutcome, AIResponseProgressBudget, AIResponseBud
 
 export type TranscriptSpeaker = "them" | "me" | "unknown";
 
+export type MeetingInputLanguage = "en" | "zh";
+
+export interface SourceLanguageAdmission {
+  sessionId: string;
+  runtimeEpoch: number;
+  turnId: string;
+  sourceText: string;
+  allowedLanguages: readonly MeetingInputLanguage[];
+  disposition: "admitted" | "excluded" | "fallback-admitted";
+  language?: MeetingInputLanguage;
+  reason: string;
+  startedAt: number;
+  completedAt: number;
+  queueWaitMs?: number;
+  manualOverride?: "force-advise";
+}
+
 export interface FactRiskReviewInput {
   readonly unavailableReason?: string;
   readonly question: string;
@@ -56,6 +73,7 @@ export interface NativeAudioManualRecoveryState {
 }
 
 export interface TranscriptTurn {
+  languageAdmission?: SourceLanguageAdmission;
   id: string;
   speaker: TranscriptSpeaker;
   text: string;

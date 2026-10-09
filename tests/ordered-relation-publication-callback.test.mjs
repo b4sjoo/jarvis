@@ -2875,6 +2875,7 @@ const stop = (h) => {
   const inert = new Proxy({}, { get: () => () => undefined });
   const context = vm.createContext({
     ...Object.fromEntries(invalidateRuntimeWorkRefs.map((name) => [name, { current: inert }])),
+    AbortController, languageAdmissionControllerRef: { current: new AbortController() },
     runtimeEpochRef: h.environment.runtimeEpochRef,
     ...Object.fromEntries([...RELATION_RUNTIME_REFS, ...OBSERVATION_RUNTIME_REFS].map((name) => [name, h.environment[name]])),
   });

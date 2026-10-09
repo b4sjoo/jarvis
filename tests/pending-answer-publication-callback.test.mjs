@@ -1157,6 +1157,9 @@ const AE_PRODUCER_TABLE = [
   "terminal:manual-action @ recordManualRuntimeAction",
   "input-accepted @ submitSpeechCorrection",
   "input-accepted @ deactivateSpeechCorrection",
+  // Language preflight cancellation/failure or exclusion before the correction mutation.
+  "terminal:manual-action @ submitSpeechCorrection",
+  "terminal:manual-action @ submitSpeechCorrection",
   "terminal:manual-action @ submitSpeechCorrection",
   "terminal:manual-action @ submitSpeechCorrection",
   "terminal:manual-action @ submitSpeechCorrection",

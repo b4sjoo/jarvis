@@ -215,6 +215,7 @@ function harness({ activeChild = false, selectedChild = false, phase = "design_f
     recordManualRuntimeAction: event => events.push(event),
     setState: update => { state = update(state); environment.state = state; },
     flushPendingSentenceCompletion() {},
+    languageHandoffTailRef: { current: Promise.resolve() },
     runAdvisor: async options => calls.push(options),
     resolveCurrentSuggestionQuestionLineage: () => { throw new Error("selected control must not read background lineage"); },
     NO_ACTIVE_TASK_MESSAGE: "No active task", NO_SUGGESTION_MESSAGE: "No suggestion",

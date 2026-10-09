@@ -101,6 +101,7 @@ function harness() {
   const runtime = { sessionId: a.sessionId, taskRuntime: {} };
   const traces = [trace(a)];
   const env = {
+    AbortController, languageAdmissionControllerRef: { current: new AbortController() },
     ...production, contextManagerRef: { current: { getState: () => runtime } },
     currentQuestionSettlementRef: { current: a }, logicalQuestionUnitRef: { current: unit(a) },
     latestManualCorrectionTargetRef: { current: { logicalQuestionUnit: unit(a) } },

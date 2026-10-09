@@ -144,7 +144,9 @@ function harness() {
   Object.assign(globals, {
     ...criticalEvents.hookRefs,
     logDiagnostic: diagnosticLog.logDiagnostic, diagnosticLogCause: diagnosticLog.logger.diagnosticLogCause,
-    console, Promise, Date, JSON, Map, Set, Error,
+    console, Promise, Date, JSON, Map, Set, Error, AbortController,
+    languageAdmissionControllerRef: { current: new AbortController() },
+    sessionLanguageObservationRef: { current: undefined },
     createMeetingId, createInterviewSessionContextFromBrief,
     createNeutralPreparationRuntimeContext, loadPreparationRuntimeContext,
     toPreparationRuntimePresentation, PreparationRuntimeProvenanceLedger,

@@ -888,7 +888,7 @@ test("LG7 the migration ledger names every migrated call site once, with what it
   assert.deepEqual(migrated.filter((row) => row.migration!.id === "added").map((row) => [tag(row), row.callSites ?? 1]),
     [["meeting.capture start-failed", 2], ["meeting.recording close-failed", 1]]);
   // The rows of commit 2 are summaries that replaced nothing.
-  assert.equal(DIAGNOSTIC_LOG_LEDGER.length - migrated.length, 8);
+  assert.equal(DIAGNOSTIC_LOG_LEDGER.length - migrated.length, 9);
   const driven = Object.values(SCENARIOS).flatMap((scenario) => scenario.sites);
   assert.equal(new Set(driven).size, driven.length, "a site belongs to one scenario");
   for (const row of migrated) {
@@ -1281,13 +1281,16 @@ test("LG7 and A8 the catches that no longer print the error they caught: each on
       assert.equal(handler!.binding, undefined, `${tag(row)} binds nothing`);
       assert.deepEqual(causeProperties(call), [], tag(row));
       assert.equal("cause" in row.data, false, tag(row));
-      assert.ok(row.knownLimits?.includes(NO_CAUSE_ON_PROVIDER_PATH), `${tag(row)} states why it has no cause`);
-      // Why it may not: the chain it guards runs the queued-segment processor, which awaits the speech-to-text provider.
-      assert.deepEqual(providerPathOf(handler!.guard), ["processQueuedSpeechSegment -> transcribeMeetingAudio -> fetchSTT"], tag(row));
+      if (row.source === "meeting.language-admission") {
+        assert.deepEqual(providerPathOf(handler!.guard), [], "the read-only language observer never runs a provider");
+      } else {
+        assert.ok(row.knownLimits?.includes(NO_CAUSE_ON_PROVIDER_PATH), `${tag(row)} states why it has no cause`);
+        assert.deepEqual(providerPathOf(handler!.guard), ["processQueuedSpeechSegment -> transcribeMeetingAudio -> fetchSTT"], tag(row));
+      }
       withoutCause.push(tag(row));
     }
   }
-  assert.deepEqual(withoutCause.sort(), ["meeting.audio-queue microphone-segment-failed", "meeting.audio-queue system-segment-failed"]);
+  assert.deepEqual(withoutCause.sort(), ["meeting.audio-queue microphone-segment-failed", "meeting.audio-queue system-segment-failed", "meeting.language-admission observation-recording-failed"]);
   assert.deepEqual(withCause.sort(), ["meeting.capture missing-provider-stop-failed", "meeting.capture pause-native-failed", "meeting.capture start-failed",
     "meeting.capture stop-native-failed", "meeting.evaluation observed-projection-persist-failed", "meeting.evaluation persistence-failed",
     "meeting.native-audio listener-setup-failed", "meeting.native-audio stall-marker-ack-failed", "meeting.native-stall-diagnostics request-failed",

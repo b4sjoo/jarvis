@@ -326,7 +326,7 @@ function entryHarness(old = {}, log: { level?: (typeof DIAGNOSTIC_LOG_SPY_LEVELS
   globals.captureLifecycleCoordinatorRef.current = new CaptureLifecycleCoordinator();
   globals.rawZeroInputEpisodeRef.current = new RawZeroInputEpisode();
   globals.handledNativeTerminalKeysRef.current = new Set();
-  globals.contextManagerRef.current = { getState: () => ({ sessionId: "session", transcriptTurns: [], screenObservations: [] }) };
+  globals.contextManagerRef.current = { getState: () => ({ sessionId: "session", transcriptTurns: [], screenObservations: [] }), getDisplayTranscriptTurns: () => [] };
   // Task 178A: the real stream and the real Hook emit callbacks.
   const criticalEvents = createRuntimeCriticalEventHarness({ sessionId: "session" });
   criticalEvents.install(globals, (name) => evaluate(criticalEventCallbackNodes[name], hook, globals));

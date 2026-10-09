@@ -1,4 +1,7 @@
 import { prepareGeneratedAnswer, prepareGeneratedAnswerPartial } from "@/lib/meeting/generated-answer-consumer";
+import { readDecisionsProviderConfiguration } from "@/config/decisions.constants";
+import { requestSourceLanguageAdmission, formatSourceLanguageAdmissionForTrace, SOURCE_LANGUAGE_DEADLINE_MS } from "@/lib/meeting/source-language-admission";
+import { sourceLanguageAdmissionMatches, isLanguageAdmittedTurn, deriveFirstParentLanguage, type SessionLanguageObservation } from "@/lib/meeting/source-language-contract";
 import { resolveOrderedTaskRelationWithinWindow as resolveOrderedTaskRelationOperation,
   type TaskRelationAdjudicationScheduleHandle, type TaskRelationOperationAuthorization,
   type TaskRelationSplitCanonicalResult } from '@/lib/meeting/ordered-relation-operation';
@@ -2743,6 +2746,8 @@ export function useMeetingAssistant() {
   const {
     screenshotConfiguration,
     selectedSttProvider,
+    selectedDecisionsProvider,
+    meetingInputLanguages,
     allSttProviders,
     selectedAIProvider,
     allAiProviders,
@@ -3028,8 +3033,11 @@ export function useMeetingAssistant() {
       generationLeaseId?: string | null;
       logicalQuestionUnitId?: string | null;
       logicalQuestionRevision?: number | null;
-    }): TaskRuntimeWriterObserver =>
-      (result, mutation) => {
+      sourceLanguageAdmission?: LogicalQuestionUnit["sourceLanguageAdmission"];
+    }): TaskRuntimeWriterObserver => {
+      const previousParentId = identity.sourceLanguageAdmission
+        ? contextManagerRef.current.getState().taskRuntime.parent?.id : undefined;
+      return (result, mutation) => {
         if (result.authorized && result.mutationApplied) {
           emitRuntimeCriticalEvent({
             fact: "lifecycle-committed",
@@ -3049,6 +3057,28 @@ export function useMeetingAssistant() {
               logicalQuestionRevision: identity.logicalQuestionRevision,
             },
           });
+          if (identity.sourceLanguageAdmission) {
+            try {
+              const context = contextManagerRef.current.getState();
+              const observation = deriveFirstParentLanguage({
+                previous: sessionLanguageObservationRef.current, sessionId: context.sessionId,
+                runtimeEpoch: runtimeEpochRef.current, previousParentId,
+                authorized: result.authorized, mutationApplied: result.mutationApplied, transition: mutation.transition,
+                parent: context.taskRuntime.parent?.id === result.state.parent?.id ? context.taskRuntime.parent : undefined,
+                source: identity.sourceLanguageAdmission, now: Date.now(),
+              });
+              if (observation) {
+                sessionLanguageObservationRef.current = observation;
+                const metadata = { sessionLanguageObservation: observation, sessionLanguageAppliedToRuntime: false };
+                if (identity.traceId) traceStoreRef.current.updateMetadata(identity.traceId, metadata);
+                sessionRecordingManagerRef.current?.recordCaptureLifecycle({ stage: "session-language-observed", traceId: identity.traceId, ...metadata });
+              }
+            } catch {
+              logDiagnostic("warn", "meeting.language-admission", "observation-recording-failed", () => ({
+                refs: { traceId: identity.traceId ?? undefined },
+              }));
+            }
+          }
           return;
         }
         // An authorized result with no mutation preserved the task: no fact.
@@ -3074,7 +3104,8 @@ export function useMeetingAssistant() {
             logicalQuestionRevision: identity.logicalQuestionRevision,
           },
         });
-      },
+      };
+    },
     [emitRuntimeCriticalEvent]
   );
   // Every assignment of the session's current settlement announces the Type
@@ -3538,6 +3569,12 @@ export function useMeetingAssistant() {
   const promotePendingAdvisorGenerationRef = useRef<() => void>(() => {});
   const screenAnalysisAbortRef = useRef<AbortController | null>(null);
   const runtimeEpochRef = useRef(1);
+  const languageAdmissionControllerRef = useRef(new AbortController());
+  const sessionLanguageObservationRef = useRef<SessionLanguageObservation | undefined>(undefined);
+  const languageHandoffTailRef = useRef<Promise<void>>(Promise.resolve());
+  const recordedTranscriptTurnsRef = useRef(new WeakSet<TranscriptTurn>());
+  const languagePolicyRef = useRef({ languages: meetingInputLanguages, provider: selectedDecisionsProvider });
+  languagePolicyRef.current = { languages: meetingInputLanguages, provider: selectedDecisionsProvider };
   const semanticTaxonomyRuntimeRef = useRef<SemanticTaxonomyRuntime | null>(
     null
   );
@@ -6379,6 +6416,10 @@ export function useMeetingAssistant() {
     const previousEpoch = runtimeEpochRef.current;
     pendingAnswerResolutionCommitByTraceRef.current.clear();
     runtimeEpochRef.current += 1;
+    if (reason !== "meeting-assistant-paused") {
+      languageAdmissionControllerRef.current.abort();
+      languageAdmissionControllerRef.current = new AbortController();
+    }
     screenOperationCoordinatorRef.current.reset();
     semanticTaxonomyEvidenceByTurnRef.current.clear();
     responseOpportunityRuntimeRef.current?.cancelAll("superseded");
@@ -7267,6 +7308,7 @@ export function useMeetingAssistant() {
       // The only place the runtime session id changes. Old-session terminals
       // from the epoch advance above were emitted before this rebind.
       runtimeCriticalEventStreamRef.current?.bind(contextState.sessionId);
+      sessionLanguageObservationRef.current = undefined;
       const nextStatus: MeetingAssistantStatus =
         runtimeActiveRef.current ? "listening" : "idle";
 
@@ -7276,7 +7318,7 @@ export function useMeetingAssistant() {
           previous.status === "paused" && !runtimeActiveRef.current
             ? "paused"
             : nextStatus,
-        transcriptTurns: contextState.transcriptTurns,
+        transcriptTurns: contextManagerRef.current.getDisplayTranscriptTurns(),
         screenObservations: contextState.screenObservations,
         interviewSessionBrief: contextState.interviewSessionBrief,
         interviewSessionContext: contextState.interviewSessionContext,
@@ -13684,6 +13726,7 @@ export function useMeetingAssistant() {
             traceId,
             logicalQuestionUnitId: advisorJob.logicalQuestionUnit?.id,
             logicalQuestionRevision: advisorJob.logicalQuestionUnit?.revision,
+            sourceLanguageAdmission: advisorJob.logicalQuestionUnit?.sourceLanguageAdmission,
           }));
           const boundaryContext =
             buildEffectiveAdvisorBasePromptContext(
@@ -13818,6 +13861,7 @@ export function useMeetingAssistant() {
               traceId,
               logicalQuestionUnitId: advisorJob.logicalQuestionUnit?.id,
               logicalQuestionRevision: advisorJob.logicalQuestionUnit?.revision,
+              sourceLanguageAdmission: advisorJob.logicalQuestionUnit?.sourceLanguageAdmission,
             }),
           });
         const sourceTransitionDurablySatisfied =
@@ -19378,14 +19422,14 @@ export function useMeetingAssistant() {
     []
   );
 
-  const appendTranscriptTurnForTrace = useCallback(
+  const recordSourceTranscriptForTrace = useCallback(
     (
       turn: TranscriptTurn,
       traceId: string,
       segment: QueuedSpeechSegment,
-      metadata: Record<string, unknown> = {}
     ) => {
-      contextManagerRef.current.addTranscriptTurn(turn);
+      if (recordedTranscriptTurnsRef.current.has(turn)) return;
+      recordedTranscriptTurnsRef.current.add(turn);
       sessionRecordingManagerRef.current?.recordTranscriptTurn(turn);
       const canonicalCandidate =
         segment.sttEvaluationCanonicalCandidate;
@@ -19419,6 +19463,12 @@ export function useMeetingAssistant() {
           sttEvaluationCanonicalTurnId: turn.id,
         });
       }
+    }, []);
+
+  const appendTranscriptTurnForTrace = useCallback(
+    (turn: TranscriptTurn, traceId: string, segment: QueuedSpeechSegment, metadata: Record<string, unknown> = {}) => {
+      contextManagerRef.current.addTranscriptTurn(turn);
+      recordSourceTranscriptForTrace(turn, traceId, segment);
       const contextState = contextManagerRef.current.getState();
       const appendStepId = traceStoreRef.current.startStep(
         traceId,
@@ -19450,25 +19500,107 @@ export function useMeetingAssistant() {
       setState((previous) => ({
         ...previous,
         status: runtimeActiveRef.current ? "listening" : "idle",
-        transcriptTurns: contextState.transcriptTurns,
+        transcriptTurns: contextManagerRef.current.getDisplayTranscriptTurns(),
         interviewSessionContext: contextState.interviewSessionContext,
         taskRuntime: contextState.taskRuntime,
         activeMeetingTask: contextState.activeMeetingTask,
       }));
 
-      scheduleMeetingMetadataInference({ turn, traceId });
+      if (isLanguageAdmittedTurn(turn)) scheduleMeetingMetadataInference({ turn, traceId });
 
       return { contextState };
     },
-    [scheduleMeetingMetadataInference]
+    [scheduleMeetingMetadataInference, recordSourceTranscriptForTrace]
   );
+
+  const publishLanguageRecoveryTarget = useCallback((turn: TranscriptTurn, traceId: string) => {
+    const context = contextManagerRef.current.getState();
+    const intentDecision = decideAdvisorTurnIntent(turn.text, {
+      hasActiveTask: Boolean(context.activeMeetingTask), hasRecentQuestionContext: Boolean(currentQuestionLineageRef.current),
+    });
+    const unit = composeCanonicalTurnCandidate({ currentTurn: turn, sessionId: context.sessionId,
+      runtimeEpoch: runtimeEpochRef.current, intentDecision });
+    publishResponseRecoveryTarget({ logicalQuestionUnit: unit, turn, traceId, intentDecision });
+  }, [publishResponseRecoveryTarget]);
+
+  const runWithLanguageAdmission = useCallback((turn: TranscriptTurn, segment: QueuedSpeechSegment, accept: () => void): Promise<void> => {
+    const source = { sessionId: contextManagerRef.current.getState().sessionId,
+      runtimeEpoch: runtimeEpochRef.current, turnId: turn.id, text: turn.text };
+    if (sourceLanguageAdmissionMatches(turn.languageAdmission, source)) {
+      if (isLanguageAdmittedTurn(turn)) accept();
+      return Promise.resolve();
+    }
+    recordSourceTranscriptForTrace(turn, segment.traceId, segment);
+    const manualRevision = manualCorrectionRevisionRef.current;
+    const signal = languageAdmissionControllerRef.current.signal;
+    const policy = languagePolicyRef.current;
+    const configuration = readDecisionsProviderConfiguration(policy.provider);
+    const requestId = createMeetingId("language_admission");
+    const stepId = traceStoreRef.current.startStep(segment.traceId, "Source language admission", {
+      languageAdmissionOperationId: requestId, languageAdmissionAllowedLanguages: [...policy.languages],
+      languageAdmissionSourceTurnId: turn.id, languageAdmissionSourceText: turn.text,
+    });
+    const result = requestSourceLanguageAdmission({ ...source, allowedLanguages: [...policy.languages],
+      configuration: configuration.snapshot, configurationError: configuration.error,
+      admission: runtimeInferenceProviderAdmissionRef.current!, signal,
+      executionIdentity: { requestId, executionPlanId: requestId, sessionId: source.sessionId,
+        runtimeEpoch: source.runtimeEpoch, modelId: configuration.snapshot?.modelId ?? "gpt-6-luna",
+        logicalQuestionUnitId: "unscoped", logicalQuestionRevision: 0 },
+      onMetadata: metadata => traceStoreRef.current.updateMetadata(segment.traceId, metadata),
+    });
+    // Requests share provider admission; only delivery preserves source order.
+    // Every request starts its own deadline now, including provider queue time.
+    const handoff = Promise.all([languageHandoffTailRef.current, result]).then(([, receipt]) => {
+      const drain = segment.replaySource ? undefined : readAudioSegmentCommitAuthorization(segment);
+      const contextOnlyPause = !runtimeActiveRef.current && drain?.authorized && drain.drainKind === "pause";
+      if (signal.aborted || source.sessionId !== contextManagerRef.current.getState().sessionId ||
+        (source.runtimeEpoch !== runtimeEpochRef.current && !contextOnlyPause) || manualRevision !== manualCorrectionRevisionRef.current ||
+        turn.text !== source.text || !isCurrentTurnSource(segment)) {
+        traceStoreRef.current.finishStep(segment.traceId, stepId, "cancelled", { languageAdmissionDisposition: "stale" });
+        finishTurnInput(segment.traceId, "cancelled", "Language admission source is no longer current.");
+        return;
+      }
+      turn.languageAdmission = receipt;
+      const handoffAt = Date.now();
+      const metadata = { ...formatSourceLanguageAdmissionForTrace(receipt), languageAdmissionHandoffAt: handoffAt,
+        languageAdmissionHandoffWaitMs: Math.max(0, handoffAt - receipt.completedAt),
+        languageAdmissionDeadlineOverrunMs: Math.max(0, handoffAt - receipt.startedAt - SOURCE_LANGUAGE_DEADLINE_MS) };
+      traceStoreRef.current.updateMetadata(segment.traceId, metadata);
+      traceStoreRef.current.finishStep(segment.traceId, stepId, "success", metadata);
+      if (receipt.disposition === "excluded") {
+        turn.contextPromptEligible = false;
+        appendTranscriptTurnForTrace(turn, segment.traceId, segment, { transcriptAppendReason: "language-excluded" });
+        publishLanguageRecoveryTarget(turn, segment.traceId);
+        finishTurnInput(segment.traceId, "success");
+        return;
+      }
+      if (receipt.disposition === "fallback-admitted") {
+        setState(previous => ({ ...previous, error: `Input language check unavailable (${receipt.reason}). The transcript was admitted.` }));
+      }
+      if (contextOnlyPause) {
+        turn.contextPromptEligible = true;
+        appendTranscriptTurnForTrace(turn, segment.traceId, segment, { transcriptAppendReason: "language-admitted-pause-drain" });
+        traceStoreRef.current.updateMetadata(segment.traceId, { languageAdmissionContextOnlyPause: true });
+        finishTurnInput(segment.traceId, "success");
+        return;
+      }
+      accept();
+    }).catch(error => {
+      const cancelled = signal.aborted;
+      traceStoreRef.current.finishStep(segment.traceId, stepId, cancelled ? "cancelled" : "error", {}, error);
+      finishTurnInput(segment.traceId, cancelled ? "cancelled" : "error", error);
+      if (!cancelled) setState(previous => ({ ...previous, error: error instanceof Error ? error.message : String(error) }));
+    });
+    languageHandoffTailRef.current = handoff;
+    return handoff;
+  }, [appendTranscriptTurnForTrace, finishTurnInput, isCurrentTurnSource, readAudioSegmentCommitAuthorization, publishLanguageRecoveryTarget, recordSourceTranscriptForTrace]);
 
   const publishDisplayTranscriptRevision = useCallback(
     (decision: BatchDisplayTranscriptDecision, traceId: string) => {
       const displayWindow = projectDisplayTranscriptWindow({
         current: decision.artifact,
         transcriptTurns:
-          contextManagerRef.current.getState().transcriptTurns,
+          contextManagerRef.current.getDisplayTranscriptTurns(),
       });
       const metadata = {
         ...formatDisplayTranscriptForTrace(decision),
@@ -19605,44 +19737,46 @@ export function useMeetingAssistant() {
         ingress(pending.turn, pending.segment);
         return true;
       }
-      const { contextState } = appendTranscriptTurnForTrace(
-        pending.turn,
-        pending.segment.traceId,
-        pending.segment,
-        {
-          ...sentenceMetadata,
-          turnGateAction: "append-only",
-          turnGateReason: intentDecision.reason,
-        }
-      );
-      const sourceOwnedSetupCandidate = createSourceOwnedSetupCandidate({
-        turn: pending.turn,
-        sessionId: contextState.sessionId,
-        runtimeEpoch: runtimeEpochRef.current,
-        activeMeetingTask: contextState.activeMeetingTask,
-      });
-      if (sourceOwnedSetupCandidate) {
-        latestSourceOwnedSetupRef.current =
-          appendSourceOwnedSetupCandidate(
-            latestSourceOwnedSetupRef.current,
-            sourceOwnedSetupCandidate
-          );
-        traceStoreRef.current.updateMetadata(pending.segment.traceId, {
-          sourceOwnedSetupCandidateStored: true,
-          sourceOwnedSetupCandidateTurnId: sourceOwnedSetupCandidate.turnId,
-          sourceOwnedSetupCandidateTurnIds:
-            latestSourceOwnedSetupRef.current.sourceTurnIds,
-          sourceOwnedSetupCandidateSpeechAct:
-            sourceOwnedSetupCandidate.speechAct,
-          sourceOwnedSetupCandidateParentId:
-            sourceOwnedSetupCandidate.parentId,
-          sourceOwnedSetupCandidateOrigin: "sentence-buffer-flush",
+      return runWithLanguageAdmission(pending.turn, pending.segment, () => {
+        const { contextState } = appendTranscriptTurnForTrace(
+          pending.turn,
+          pending.segment.traceId,
+          pending.segment,
+          {
+            ...sentenceMetadata,
+            turnGateAction: "append-only",
+            turnGateReason: intentDecision.reason,
+          }
+        );
+        const sourceOwnedSetupCandidate = createSourceOwnedSetupCandidate({
+          turn: pending.turn,
+          sessionId: contextState.sessionId,
+          runtimeEpoch: runtimeEpochRef.current,
+          activeMeetingTask: contextState.activeMeetingTask,
         });
-      }
-      finishTurnInput(pending.segment.traceId, "success");
-      return true;
+        if (sourceOwnedSetupCandidate) {
+          latestSourceOwnedSetupRef.current =
+            appendSourceOwnedSetupCandidate(
+              latestSourceOwnedSetupRef.current,
+              sourceOwnedSetupCandidate
+            );
+          traceStoreRef.current.updateMetadata(pending.segment.traceId, {
+            sourceOwnedSetupCandidateStored: true,
+            sourceOwnedSetupCandidateTurnId: sourceOwnedSetupCandidate.turnId,
+            sourceOwnedSetupCandidateTurnIds:
+              latestSourceOwnedSetupRef.current.sourceTurnIds,
+            sourceOwnedSetupCandidateSpeechAct:
+              sourceOwnedSetupCandidate.speechAct,
+            sourceOwnedSetupCandidateParentId:
+              sourceOwnedSetupCandidate.parentId,
+            sourceOwnedSetupCandidateOrigin: "sentence-buffer-flush",
+          });
+        }
+        if (reason === "force-advise") publishLanguageRecoveryTarget(pending.turn, pending.segment.traceId);
+        finishTurnInput(pending.segment.traceId, "success");
+      }).then(() => true);
     },
-    [finishTurnInput, appendTranscriptTurnForTrace, isCurrentTurnSource]
+    [finishTurnInput, appendTranscriptTurnForTrace, isCurrentTurnSource, runWithLanguageAdmission, publishLanguageRecoveryTarget]
   );
 
   const activateSentenceContinuationFromSpeechStart = useCallback(
@@ -24146,7 +24280,10 @@ export function useMeetingAssistant() {
       publishCanonicalLogicalQuestionTarget, publishResponseRecoveryTarget, promoteMeTurnForFusion,
       scheduleAdvisorAfterQuestionTypeWindow, scheduleResponseOpportunityInference,
       scheduleQuestionRuntime]);
-  processPostBufferThemTurnRef.current = processPostBufferThemTurn;
+  const processLanguageCheckedThemTurn = useCallback((turn: TranscriptTurn, segment: QueuedSpeechSegment, confirmationWindowClosed = false) =>
+    runWithLanguageAdmission(turn, segment, () => processPostBufferThemTurn(turn, segment, confirmationWindowClosed)),
+    [runWithLanguageAdmission, processPostBufferThemTurn]);
+  processPostBufferThemTurnRef.current = processLanguageCheckedThemTurn;
 
   const processCanonicalTurnIngress = useCallback(
     async ({
@@ -24214,9 +24351,15 @@ export function useMeetingAssistant() {
       });
       if (shutdownRequestedRef.current) {
         if (transport === "accepted-stt") {
-          appendTranscriptTurnForTrace(turn, traceId, segment, {
-            transcriptAppendReason: "application-shutdown-accepted-stt",
-          });
+          if (turn.speaker === "them") {
+            recordSourceTranscriptForTrace(turn, traceId, segment);
+            traceStoreRef.current.updateMetadata(traceId, { transcriptAppendDisposition: "raw-only",
+              transcriptAppendReason: "application-shutdown-before-language-admission" });
+          } else {
+            appendTranscriptTurnForTrace(turn, traceId, segment, {
+              transcriptAppendReason: "application-shutdown-accepted-stt",
+            });
+          }
         }
         finishTurnInput(traceId, transport === "accepted-stt" ? "success" : "cancelled");
         return;
@@ -24448,7 +24591,7 @@ export function useMeetingAssistant() {
           : 0,
         sentenceBufferMergedTranscriptChars: turn.text.length,
       });
-      processPostBufferThemTurn(turn, segment);
+      void processLanguageCheckedThemTurn(turn, segment);
     },
     [
       finishTurnInput,
@@ -24456,6 +24599,8 @@ export function useMeetingAssistant() {
       buildLogicalQuestionForTurn,
       consumePendingSentenceCompletion,
       processPostBufferThemTurn,
+      processLanguageCheckedThemTurn,
+      recordSourceTranscriptForTrace,
       flushPendingSentenceCompletion,
       holdPendingConfirmation,
       holdPendingSentenceCompletion,
@@ -26551,7 +26696,7 @@ export function useMeetingAssistant() {
           setState((previous) => ({
             ...previous,
             status: silentSourceProbe ? previous.status : "listening",
-            transcriptTurns: contextState.transcriptTurns,
+            transcriptTurns: contextManagerRef.current.getDisplayTranscriptTurns(),
             screenObservations: contextState.screenObservations,
             interviewSessionBrief: contextState.interviewSessionBrief,
             interviewSessionContext: contextState.interviewSessionContext,
@@ -27105,7 +27250,7 @@ export function useMeetingAssistant() {
       }
       whiteboardSyntaxRepairRuntimeRef.current?.cancelAll("superseded");
       sourceLinkageAdjudicationRuntimeRef.current?.cancelAll("superseded");
-      flushPendingSentenceCompletion("screen-capture");
+      await flushPendingSentenceCompletion("screen-capture");
       const screenRefreshAuthority = decideRefreshAuthority({
         source: "screen",
       });
@@ -29669,6 +29814,7 @@ export function useMeetingAssistant() {
                 runtimeSessionId: screenRuntimeToken.expectedSessionId,
                 runtimeEpoch: screenRuntimeToken.runtimeEpoch,
                 traceId: trace.id,
+                sourceLanguageAdmission: screenRelationLogicalQuestionUnit?.sourceLanguageAdmission,
               }),
             });
           const screenTransitionCommitted =
@@ -32585,7 +32731,7 @@ export function useMeetingAssistant() {
         setState(previous => ({...previous, error:"The displayed question source changed. Unlock or wait for its current result before correcting it."}));
         return;
       }
-      flushPendingSentenceCompletion("manual-question-type-correction");
+      await flushPendingSentenceCompletion("manual-question-type-correction");
 
       contextManagerRef.current.clearExpiredActiveMeetingTask();
       const contextState = contextManagerRef.current.getState();
@@ -33549,6 +33695,7 @@ export function useMeetingAssistant() {
             traceId: correctionTrace.id,
             logicalQuestionUnitId: correctionLogicalQuestionUnit.id,
             logicalQuestionRevision: correctionLogicalQuestionUnit.revision,
+            sourceLanguageAdmission: correctionLogicalQuestionUnit.sourceLanguageAdmission,
           }),
         });
         correctionExecutionPlan = lifecycleCommit.plan;
@@ -34227,7 +34374,7 @@ export function useMeetingAssistant() {
       }));
       return;
     }
-    flushPendingSentenceCompletion("regenerate");
+    await flushPendingSentenceCompletion("regenerate");
     const visibleTarget = resolveVisibleAnswerResponseActionTarget({
       stableAnswer: actionStableAnswer,
       currentLogicalQuestionUnit,
@@ -34598,7 +34745,8 @@ export function useMeetingAssistant() {
         logicalQuestionUnitRef.current?.revision,
       observedTaskId: requestedRuntime.activeMeetingTask?.id,
     });
-    flushPendingSentenceCompletion("force-advise");
+    await flushPendingSentenceCompletion("force-advise");
+    await languageHandoffTailRef.current;
     const target = latestForceAdviseTargetRef.current;
     if (!target) {
       recordManualRuntimeAction({
@@ -34694,6 +34842,27 @@ export function useMeetingAssistant() {
           "The interviewer moved to a newer question. Use Advise on the latest turn.",
       }));
       return;
+    }
+
+    if (target.turn.languageAdmission?.disposition === "excluded") {
+      const restored = contextManagerRef.current.restoreLanguageAdmission({
+        sessionId: target.logicalQuestionUnit.sessionId, runtimeEpoch: target.turn.languageAdmission.runtimeEpoch,
+        turnId: target.turn.id, text: target.turn.text,
+      });
+      if (!restored) {
+        recordManualRuntimeAction({ actionId: manualActionId, action: "force-advise", stage: "terminal",
+          terminalDisposition: "stale", reason: "language-source-version-unavailable" });
+        setState(previous => ({ ...previous, error: "The excluded transcript version is no longer available. Use Advise on the current input." }));
+        return;
+      }
+      target.turn = { ...target.turn, contextPromptEligible: true,
+        languageAdmission: { ...target.turn.languageAdmission, manualOverride: "force-advise" } };
+      traceStoreRef.current.updateMetadata(target.presentation.originalTraceId, {
+        languageAdmissionManualOverride: "force-advise", languageAdmissionRestoredSourceText: target.turn.text,
+        languageAdmissionRestoredTurnId: target.turn.id,
+      });
+      setState(previous => ({ ...previous, transcriptTurns: contextManagerRef.current.getDisplayTranscriptTurns() }));
+      scheduleMeetingMetadataInference({ turn: target.turn, traceId: target.presentation.originalTraceId });
     }
 
     const repairTrace = traceStoreRef.current.startTrace("voice", {
@@ -34927,7 +35096,7 @@ export function useMeetingAssistant() {
         : completedTrace?.error ?? "visible-answer-not-committed",
       occurredAt: completedAt,
     });
-  }, [flushPendingSentenceCompletion,
+  }, [flushPendingSentenceCompletion, scheduleMeetingMetadataInference,
     recordHumanGroundTruthV2,
     recordManualRuntimeAction,
     refreshRecordedCompletedTrace,
@@ -35040,7 +35209,7 @@ export function useMeetingAssistant() {
           return;
         }
       }
-      flushPendingSentenceCompletion(
+      await flushPendingSentenceCompletion(
         responseAction === "next-phase" ? "manual-next" : "response-action"
       );
       if (!currentSuggestionText.trim()) {
@@ -35878,7 +36047,7 @@ export function useMeetingAssistant() {
         };
       }
 
-      flushPendingSentenceCompletion("clarifying-answer");
+      await flushPendingSentenceCompletion("clarifying-answer");
 
       contextManagerRef.current.clearExpiredActiveMeetingTask();
       const projectChoice = interaction?.projectChoice
@@ -36110,7 +36279,7 @@ export function useMeetingAssistant() {
 
   const submitSpeechCorrection = useCallback(
     async (input: string) => {
-      flushPendingSentenceCompletion("emergency-correction");
+      await flushPendingSentenceCompletion("emergency-correction");
       const correctionEventOrigin = {
         runtimeSessionId: contextManagerRef.current.getState().sessionId,
         runtimeEpoch: runtimeEpochRef.current,
@@ -36413,13 +36582,56 @@ export function useMeetingAssistant() {
         return;
       }
 
+      const application = applyActiveQuestionTermCorrection({
+        correction, logicalQuestionUnit: targetLogicalQuestionUnit, correctionTraceId: trace.id,
+        manualCorrectionRevision: manualCorrectionRevisionRef.current + 1, now: requestedAt,
+      });
+      if (correctionSourceKind === "voice" &&
+        application.logicalQuestionUnit.normalizedText !== targetLogicalQuestionUnit.normalizedText) {
+        const expectedQuestion = logicalQuestionUnitRef.current;
+        const expectedManualRevision = manualCorrectionRevisionRef.current;
+        const source = { sessionId: contextState.sessionId, runtimeEpoch: correctionExecutionEpoch,
+          turnId: application.logicalQuestionUnit.currentTurnId, text: application.logicalQuestionUnit.normalizedText };
+        const policy = languagePolicyRef.current;
+        const config = readDecisionsProviderConfiguration(policy.provider);
+        const requestId = createMeetingId("correction_language");
+        const languageSignal = languageAdmissionControllerRef.current.signal;
+        let receipt;
+        try {
+          receipt = await requestSourceLanguageAdmission({ ...source, allowedLanguages: [...policy.languages],
+            configuration: config.snapshot, configurationError: config.error,
+            admission: runtimeInferenceProviderAdmissionRef.current!, signal: languageSignal,
+            executionIdentity: { requestId, executionPlanId: requestId, modelId: config.snapshot?.modelId ?? "gpt-6-luna",
+              sessionId: source.sessionId, runtimeEpoch: source.runtimeEpoch,
+              logicalQuestionUnitId: application.logicalQuestionUnit.id, logicalQuestionRevision: application.logicalQuestionUnit.revision },
+            onMetadata: metadata => traceStoreRef.current.updateMetadata(trace.id, metadata),
+          });
+        } catch (error) {
+          const cancelled = languageSignal.aborted;
+          traceStoreRef.current.finishTrace(trace.id, cancelled ? "cancelled" : "error", error);
+          emitRuntimeCriticalEvent({ ...correctionEventBase, purpose: "formal", fact: "terminal", stage: "correction-language-check",
+            terminal: { object: "manual-action", disposition: "failed", reason: "language-check-cancelled-or-failed" } });
+          if (!cancelled) setState(previous => ({ ...previous, error: error instanceof Error ? error.message : String(error) }));
+          return;
+        }
+        const current = contextManagerRef.current.getState();
+        const stale = current.sessionId !== source.sessionId || runtimeEpochRef.current !== source.runtimeEpoch ||
+          logicalQuestionUnitRef.current !== expectedQuestion || manualCorrectionRevisionRef.current !== expectedManualRevision;
+        traceStoreRef.current.updateMetadata(trace.id, { ...formatSourceLanguageAdmissionForTrace(receipt),
+          languageAdmissionCorrectionSourceRevision: application.logicalQuestionUnit.revision, languageAdmissionCorrectionStale: stale });
+        if (stale || receipt.disposition === "excluded") {
+          traceStoreRef.current.finishTrace(trace.id, stale ? "cancelled" : "success");
+          emitRuntimeCriticalEvent({ ...correctionEventBase, purpose: "formal", fact: "terminal", stage: "correction-language-check",
+            terminal: { object: "manual-action", disposition: "rejected", reason: stale ? "source-changed" : "outside-allowed-languages" } });
+          setState(previous => ({ ...previous, error: stale ? "The question changed while checking the corrected transcript. Retry on the current question."
+            : "The corrected transcript uses a language outside Meeting Input Languages. The current question was not changed." }));
+          return;
+        }
+        application.logicalQuestionUnit = { ...application.logicalQuestionUnit, sourceLanguageAdmission: receipt };
+      }
       manualCorrectionRevisionRef.current += 1;
       unpublishedArtifactSlotRef.current.clear();
-      settleAwaitingVisualEvidenceRecovery(
-        "cancelled",
-        "manual-term-correction",
-        trace.id
-      );
+      settleAwaitingVisualEvidenceRecovery("cancelled", "manual-term-correction", trace.id);
       const invalidatedSettlementId =
         currentQuestionSettlementRef.current?.settlementId;
       const invalidatedExecutionPlanId =
@@ -36440,14 +36652,6 @@ export function useMeetingAssistant() {
         correctionInvalidatedAdvisorJob: true,
         correctionManualRevision:
           manualCorrectionRevisionRef.current,
-      });
-      const application = applyActiveQuestionTermCorrection({
-        correction,
-        logicalQuestionUnit: targetLogicalQuestionUnit,
-        correctionTraceId: trace.id,
-        manualCorrectionRevision:
-          manualCorrectionRevisionRef.current,
-        now: requestedAt,
       });
       const originalSemanticEvidenceText =
         getLogicalQuestionSemanticEvidenceText(
@@ -37208,6 +37412,7 @@ export function useMeetingAssistant() {
                     traceId: repairTrace.id,
                     logicalQuestionUnitId: application.logicalQuestionUnit.id,
                     logicalQuestionRevision: application.logicalQuestionUnit.revision,
+                    sourceLanguageAdmission: application.logicalQuestionUnit.sourceLanguageAdmission,
                   }),
                 });
               const proposedExecutionPlan = lifecycleCommit.plan;

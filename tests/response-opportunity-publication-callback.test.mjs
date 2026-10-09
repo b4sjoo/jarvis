@@ -32,6 +32,10 @@ const callbackNames = [
   "scheduleResponseOpportunityInference",
   "scheduleAdvisorAfterQuestionTypeWindow",
   "appendTranscriptTurnForTrace",
+  "recordSourceTranscriptForTrace",
+  "publishLanguageRecoveryTarget",
+  "runWithLanguageAdmission",
+  "processLanguageCheckedThemTurn",
   "buildLogicalQuestionForTurn",
   "readAudioSegmentCommitAuthorization",
   "isCurrentAudioSegment",
@@ -92,6 +96,8 @@ for (const name of [
   "settled-advisor-execution-plan", "advisor-trigger-job", "stable-answer", "meeting-answer",
   "audio-drain-authorization",
   "relation-decision-provenance",
+  "runtime-inference-provider-admission",
+  "source-language-contract",
 ]) {
   exports.push(`export * from "@/lib/meeting/${name}";`);
 }
@@ -151,12 +157,12 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-function createHarness() {
+function createHarness({ languageAdmission = false } = {}) {
   const clock = new Clock();
   class TestDate extends Date { static now() { return clock.now; } }
   const module = { exports: {} };
   const environment = {
-    module, exports: module.exports, require, console, AbortController, structuredClone,
+    module, exports: module.exports, require, console, AbortController, structuredClone, Response, Headers,
     Date: TestDate, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout,
     window: clock,
   };
@@ -188,9 +194,16 @@ function createHarness() {
     VOICE_ORDERED_RELATION_FOREGROUND_BUDGET_MS: 4_000,
     contextManagerRef: { current: { getState: () => state, clearExpiredActiveMeetingTask: () => false,
       addTranscriptTurn: (turn) => state.transcriptTurns.push(turn),
+      getDisplayTranscriptTurns: () => state.transcriptTurns,
     } },
     runtimeEpochRef: { current: 2 },
     manualCorrectionRevisionRef: { current: 0 },
+    recordedTranscriptTurnsRef: { current: new WeakSet() },
+    languageAdmissionControllerRef: { current: new AbortController() },
+    sessionLanguageObservationRef: { current: undefined },
+    languageHandoffTailRef: { current: Promise.resolve() },
+    languagePolicyRef: { current: { languages: ["en", "zh"], provider: { provider: "openai-decisions", variables: { api_key: "synthetic" } } } },
+    runtimeInferenceProviderAdmissionRef: { current: new pure.RuntimeInferenceProviderAdmissionCoordinator() },
     runtimeActiveRef: { current: true },
     logicalQuestionUnitRef: { current: null },
     adjacentQuestionScopeRef: { current: null },
@@ -278,7 +291,8 @@ function createHarness() {
   callbackNames.forEach((name, index) => {
     environment[name] = vm.runInContext(transpile(`(${callbackSources[index]})`), context);
   });
-  environment.processPostBufferThemTurnRef.current = environment.processPostBufferThemTurn;
+  if (!languageAdmission) environment.runWithLanguageAdmission = (_turn, _segment, accept) => { accept();return Promise.resolve(); };
+  environment.processPostBufferThemTurnRef.current = environment.processLanguageCheckedThemTurn;
   vm.runInContext(transpile(helperSource), context);
 
   function candidate(id, text = `How would you design ${id}?`, birthEpoch = 2) {
@@ -356,6 +370,124 @@ function bufferedTurn(h, id, text) {
     source: "system-audio", speaker: "them" };
   return { ...value, segment };
 }
+
+test("LA135 production ingress: timely other preserves raw/Force identity and cannot create setup, section, LQU, Metadata or model work", async () => {
+  const h = createHarness({ languageAdmission: true });
+  let calls = 0, raw = 0, metadata = 0, type = 0;
+  h.environment.fetch = async () => { calls++;return new Response(JSON.stringify({ answers: [{ name: "input_language", type: "choice", choice: "other", confidence: .2 }] })); };
+  h.environment.sessionRecordingManagerRef.current.recordTranscriptTurn = () => raw++;
+  h.environment.scheduleMeetingMetadataInference = () => metadata++;
+  h.environment.scheduleQuestionRuntime = () => { type++;return {}; };
+  const candidate = bufferedTurn(h, "100", "Now let's switch to a coding task.");
+  await h.environment.processCanonicalTurnIngress(candidate);
+  await h.environment.languageHandoffTailRef.current;
+  assert.equal(calls, 1);assert.equal(raw, 1);assert.equal(metadata, 0);assert.equal(type, 0);
+  assert.equal(h.environment.latestSourceOwnedSetupRef.current, undefined);
+  assert.equal(h.environment.pendingInterviewSectionHintRef.current, undefined);
+  assert.equal(h.products().unit, null);assert.equal(h.products().advisorCalls, 0);
+  assert.equal(h.products().forceTarget.turn.id, candidate.turn.id);
+  assert.equal(h.products().forceTarget.logicalQuestionUnit.normalizedText, candidate.turn.text);
+  assert.equal(h.products().forceTarget.presentation.targetKind, "response-recovery");
+  assert.equal(h.metadata.get(candidate.traceId).languageAdmissionDisposition, "excluded");
+});
+
+test("LA135 production ingress: completed allowed input reaches the original RO/Type path; confirmation reuse makes no second language call", async () => {
+  const h = createHarness({ languageAdmission: true });let calls = 0;
+  h.environment.fetch = async () => { calls++;return new Response(JSON.stringify({ answers: [{ name: "input_language", type: "choice", choice: "en", confidence: .1 }] })); };
+  const candidate = bufferedTurn(h, "101", "How would you design a distributed cache?");
+  await h.environment.processCanonicalTurnIngress(candidate);await h.environment.languageHandoffTailRef.current;
+  assert.equal(calls, 1);assert.equal(h.scheduled.length, 1);
+  let reused = 0;
+  await h.environment.runWithLanguageAdmission(candidate.turn, candidate.segment, () => reused++);
+  assert.equal(reused, 1);assert.equal(calls, 1);
+  h.settle(h.scheduled[0], h.modelResult(h.scheduled[0].job, "no-output-request"));
+});
+
+test("LA135 production ingress: policy/source snapshots resist settings changes, out-of-order responses and stale epochs", async () => {
+  const h = createHarness({ languageAdmission: true });const requests = [];const accepted = [];
+  h.environment.fetch = async (_url, init) => {
+    const response = deferred();requests.push({ response, body: JSON.parse(init.body) });return response.promise;
+  };
+  const a = bufferedTurn(h, "102", "First input."), b = bufferedTurn(h, "103", "Second input.");
+  const pa = h.environment.runWithLanguageAdmission(a.turn, a.segment, () => accepted.push("a"));
+  h.environment.languagePolicyRef.current = { ...h.environment.languagePolicyRef.current, languages: ["zh"] };
+  const pb = h.environment.runWithLanguageAdmission(b.turn, b.segment, () => accepted.push("b"));
+  await h.clock.flush();
+  assert.deepEqual(requests[0].body.questions[0].choices.map(c => c.value), ["en", "zh", "other"]);
+  assert.deepEqual(requests[1].body.questions[0].choices.map(c => c.value), ["zh", "other"]);
+  const answer = language => new Response(JSON.stringify({ answers: [{ name: "input_language", type: "choice", choice: language, confidence: .8 }] }));
+  requests[1].response.resolve(answer("zh"));await h.clock.flush();assert.deepEqual(accepted, []);
+  requests[0].response.resolve(answer("en"));await pa;await pb;assert.deepEqual(accepted, ["a", "b"]);
+  const c = bufferedTurn(h, "104", "Old source.");
+  const pc = h.environment.runWithLanguageAdmission(c.turn, c.segment, () => accepted.push("c"));
+  await h.clock.flush();h.environment.runtimeEpochRef.current++;
+  requests[2].response.resolve(answer("zh"));await pc;
+  assert.deepEqual(accepted, ["a", "b"]);assert.equal(c.turn.languageAdmission, undefined);
+  assert.equal(h.finished.at(-1)[1], "cancelled");
+});
+
+test("LA135 production buffer: no per-fragment request, manual flush checks the merged input before append/setup", async () => {
+  const h = createHarness({ languageAdmission: true });let calls = 0;
+  h.environment.fetch = async () => { calls++;return new Response(JSON.stringify({ answers: [{ name: "input_language", type: "choice", choice: "other", confidence: .9 }] })); };
+  const fragment = bufferedTurn(h, "105", replayBufferedText);
+  await h.environment.processCanonicalTurnIngress(fragment);
+  assert.equal(calls, 0);assert.ok(h.environment.pendingSentenceCompletionRef.current);
+  await h.environment.flushPendingSentenceCompletion("force-advise");
+  assert.equal(calls, 1);assert.equal(h.scheduled.length, 0);
+  assert.equal(h.environment.latestSourceOwnedSetupRef.current, undefined);
+  assert.equal(h.products().forceTarget.turn.id, fragment.turn.id);
+});
+
+test("LP203 production writer observer: committed A reads A's frozen language even after B arrived; later parent cannot overwrite it", () => {
+  const h = createHarness();
+  const source = { sessionId: "session-a", runtimeEpoch: 2, turnId: "a", sourceText: "A", allowedLanguages: ["en", "zh"],
+    language: "en", disposition: "admitted", reason: "allowed-language", startedAt: 1, completedAt: 2 };
+  const observeA = h.environment.observeTaskRuntimeWriter({ runtimeSessionId: "session-a", runtimeEpoch: 2,
+    traceId: "trace-a", sourceLanguageAdmission: source });
+  h.state.transcriptTurns.push({ id: "b", text: "B", languageAdmission: { ...source, turnId: "b", language: "zh" } });
+  const parentA = { id: "parent-a", canonicalQuestionSourceTurnIds: ["a"] };
+  h.state.taskRuntime = { parent: parentA };
+  observeA({ authorized: true, mutationApplied: true, state: { parent: parentA, revision: 1 } }, { transition: "create-parent" });
+  assert.equal(h.environment.sessionLanguageObservationRef.current.language, "en");
+  assert.equal(h.metadata.get("trace-a").sessionLanguageAppliedToRuntime, false);
+  const observeB = h.environment.observeTaskRuntimeWriter({ runtimeSessionId: "session-a", runtimeEpoch: 2,
+    traceId: "trace-b", sourceLanguageAdmission: { ...source, turnId: "b", language: "zh" } });
+  const parentB = { id: "parent-b", canonicalQuestionSourceTurnIds: ["b"] };
+  h.state.taskRuntime = { parent: parentB };
+  observeB({ authorized: true, mutationApplied: true, state: { parent: parentB, revision: 2 } }, { transition: "replace-parent" });
+  assert.equal(h.environment.sessionLanguageObservationRef.current.parentId, "parent-a");
+  assert.equal(h.products().advisorCalls, 0);assert.equal(h.scheduled.length, 0);
+});
+
+test("LA135 Pause: a still-authorized drain stores admitted context without starting RO/Type or publishing an LQU", async () => {
+  const h = createHarness({ languageAdmission: true });const response = deferred();
+  h.environment.fetch = async () => response.promise;
+  const candidate = bufferedTurn(h, "106", "Please design a rate limiter.");
+  await h.environment.processCanonicalTurnIngress(candidate);await h.clock.flush();
+  h.environment.runtimeActiveRef.current = false;
+  h.environment.runtimeEpochRef.current++;
+  h.environment.audioDrainAuthorizationRef.current = { operationId: "pause-drain", kind: "pause", audioSessionId: 1,
+    captureSessionId: "capture-a", captureGeneration: 1, issuedAt: h.clock.now, expiresAt: h.clock.now + 10000 };
+  response.resolve(new Response(JSON.stringify({ answers: [{ name: "input_language", type: "choice", choice: "en", confidence: .9 }] })));
+  await h.environment.languageHandoffTailRef.current;
+  assert.equal(h.state.transcriptTurns[0].text, candidate.turn.text);
+  assert.equal(h.scheduled.length, 0);assert.equal(h.products().unit, null);
+  assert.equal(h.metadata.get(candidate.traceId).languageAdmissionContextOnlyPause, true);
+});
+
+test("LP203 observation loss cannot undo a committed parent or start any model work", () => {
+  const h = createHarness();const logged = [];
+  h.environment.logDiagnostic = (...args) => logged.push(args.slice(0, 3));
+  h.environment.sessionRecordingManagerRef.current.recordCaptureLifecycle = () => { throw new Error("fixture recording failure"); };
+  const observer = h.environment.observeTaskRuntimeWriter({ runtimeSessionId: "session-a", runtimeEpoch: 2, traceId: "trace-a",
+    sourceLanguageAdmission: { sessionId: "session-a", runtimeEpoch: 2, turnId: "a", sourceText: "A", allowedLanguages: ["en"],
+      language: "en", disposition: "admitted", startedAt: 1, completedAt: 2 } });
+  const parent = { id: "parent", canonicalQuestionSourceTurnIds: ["a"] };
+  h.state.taskRuntime = { parent };
+  assert.doesNotThrow(() => observer({ authorized: true, mutationApplied: true, state: { parent, revision: 1 } }, { transition: "create-parent" }));
+  assert.equal(h.state.taskRuntime.parent, parent);assert.equal(h.scheduled.length, 0);
+  assert.deepEqual(logged, [["warn", "meeting.language-admission", "observation-recording-failed"]]);
+});
 
 const replayBufferedText = "But then how, were you using AI to extract this? Did you write like a program to, so were you sending this to another AI to extract or are you...";
 

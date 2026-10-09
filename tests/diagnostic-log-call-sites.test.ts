@@ -257,6 +257,7 @@ test("LG the not-graded list names each case once and says what the log holds fo
   assert.deepEqual(DIAGNOSTIC_LOG_LEDGER.filter(row => row.caught?.safeCode).map(row => `${row.source} ${row.event}`).sort(),
     ["meeting.evaluation observed-projection-persist-failed", "meeting.evaluation persistence-failed"]);
   assert.deepEqual(limits, { "meeting.relation formal-operation-settled": 2, "meeting.question-type foreground-deadline-finalized": 1,
+    "meeting.language-admission observation-recording-failed": 1,
     "meeting.trace store-event": 2, "meeting.native-audio lifecycle-event": 1, "meeting.raw-zero-input probe-observed": 4,
     "meeting.manual-action type-correction-recorded": 1, ...causeLimits, ...noCause,
     "meeting.evaluation observed-projection-persist-failed": 1, "meeting.evaluation persistence-failed": 1,

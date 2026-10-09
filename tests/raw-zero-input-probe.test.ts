@@ -72,7 +72,7 @@ function harness() {
     invalidateAudioProcessingSession: () => calls.push("invalidate-audio"),
     startAudioProcessingSession: () => calls.push("start-audio"),
     prewarmSemanticTaxonomyRuntime: () => {},
-    contextManagerRef: { current: { getState: () => context } },
+    contextManagerRef: { current: { getState: () => context, getDisplayTranscriptTurns: () => [] } },
   };
   const attempt = { id: "probe", startedAt: now, previousCaptureSessionId: "old",
     previousCaptureGeneration: 1, reason: "raw-zero-input" };

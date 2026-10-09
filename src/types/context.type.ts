@@ -2,6 +2,7 @@ import { Dispatch, SetStateAction } from "react";
 import type { ScreenshotConfig } from "./settings";
 import type { SelectedAiProviderConfig, TYPE_PROVIDER } from "./provider.type";
 import { CursorType, CustomizableState } from "@/lib/storage";
+import type { MeetingInputLanguage } from "@/config/meeting-input-languages";
 
 export type IContextType = {
   systemPrompt: string;
@@ -12,6 +13,8 @@ export type IContextType = {
   onSetSelectedAIProvider: (selection: SelectedAiProviderConfig) => void;
   selectedPreparationAIProvider: SelectedAiProviderConfig;
   selectedDecisionsProvider: SelectedAiProviderConfig;
+  meetingInputLanguages: readonly MeetingInputLanguage[];
+  onSetMeetingInputLanguages: (languages: readonly MeetingInputLanguage[]) => void;
   onSetSelectedDecisionsProvider: (selection: SelectedAiProviderConfig) => void;
   onSetSelectedPreparationAIProvider: (
     selection: SelectedAiProviderConfig

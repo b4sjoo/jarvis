@@ -226,6 +226,7 @@ export async function openProjectSelectionBrowserHost(t,bundle,browser,execution
             }},
         };},
         app: { screenshotConfiguration: {}, selectedSttProvider: { provider: "", variables: {} }, allSttProviders: [],
+          meetingInputLanguages: ["en", "zh"], selectedDecisionsProvider: { provider: "", variables: {} },
           selectedAIProvider: { provider: "s63", variables: {} }, allAiProviders: [provider],
           selectedAudioDevices: { input: { id: "default" }, output: { id: "default" } } },
         database: { select: async sql => { calls.push({sql}); return []; }, execute: async (sql,values=[]) => {
