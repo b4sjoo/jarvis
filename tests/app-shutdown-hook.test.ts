@@ -131,6 +131,7 @@ async function harness(owner: "meeting" | "system" = "meeting",
   Object.assign(globals, {
     console: { info: noop, warn: noop }, logDiagnostic: diagnosticLog.logDiagnostic, diagnosticLogCause: diagnosticLog.logger.diagnosticLogCause,
     Date, Promise, Set, Map, Error, structuredClone, exports: {}, importMeta: { env: { DEV: false } },
+    languageHandoffTailRef: { current: Promise.resolve() },
     artifactReuseSettingsRef: { current: { useMemory: false } },
     manualCorrectionRevisionRef: { current: 0 },
     preparationRuntimeContextRef: { current: { preparationContextRevision: 0 } },
@@ -269,6 +270,27 @@ async function harness(owner: "meeting" | "system" = "meeting",
     },
   };
 }
+
+test("LA135 native drain joins language work created by the final STT turn before releasing source authorization", async () => {
+  const h = await harness();const language = deferred();let completed = false;
+  const drain = h.globals.drainSystemAudioQueueForNativeStop("pause", "drain-language").then((result: any) => { completed = true;return result; });
+  await settle();
+  // The last STT completion installs a language handoff after drain began.
+  h.globals.languageHandoffTailRef.current = language.promise;
+  h.queue.resolve();await settle();assert.equal(completed, false);
+  language.resolve();const result = await drain;
+  assert.equal(result.timedOut, false);assert.ok(result.postSttLanguageWaitMs >= 0);
+  assert.equal(result.timeoutMs, 3000);assert.equal(h.nativeCommands.length, 0);
+  await h.recording.stop();
+});
+
+test("LA135 native drain keeps the existing hard deadline when language work cannot finish", async () => {
+  const h = await harness();const language = deferred();h.globals.languageHandoffTailRef.current = language.promise;
+  h.queue.resolve();const drain = h.globals.drainSystemAudioQueueForNativeStop("stop", "drain-language");
+  await settle();h.queueTimeout();
+  const result = await drain;assert.equal(result.timedOut, true);assert.equal(result.timeoutMs, 3000);
+  language.resolve();await h.recording.stop();
+});
 
 for (const owner of ["meeting", "system"] as const) {
   test(`Q2 actual Hook ${owner} lease: native reply < accepted terminal < queue/evaluation < 127 seal`, async () => {

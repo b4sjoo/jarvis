@@ -6219,9 +6219,13 @@ export function useMeetingAssistant() {
         activeSttRequestsRef.current.size;
       let timeoutId: number | undefined;
       let timedOut = false;
+      let sttSettledAt: number | undefined;
       try {
         await Promise.race([
-          systemAudioQueueTailRef.current,
+          systemAudioQueueTailRef.current.then(() => {
+            sttSettledAt = Date.now();
+            return languageHandoffTailRef.current;
+          }),
           new Promise<void>((resolve) => {
             timeoutId = window.setTimeout(() => {
               timedOut = true;
@@ -6246,6 +6250,7 @@ export function useMeetingAssistant() {
         activeRequestCountAtDrainStart,
         activeRequestCountAtDrainEnd:
           activeSttRequestsRef.current.size,
+        postSttLanguageWaitMs: sttSettledAt === undefined ? undefined : Math.max(0, Date.now() - sttSettledAt),
         audioDrainOperationId: drainAuthorization?.operationId,
         audioDrainKind: drainAuthorization?.kind,
         audioDrainMaximumSegmentSequence:
