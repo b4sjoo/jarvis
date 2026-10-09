@@ -30,7 +30,6 @@ export const STORAGE_KEYS = {
   CUSTOMIZABLE_DOCK_STEALTH_MIGRATED: "customizable_dock_stealth_migrated",
   MANAGED_API_ENABLED: "managed_api_enabled",
   SHORTCUTS: "shortcuts",
-  AUTOSTART_INITIALIZED: "autostart_initialized",
 
   SELECTED_AUDIO_DEVICES: "selected_audio_devices",
   RESPONSE_SETTINGS: "response_settings",

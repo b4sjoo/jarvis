@@ -53,6 +53,8 @@ reqwest = { version = "0.12", features = ["json", "stream", "multipart"] }
 dotenv = "0.15"
 futures-util = "0.3"
 anyhow = "1.0"
+dirs = "6"
+fs2 = "0.4.3"
 tracing = "0.1"
 ringbuf = "0.4.8"
 tauri-plugin-shell = "2.3.1"

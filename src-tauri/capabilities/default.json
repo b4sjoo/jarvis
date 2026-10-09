@@ -24,9 +24,6 @@
     "shell:allow-open",
     "core:window:allow-start-dragging",
     "sql:default",
-    "sql:allow-execute",
-    "autostart:allow-enable",
-    "autostart:allow-disable",
-    "autostart:allow-is-enabled"
+    "sql:allow-execute"
   ]
 }

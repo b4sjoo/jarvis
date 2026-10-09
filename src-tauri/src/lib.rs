@@ -1,4 +1,5 @@
 mod app_shutdown;
+mod autostart;
 mod capture;
 mod db;
 mod diagnostic_log;
@@ -10,6 +11,7 @@ mod preparation_storage;
 mod runtime_regression_files;
 mod session_recording_files;
 mod shortcuts;
+mod single_instance;
 mod stt_evaluation;
 mod window;
 use base64::{engine::general_purpose, Engine as _};
@@ -398,6 +400,38 @@ fn meeting_trace_metrics_path(app: &AppHandle) -> Result<PathBuf, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let context = tauri::generate_context!();
+    let identifier = &context.config().identifier;
+    let started = std::time::Instant::now();
+    // Match Tauri's app_data_dir before any plugin, database or window is initialized.
+    let acquired = dirs::data_dir()
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "Application data directory unavailable"))
+        .and_then(|dir| single_instance::InstanceGuard::acquire(&dir.join(identifier)));
+    let _instance_guard = match acquired {
+        Ok(Some(guard)) => {
+            eprintln!("ApplicationStartupReceipt {}", serde_json::json!({
+                "outcome": "acquired", "identifier": identifier,
+                "pid": std::process::id(), "elapsedMs": started.elapsed().as_secs_f64() * 1000.0
+            }));
+            guard
+        }
+        Ok(None) => {
+            eprintln!("ApplicationStartupReceipt {}", serde_json::json!({
+                "outcome": "duplicate", "identifier": identifier,
+                "pid": std::process::id(), "elapsedMs": started.elapsed().as_secs_f64() * 1000.0
+            }));
+            eprintln!("Jarvis is already running. Quit the existing instance before starting another.");
+            return;
+        }
+        Err(error) => {
+            eprintln!("ApplicationStartupReceipt {}", serde_json::json!({
+                "outcome": "error", "identifier": identifier, "errorKind": format!("{:?}", error.kind()),
+                "pid": std::process::id(), "elapsedMs": started.elapsed().as_secs_f64() * 1000.0
+            }));
+            eprintln!("Jarvis could not establish exclusive application ownership: {error}");
+            std::process::exit(1);
+        }
+    };
     let mut builder = tauri::Builder::default()
         .plugin(
             tauri_plugin_sql::Builder::default()
@@ -427,6 +461,8 @@ pub fn run() {
     }
     let mut builder = builder
         .invoke_handler(tauri::generate_handler![
+            autostart::get_autostart_status,
+            autostart::set_autostart_enabled,
             app_shutdown::get_app_shutdown,
             app_shutdown::retry_app_shutdown,
             app_shutdown::report_app_shutdown,
@@ -534,16 +570,14 @@ pub fn run() {
             }
 
             #[cfg(desktop)]
-            {
+            if autostart::supported(&app.config().identifier) {
                 use tauri_plugin_autostart::MacosLauncher;
 
                 #[allow(deprecated, unexpected_cfgs)]
-                if let Err(e) = app.handle().plugin(tauri_plugin_autostart::init(
+                app.handle().plugin(tauri_plugin_autostart::init(
                     MacosLauncher::LaunchAgent,
                     Some(vec![]),
-                )) {
-                    eprintln!("Failed to initialize autostart plugin: {}", e);
-                }
+                ))?;
             }
 
             // Initialize global shortcut plugin with centralized handler
@@ -611,7 +645,7 @@ pub fn run() {
     }
 
     builder
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building tauri application")
         .run(app_shutdown::on_run_event);
 }

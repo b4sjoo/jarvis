@@ -24,6 +24,22 @@ flowchart LR
 
 ## Ownership Boundaries
 
+### Application Startup
+
+Before Tauri initializes plugins, SQLite or windows, the native entry acquires
+one OS-backed exclusive file lock in the application's user-data directory.
+The process holds that handle until exit. The file is never unlinked as an unlock
+operation. A duplicate exits before creating resources; an I/O failure prevents
+startup. Different diagnostic data identities have separate ownership, while
+development and release sharing an identity cannot run concurrently.
+
+Autostart is an explicit opt-in for the ordinary release build. Native
+`get_autostart_status` and `set_autostart_enabled` own capability and actual state;
+development/test builds cannot register login startup. The frontend reads native
+state into the existing setting mirror, without first-launch registration.
+Direct frontend autostart-plugin permissions are removed. This startup-only
+boundary adds no Meeting scheduling, inference, polling or shutdown coordinator.
+
 - `src/hooks/useMeetingAssistant.ts` composes the current meeting runtime. It is
   still a migration boundary, not permission to add more independent state
   authorities.

@@ -28,7 +28,6 @@ import { isMeetingInputLanguageSet, readMeetingInputLanguages, type MeetingInput
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { enable, disable } from "@tauri-apps/plugin-autostart";
 import {
   ReactNode,
   createContext,
@@ -76,6 +75,8 @@ const AppContext = createContext<IContextType | undefined>(undefined);
 
 // Create the provider component
 export const AppProvider = ({ children }: { children: ReactNode }) => {
+  const [autostartSupported, setAutostartSupported] = useState<boolean | null>(null);
+  const [autostartError, setAutostartError] = useState<string | null>(null);
   const [systemPrompt, setSystemPrompt] = useState<string>(
     safeLocalStorage.getItem(STORAGE_KEYS.SYSTEM_PROMPT) ||
       DEFAULT_SYSTEM_PROMPT
@@ -359,25 +360,12 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   useEffect(() => {
     const initializeAutostart = async () => {
       try {
-        const autostartInitialized = safeLocalStorage.getItem(
-          STORAGE_KEYS.AUTOSTART_INITIALIZED
-        );
-
-        // Only apply autostart on the very first launch
-        if (!autostartInitialized) {
-          const autostartEnabled = customizable?.autostart?.isEnabled ?? true;
-
-          if (autostartEnabled) {
-            await enable();
-          } else {
-            await disable();
-          }
-
-          // Mark as initialized so this never runs again
-          safeLocalStorage.setItem(STORAGE_KEYS.AUTOSTART_INITIALIZED, "true");
-        }
+        const status = await invoke<{ supported: boolean; enabled: boolean }>("get_autostart_status");
+        setAutostartSupported(status.supported);
+        setCustomizable(updateAutostart(status.enabled));
       } catch (error) {
-        console.debug("Autostart initialization skipped:", error);
+        setAutostartError(String(error));
+        console.error("Could not read native autostart status:", error);
       }
     };
 
@@ -612,20 +600,9 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const toggleAutostart = async (isEnabled: boolean) => {
-    const newState = updateAutostart(isEnabled);
-    setCustomizable(newState);
-    try {
-      if (isEnabled) {
-        await enable();
-      } else {
-        await disable();
-      }
-      loadData();
-    } catch (error) {
-      console.error("Failed to toggle autostart:", error);
-      const revertedState = updateAutostart(!isEnabled);
-      setCustomizable(revertedState);
-    }
+    const status = await invoke<{ supported: boolean; enabled: boolean }>("set_autostart_enabled", { enabled: isEnabled });
+    setAutostartSupported(status.supported);
+    setCustomizable(updateAutostart(status.enabled));
   };
 
   const setCursorType = (type: CursorType) => {
@@ -666,6 +643,8 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     toggleAppIconVisibility,
     toggleAlwaysOnTop,
     toggleAutostart,
+    autostartSupported,
+    autostartError,
     loadData,
     managedApiEnabled,
     setManagedApiEnabled,

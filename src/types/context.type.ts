@@ -40,6 +40,8 @@ export type IContextType = {
   toggleAppIconVisibility: (isVisible: boolean) => Promise<void>;
   toggleAlwaysOnTop: (isEnabled: boolean) => Promise<void>;
   toggleAutostart: (isEnabled: boolean) => Promise<void>;
+  autostartSupported: boolean | null;
+  autostartError: string | null;
   loadData: () => void;
   managedApiEnabled: boolean;
   setManagedApiEnabled: (enabled: boolean) => Promise<void>;

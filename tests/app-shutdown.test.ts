@@ -302,7 +302,8 @@ test("production entry delegates native; Dashboard dialog does not import main o
   for (const command of ["get_app_shutdown", "retry_app_shutdown", "report_app_shutdown", "complete_app_shutdown", "force_app_shutdown"]) {
     assert.ok(registration.includes(`app_shutdown::${command},`));
   }
-  assert.match(registration, /\.build\(tauri::generate_context!\(\)\)[\s\S]*?\.run\(app_shutdown::on_run_event\)/);
+  assert.match(registration, /let context = tauri::generate_context!\(\);/);
+  assert.match(registration, /\.build\(context\)[\s\S]*?\.run\(app_shutdown::on_run_event\)/);
   assert.match(read("src/layouts/DashboardLayout.tsx"), /<ApplicationShutdownDialog/);
   assert.doesNotMatch(read("src/components/ApplicationShutdownDialog.tsx"), /useMeetingAssistant|ApplicationShutdownCoordinator/);
   assert.match(read("src/hooks/useApplicationShutdown.ts"), /getCurrentWindow\(\)\.label !== "main"/);

@@ -13,10 +13,9 @@ test("DR205: real AppProvider persists independent masked Decisions credentials 
       export {Input} from ${file("src/components/ui/input.tsx")};export {Button} from ${file("src/components/ui/button.tsx")};`,
     "@/contexts": `export {useApp} from ${file("src/contexts/app.context.tsx")};`,
     "@/lib": `export {safeLocalStorage} from ${file("src/lib/storage/helper.ts")};export const getPlatform=()=>"macos";`,
-    "@tauri-apps/api/core": `export const invoke=async()=>undefined;`,
+    "@tauri-apps/api/core": `export const invoke=async(command)=>command==='get_autostart_status'?{supported:false,enabled:false}:undefined;`,
     "@tauri-apps/api/event": `export const listen=async()=>()=>{};`,
     "@tauri-apps/api/window": `export const getCurrentWindow=()=>({label:'dashboard'});`,
-    "@tauri-apps/plugin-autostart": `export const enable=async()=>{};export const disable=async()=>{};`,
   };
   const bundle = await build({ stdin: { resolveDir: root, loader: "tsx", contents: `
     import React from 'react';import {createRoot} from 'react-dom/client';import {MemoryRouter} from 'react-router-dom';
