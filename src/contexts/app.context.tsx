@@ -23,6 +23,7 @@ import {
   TYPE_PROVIDER,
 } from "@/types";
 import curl2Json from "@bany/curl-to-json";
+import { DECISIONS_PROVIDER_ID } from "@/config/decisions.constants";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -114,6 +115,9 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     provider: "",
     variables: {},
   });
+
+  const [selectedDecisionsProvider, setSelectedDecisionsProvider] =
+    useState<SelectedAiProviderConfig>({ provider: "", variables: {} });
 
   // STT Providers
   const [customSttProviders, setCustomSttProviders] = useState<TYPE_PROVIDER[]>(
@@ -228,6 +232,19 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       setSelectedPreparationAIProvider(
         JSON.parse(savedSelectedPreparationAi)
       );
+    }
+
+    const savedDecisions = safeLocalStorage.getItem(STORAGE_KEYS.SELECTED_DECISIONS_PROVIDER);
+    if (savedDecisions) {
+      try {
+        const parsed = JSON.parse(savedDecisions);
+        setSelectedDecisionsProvider(parsed && typeof parsed === "object"
+          ? parsed : { provider: "", variables: {} });
+      } catch {
+        setSelectedDecisionsProvider({ provider: "", variables: {} });
+      }
+    } else {
+      setSelectedDecisionsProvider({ provider: "", variables: {} });
     }
 
     // Load selected STT provider
@@ -406,6 +423,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
         e.key === STORAGE_KEYS.SELECTED_PREPARATION_AI_PROVIDER ||
         e.key === STORAGE_KEYS.CUSTOM_SPEECH_PROVIDERS ||
         e.key === STORAGE_KEYS.SELECTED_STT_PROVIDER ||
+        e.key === STORAGE_KEYS.SELECTED_DECISIONS_PROVIDER ||
         e.key === STORAGE_KEYS.SYSTEM_PROMPT ||
         e.key === STORAGE_KEYS.SCREENSHOT_CONFIG ||
         e.key === STORAGE_KEYS.CUSTOMIZABLE ||
@@ -464,6 +482,15 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     }
   }, [selectedSttProvider]);
 
+  useEffect(() => {
+    if (selectedDecisionsProvider.provider) {
+      safeLocalStorage.setItem(
+        STORAGE_KEYS.SELECTED_DECISIONS_PROVIDER,
+        JSON.stringify(selectedDecisionsProvider)
+      );
+    }
+  }, [selectedDecisionsProvider]);
+
   // Computed all AI providers
   const allAiProviders: TYPE_PROVIDER[] = [
     ...AI_PROVIDERS,
@@ -521,6 +548,11 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       provider,
       variables,
     }));
+  };
+
+  const onSetSelectedDecisionsProvider = (selection: SelectedAiProviderConfig) => {
+    if (selection.provider !== DECISIONS_PROVIDER_ID) return;
+    setSelectedDecisionsProvider({ provider: selection.provider, variables: { ...selection.variables } });
   };
 
   // Setter for selected STT with validation
@@ -603,6 +635,8 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     onSetSelectedAIProvider,
     selectedPreparationAIProvider,
     onSetSelectedPreparationAIProvider,
+    selectedDecisionsProvider,
+    onSetSelectedDecisionsProvider,
     allSttProviders,
     customSttProviders,
     selectedSttProvider,

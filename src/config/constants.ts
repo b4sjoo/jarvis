@@ -11,6 +11,7 @@ export const STORAGE_KEYS = {
   SELECTED_AI_PROVIDER: "curl_selected_ai_provider",
   SELECTED_PREPARATION_AI_PROVIDER: "curl_selected_preparation_ai_provider",
   SELECTED_STT_PROVIDER: "curl_selected_stt_provider",
+  SELECTED_DECISIONS_PROVIDER: "curl_selected_decisions_provider",
   MEETING_ASSISTANT_SETTINGS: "meeting_assistant_settings",
   MEETING_INTERVIEW_BRIEF: "meeting_interview_brief",
   MEETING_FOCUS_MODE: "meeting_focus_mode",

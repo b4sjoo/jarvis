@@ -11,6 +11,8 @@ export type IContextType = {
   selectedAIProvider: SelectedAiProviderConfig;
   onSetSelectedAIProvider: (selection: SelectedAiProviderConfig) => void;
   selectedPreparationAIProvider: SelectedAiProviderConfig;
+  selectedDecisionsProvider: SelectedAiProviderConfig;
+  onSetSelectedDecisionsProvider: (selection: SelectedAiProviderConfig) => void;
   onSetSelectedPreparationAIProvider: (
     selection: SelectedAiProviderConfig
   ) => void;

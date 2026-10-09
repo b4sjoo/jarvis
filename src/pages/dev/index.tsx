@@ -1,4 +1,4 @@
-import { AIProviders, MemoryBase } from "./components";
+import { AIProviders, DecisionsProvider, MemoryBase } from "./components";
 import { useSettings } from "@/hooks";
 import { PageLayout } from "@/layouts";
 
@@ -8,6 +8,8 @@ const DevSpace = () => {
   return (
     <PageLayout title="Dev Space" description="Manage your dev space">
       <AIProviders {...settings} />
+
+      <DecisionsProvider />
 
       <MemoryBase />
     </PageLayout>

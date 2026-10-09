@@ -15,7 +15,7 @@ function renderPage(file: string, settings: Record<string, unknown>) {
   };
   const imports: Record<string, any> = {
     "react/jsx-runtime": jsx,
-    "./components": Object.fromEntries(["AudioSelection", "STTProviders", "AIProviders", "MemoryBase"].map(name => [name, component(name)])),
+    "./components": Object.fromEntries(["AudioSelection", "STTProviders", "AIProviders", "DecisionsProvider", "MemoryBase"].map(name => [name, component(name)])),
     "@/hooks": { useSettings: () => settings },
     "@/layouts": { PageLayout: component("PageLayout") },
     "@/lib": { getPlatform: () => "macos" },

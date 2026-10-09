@@ -18,6 +18,7 @@ export interface RuntimeInferenceRuntimeJob {
   budgetReason: string;
   admissionLane?: RuntimeInferenceLane;
   providerTier?: RuntimeInferenceProviderTier;
+  providerConfigFingerprint?: string;
 }
 
 export interface RuntimeInferenceBudgetSnapshot {
@@ -230,6 +231,7 @@ export class RuntimeInferenceOperationRuntime<
           operationId: active.job.operationId,
           lane: active.job.admissionLane ?? this.definition.lane,
           providerTier: active.job.providerTier ?? this.definition.providerTier,
+          providerConfigFingerprint: active.job.providerConfigFingerprint,
           signal: controller.signal,
           execute,
           onAdmitted: (receipt) => {

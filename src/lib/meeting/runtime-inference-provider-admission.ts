@@ -74,6 +74,7 @@ export class RuntimeInferenceProviderAdmissionCoordinator {
     operationId: string;
     lane: RuntimeInferenceLane;
     providerTier?: RuntimeInferenceProviderTier;
+    providerConfigFingerprint?: string;
     signal: AbortSignal;
     execute: () => Promise<T>;
     onAdmitted?: (receipt: RuntimeInferenceSharedAdmissionReceipt) => void;
@@ -83,7 +84,9 @@ export class RuntimeInferenceProviderAdmissionCoordinator {
     }
     const queuedAt = this.clock.now();
     const providerTier = input.providerTier ?? "fast";
-    const providerGroupKey = this.resolveProviderGroupKey(providerTier);
+    const providerGroupKey = input.providerConfigFingerprint
+      ? `provider:${input.providerConfigFingerprint}`
+      : this.resolveProviderGroupKey(providerTier);
     const eligibleAt = this.resolveEligibleAt({
       providerGroupKey,
       lane: input.lane,

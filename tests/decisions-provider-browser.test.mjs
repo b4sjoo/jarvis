@@ -1,0 +1,60 @@
+import assert from "node:assert/strict";
+import path from "node:path";
+import test from "node:test";
+import { build } from "esbuild";
+import { loadBrowserTestDependency } from "./helpers/browser-test-dependency.mjs";
+
+const { playwright, skip } = loadBrowserTestDependency();
+test("DR205: real AppProvider persists independent masked Decisions credentials across windows", { skip }, async () => {
+  const root = process.cwd(), file = name => JSON.stringify(path.join(root, name));
+  const mocks = {
+    "@/components": `export {Header} from ${file("src/components/Header/index.tsx")};
+      export {Input} from ${file("src/components/ui/input.tsx")};export {Button} from ${file("src/components/ui/button.tsx")};`,
+    "@/contexts": `export {useApp} from ${file("src/contexts/app.context.tsx")};`,
+    "@/lib": `export {safeLocalStorage} from ${file("src/lib/storage/helper.ts")};export const getPlatform=()=>"macos";`,
+    "@tauri-apps/api/core": `export const invoke=async()=>undefined;`,
+    "@tauri-apps/api/event": `export const listen=async()=>()=>{};`,
+    "@tauri-apps/api/window": `export const getCurrentWindow=()=>({label:'dashboard'});`,
+    "@tauri-apps/plugin-autostart": `export const enable=async()=>{};export const disable=async()=>{};`,
+  };
+  const bundle = await build({ stdin: { resolveDir: root, loader: "tsx", contents: `
+    import React from 'react';import {createRoot} from 'react-dom/client';import {MemoryRouter} from 'react-router-dom';
+    import {AppProvider} from './src/contexts/app.context.tsx';
+    import {DecisionsProvider} from './src/pages/dev/components/DecisionsProvider.tsx';
+    createRoot(document.getElementById('root')).render(<MemoryRouter><AppProvider><DecisionsProvider/></AppProvider></MemoryRouter>);
+  ` }, bundle: true, write: false, platform: "browser", format: "iife", jsx: "automatic",
+    define: { "process.env.NODE_ENV": '"test"' },
+    plugins: [{ name: "native-boundaries", setup(b) {
+      b.onResolve({ filter: /.*/ }, args => Object.hasOwn(mocks, args.path) ? { path: args.path, namespace: "fixture" } : undefined);
+      b.onLoad({ filter: /.*/, namespace: "fixture" }, args => ({ contents: mocks[args.path], loader: "tsx", resolveDir: root }));
+    } }],
+  });
+  const browser = await playwright.chromium.launch({ headless: true, executablePath: process.env.JARVIS_CHROMIUM_EXECUTABLE });
+  try {
+    const context = await browser.newContext();
+    let requests=0;const errors=[];
+    await context.route("**/*", route=>route.request().url()==="http://decisions-settings.fixture/"
+      ?route.fulfill({contentType:"text/html",body:'<div id="root"></div>'})
+      :(requests++,route.abort()));
+    const page = await context.newPage();page.on("pageerror",e=>errors.push(e.message));
+    await page.goto("http://decisions-settings.fixture/");
+    const stt={provider:"azure-mai-transcribe",variables:{api_key:"synthetic-azure",endpoint:"fixture.cognitiveservices.azure.com"}};
+    await page.evaluate(stt=>{localStorage.clear();localStorage.setItem('auto-configs-enabled','true');localStorage.setItem('autostart_initialized','true');
+      localStorage.setItem('curl_selected_stt_provider',JSON.stringify(stt));},stt);
+    await page.addScriptTag({content:bundle.outputFiles[0].text});
+    await page.getByLabel("API Key",{exact:true}).fill("synthetic-openai");
+    await page.waitForFunction(()=>JSON.parse(localStorage.getItem('curl_selected_decisions_provider')||'null')?.variables?.api_key==='synthetic-openai');
+    assert.equal(await page.getByLabel("API Key",{exact:true}).getAttribute("type"),"password");
+    assert.equal(await page.getByLabel("Model",{exact:true}).inputValue(),"gpt-6-luna");
+    assert.deepEqual(await page.evaluate(()=>JSON.parse(localStorage.getItem('curl_selected_stt_provider'))),stt);
+    const second=await context.newPage();second.on("pageerror",e=>errors.push(e.message));
+    await second.goto("http://decisions-settings.fixture/");await second.addScriptTag({content:bundle.outputFiles[0].text});
+    await second.waitForFunction(()=>document.querySelector('#decisions-api-key')?.value==='synthetic-openai');
+    await page.getByLabel("API Key",{exact:true}).fill("replacement-openai");
+    await second.waitForFunction(()=>document.querySelector('#decisions-api-key')?.value==='replacement-openai');
+    await second.getByRole("button",{name:"Remove Decisions API key"}).click();
+    await page.waitForFunction(()=>document.querySelector('#decisions-api-key')?.value==='');
+    assert.deepEqual(await page.evaluate(()=>JSON.parse(localStorage.getItem('curl_selected_stt_provider'))),stt);
+    assert.equal(requests,0);assert.deepEqual(errors,[]);
+  } finally { await browser.close(); }
+});
