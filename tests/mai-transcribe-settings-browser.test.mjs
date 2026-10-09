@@ -28,7 +28,7 @@ test("MAI203: real settings controls and STT request round-trip in a browser", {
     stdin: { resolveDir: root, loader: "tsx", contents: `
       import React from 'react';import {createRoot} from 'react-dom/client';import {MemoryRouter} from 'react-router-dom';
       import {StateContext} from '@/contexts';
-      import {Providers} from './src/pages/dev/components/stt-configs/Providers.tsx';
+      import {Providers} from './src/pages/audio/components/stt-configs/Providers.tsx';
       import {useSettings} from './src/hooks/useSettings.ts';
       import {SPEECH_TO_TEXT_PROVIDERS} from './src/config/stt.constants.ts';
       import {fetchSTT} from './src/lib/functions/stt.function.ts';

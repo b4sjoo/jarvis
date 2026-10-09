@@ -7,7 +7,7 @@ export const STTProviders = (settings: UseSettingsReturn) => {
   return (
     <div id="stt-providers" className="space-y-3">
       <Header
-        title="STT Providers"
+        title="Transcription Provider"
         description="Select your preferred STT service provider to get started."
         isMainTitle
       />

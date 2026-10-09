@@ -1,4 +1,5 @@
-import { AudioSelection } from "./components";
+import { AudioSelection, STTProviders } from "./components";
+import { useSettings } from "@/hooks";
 import { PageLayout } from "@/layouts";
 import { getPlatform } from "@/lib";
 
@@ -31,6 +32,7 @@ const getOsInstructions = () => {
 
 const Audio = () => {
   const osInstructions = getOsInstructions();
+  const settings = useSettings();
 
   return (
     <PageLayout
@@ -54,6 +56,8 @@ const Audio = () => {
           devices.
         </p>
       </div>
+
+      <STTProviders {...settings} />
     </PageLayout>
   );
 };

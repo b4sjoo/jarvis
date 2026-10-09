@@ -108,7 +108,7 @@ Jarvis expects you to configure local/custom providers before relying on meeting
 
 ### Azure MAI-Transcribe-2
 
-Select **Azure MAI-Transcribe-2** in the STT settings and enter the Speech resource
+Open **Audio Settings**, select **Azure MAI-Transcribe-2** under Transcription Provider and enter the Speech resource
 endpoint (`https://<resource>.cognitiveservices.azure.com`) and its API key. A
 hostname without `https://` is also accepted. Project and Azure OpenAI endpoints
 are not Speech endpoints. Selecting the provider is explicit; existing settings

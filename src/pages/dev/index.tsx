@@ -1,4 +1,4 @@
-import { AIProviders, MemoryBase, STTProviders } from "./components";
+import { AIProviders, MemoryBase } from "./components";
 import { useSettings } from "@/hooks";
 import { PageLayout } from "@/layouts";
 
@@ -8,8 +8,6 @@ const DevSpace = () => {
   return (
     <PageLayout title="Dev Space" description="Manage your dev space">
       <AIProviders {...settings} />
-
-      <STTProviders {...settings} />
 
       <MemoryBase />
     </PageLayout>
