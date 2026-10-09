@@ -21,17 +21,18 @@ export function DecisionsProvider() {
       <Header title="Decisions Provider" description="OpenAI" isMainTitle />
       <div className="space-y-1">
         <label htmlFor="decisions-model" className="text-sm font-medium">Model</label>
-        <Input id="decisions-model" value={DECISIONS_MODEL} readOnly />
+        <Input id="decisions-model" value={DECISIONS_MODEL} readOnly className="h-11" />
       </div>
       <div className="space-y-1">
         <label htmlFor="decisions-api-key" className="text-sm font-medium">API Key</label>
         <div className="flex min-w-0 gap-2">
           <Input id="decisions-api-key" type="password" placeholder="OpenAI API key"
-            value={draft} onChange={event => setKey(event.target.value)} className="min-w-0 flex-1" />
-          <Button size="icon" variant="outline" disabled={!draft} title="Remove Decisions API key"
+            value={draft} onChange={event => setKey(event.target.value)}
+            className="h-11 min-w-0 flex-1 border-1 border-input/50 transition-colors focus:border-primary/50" />
+          {draft.trim() ? <Button size="icon" variant="destructive" className="h-11 w-11 shrink-0" title="Remove API Key"
             aria-label="Remove Decisions API key" onClick={() => setKey("")}>
             <TrashIcon className="h-4 w-4" />
-          </Button>
+          </Button> : null}
         </div>
       </div>
       {saveError ? <p role="alert" className="text-xs text-red-500">{saveError}</p>

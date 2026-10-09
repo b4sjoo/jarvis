@@ -122,6 +122,17 @@
   }
 }
 
+/* Keep WebKit's native 17px Caps Lock indicator from stretching in taller inputs. */
+input[data-slot="input"][type="password"]::-webkit-caps-lock-indicator {
+  width: 17px;
+  height: 17px;
+  max-width: 17px;
+  max-height: 17px;
+  align-self: center;
+  flex: none;
+  object-fit: contain;
+}
+
 /* Apply global transparency */
 [data-slot="card"] {
   background-color: rgb(from var(--card) r g b / var(--opacity, 1)) !important;

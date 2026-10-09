@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import path from "node:path";
+import { mkdirSync, readFileSync, readdirSync } from "node:fs";
 import test from "node:test";
 import { build } from "esbuild";
 import { loadBrowserTestDependency } from "./helpers/browser-test-dependency.mjs";
@@ -43,6 +44,10 @@ test("DR205: real AppProvider persists independent masked Decisions credentials 
     await page.evaluate(stt=>{localStorage.clear();localStorage.setItem('auto-configs-enabled','true');localStorage.setItem('autostart_initialized','true');
       localStorage.setItem('curl_selected_stt_provider',JSON.stringify(stt));},stt);
     await page.addScriptTag({content:bundle.outputFiles[0].text});
+    const styles = readdirSync('dist/assets').filter(name => name.endsWith('.css'));
+    assert.ok(styles.length, 'Build the current frontend before explicit styled browser acceptance.');
+    await page.addStyleTag({ content: styles.map(name => readFileSync(path.join('dist/assets', name), 'utf8')).join('\n') });
+    assert.equal(await page.getByRole('button', { name: 'Remove Decisions API key' }).count(), 0);
     assert.equal(await page.getByLabel("English",{exact:true}).isChecked(),true);
     assert.equal(await page.getByLabel("中文",{exact:true}).isChecked(),true);
     await page.getByLabel("中文",{exact:true}).uncheck();
@@ -51,6 +56,19 @@ test("DR205: real AppProvider persists independent masked Decisions credentials 
     await page.getByLabel("API Key",{exact:true}).fill("synthetic-openai");
     await page.waitForFunction(()=>JSON.parse(localStorage.getItem('curl_selected_decisions_provider')||'null')?.variables?.api_key==='synthetic-openai');
     assert.equal(await page.getByLabel("API Key",{exact:true}).getAttribute("type"),"password");
+    const directory = 'evidence/decisions-runtime-implementation-2026-10-08/provider-ui';
+    mkdirSync(directory, { recursive: true });
+    for (const width of [340, 900]) for (const dark of [false, true]) {
+      await page.setViewportSize({ width, height: 550 });
+      await page.evaluate(dark => { document.documentElement.classList.toggle('dark', dark);document.body.style.padding = '16px'; }, dark);
+      const input = await page.getByLabel('API Key', { exact: true }).boundingBox();
+      const button = await page.getByRole('button', { name: 'Remove Decisions API key' }).boundingBox();
+      assert.equal(input.height, 44);assert.equal(button.height, 44);assert.equal(button.width, 44);
+      assert.equal(input.y, button.y);assert.ok(input.x + input.width <= button.x);
+      assert.ok(button.x + button.width <= width);
+      assert.ok((await page.getByRole('button', { name: 'Remove Decisions API key' }).getAttribute('class')).includes('bg-destructive'));
+      await page.screenshot({ path: `${directory}/${width}-${dark ? 'dark' : 'light'}.png`, animations: 'disabled' });
+    }
     assert.equal(await page.getByLabel("Model",{exact:true}).inputValue(),"gpt-6-luna");
     assert.deepEqual(await page.evaluate(()=>JSON.parse(localStorage.getItem('curl_selected_stt_provider'))),stt);
     const second=await context.newPage();second.on("pageerror",e=>errors.push(e.message));
@@ -63,6 +81,7 @@ test("DR205: real AppProvider persists independent masked Decisions credentials 
     await second.waitForFunction(()=>document.querySelector('#decisions-api-key')?.value==='replacement-openai');
     await second.getByRole("button",{name:"Remove Decisions API key"}).click();
     await page.waitForFunction(()=>document.querySelector('#decisions-api-key')?.value==='');
+    assert.equal(await page.getByRole('button', { name: 'Remove Decisions API key' }).count(), 0);
     // A failed write must not activate an unpersisted provider or language policy.
     await page.evaluate(() => {
       const original = Storage.prototype.setItem;
